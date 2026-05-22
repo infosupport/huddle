@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Huddle DMZ Portal — Documentatie</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #1a202c;
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+      overflow: hidden;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #1a2545 0%, #2c3e50 100%);
+      color: #fff;
+      padding: 3rem 2rem;
+      text-align: center;
+      position: relative;
+    }
+    
+    .header::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path fill="rgba(255,255,255,0.05)" d="M0 0 L100 0 L100 100 L0 100 Z M0 50 Q50 30 100 50 L100 100 L0 100 Z"/></svg>');
+      background-size: cover;
+    }
+    
+    .header h1 {
+      font-size: 3.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.75rem;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .header .subtitle {
+      font-size: 1.25rem;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 0 auto;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .content {
+      padding: 3rem 2rem;
+    }
+    
+    .section {
+      margin-bottom: 3.5rem;
+    }
+    
+    .section h2 {
+      font-size: 2.25rem;
+      font-weight: 700;
+      color: #1a2545;
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 3px solid #f97316;
+      display: inline-block;
+    }
+    
+    .section h3 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #4a5568;
+      margin: 2rem 0 0.75rem;
+    }
+    
+    .section p {
+      font-size: 1.1rem;
+      line-height: 1.8;
+      margin-bottom: 1.25rem;
+      color: #4a5568;
+    }
+    
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+    
+    .card {
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      border-radius: 10px;
+      padding: 1.75rem;
+      border-left: 4px solid #3b82f6;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    }
+    
+    .card h4 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #1a2545;
+      margin-bottom: 0.75rem;
+    }
+    
+    .card p {
+      color: #64748b;
+      margin-bottom: 0;
+      font-size: 0.95rem;
+    }
+    
+    .architecture-diagram {
+      background: linear-gradient(135deg, #f0f4f8 0%, #e0e7ff 100%);
+      border-radius: 12px;
+      padding: 2rem;
+      margin: 2rem 0;
+      border: 2px solid #e2e8f0;
+    }
+    
+    .diagram-box {
+      padding: 1.25rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+      font-weight: 600;
+      color: #fff;
+      text-align: center;
+    }
+    
+    .box-outer-world { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .box-huddle { background: linear-gradient(135deg, #f97316 0%, #fb923c 100%); }
+    .box-container { background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%); }
+    .box-jetbrains { background: linear-gradient(135deg, #10b981 0%, #34d399 100%); }
+    
+    .diagram-label {
+      font-size: 0.85rem;
+      text-align: center;
+      margin-top: 0.5rem;
+      opacity: 0.9;
+    }
+    
+    .diagram-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin: 1rem 0;
+      color: #64748b;
+    }
+    
+    .security-badge {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      margin: 0.5rem 0.5rem 0.5rem 0;
+    }
+    
+    .security-critical { background: #fee2e2; color: #991b1b; }
+    .security-high { background: #fef3c7; color: #92400e; }
+    .security-medium { background: #e0f2fe; color: #1e40af; }
+    
+    .code-example {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 1.25rem;
+      border-radius: 8px;
+      font-family: "Fira Code", "Roboto Mono", "Courier New", monospace;
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin: 1.5rem 0;
+      overflow-x: auto;
+    }
+    
+    .code-example .keyword { color: #c678dd; }
+    .code-example .string { color: #98c379; }
+    .code-example .function { color: #61afcb; }
+    .code-example .number { color: #d19a66; }
+    
+    .feature-list {
+      list-style: none;
+      padding: 0;
+    }
+    
+    .feature-list li {
+      padding: 0.875rem 1rem;
+      margin-bottom: 0.75rem;
+      background: #f8fafc;
+      border-radius: 8px;
+      border-left: 4px solid #3b82f6;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    
+    .feature-list li:before {
+      content: '✓';
+      font-size: 1.25rem;
+      color: #10b981;
+      font-weight: 700;
+    }
+    
+    .vision-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+    
+    .vision-card {
+      background: linear-gradient(135deg, #1a2545 0%, #2c3e50 100%);
+      border-radius: 10px;
+      padding: 1.5rem;
+      color: #fff;
+    }
+    
+    .vision-card h4 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      border-bottom: 2px solid #f97316;
+      padding-bottom: 0.5rem;
+    }
+    
+    .vision-card p {
+      color: rgba(255,255,255,0.85);
+      font-size: 0.95rem;
+      margin-bottom: 0;
+      line-height: 1.7;
+    }
+    
+    .footer {
+      background: linear-gradient(135deg, #1a2545 0%, #0d1526 100%);
+      color: #94a3b8;
+      text-align: center;
+      padding: 2rem 1rem;
+      margin-top: 3rem;
+    }
+    
+    .footer a {
+      color: #f97316;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    
+    @media (max-width: 768px) {
+      .header h1 { font-size: 2.25rem; }
+      .content { padding: 2rem 1rem; }
+      .section h2 { font-size: 1.75rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Huddle DMZ Portal</h1>
+      <p class="subtitle">Beveiligde gateway tussen devcontainers en het internet — Firewall, Docker Proxy & Administratie</p>
+    </header>
+
+    <div class="content">
+      <section class="section">
+        <h2>Wat Is Huddle?</h2>
+        <p>Huddle is een veiligheidsproxy die fungeert als DMZ (Demilitarized Zone) tussen uw devcontainers en het externe netwerk. Het biedt een geconsolideerde laag voor netwerkbeveiliging, proxying en containerbeheer—speciaal ontworpen voor <strong>JetBrains DevContainers</strong> die via de IntelliJ IDEA / Rider IDE werken.</p>
+        
+        <p class="highlight">Huddle beschermt uw开发omgevingen door verkeer te filteren, Docker-toegang te beheren en gedetailleerde audit Logs bij te houden—terwijl het de devcontainer-erfvaring volledig behoudt.</p>
+      </section>
+
+      <section class="section">
+        <h2>Hoogtepunten van Huddle</h2>
+        <ul class="feature-list">
+          <li><strong>Firewall Proxy</strong> — HTTP/HTTPS verkeer wordt automatisch omgeleid door Huddle, waar regels op per-container en globaal worden toegepast</li>
+          <li><strong>Time-Limited Docker Access</strong> — Docker socket-toegang is tijdelijk en moet expliciet worden goedgekeurd via de UI</li>
+          <li><strong>Per-Container Proxy Sockets</strong> — Elke container heeft een eigen Docker socket proxy met toegangscontrole</li>
+          <li><strong>Management UI</strong> — Gebruiksvriendelijke webinterface voor het beheren van containers, firewallregels en Docker-toegang</li>
+          <li><strong>JetBrains Integration</strong> — Volledige automatische configuratie voor IntelliJ IDEA en Rider remote development</li>
+          <li><strong>SQLite Database</strong> — Persistente opslag van firewallregels, Docker-toegangsvergunningen en audit Logs</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>Architectuur</h2>
+        <p>Huddle functioneert als de <em>only exit point</em> voor devcontainers. Elk container verkeer (HTTP/HTTPS) en Docker API calls moeten Huddle passeren. Dit maakt het mogelijk om:</p>
+        
+        <div class="architecture-diagram">
+          <div class="diagram-box box-outer-world">
+            🌐 Externe Wereld
+            <div class="diagram-label">Internet services, APIs, repositories</div>
+          </div>
+          
+          <div class="diagram-arrow">➤</div>
+          
+          <div class="diagram-box box-huddle">
+            🐧 Huddle Gateway
+            <div class="diagram-label">HTTP Proxy (80) + Management API (3000) + Firewall Engine</div>
+          </div>
+          
+          <div class="diagram-arrow">➤</div>
+          
+          <div class="diagram-box box-container">
+            🐳 Devcontainer
+            <div class="diagram-label">IntelliJ IDEA / Rider — proxy via huddle:80</div>
+          </div>
+          
+          <div class="diagram-arrow">➤</div>
+          
+          <div class="diagram-box box-jetbrains">
+            💻 JetBrains IDE
+            <div class="diagram-label">Lcl host — beheer via UI</div>
+          </div>
+        </div>
+        
+        <p><strong>Dataflow:</strong></p>
+        <ol style="margin-left: 2rem; margin-top: 1.5rem; color: #64748b; font-size: 0.95rem; line-height: 1.8;">
+          <li>Devcontainer maakt HTTP/HTTPS request → proxy via huddle:80 (geset via <code>http_proxy</code> env var)</li>
+          <li>Huddle proxy ontvanger request, controleert firewall regel voor deze domain + container_id</li>
+          <li>Als <strong>allow</strong> → forward naar doel; als <strong>deny</strong> → 403 Forbidden; als <strong>requested</strong> → 403 + create rule</li>
+          <li>Als container Docker socket nodig heeft → bind-mount naar <code>/tmp/dc-sockets/[container].sock</code></li>
+          <li>Socket proxy controleert Docker grant in SQLite—tijdgebonden (1-120 minuten)</li>
+          <li>Management UI (port 3000) helpt beheren: containers, rules, grants—alleen bestemde voor host</li>
+        </ol>
+      </section>
+
+      <section class="section">
+        <h2>Componenten</h2>
+        <div class="card-grid">
+          <div class="card">
+            <h4>🌐 HTTP Proxy (port 80)</h4>
+            <p>Intercepteert alle HTTP/HTTPS verkeer van devcontainers, draait regels op via Rules Engine. Ondersteunt CONNECT voor HTTPS.</p>
+          </div>
+          <div class="card">
+            <h4>📦 Docker Socket Proxy</h4>
+            <p>Per-container UNIX socket proxy met time-limited toegang. Elke container heeft eigen socket in <code>/tmp/dc-sockets/</code>.</p>
+          </div>
+          <div class="card">
+            <h4>🔧 Management API (port 3000)</h4>
+            <p>REST API voor container management, snapshot images, firewall rules en Docker access grants.</p>
+          </div>
+          <div class="card">
+            <h4>🎨 UI Dashboard</h4>
+            <p>React-achtige frontend met dark/light mode, container overzicht, firewall rules, audit logs en Docker access control.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Firewall Model</h2>
+        <p>Huddle gebruikt een <strong>two-level policy system</strong>:</p>
+        <ul>
+          <li><strong>Per-Container Rules</strong> — Regels zijn gekoppeld aan specifieke container_id (com.intellij.devcontainer.id)</li>
+          <li><strong>Global Rules</strong> — Regels met <code>container_id IS NULL</code> gelden voor alle containers</li>
+        </ul>
+        
+        <p><strong>Policy check order:</strong></p>
+        <ol style="margin-left: 2rem; color: #647478; font-size: 0.95rem; line-height: 1.8;">
+          <li>Is er een per-container rule voor deze domain? → Check status</li>
+          <li>Is er een global rule voor deze domain? → Check status</li>
+          <li>Als geen rule gevonden → creëer "requested" rule en geef 403</li>
+        </ol>
+        
+        <p><strong>Status types:</strong></p>
+        <ul style="list-style: circle; margin-left: 2rem; color: #64748b; font-size: 0.95rem;">
+          <li><code>requested</code> — Nieuwe request, nog niet goedgekeurd</li>
+          <li><code>allow</code> — Domain is toegestaan voor deze container</li>
+          <li><code>deny</code> — Domain is geblokkeerd voor deze container</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>Docker Access Grants</h2>
+        <p>Devcontainers kunnen alleen Docker API calling als ze een <em>time-limited grant</em> hebben. Grants zijn in de SQLite database met <code>docker_grants</code> table:</p>
+        
+        <div class="code-example">
+<span class="keyword">CREATE TABLE</span> docker_grants (
+  container_id TEXT <span class="keyword">PRIMARY KEY</span>,
+  until INTEGER <span class="keyword">NOT NULL</span>
+);
+        </div>
+        
+        <p><strong>Grant levenscyclus:</strong></p>
+        <ol style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.8;">
+          <li>Container probeert Docker socket connectie</li>
+          <li>Socket proxy ophaalt grant met <code>getGrant(containerName)</code></li>
+          <li>Als <code>until &gt; now()</code> → allow; else → 403 Forbidden</li>
+          <li>Grant verlengbaar via UI (max 120 minuten)</li>
+        </ol>
+      </section>
+
+      <section class="section">
+        <h2>Container Start Workflow</h2>
+        <p>Als u een devcontainer start via de UI:</p>
+        
+        <div class="code-example">
+<span class="function">POST</span> /api/docker/start
+<span class="keyword">{</span>
+  "imageName": <span class="string">"base-devimage"</span>,
+  "workspaceDir": <span class="string">"C:/projects/my-project"</span>,
+  "containerName": <span class="string">"dc-my-project"</span>,
+  "ideName": <span class="string">"intellij"</span>
+<span class="keyword">}</span>
+        </div>
+        
+        <p>Huddle voert deze stappen uit:</p>
+        <ol style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.8;">
+          <li>Check of <code>devcontainer-net</code> network bestaat</li>
+          <li>Maak per-container socket proxy via <code>createContainerProxy(containerName, SOCKET_DIR)</code></li>
+          <li>Build Docker container met:
+            <ul style="margin-left: 1.5rem; color: #64748b; font-size: 0.9rem; line-height: 1.7;">
+              <li>Env vars voor http_proxy/https_proxy naar huddle:80</li>
+              <li>Mount volume JetBrains Remote Dev dist</li>
+              <li>Bind-mount workspace naar container</li>
+              <li>Bind-mount Docker socket proxy naar <code>/var/run/docker.sock</code></li>
+              <li>Mounts <code>NET_ADMIN</code> capability</li>
+            </ul>
+          </li>
+          <li>Start container</li>
+          <li>Run <code>jb-config.sh</code> via <code>exec</code> met <code>User: 'root'</code></li>
+        </ol>
+      </section>
+
+      <section class="section">
+        <h2>jb-config.sh — Container Setup Script</h2>
+        <p>Elke container krijgt dit script uitgevoerd bij start (via <code>docker exec</code> root):</p>
+        
+        <div class="code-example">
+<span class="keyword">#!/bin/sh</span>
+<span class="comment"># Locate JetBrains Remote Dev directory & build number</span>
+IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i <span class="string">"idea"</span> | sort -t- -k2 -V | tail -1)
+IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
+BUILD=$(grep -o <span class="string">'"buildNumber":"[^"]*"'</span> <span class="string">"$IDEA_PATH/product-info.json"</span> | cut -d<span class="string">'"'</span> -f4)
+CODE=$(grep -o <span class="string">'"productCode":"[^"]*"'</span> <span class="string">"$IDEA_PATH/product-info.json"</span> | cut -d<span class="string">'"'</span> -f4)
+
+<span class="comment"># Write host-config.json voor JetBrains remote development</span>
+printf <span class="string">'{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}'</span> <span class="string">"$PROJ"</span> <span class="string">"$IDEA_PATH"</span> <span class="string">"$BUILD"</span> <span class="string">"$CODE"</span> <span class="keyword">&gt;</span> /.jbdevcontainer/config/JetBrains/host-config.json
+
+<span class="comment"># Configure curl to send X-Container-ID header (voor policy audit)</span>
+CURL_LINE=<span class="string">'--proxy-header "X-Container-ID: ${containerName}"'</span>
+grep -qF <span class="string">"$CURL_LINE"</span> /home/vscode/.curlrc 2&gt;/dev/null || echo <span class="string">"$CURL_LINE"</span> <span class="keyword">&gt;&gt;</span> /home/vscode/.curlrc
+
+<span class="comment"># Configure iptables DNAT for HTTP egress via Huddle</span>
+HUDDLE_IP=$(getent hosts huddle | awk <span class="string">'{print $1}'</span>
+iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d <span class="string">"$HUDDLE_IP"</span> -j DNAT --to-destination <span class="string">"$HUDDLE_IP:80"</span> 2&gt;/dev/null || \
+  iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d <span class="string">"$HUDDLE_IP"</span> -j DNAT --to-destination <span class="string">"$HUDDLE_IP:80"</span>
+        </div>
+        
+        <p><strong>Wat dit script doet:</strong></p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li>Leest JetBrains Remote Dev build info → schrijft <code>host-config.json</code></li>
+          <li>Voegt <code>X-Container-ID</code> proxy-header toe aan <code>.curlrc</code> (voor policy logging)</li>
+          <li>Configureert iptables DNAT: alle HTTP traffic (port 80) wordt omgeleid naar huddle:80</li>
+          <li>Container moet <code>NET_ADMIN</code> capability hebben (kan firewall regels wijzigen!)</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>Beveiligingsoverwegingen</h2>
+        <p>Huddle is ontworpen als <strong>high-trust gateway</strong> met toegang tot de host Docker socket. De huidige implementatie heeft enkele bekende kwetsbaarheden die worden vermeld in de <code>SECURITY.md</code> bestand:</p>
+        
+        <p><span class="security-badge security-critical">CRIT-01</span> Docker socket grant bypass via X-Container-ID header injection</p>
+        <p><span class="security-badge security-critical">CRIT-02</span> Container identity spoofing via client-controlled IP/cached headers</p>
+        <p><span class="security-badge security-critical">CRIT-03</span> Geen authenticatie op management API (port 3000) — bereikbaar van alle containers</p>
+        
+        <p><span class="security-badge security-high">HIGH-02</span> Unvalidated container/image/workspace inputs in Docker API & shell scripts</p>
+        <p><span class="security-badge security-high">HIGH-03</span> Egress firewall ingewikkeld in container (met <code>NET_ADMIN</code>) → container kan iptables bypassen</p>
+        
+        <p><strong>Aanbevolen remediatie:</strong></p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li>Bind management API naar <code>127.0.0.1</code> of UNIX socket (niet op devcontainer-net)</li>
+          <li>Vereis bear token of mTLS op alle <code>/api/*</code> routes</li>
+          <li>Verwijder <code>NET_ADMIN</code> capability of verplaats iptables filtering naar host bridge</li>
+          <li>Validate container/image/workspace inputs strikt met regex/allow-list</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>Visie & Toekomst</h2>
+        <div class="vision-grid">
+          <div class="vision-card">
+            <h4>🛡️ Geautomatiseerde Firewall</h4>
+            <p>Machine learning-driven anomaly detection in HTTP traffic patterns; auto-block on suspicious behavior with 24h review period.</p>
+          </div>
+          <div class="vision-card">
+            <h4>🕵️ uitgebreide Audit Logging</h4>
+            <p>Sla alle proxy requests, Docker socket calls, en container lifecycle events op in een tamper-proof logboek met 90-dag retention.</p>
+          </div>
+          <div class="vision-card">
+            <h4>📈 Security Score Metrics</h4>
+            <p>Per-container security posture metrics: firewall compliance, grant usage, request patterns—visualiseer via dashboard KPIs.</p>
+          </div>
+          <div class="vision-card">
+            <h4>🔒 Zero-Trust Docker Access</h4>
+            <p>Implementeer mTLS between containers and Huddle; replace X-Container-ID header with client certificate subject validation.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Opslaan & Backups</h2>
+        <p>Huddle gebruikt SQLite database met WAL mode voor persistentie. Het bestand:</p>
+        <div class="code-example" style="margin-bottom: 1.5rem;">
+<span class="keyword">const</span> DB_PATH = <span class="string">process.env.DB_PATH || '/data/huddle.db'</span>
+        </div>
+        
+        <p><strong>Back-up strategie:</strong></p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li>Draai regelmatig <code>sqlite3 huddle.db VACUUM</code> voor compactie</li>
+          <li>Kopieer het DB bestand en archiveer naar off-site opslag</li>
+          <li>Test restore procedure periodiek</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>Debug & Logging</h2>
+        <p>Huddle logt naar stdout/stderr. Belangrijke log messages:</p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li><code>[proxy] listening on :80</code> — HTTP proxy gestart</li>
+          <li><code>[api] listening on http://0.0.0.0:3000</code> — Management API gestart</li>
+          <li><code>[socket-proxy] container-name → /tmp/dc-sockets/container-name.sock</code> — Socket proxy aangemaakt</li>
+          <li><code>[socket-proxy] DENY container-name: no active grant</code> — Docker access geweigerd</li>
+        </ul>
+        
+        <p><strong>Veilige log practices:</strong></p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li>Geen password/secret logging</li>
+          <li>Geen request bodies in logs</li>
+          <li>Redact API response in DEBUG mode only</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <h2>Veiligheid</h2>
+        <p>⚠️ <strong>Belangrijke waarschuwing:</strong> De huidige implementatie is <em>not suitable for production deployment</em> zonder beveiligingsfixes. De belangrijkste problemen:</p>
+        
+        <p><span class="security-badge security-critical">CRIT-03</span> Geen authentication op management API — elke container kan arbitrary containers starten, snapshot images maken, grants geven.</p>
+        
+        <p>Lees <code>SECURITY.md</code> voor complete audit en remediation steps.</p>
+      </section>
+
+      <section class="section">
+        <h2>Development & Deployment</h2>
+        
+        <h3>Build & Run (Local)</h3>
+        <div class="code-example">
+<span class="comment"># Build TypeScript</span>
+<span class="keyword">cd</span> gateway
+npm install
+npm run build
+
+<span class="comment"># Start gateway</span>
+<span class="function">node</span> dist/index.js
+        </div>
+        
+        <h3>Docker Build</h3>
+        <div class="code-example">
+<span class="comment"># Build image</span>
+<span class="function">docker</span> build -t huddle gateway/
+
+<span class="comment"># Run container</span>
+<span class="function">docker</span> run -p 80:80 -p 3000:3000 -v /var/run/docker.sock:/var/run/docker.sock huddle
+        </div>
+        
+        <h3>Devcontainer Configuration</h3>
+        <p>Huddle draait in een eigen devcontainer met <code>.devcontainer/devcontainer.json</code> settings.</p>
+      </section>
+
+      <section class="section">
+        <h2>Verwijzingen</h2>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li><code>gateway/src/index.ts</code> — Main entry point (proxy + api + init)</li>
+          <li><code>gateway/src/proxy.ts</code> — HTTP/HTTPS proxy logic</li>
+          <li><code>gateway/src/socket-proxy.ts</code> — Docker socket proxy per container</li>
+          <li><code>gateway/src/api.ts</code> — Management API endpoints</li>
+          <li><code>gateway/src/docker.ts</code> — Docker API client + container management</li>
+          <li><code>gateway/src/rules.ts</code> — Firewall policy engine</li>
+          <li><code>gateway/src/db.ts</code> — SQLite database initialization & grant management</li>
+          <li><code>gateway/src/ui/</code> — Frontend (HTML/CSS/JS)</li>
+        </ul>
+      </section>
+
+      <footer class="footer">
+        <p>Huddle DMZ Portal v2.3.0 | © 2026 JetBrains Devcontainer Infrastructure</p>
+        <p>Documentation generated from source code analysis</p>
+        <p style="margin-top: 1rem;">
+          <a href="https://www.jetbrains.com/blog/2023/02/16/intellij-idea-2023-1-eap-devcontainers/" target="_blank">JetBrains DevContainers Blog</a> • 
+          <a href="https://www.docker.com/" target="_blank">Docker Documentation</a> • 
+          <a href="https://developer.mozilla.org/en-US/docs/Web/API/HTTP_API" target="_blank">HTTP Proxy Patterns</a>
+        </p>
+      </footer>
+    </div>
+  </div>
+</body>
+</html>
