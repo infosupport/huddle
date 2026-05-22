@@ -103,6 +103,31 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
   });
 }
 
+export async function refreshContainerIptables(containerId: string, containerName: string): Promise<void> {
+  // After a huddle restart the container's iptables DNAT rule still points to the old huddle IP.
+  // Re-run the rule inside the container so HTTP traffic routes to the new huddle IP.
+  const script = `
+HUDDLE_IP=$(getent hosts huddle 2>/dev/null | awk '{print $1}')
+[ -z "$HUDDLE_IP" ] && exit 0
+iptables -t nat -L OUTPUT --line-numbers -n 2>/dev/null \
+  | awk '/DNAT.*dpt:80/{print $1}' | sort -rn \
+  | while read LINE; do iptables -t nat -D OUTPUT "$LINE" 2>/dev/null || true; done
+iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || true
+`;
+  try {
+    const exec = await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/exec`, {
+      User: 'root',
+      Cmd: ['sh', '-c', script],
+      AttachStdout: false,
+      AttachStderr: false,
+    });
+    await dockerRequest('POST', `/exec/${exec.Id}/start`, { Detach: true });
+    console.log(`[iptables] refreshed rules in ${containerName}`);
+  } catch (err: any) {
+    console.warn(`[iptables] refresh failed for ${containerName}:`, err.message);
+  }
+}
+
 export function getBaseImageName(): string {
   return process.env.BASE_IMAGE ?? 'base-devimage';
 }
