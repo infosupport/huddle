@@ -1,0 +1,42 @@
+@if (vm$ | async; as vm) {
+  <div class="page-header"><h1>Docker Access Grants</h1></div>
+  <div class="card">
+    <div class="card-header"><h3>Active Grants</h3></div>
+    @if (vm.entries.length === 0) {
+      <p class="empty-note">Geen grants</p>
+    } @else {
+      <table class="data-table">
+        <thead><tr><th>Container</th><th>Status</th><th>Expires</th><th class="col-actions">Action</th></tr></thead>
+        <tbody>
+          @for (entry of vm.entries; track entry[0]) {
+            @let rem = entry[1].until - vm.now;
+            <tr>
+              <td>{{ entry[0] }}</td>
+              <td><span class="pill" [ngClass]="rem > 0 ? 'pill--active' : 'pill--expires'">{{ rem > 0 ? 'Active' : 'Expired' }}</span></td>
+              <td><span class="grant-timer" [class.active]="rem > 0">{{ rem > 0 ? (remainingMinutes(entry[1].until) + 'm remaining') : 'Expired' }}</span></td>
+              <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="revoke(entry[0])">Revoke</button></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+    <div class="grant-form">
+      <label style="font-weight:600">Grant Access:</label>
+      <select [(ngModel)]="selectedContainer">
+        @if (vm.containers.length === 0) {
+          <option value="">Geen containers</option>
+        } @else {
+          @for (c of vm.containers; track c.name) {
+            <option [value]="c.name">{{ c.presentableName || c.name }}</option>
+          }
+        }
+      </select>
+      <select [(ngModel)]="selectedMinutes">
+        @for (m of minuteOptions; track m) {
+          <option [value]="m">{{ m }} min</option>
+        }
+      </select>
+      <button class="btn btn--accent btn-sm" (click)="grantAccess()">Grant</button>
+    </div>
+  </div>
+}

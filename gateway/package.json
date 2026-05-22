@@ -2,10 +2,13 @@
   "name": "huddle",
   "version": "1.0.0",
   "scripts": {
-    "build": "tsc",
+    "build:ts": "tsc",
+    "build:ui": "npm run build --prefix frontend",
+    "build": "npm run build:ui && npm run build:ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@fastify/static": "^8.3.0",
     "better-sqlite3": "^9.4.3",
     "fastify": "^4.27.0"
   },

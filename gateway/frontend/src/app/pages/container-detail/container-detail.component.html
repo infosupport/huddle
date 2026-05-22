@@ -1,0 +1,136 @@
+<a class="back-link" routerLink="/containers">← Containers</a>
+
+@if (error$ | async; as err) {
+  <div class="card"><div class="card-body"><p class="form-error">{{ err }}</p></div></div>
+}
+
+@if (detail$ | async; as d) {
+  @let cfg = d.inspect.Config;
+  @let net = d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
+  @let workspace = cfg?.Labels?.['com.intellij.devcontainer.workspace.path'] ?? '—';
+  @let sourcesPath = cfg?.Labels?.['com.intellij.devcontainer.sources.path'] ?? '—';
+  @let inNetwork = !!net;
+  @let allow = allowRules(d.rules);
+  @let deny = denyRules(d.rules);
+  @let requested = requestedRules(d.rules);
+
+  <div class="page-header">
+    <h1>{{ name }}</h1>
+    <div class="actions">
+      <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
+    </div>
+  </div>
+
+  <div class="detail-grid">
+    <div class="card">
+      <div class="card-header"><h3>Container info</h3></div>
+      <div class="card-body">
+        <dl class="info-grid">
+          <dt>Image</dt><dd>{{ cfg?.Image ?? d.inspect.Image }}</dd>
+          <dt>Aangemaakt</dt><dd>{{ d.inspect.Created | date:'dd-MM-yyyy HH:mm' }}</dd>
+          <dt>Workspace</dt><dd>{{ workspace }}</dd>
+          <dt>Bronmap</dt><dd>{{ sourcesPath }}</dd>
+          <dt>IP</dt><dd>{{ net?.IPAddress ?? '—' }}</dd>
+          <dt>Netwerk</dt>
+          <dd>
+            @if (inNetwork) {
+              <span class="status-text ok">✓ In netwerk</span>
+            } @else {
+              <span class="status-text rogue">✗ Rogue</span>
+            }
+          </dd>
+        </dl>
+      </div>
+
+      <div class="card-header"><h3>Docker access</h3></div>
+      <div class="card-body">
+        @if (grants$ | async; as grants) {
+          @let rem = grantRemaining(grants);
+          <div class="docker-access-row">
+            <span class="grant-timer" [class.active]="rem > 0">
+              🐳 {{ rem > 0 ? (Math.ceil(rem / 60) + 'm over') : 'Geen toegang' }}
+            </span>
+            @if (rem > 0) {
+              <button class="btn btn-delete btn-sm" (click)="revoke()">Intrekken</button>
+            }
+            <div class="menu-wrap">
+              <details>
+                <summary class="btn btn-ghost btn-sm">Verlenen ▾</summary>
+                <div class="dropdown">
+                  @for (m of [5, 10, 15, 20, 30]; track m) {
+                    <button (click)="grant(m)">{{ m }} min</button>
+                  }
+                </div>
+              </details>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>Rules</h3></div>
+      <h4>✓ Toegestaan ({{ allow.length }})</h4>
+      <div class="card-body tight">
+        @if (allow.length === 0) { <p class="empty-note">Geen</p> } @else {
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
+            <tbody>
+              @for (r of allow; track r.id) {
+                <tr>
+                  <td class="domain-cell">{{ r.domain }}</td>
+                  <td>{{ r.request_count }}</td>
+                  <td>{{ r.last_seen | relTime }}</td>
+                  <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+      <h4>🚫 Geblokkeerd ({{ deny.length }})</h4>
+      <div class="card-body tight">
+        @if (deny.length === 0) { <p class="empty-note">Geen</p> } @else {
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
+            <tbody>
+              @for (r of deny; track r.id) {
+                <tr>
+                  <td class="domain-cell">{{ r.domain }}</td>
+                  <td>{{ r.request_count }}</td>
+                  <td>{{ r.last_seen | relTime }}</td>
+                  <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+      <h4>⏳ Requested ({{ requested.length }})</h4>
+      <div class="card-body tight">
+        @if (requested.length === 0) { <p class="empty-note">Geen</p> } @else {
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
+            <tbody>
+              @for (r of requested; track r.id) {
+                <tr>
+                  <td class="domain-cell">{{ r.domain }}</td>
+                  <td>{{ r.request_count }}</td>
+                  <td>{{ r.last_seen | relTime }}</td>
+                  <td class="col-actions">
+                    <div class="domain-actions">
+                      <button class="btn btn-deny btn-sm" title="Blokkeren" (click)="denyRule(r)">🚫</button>
+                      <button class="btn btn-deny-g btn-sm" title="Globaal blokkeren" (click)="openGlobalConfirm(r.domain, 'deny')">🚫🚫</button>
+                      <button class="btn btn-allow btn-sm" title="Toestaan" (click)="allowRule(r)">✓</button>
+                      <button class="btn btn-allow-g btn-sm" title="Globaal toestaan" (click)="openGlobalConfirm(r.domain, 'allow')">✓✓</button>
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+    </div>
+  </div>
+}

@@ -1,0 +1,32 @@
+import { Rule } from './rule.model';
+import { Grant } from './grant.model';
+
+export type ContainerStatus = 'running' | 'stopped' | 'rogue';
+
+export interface Container {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  created: number;
+  workspacePath?: string;
+  presentableName?: string;
+  inNetwork?: boolean;
+  ipAddress?: string;
+  securityScore?: number;
+  labels?: Record<string, string>;
+  Labels?: Record<string, string>;
+}
+
+export interface ContainerDetail extends Container {
+  rules: Rule[];
+  grant?: Grant;
+}
+
+export interface DockerImage {
+  id: string;
+  name: string;
+  tag: string;
+  size: number;
+  created: number;
+}

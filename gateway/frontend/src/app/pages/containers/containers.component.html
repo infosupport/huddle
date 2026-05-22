@@ -1,0 +1,77 @@
+@if (vm$ | async; as vm) {
+  <div class="page-header">
+    <h1>Containers</h1>
+    <div class="actions">
+      <button class="btn btn--accent" (click)="modal.openStart()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        Start devcontainer
+      </button>
+    </div>
+  </div>
+  <div class="card">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Container</th><th>Status</th><th>Network</th>
+          <th>Requested</th><th>Score</th><th>Docker</th><th class="col-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        @if (vm.containers.length === 0) {
+          <tr><td colspan="7"><p class="empty-note">Geen containers</p></td></tr>
+        } @else {
+          @for (c of vm.containers; track c.name) {
+            @let score = scoreOf(c.name, vm.rules);
+            @let grant = vm.grants[c.name];
+            @let dockerActive = grant && grant.until > vm.now;
+            @let reqCount = requestedCount(c.name, vm.rules);
+            <tr class="clickable" [routerLink]="['/container', c.name]">
+              <td>
+                <div class="container-cell">
+                  <div class="cc-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+                  </div>
+                  <div>
+                    <div class="name">{{ c.presentableName || c.name }}</div>
+                    <div class="sub"><code>{{ imageName(c) }}</code></div>
+                  </div>
+                </div>
+              </td>
+              <td><span class="status" [ngClass]="'status--' + statusClass(c)">{{ statusLabel(c) }}</span></td>
+              <td>
+                @if (isRogue(c)) {
+                  <span class="status-text rogue">✗ Rogue</span>
+                } @else {
+                  <span class="status-text ok">✓ In netwerk</span>
+                }
+              </td>
+              <td>
+                @if (reqCount > 0) {
+                  <span class="badge-pill yellow">{{ reqCount }}</span>
+                } @else {
+                  <span class="badge-pill muted">0</span>
+                }
+              </td>
+              <td>
+                @if (score === null) {
+                  <span class="badge-pill muted">—</span>
+                } @else {
+                  <span class="badge-pill" [ngClass]="scoreClass(score)">{{ score }}%</span>
+                }
+              </td>
+              <td>
+                @if (dockerActive) {
+                  <span class="pill pill--active">Active</span>
+                } @else { — }
+              </td>
+              <td class="col-actions" (click)="$event.stopPropagation()">
+                <button class="btn btn-ghost btn-sm" [routerLink]="['/container', c.name]">Detail</button>
+                <button class="btn btn-delete btn-sm" (click)="openSnapshot(c)">Snapshot</button>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  </div>
+}

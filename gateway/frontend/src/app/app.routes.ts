@@ -1,0 +1,14 @@
+import { Routes } from '@angular/router';
+
+export const routes: Routes = [
+  { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
+  { path: 'dashboard', loadComponent: () => import('./pages/dashboard/dashboard.component').then(m => m.DashboardComponent) },
+  { path: 'containers', loadComponent: () => import('./pages/containers/containers.component').then(m => m.ContainersComponent) },
+  { path: 'container/:name', loadComponent: () => import('./pages/container-detail/container-detail.component').then(m => m.ContainerDetailComponent) },
+  { path: 'firewall', loadComponent: () => import('./pages/firewall/firewall.component').then(m => m.FirewallComponent) },
+  { path: 'docker-access', loadComponent: () => import('./pages/docker-access/docker-access.component').then(m => m.DockerAccessComponent) },
+  { path: 'policies', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Policies' } },
+  { path: 'audit', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Audit Logs' } },
+  { path: 'settings', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Settings' } },
+  { path: '**', redirectTo: 'dashboard' },
+];

@@ -1,6 +1,6 @@
 import path from 'path';
-import fs from 'fs';
 import Fastify, { FastifyInstance } from 'fastify';
+import fastifyStatic from '@fastify/static';
 import { db, getAllGrants, setGrant, deleteGrant } from './db';
 import {
   listDevcontainers,
@@ -13,7 +13,7 @@ import {
 } from './docker';
 
 const API_PORT = 3000;
-const UI_DIR = path.join(__dirname, 'ui');
+const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
 
 type RuleStatus = 'requested' | 'allow' | 'deny';
 
@@ -28,42 +28,13 @@ interface Rule {
   request_count: number;
 }
 
-function serveStatic(file: string, type: string) {
-  return async (_req: any, reply: any) => {
-    try {
-      const content = fs.readFileSync(path.join(UI_DIR, file));
-      reply.header('content-type', type).send(content);
-    } catch {
-      reply.code(404).send({ error: 'not_found' });
-    }
-  };
-}
-
 export function createApiServer(): FastifyInstance {
   const app = Fastify({ logger: false });
 
-  app.get('/', serveStatic('index.html', 'text/html; charset=utf-8'));
-  app.get('/app.js', serveStatic('app.js', 'application/javascript; charset=utf-8'));
-  app.get('/style.css', serveStatic('style.css', 'text/css; charset=utf-8'));
-  app.get<{ Params: { file: string } }>('/assets/:file', async (req, reply) => {
-    const file = req.params.file;
-    if (!/^[A-Za-z0-9._-]+$/.test(file)) {
-      return reply.code(400).send({ error: 'invalid_file' });
-    }
-    try {
-      const content = fs.readFileSync(path.join(UI_DIR, 'assets', file));
-      const ext = file.split('.').pop() ?? '';
-      const types: Record<string, string> = {
-        png: 'image/png',
-        jpg: 'image/jpeg',
-        jpeg: 'image/jpeg',
-        svg: 'image/svg+xml',
-        json: 'application/json',
-      };
-      reply.header('content-type', types[ext] ?? 'application/octet-stream').send(content);
-    } catch {
-      reply.code(404).send({ error: 'not_found' });
-    }
+  app.register(fastifyStatic, {
+    root: UI_DIR,
+    prefix: '/',
+    wildcard: false,
   });
 
   app.get<{ Querystring: { status?: string; container?: string } }>(
@@ -262,6 +233,11 @@ export function createApiServer(): FastifyInstance {
       return { ok: true };
     }
   );
+
+  // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
+  app.setNotFoundHandler(async (_req, reply) => {
+    return reply.sendFile('index.html');
+  });
 
   app.listen({ port: API_PORT, host: '0.0.0.0' }, (err, address) => {
     if (err) {

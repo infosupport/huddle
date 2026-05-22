@@ -1,0 +1,17 @@
+@if (open) {
+  <div class="modal" (click)="close()">
+    <div class="modal-box modal-box--narrow" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Globaal toestaan</h2>
+        <button class="modal-close" (click)="close()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p>{{ message }}</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" (click)="confirm()">{{ data?.status === 'allow' ? 'Toestaan' : 'Blokkeren' }}</button>
+        <button class="btn btn-ghost" (click)="close()">Annuleren</button>
+      </div>
+    </div>
+  </div>
+}

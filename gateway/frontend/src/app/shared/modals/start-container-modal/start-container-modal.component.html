@@ -1,0 +1,43 @@
+@if (open) {
+  <div class="modal" (click)="close()">
+    <div class="modal-box" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Start devcontainer</h2>
+        <button class="modal-close" (click)="close()">✕</button>
+      </div>
+      <div class="modal-body">
+        <label for="start-image">Image</label>
+        <select id="start-image" [(ngModel)]="selectedImage">
+          @if (baseImage) {
+            <option [value]="baseImage">[Leeg] {{ baseImage }}</option>
+          }
+          @for (img of images; track img.id) {
+            <option [value]="img.name">{{ img.name }} ({{ img.size | fmtBytes }})</option>
+          }
+          @if (!baseImage && images.length === 0) {
+            <option value="">Geen snapshot images beschikbaar</option>
+          }
+        </select>
+
+        <label for="start-ide">IDE</label>
+        <select id="start-ide" [(ngModel)]="ide">
+          <option value="intellij">IntelliJ IDEA</option>
+          <option value="rider">Rider</option>
+        </select>
+
+        <label for="start-workspace">Workspace directory</label>
+        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" />
+
+        <label for="start-name">Containernaam</label>
+        <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-mijn-project" />
+
+        @if (error) { <p class="form-error">{{ error }}</p> }
+        @if (status) { <p class="form-status">{{ status }}</p> }
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" [disabled]="loading" (click)="confirm()">Starten</button>
+        <button class="btn btn-ghost" (click)="close()">Annuleren</button>
+      </div>
+    </div>
+  </div>
+}
