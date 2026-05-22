@@ -224,6 +224,7 @@ export function createApiServer(): FastifyInstance {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
