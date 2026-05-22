@@ -15,31 +15,37 @@ function checkPolicy(containerName: string): boolean {
   return Boolean(grant && grant.until > Math.floor(Date.now() / 1000));
 }
 
-function checkRequest(method: string, urlPath: string): boolean {
+function checkRequest(method: string, urlPath: string, containerName: string): boolean {
   const m = method.toUpperCase();
-  // Strip optional Docker API version prefix (/v1.41/...)
   const p = urlPath.replace(/^\/v[\d.]+/, '');
 
+  // Never allow destructive operations
   if (m === 'DELETE') return false;
 
   if (m === 'GET' || m === 'HEAD') {
-    // Essential system info only
     if (p === '/version' || p === '/info' || p === '/_ping') return true;
-    // Exec session inspection
+    // Exec session inspection (exec IDs are UUIDs, can't restrict to own container)
     if (/^\/exec\/[^/]+\/json$/.test(p)) return true;
-    // Single-container inspection and logs (any container ID/name, not list-all)
+    // Container inspect/logs: any ID accepted (IntelliJ may use hash ID, not name)
+    // but list-all (/containers/json) stays blocked
     if (/^\/containers\/[^/]+\/(json|logs|top)$/.test(p)) return true;
     return false;
   }
 
   if (m === 'POST') {
-    return (
-      /^\/exec\/[^/]+\/(start|resize)$/.test(p) ||
-      /^\/containers\/[^/]+\/exec$/.test(p) ||
-      /^\/containers\/[^/]+\/attach$/.test(p) ||
-      /^\/containers\/[^/]+\/logs$/.test(p) ||
-      /^\/containers\/[^/]+\/(start|stop)$/.test(p)
-    );
+    // Exec start/resize: exec IDs are issued by Docker, can't scope to container here
+    if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) return true;
+    // Exec create: only on own container (by name OR by any ID — IntelliJ uses its container)
+    // We allow any single container segment; the grant check already scopes the socket to one container
+    if (/^\/containers\/[^/]+\/exec$/.test(p)) {
+      // Extract the container identifier from the path and reject if it's clearly a different named container
+      const match = p.match(/^\/containers\/([^/]+)\/exec$/);
+      const target = match?.[1] ?? '';
+      // Allow if target matches own name, or looks like a Docker ID (hex), or is short ID
+      if (target === containerName || /^[a-f0-9]+$/i.test(target)) return true;
+      return false;
+    }
+    return false;
   }
   return false;
 }
@@ -91,7 +97,7 @@ export function createContainerProxy(containerName: string, socketDir: string): 
           return;
         }
 
-        if (!checkRequest(method, urlPath)) {
+        if (!checkRequest(method, urlPath, containerName)) {
           console.log(`[socket-proxy] DENY ${containerName}: ${method} ${urlPath} not allowed`);
           const body = '{"message":"operation not permitted"}';
           client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
