@@ -225,6 +225,9 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+
+rm -f /var/run/docker.sock
+ln -sf /tmp/dc-sockets/${containerName}.sock /var/run/docker.sock
 `;
 }
 
@@ -298,8 +301,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
         },
         {
           Type: 'bind',
-          Source: `${SOCKET_DIR}/${containerName}.sock`,
-          Target: '/var/run/docker.sock',
+          Source: SOCKET_DIR,
+          Target: '/tmp/dc-sockets',
         },
       ],
       NetworkMode: netName,
