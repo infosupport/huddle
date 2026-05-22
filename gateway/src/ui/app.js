@@ -74,9 +74,6 @@
     document.documentElement.setAttribute('data-theme', theme);
     const btn = document.getElementById('btn-theme');
     if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
-    document.querySelectorAll('img[data-asset]').forEach((img) => {
-      img.src = `/assets/${img.dataset.asset}.${theme}.png`;
-    });
   }
 
   function loadTheme() {
@@ -164,7 +161,6 @@
       case 'settings':      setBreadcrumb('Settings');          root.innerHTML = renderPlaceholder('Settings'); break;
       default:              setBreadcrumb('Dashboard');         root.innerHTML = renderDashboard();
     }
-    applyTheme(loadTheme());
   }
 
   function navigate(hash) { window.location.hash = hash; }
@@ -291,10 +287,7 @@
           <h1>Welcome back!</h1>
           <p>Everything looks secure. Keep building amazing things.</p>
         </div>
-        <img class="welcome-hero"
-             src="/assets/hero-penguins-icebergs.light.png"
-             data-asset="hero-penguins-icebergs"
-             alt="" />
+        <div class="welcome-hero sprite sprite-hero-penguins-icebergs" role="presentation"></div>
       </div>
       ${stats}
       <div class="dash-grid">
@@ -366,7 +359,7 @@
           <h2>Huddle together. Build boldly. We've got your back.</h2>
           <p>Secure dev environments in the DMZ</p>
         </div>
-        <img class="banner-art" src="/assets/footer-penguins-right.light.png" data-asset="footer-penguins-right" alt="" />
+        <div class="banner-art sprite sprite-footer-penguins-right" role="presentation"></div>
       </div>
     `;
   }

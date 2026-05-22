@@ -1,3 +1,31 @@
+/* ── Sprites ─────────────────────────────────────────────────────────────── */
+:root { --sprite-url: url('/assets/sprite.light.png'); }
+[data-theme="dark"] { --sprite-url: url('/assets/sprite.dark.png'); }
+
+.sprite {
+  background-image: var(--sprite-url);
+  background-repeat: no-repeat;
+  display: block;
+}
+
+/* sprite-huddle-logo-icon   y=1272, 376x350, shown at 40x40 (cover-fit, scale=40/350) */
+.sprite-huddle-logo-icon    { background-size: 96px auto; background-position: -1px -145px; }
+/* sprite-sidebar-penguin-illustration  y=0, 836x331, width=100% responsive */
+.sprite-sidebar-penguin-illustration {
+  width: 100%;
+  aspect-ratio: 836 / 331;
+  background-size: 100% auto;
+  background-position: 0 0;
+}
+/* sprite-hero-penguins-icebergs  y=331, 836x471, shown at 284x160 (scale=160/471) */
+.sprite-hero-penguins-icebergs { width: 284px; height: 160px; background-size: 284px auto; background-position: 0 -112px; }
+/* sprite-footer-penguins-right  y=802, 836x470, shown at 320x180 (scale=180/470) */
+.sprite-footer-penguins-right  { width: 320px; height: 180px; background-size: 320px auto; background-position: 0 -307px; }
+/* sprite-footer-penguins-left   y=1622, 250x123 */
+.sprite-footer-penguins-left   { width: 250px; height: 123px; background-size: 836px auto; background-position: 0 -1622px; }
+/* sprite-user-avatar            y=1745, 62x62 */
+.sprite-user-avatar            { width: 62px; height: 62px; background-size: 836px auto; background-position: 0 -1745px; }
+
 /* ── Tokens ──────────────────────────────────────────────────────────────── */
 :root {
   --sidebar-bg: #1a2545;
@@ -74,7 +102,7 @@ a { color: inherit; text-decoration: none; }
   padding: 1.1rem 1rem .9rem;
   border-bottom: 1px solid rgba(255,255,255,.05);
 }
-.sidebar-logo { width: 40px; height: 40px; object-fit: cover; border-radius: .4rem; }
+.sidebar-logo { width: 40px; height: 40px; border-radius: .4rem; overflow: hidden; flex-shrink: 0; }
 .sidebar-brand-text { display: flex; flex-direction: column; line-height: 1.1; }
 .sidebar-brand-name { color: #fff; font-weight: 800; letter-spacing: .08em; font-size: .95rem; }
 .sidebar-brand-sub { color: rgba(255,255,255,.55); font-size: .65rem; letter-spacing: .12em; }
@@ -120,10 +148,7 @@ a { color: inherit; text-decoration: none; }
   flex-direction: column;
 }
 .sidebar-hero-img {
-  width: 100%;
-  height: auto;
-  display: block;
-  object-fit: cover;
+  /* dimensions and background set by .sprite-sidebar-penguin-illustration */
 }
 .sidebar-hero-text {
   padding: .85rem 1rem .9rem;
@@ -227,9 +252,6 @@ main {
   color: var(--text);
 }
 .welcome-hero {
-  height: 160px;
-  width: auto;
-  object-fit: contain;
   flex-shrink: 0;
   align-self: flex-end;
 }
@@ -607,12 +629,10 @@ main {
 .banner-text h2 { font-size: 1.15rem; font-weight: 700; margin-bottom: .3rem; }
 .banner-text p  { font-size: .875rem; opacity: .9; }
 .banner-art {
-  height: 180px;
-  width: auto;
   flex-shrink: 0;
-  object-fit: cover;
   border-radius: 0 .75rem .75rem 0;
-  align-self: stretch;
+  overflow: hidden;
+  align-self: center;
 }
 
 /* ── Container detail page ───────────────────────────────────────────────── */
