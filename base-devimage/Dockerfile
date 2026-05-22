@@ -23,8 +23,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Global CLIs: Anthropic Claude Code and OpenAI Codex
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+# Global CLIs: Anthropic Claude Code, OpenAI Codex, OpenCode
+RUN npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
+
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Create vscode user and grant docker socket access via docker group membership
 RUN groupadd --gid 1000 vscode \
