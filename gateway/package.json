@@ -1,0 +1,17 @@
+{
+  "name": "huddle",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "fastify": "^4.27.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.12.5",
+    "typescript": "^5.4.5"
+  }
+}

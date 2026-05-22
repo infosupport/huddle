@@ -1,0 +1,11 @@
+{
+  "name": "huddle-agent",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/huddle,type=bind",
+  "workspaceFolder": "/workspaces/huddle",
+  "customizations": {
+    "vscode": {
+      "extensions": []
+    }
+  }
+}

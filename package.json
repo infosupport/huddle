@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "hello": "node -e \"console.log('hello from devcontainer')\""
+  }
+}
