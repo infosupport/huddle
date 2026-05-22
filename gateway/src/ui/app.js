@@ -76,6 +76,19 @@
     if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
   }
 
+  // ── SVG icon helper ──────────────────────────────────────────────────────
+  function svgIcon(paths, size = 18) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  }
+  const ICON_BOX       = '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>';
+  const ICON_GLOBE     = '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/>';
+  const ICON_SHIELD    = '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>';
+  const ICON_FILE      = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/>';
+  const ICON_ALERT     = '<path d="m21.7 17.3-8-13a2 2 0 0 0-3.4 0l-8 13A2 2 0 0 0 4 20h16a2 2 0 0 0 1.7-2.7Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>';
+  const ICON_SHIP      = '<path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1s1.2 1 2.5 1c2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M19.4 18 22 11h-1l-9-3-9 3H2l2.6 7"/><path d="M12 8V2H8"/><path d="M5 11v-1a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/>';
+  const ICON_REFRESH   = '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>';
+  const ICON_ARROW_R   = '<path d="M5 12h14"/><path d="m13 5 7 7-7 7"/>';
+
   function loadTheme() {
     try { return localStorage.getItem('huddle-theme') || 'light'; } catch { return 'light'; }
   }
@@ -134,8 +147,8 @@
 
   function updateActiveNav(route) {
     const baseRoute = route === 'container' ? 'containers' : route;
-    document.querySelectorAll('.sidebar-link').forEach((a) => {
-      a.classList.toggle('active', a.dataset.route === baseRoute);
+    document.querySelectorAll('.nav__item').forEach((a) => {
+      a.classList.toggle('nav__item--active', a.dataset.route === baseRoute);
     });
   }
 
@@ -176,65 +189,103 @@
     const allowRules     = rules.filter((r) => r.status === 'allow');
     const denyRules      = rules.filter((r) => r.status === 'deny');
     const requestedRules = rules.filter((r) => r.status === 'requested');
+    const activeGrants   = Object.entries(grants).filter(([, g]) => g.until > now);
+    const violations     = requestedRules.length;
 
-    const activeGrants = Object.entries(grants).filter(([, g]) => g.until > now);
+    // ── KPI cards ──
+    const kpiContainerDot = runningCount > 0 ? 'dot--ok' : 'dot--warn';
+    const kpiViolDot      = violations > 0   ? 'dot--err' : 'dot--ok';
+    const kpiViolFoot     = violations > 0
+      ? `<span class="dot ${kpiViolDot}"></span><b>${violations}</b> pending review`
+      : `<span class="dot dot--ok"></span>All clear`;
 
-    const violations = requestedRules.length;
-    const violationsColor = violations > 0 ? 'orange' : 'muted';
-    const violationsIcon  = violations > 0 ? ' ⚠️' : '';
-
-    const stats = `
-      <div class="stats-row">
-        <div class="stat-card stat-card--blue">
-          <span class="stat-label">Containers</span>
-          <span class="stat-value">${containers.length || (state.loaded ? 0 : '—')}</span>
-          <span class="stat-sub${runningCount > 0 ? ' warn' : ''}">${runningCount} Running</span>
+    const kpis = `
+      <div class="kpis">
+        <div class="kpi">
+          <div class="kpi__head">
+            <span class="kpi__label">Containers</span>
+            <span class="kpi__icon">${svgIcon(ICON_BOX, 22)}</span>
+          </div>
+          <div class="kpi__value">${state.loaded ? containers.length : '—'}</div>
+          <div class="kpi__foot"><span class="dot ${kpiContainerDot}"></span><b>${runningCount}</b> running</div>
         </div>
-        <div class="stat-card stat-card--navy">
-          <span class="stat-label">Firewall Rules</span>
-          <span class="stat-value">${rules.length || (state.loaded ? 0 : '—')}</span>
-          <span class="stat-sub">${requestedRules.length} Pending Review</span>
+        <div class="kpi">
+          <div class="kpi__head">
+            <span class="kpi__label">Firewall Rules</span>
+            <span class="kpi__icon">${svgIcon(ICON_GLOBE, 22)}</span>
+          </div>
+          <div class="kpi__value">${state.loaded ? rules.length : '—'}</div>
+          <div class="kpi__foot"><span class="dot ${requestedRules.length > 0 ? 'dot--warn' : 'dot--ok'}"></span><b>${requestedRules.length}</b> pending</div>
         </div>
-        <div class="stat-card stat-card--green">
-          <span class="stat-label">Docker Access</span>
-          <span class="stat-value">${activeGrants.length || (state.loaded ? 0 : '—')}</span>
-          <span class="stat-sub">${activeGrants.length} Active Grants</span>
+        <div class="kpi">
+          <div class="kpi__head">
+            <span class="kpi__label">Docker Access</span>
+            <span class="kpi__icon">${svgIcon(ICON_SHIP, 22)}</span>
+          </div>
+          <div class="kpi__value">${state.loaded ? activeGrants.length : '—'}</div>
+          <div class="kpi__foot"><span class="dot dot--ok"></span><b>${activeGrants.length}</b> active grants</div>
         </div>
-        <div class="stat-card stat-card--${violationsColor}">
-          <span class="stat-label">Policy Violations${violationsIcon}</span>
-          <span class="stat-value">${violations}</span>
-          <span class="stat-sub${violations > 0 ? ' warn' : ''}">${violations > 0 ? `${violations} Inbound` : 'All clear'}</span>
+        <div class="kpi">
+          <div class="kpi__head">
+            <span class="kpi__label">Policy Violations</span>
+            <span class="kpi__icon">${svgIcon(ICON_ALERT, 22)}</span>
+          </div>
+          <div class="kpi__value">${violations}</div>
+          <div class="kpi__foot">${kpiViolFoot}</div>
         </div>
       </div>`;
 
+    // ── Recent containers table ──
     const recentContainers = containers.slice(0, 6);
     const recentContainersTable = recentContainers.length === 0
       ? '<p class="empty-note">Geen containers</p>'
-      : `<table class="data-table">
-          <thead><tr><th>Name</th><th>Status</th><th>Owner</th><th>Score</th><th>Docker</th></tr></thead>
+      : `<table class="table">
+          <thead><tr><th>Container</th><th>Status</th><th>Owner</th><th>Score</th></tr></thead>
           <tbody>
             ${recentContainers.map((c) => {
               const cRules = rules.filter((r) => r.container_id === c.name);
               const allow = cRules.filter((r) => r.status === 'allow').length;
               const deny  = cRules.filter((r) => r.status === 'deny').length;
               const score = discoveryScore(allow, deny);
-              const grant = grants[c.name];
-              const dockerActive = grant && grant.until > now;
+              const sc    = statusClass(c);
               return `
                 <tr class="clickable" data-nav="container/${esc(c.name)}">
-                  <td><strong>${esc(c.presentableName || c.name)}</strong></td>
-                  <td><span class="status-dot ${statusClass(c)}"></span>${esc(statusLabel(c))}</td>
+                  <td>
+                    <div class="container-cell">
+                      <div class="cc-icon">${svgIcon(ICON_BOX)}</div>
+                      <div>
+                        <div class="name">${esc(c.presentableName || c.name)}</div>
+                        <div class="sub">${esc(sourcesLeaf(c))}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="status status--${sc}">${esc(statusLabel(c))}</span></td>
                   <td>${esc(sourcesLeaf(c))}</td>
                   <td>${scoreBadge(score)}</td>
-                  <td>${dockerActive ? '🐳' : '—'}</td>
                 </tr>`;
             }).join('')}
           </tbody>
         </table>`;
 
+    // ── Firewall rules list (top 4) ──
+    const topRules = [...rules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 4);
+    const firewallList = topRules.length === 0
+      ? '<p class="empty-note">Geen regels</p>'
+      : topRules.map((r) => `
+        <div class="fw-rule">
+          <div class="fw-rule__icon">${svgIcon(ICON_GLOBE)}</div>
+          <div>
+            <div class="fw-rule__name">${esc(r.domain)}</div>
+            <div class="fw-rule__sub">${r.container_id ? esc(r.container_id) : 'Global'}</div>
+          </div>
+          <span class="pill pill--${r.status === 'allow' ? 'allow' : r.status === 'deny' ? 'deny' : 'pending'}">${r.status}</span>
+          <span class="fw-rule__more">${svgIcon(ICON_ARROW_R, 16)}</span>
+        </div>`).join('');
+
+    // ── Docker access grants table ──
     const grantRows = activeGrants.length === 0
       ? '<p class="empty-note">Geen actieve toegang</p>'
-      : `<table class="data-table">
+      : `<table class="table">
           <thead><tr><th>Container</th><th>Expires</th><th class="col-actions">Action</th></tr></thead>
           <tbody>
             ${activeGrants.map(([name, g]) => {
@@ -252,130 +303,128 @@
           </tbody>
         </table>`;
 
-    const recentRules = [...rules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 8);
-    const rulesList = recentRules.length === 0
-      ? '<p class="empty-note">Geen regels</p>'
-      : recentRules.map((r) => `
-        <div class="list-row">
-          <span class="domain">${esc(r.domain)}</span>
-          <span class="badge badge-${r.status}">${r.status}</span>
-          <span class="timestamp">${relTime(r.last_seen)}</span>
-        </div>`).join('');
-
+    // ── Policy compliance donut ──
     const totalCompliance = allowRules.length + denyRules.length + requestedRules.length;
     const compliancePct = totalCompliance === 0
       ? 100
       : Math.round((allowRules.length / totalCompliance) * 100);
-    const donut = svgDonut(compliancePct);
+    const R = 56;
+    const circ = 2 * Math.PI * R;
+    const allowDash = totalCompliance > 0 ? (allowRules.length / totalCompliance) * circ : circ;
+    const warnDash  = totalCompliance > 0 ? (requestedRules.length / totalCompliance) * circ : 0;
+    const allowOff  = 0;
+    const warnOff   = -allowDash;
+    const denyOff   = -(allowDash + warnDash);
+    const complianceCard = `
+      <div class="compliance">
+        <div class="donut">
+          <svg viewBox="0 0 140 140">
+            <circle cx="70" cy="70" r="${R}" fill="none" stroke="var(--border)" stroke-width="14"/>
+            <circle cx="70" cy="70" r="${R}" fill="none" stroke="var(--success)" stroke-width="14"
+              stroke-dasharray="${allowDash.toFixed(2)} ${circ.toFixed(2)}"
+              stroke-dashoffset="${allowOff.toFixed(2)}" stroke-linecap="butt"/>
+            <circle cx="70" cy="70" r="${R}" fill="none" stroke="var(--warning)" stroke-width="14"
+              stroke-dasharray="${warnDash.toFixed(2)} ${circ.toFixed(2)}"
+              stroke-dashoffset="${warnOff.toFixed(2)}" stroke-linecap="butt"/>
+            <circle cx="70" cy="70" r="${R}" fill="none" stroke="var(--danger)" stroke-width="14"
+              stroke-dasharray="${(circ - allowDash - warnDash).toFixed(2)} ${circ.toFixed(2)}"
+              stroke-dashoffset="${denyOff.toFixed(2)}" stroke-linecap="butt"/>
+          </svg>
+          <div class="donut__center">
+            <b>${compliancePct}%</b>
+            <span>Compliant</span>
+          </div>
+        </div>
+        <div class="compliance__legend">
+          <div class="legend-row"><span class="dot dot--green"></span><span class="label">Compliant</span><span class="num">${allowRules.length}</span></div>
+          <div class="legend-row"><span class="dot dot--amber"></span><span class="label">Warnings</span><span class="num">${requestedRules.length}</span></div>
+          <div class="legend-row"><span class="dot dot--red"></span><span class="label">Violations</span><span class="num">${denyRules.length}</span></div>
+        </div>
+      </div>`;
 
-    const activityList = [...rules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 10);
-    const activity = activityList.length === 0
+    // ── Activity feed ──
+    const activityList = [...rules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 8);
+    const feedItems = activityList.length === 0
       ? '<p class="empty-note">Geen activiteit</p>'
       : activityList.map((r) => {
           const verb = r.status === 'allow' ? 'allowed' : r.status === 'deny' ? 'blocked' : 'requested';
+          const iconCls = r.status === 'allow' ? 'icon--ok' : r.status === 'deny' ? 'icon--err' : 'icon--warn';
           return `
-            <div class="list-row">
-              <span class="domain">${esc(r.domain)}</span>
-              <span class="badge badge-${r.status}">${esc(verb)}</span>
-              <span class="timestamp">${relTime(r.last_seen)}</span>
+            <div class="feed-item">
+              <div class="feed-item__icon ${iconCls}">${svgIcon(ICON_GLOBE, 17)}</div>
+              <div class="feed-item__body">
+                <div class="feed-item__title">${esc(r.domain)}</div>
+                <div class="feed-item__sub">${r.container_id ? esc(r.container_id) : 'Global'} · ${verb}</div>
+              </div>
+              <span class="feed-item__time">${relTime(r.last_seen)}</span>
             </div>`;
         }).join('');
 
     return `
       <div class="welcome">
-        <div class="welcome-text">
+        <div class="welcome__bg"></div>
+        <div class="welcome__text">
           <h1>Welcome back!</h1>
           <p>Everything looks secure. Keep building amazing things.</p>
         </div>
-        <div class="welcome-hero sprite sprite-hero-penguins-icebergs" role="presentation"></div>
       </div>
-      ${stats}
-      <div class="dash-grid">
-        <div class="dash-col">
-          <div class="card">
-            <div class="card-header">
-              <h3>Recent Containers</h3>
-              <a class="card-link" data-nav="containers">View All →</a>
-            </div>
-            <div class="card-body tight">${recentContainersTable}</div>
-          </div>
 
-          <div class="card">
-            <div class="card-header">
-              <h3>Docker Access Grants</h3>
-              <a class="card-link" data-nav="docker-access">+ Grant Access</a>
-            </div>
-            <div class="card-body tight">${grantRows}</div>
+      ${kpis}
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Recent Containers</h3>
+            <a class="link" data-nav="containers">View all ${svgIcon(ICON_ARROW_R, 14)}</a>
           </div>
+          ${recentContainersTable}
         </div>
-
-        <div class="dash-col">
-          <div class="card">
-            <div class="card-header">
-              <h3>Firewall Rules</h3>
-              <a class="card-link" data-nav="firewall">View All →</a>
-            </div>
-            <div class="card-body tight">${rulesList}</div>
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Firewall Rules</h3>
+            <a class="link" data-nav="firewall">View all ${svgIcon(ICON_ARROW_R, 14)}</a>
           </div>
-
-          <div class="card">
-            <div class="card-header"><h3>Policy Compliance</h3></div>
-            <div class="card-body tight">
-              <div class="donut-wrap">
-                <div class="donut">
-                  ${donut}
-                  <div class="donut-center">
-                    <span class="donut-pct">${compliancePct}%</span>
-                    <span class="donut-label">Compliant</span>
-                  </div>
-                </div>
-              </div>
-              <div class="compliance-stats">
-                <div class="compliance-stat green">
-                  <div class="num">${allowRules.length}</div>
-                  <div class="lbl">Compliant</div>
-                </div>
-                <div class="compliance-stat yellow">
-                  <div class="num">${requestedRules.length}</div>
-                  <div class="lbl">Warnings</div>
-                </div>
-                <div class="compliance-stat red">
-                  <div class="num">${denyRules.length}</div>
-                  <div class="lbl">Violations</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header"><h3>Activity Feed</h3></div>
-            <div class="card-body tight">${activity}</div>
-          </div>
+          ${firewallList}
         </div>
       </div>
 
-      <div class="banner">
-        <div class="banner-text">
-          <h2>Huddle together. Build boldly. We've got your back.</h2>
-          <p>Secure dev environments in the DMZ</p>
+      <div class="grid-3">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Docker Access Grants</h3>
+            <a class="link" data-nav="docker-access">Manage</a>
+          </div>
+          ${grantRows}
         </div>
-        <div class="banner-art sprite sprite-footer-penguins-right" role="presentation"></div>
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Policy Compliance</h3>
+          </div>
+          ${complianceCard}
+        </div>
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Activity Feed</h3>
+          </div>
+          <div class="feed">${feedItems}</div>
+        </div>
+      </div>
+
+      <div class="huddle-banner">
+        <div class="huddle-banner__bg"></div>
+        <div class="huddle-banner__hex"></div>
+        <div class="huddle-banner__text">
+          <b>Huddle together. Build boldly. <span class="accent">We've got your back.</span></b>
+          <span>Secure dev environments in the DMZ — protected from the cold outside.</span>
+        </div>
+        <div class="huddle-banner__cta">
+          <button class="btn btn--accent" data-action="start-modal">
+            ${svgIcon('<path d="M12 5v14"/><path d="M5 12h14"/>', 16)}
+            Start devcontainer
+          </button>
+        </div>
       </div>
     `;
-  }
-
-  function svgDonut(pct) {
-    const r = 60;
-    const c = 2 * Math.PI * r;
-    const dash = (pct / 100) * c;
-    return `
-      <svg viewBox="0 0 160 160" width="160" height="160">
-        <circle cx="80" cy="80" r="${r}" fill="none" stroke="var(--border)" stroke-width="14"/>
-        <circle cx="80" cy="80" r="${r}" fill="none" stroke="var(--orange)" stroke-width="14"
-          stroke-dasharray="${dash} ${c}"
-          stroke-linecap="round"
-          transform="rotate(-90 80 80)"/>
-      </svg>`;
   }
 
   // ── Containers page ────────────────────────────────────────────────────
@@ -386,7 +435,7 @@
     const now = Math.floor(Date.now() / 1000);
 
     const tableBody = containers.length === 0
-      ? `<tr><td colspan="8"><p class="empty-note">Geen containers</p></td></tr>`
+      ? `<tr><td colspan="7"><p class="empty-note">Geen containers</p></td></tr>`
       : containers.map((c) => {
           const cRules = rules.filter((r) => r.container_id === c.name);
           const requested = cRules.filter((r) => r.status === 'requested').length;
@@ -396,19 +445,27 @@
           const grant = grants[c.name];
           const dockerActive = grant && grant.until > now;
           const image = (c.image || '').split('/').pop() || '—';
+          const sc = statusClass(c);
           const networkCell = isRogue(c)
             ? '<span class="status-text rogue">✗ Rogue</span>'
             : '<span class="status-text ok">✓ In netwerk</span>';
 
           return `
-            <tr>
-              <td><span class="status-dot ${statusClass(c)}"></span>${esc(statusLabel(c))}</td>
-              <td><a class="card-link" data-nav="container/${esc(c.name)}">${esc(c.presentableName || c.name)}</a></td>
-              <td><code>${esc(image)}</code></td>
+            <tr class="clickable" data-nav="container/${esc(c.name)}">
+              <td>
+                <div class="container-cell">
+                  <div class="cc-icon">${svgIcon(ICON_BOX)}</div>
+                  <div>
+                    <div class="name">${esc(c.presentableName || c.name)}</div>
+                    <div class="sub"><code>${esc(image)}</code></div>
+                  </div>
+                </div>
+              </td>
+              <td><span class="status status--${sc}">${esc(statusLabel(c))}</span></td>
               <td>${networkCell}</td>
               <td>${requested > 0 ? `<span class="badge-pill yellow">${requested}</span>` : '<span class="badge-pill muted">0</span>'}</td>
               <td>${scoreBadge(score)}</td>
-              <td>${dockerActive ? '🐳' : '—'}</td>
+              <td>${dockerActive ? '<span class="pill pill--active">Active</span>' : '—'}</td>
               <td class="col-actions">
                 <button class="btn btn-ghost btn-sm" data-nav="container/${esc(c.name)}">Detail</button>
                 <button class="btn btn-delete btn-sm" data-action="snapshot" data-container="${esc(c.name)}" data-id="${esc(c.id || '')}">Snapshot</button>
@@ -420,21 +477,22 @@
       <div class="page-header">
         <h1>Containers</h1>
         <div class="actions">
-          <button class="btn btn-primary" data-action="start-modal">+ Start devcontainer</button>
+          <button class="btn btn--accent" data-action="start-modal">
+            ${svgIcon('<path d="M12 5v14"/><path d="M5 12h14"/>', 16)}
+            Start devcontainer
+          </button>
         </div>
       </div>
       <div class="card">
-        <div class="card-body tight">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Status</th><th>Name</th><th>Image</th><th>Network</th>
-                <th>Requested</th><th>Score</th><th>Docker</th><th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>${tableBody}</tbody>
-          </table>
-        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Container</th><th>Status</th><th>Network</th>
+              <th>Requested</th><th>Score</th><th>Docker</th><th class="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${tableBody}</tbody>
+        </table>
       </div>`;
   }
 
@@ -583,22 +641,18 @@
     const globalSection = `
       <div class="card">
         <div class="card-header"><h3>Globale regels</h3></div>
-        <h4>✓ Toegestaan (${allow.length})</h4>
-        <div class="card-body tight">
-          ${allow.length === 0 ? '<p class="empty-note">Geen</p>' : `
-            <table class="data-table">
-              <thead><tr><th>Domein</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
-              <tbody>${allow.map(ruleRow).join('')}</tbody>
-            </table>`}
-        </div>
-        <h4>🚫 Geblokkeerd (${deny.length})</h4>
-        <div class="card-body tight">
-          ${deny.length === 0 ? '<p class="empty-note">Geen</p>' : `
-            <table class="data-table">
-              <thead><tr><th>Domein</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
-              <tbody>${deny.map(ruleRow).join('')}</tbody>
-            </table>`}
-        </div>
+        <h4>Toegestaan (${allow.length})</h4>
+        ${allow.length === 0 ? '<p class="empty-note">Geen</p>' : `
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
+            <tbody>${allow.map(ruleRow).join('')}</tbody>
+          </table>`}
+        <h4>Geblokkeerd (${deny.length})</h4>
+        ${deny.length === 0 ? '<p class="empty-note">Geen</p>' : `
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
+            <tbody>${deny.map(ruleRow).join('')}</tbody>
+          </table>`}
       </div>`;
 
     const groups = {};
@@ -611,36 +665,34 @@
     const requestedSection = `
       <div class="card">
         <div class="card-header"><h3>Openstaande verzoeken (${requested.length})</h3></div>
-        <div class="card-body tight">
-          ${groupNames.length === 0 ? '<p class="empty-note">Geen openstaande verzoeken</p>' :
-            groupNames.map((name) => `
-              <h4>${esc(name)}</h4>
-              <table class="data-table">
-                <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
-                <tbody>${groups[name].map((r) => `
-                  <tr>
-                    <td class="domain-cell">${esc(r.domain)}</td>
-                    <td>${r.request_count}</td>
-                    <td>${relTime(r.last_seen)}</td>
-                    <td class="col-actions">
-                      <div class="domain-actions">
-                        <button class="btn btn-deny btn-sm" data-action="deny" data-id="${r.id}">🚫</button>
-                        <button class="btn btn-deny-g btn-sm" data-action="deny-global" data-id="${r.id}" data-domain="${esc(r.domain)}">🚫🚫</button>
-                        <button class="btn btn-allow btn-sm" data-action="allow" data-id="${r.id}">✓</button>
-                        <button class="btn btn-allow-g btn-sm" data-action="allow-global" data-id="${r.id}" data-domain="${esc(r.domain)}">✓✓</button>
-                      </div>
-                    </td>
-                  </tr>`).join('')}
-                </tbody>
-              </table>`).join('')}
-        </div>
+        ${groupNames.length === 0 ? '<p class="empty-note">Geen openstaande verzoeken</p>' :
+          groupNames.map((name) => `
+            <h4>${esc(name)}</h4>
+            <table class="data-table">
+              <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
+              <tbody>${groups[name].map((r) => `
+                <tr>
+                  <td class="domain-cell">${esc(r.domain)}</td>
+                  <td>${r.request_count}</td>
+                  <td>${relTime(r.last_seen)}</td>
+                  <td class="col-actions">
+                    <div class="domain-actions">
+                      <button class="btn btn-deny btn-sm" data-action="deny" data-id="${r.id}">🚫</button>
+                      <button class="btn btn-deny-g btn-sm" data-action="deny-global" data-id="${r.id}" data-domain="${esc(r.domain)}">🚫🚫</button>
+                      <button class="btn btn-allow btn-sm" data-action="allow" data-id="${r.id}">✓</button>
+                      <button class="btn btn-allow-g btn-sm" data-action="allow-global" data-id="${r.id}" data-domain="${esc(r.domain)}">✓✓</button>
+                    </div>
+                  </td>
+                </tr>`).join('')}
+              </tbody>
+            </table>`).join('')}
       </div>`;
 
     return `
       <div class="page-header"><h1>Firewall Rules</h1></div>
-      <div class="dash-grid">
-        <div class="dash-col">${requestedSection}</div>
-        <div class="dash-col">${globalSection}</div>
+      <div class="grid-2">
+        <div>${requestedSection}</div>
+        <div>${globalSection}</div>
       </div>`;
   }
 
@@ -653,14 +705,16 @@
     const rows = entries.length === 0
       ? '<p class="empty-note">Geen grants</p>'
       : `<table class="data-table">
-          <thead><tr><th>Container</th><th>Expires</th><th class="col-actions">Action</th></tr></thead>
+          <thead><tr><th>Container</th><th>Status</th><th>Expires</th><th class="col-actions">Action</th></tr></thead>
           <tbody>
             ${entries.map(([name, g]) => {
               const remaining = g.until - now;
               const text = remaining > 0 ? `${Math.ceil(remaining / 60)}m remaining` : 'Expired';
+              const pillCls = remaining > 0 ? 'pill pill--active' : 'pill pill--expires';
               return `
                 <tr>
                   <td>${esc(name)}</td>
+                  <td><span class="${pillCls}">${remaining > 0 ? 'Active' : 'Expired'}</span></td>
                   <td><span class="grant-timer${remaining > 0 ? ' active' : ''}">${text}</span></td>
                   <td class="col-actions">
                     <button class="btn btn-delete btn-sm" data-action="revoke-grant" data-container="${esc(name)}">Revoke</button>
@@ -678,14 +732,14 @@
       <div class="page-header"><h1>Docker Access Grants</h1></div>
       <div class="card">
         <div class="card-header"><h3>Active Grants</h3></div>
-        <div class="card-body tight">${rows}</div>
+        ${rows}
         <div class="grant-form">
-          <label for="grant-container" style="font-weight:600;font-size:.85rem">+ Grant Access:</label>
+          <label for="grant-container" style="font-weight:600">Grant Access:</label>
           <select id="grant-container">${containerOpts || '<option value="">Geen containers</option>'}</select>
           <select id="grant-minutes">
             ${[5,10,15,20,30].map((m) => `<option value="${m}">${m} min</option>`).join('')}
           </select>
-          <button class="btn btn-primary btn-sm" data-action="grant-form">Grant</button>
+          <button class="btn btn--accent btn-sm" data-action="grant-form">Grant</button>
         </div>
       </div>`;
   }
@@ -695,9 +749,7 @@
     return `
       <div class="page-header"><h1>${esc(title)}</h1></div>
       <div class="card">
-        <div class="card-body">
-          <p class="empty-note">Binnenkort beschikbaar</p>
-        </div>
+        <p class="empty-note">Binnenkort beschikbaar</p>
       </div>`;
   }
 

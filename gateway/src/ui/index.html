@@ -4,75 +4,99 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Huddle — DMZ Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
 
-<div class="layout">
+<div class="app">
+  <!-- ── Sidebar ── -->
   <aside class="sidebar">
-    <div class="sidebar-brand">
-      <div id="sidebar-logo" class="sidebar-logo sprite sprite-huddle-logo-icon" role="img" aria-label="Huddle"></div>
-      <div class="sidebar-brand-text">
-        <span class="sidebar-brand-name">HUDDLE</span>
-        <span class="sidebar-brand-sub">DMZ PORTAL</span>
-      </div>
+    <div class="sidebar__logo" role="img" aria-label="Huddle DMZ Portal"></div>
+
+    <div class="sidebar__igloo" role="presentation"></div>
+
+    <div class="sidebar__pledge">
+      <h3>TOGETHER,<span class="accent">WE STAY SECURE.</span></h3>
+      <p>Huddle keeps your dev environments protected from the cold outside. <span class="heart">♥</span></p>
     </div>
 
-    <div class="sidebar-hero">
-      <div class="sidebar-hero-img sprite sprite-sidebar-penguin-illustration" role="presentation"></div>
-      <div class="sidebar-hero-text">
-        <span class="sidebar-hero-title">TOGETHER,<br><em>WE STAY SECURE.</em></span>
-        <p class="sidebar-hero-sub">Huddle keeps your dev environments protected from the cold outside.</p>
-      </div>
-    </div>
-
-    <nav class="sidebar-nav" id="sidebar-nav">
-      <a class="sidebar-link" data-route="dashboard" href="#dashboard">
-        <span class="sidebar-icon">&#9632;</span><span>Dashboard</span>
+    <nav class="nav" id="sidebar-nav">
+      <a class="nav__item" data-route="dashboard" href="#dashboard">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1Z"/></svg>
+        <span>Dashboard</span>
       </a>
-      <a class="sidebar-link" data-route="containers" href="#containers">
-        <span class="sidebar-icon">&#9635;</span><span>Containers</span>
+      <a class="nav__item" data-route="containers" href="#containers">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+        <span>Containers</span>
       </a>
-      <a class="sidebar-link" data-route="firewall" href="#firewall">
-        <span class="sidebar-icon">&#9633;</span><span>Firewall</span>
+      <a class="nav__item" data-route="firewall" href="#firewall">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
+        <span>Firewall</span>
       </a>
-      <a class="sidebar-link" data-route="docker-access" href="#docker-access">
-        <span class="sidebar-icon">&#9634;</span><span>Docker Access</span>
+      <a class="nav__item" data-route="docker-access" href="#docker-access">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1s1.2 1 2.5 1c2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M19.4 18 22 11h-1l-9-3-9 3H2l2.6 7"/><path d="M12 8V2H8"/><path d="M5 11v-1a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/></svg>
+        <span>Docker Access</span>
       </a>
-      <a class="sidebar-link" data-route="policies" href="#policies">
-        <span class="sidebar-icon">&#9671;</span><span>Policies</span>
+      <a class="nav__item" data-route="policies" href="#policies">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span>Policies</span>
       </a>
-      <a class="sidebar-link" data-route="audit" href="#audit">
-        <span class="sidebar-icon">&#9776;</span><span>Audit Logs</span>
+      <a class="nav__item" data-route="audit" href="#audit">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg>
+        <span>Audit Logs</span>
       </a>
-      <a class="sidebar-link" data-route="settings" href="#settings">
-        <span class="sidebar-icon">&#9881;</span><span>Settings</span>
+      <a class="nav__item" data-route="settings" href="#settings">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+        <span>Settings</span>
       </a>
     </nav>
 
-    <div class="sidebar-footer">
-      <span class="sidebar-version">Huddle DMZ Portal v2.3.0</span>
+    <div class="sidebar__footer">
+      <div class="badge">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+      </div>
+      <div class="meta">
+        <b>Huddle DMZ Portal</b>
+        <span>v2.3.0</span>
+      </div>
+      <div class="online-dot" title="Connected"></div>
     </div>
   </aside>
 
-  <div class="main-wrapper">
+  <!-- ── Main ── -->
+  <div class="main">
     <header class="topbar">
-      <div class="topbar-left">
-        <span id="page-breadcrumb" class="topbar-breadcrumb">Dashboard</span>
-      </div>
-      <div class="topbar-right">
-        <button id="btn-theme" class="btn-icon-square" type="button" title="Wissel thema">🌙</button>
-        <button id="btn-start" class="btn btn-primary" type="button">+ Start devcontainer</button>
-        <div class="user-avatar" title="Gebruiker">U</div>
+      <span id="page-breadcrumb" class="topbar__title">Dashboard</span>
+      <div class="topbar__spacer"></div>
+
+      <button id="btn-theme" class="icon-btn" type="button" title="Toggle theme">🌙</button>
+
+      <button id="btn-start" class="icon-btn" type="button" title="Start devcontainer">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      </button>
+
+      <button class="icon-btn" type="button" title="Notifications">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+
+      <div class="profile">
+        <div class="profile__avatar">A</div>
+        <div class="profile__name">
+          <b>Admin</b>
+          <span>DMZ Portal</span>
+        </div>
       </div>
     </header>
 
-    <main id="page-content"></main>
+    <div class="content" id="page-content"></div>
   </div>
 </div>
 
 
-<!-- ── Snapshot modal ────────────────────────────────────────────────────── -->
+<!-- ── Snapshot modal ── -->
 <div id="modal-snapshot" class="modal hidden">
   <div class="modal-box">
     <div class="modal-header">
@@ -91,7 +115,7 @@
   </div>
 </div>
 
-<!-- ── Start devcontainer modal ──────────────────────────────────────────── -->
+<!-- ── Start devcontainer modal ── -->
 <div id="modal-start" class="modal hidden">
   <div class="modal-box">
     <div class="modal-header">
@@ -124,7 +148,7 @@
   </div>
 </div>
 
-<!-- ── Global confirm modal ──────────────────────────────────────────────── -->
+<!-- ── Global confirm modal ── -->
 <div id="modal-confirm" class="modal hidden">
   <div class="modal-box modal-box--narrow">
     <div class="modal-header">
