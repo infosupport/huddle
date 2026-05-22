@@ -7,14 +7,33 @@ import { getGrant } from './db';
 const DOCKER_SOCKET = '/var/run/docker.sock';
 const proxyServers = new Map<string, net.Server>();
 
-// ── Policy ───────────────────────────────────────────────────────────────────
+// ── Devcontainer registry ─────────────────────────────────────────────────────
+// All known devcontainer identifiers (name + full ID + short ID).
+// Operations targeting any of these are blocked — containers may only
+// spawn and manage their OWN child containers, not touch other devcontainers
+// (including themselves).
+
+const devcontainerIds = new Set<string>();
+
+export function registerDevcontainer(name: string, id: string): void {
+  devcontainerIds.add(name);
+  if (id) {
+    devcontainerIds.add(id);
+    devcontainerIds.add(id.slice(0, 12));
+  }
+}
+
+function isDevcontainer(target: string): boolean {
+  return devcontainerIds.has(target);
+}
+
+// ── Policy ────────────────────────────────────────────────────────────────────
 
 function checkPolicy(containerName: string): boolean {
   const grant = getGrant(containerName);
   return Boolean(grant && grant.until > Math.floor(Date.now() / 1000));
 }
 
-// Fetch the container's full and short Docker ID so we can match by ID too.
 function lookupContainerId(containerName: string): Promise<{ id: string; shortId: string }> {
   return new Promise((resolve) => {
     const req = http.request(
@@ -35,46 +54,37 @@ function lookupContainerId(containerName: string): Promise<{ id: string; shortId
   });
 }
 
-// Returns true if `target` (from URL path) refers to this container.
-function isOwn(target: string, name: string, id: string, shortId: string): boolean {
-  return target === name || (id !== '' && target === id) || (shortId !== '' && target === shortId);
-}
-
-function checkRequest(
-  method: string,
-  urlPath: string,
-  name: string,
-  id: string,
-  shortId: string,
-): boolean {
+function checkRequest(method: string, urlPath: string): boolean {
   const m = method.toUpperCase();
   const p = urlPath.replace(/^\/v[\d.]+/, '');
 
+  // No destructive operations ever
   if (m === 'DELETE') return false;
 
   if (m === 'GET' || m === 'HEAD') {
     if (p === '/version' || p === '/info' || p === '/_ping') return true;
-    // Exec inspection — exec IDs are UUIDs; can't scope them further
+    if (p === '/containers/json' || p === '/containers/json') return true;
+    if (p === '/images/json' || /^\/images\/[^/]+\/json$/.test(p)) return true;
     if (/^\/exec\/[^/]+\/json$/.test(p)) return true;
-    // Container inspect/logs: only own container
-    const ct = p.match(/^\/containers\/([^/]+)\/(json|logs|top)$/)?.[1];
-    if (ct && isOwn(ct, name, id, shortId)) return true;
+    if (/^\/containers\/[^/]+\/(json|logs|top)$/.test(p)) return true;
     return false;
   }
 
   if (m === 'POST') {
-    // Exec start/resize: exec IDs are opaque UUIDs issued by Docker
+    // Exec session control — exec IDs are opaque UUIDs
     if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) return true;
-    // Exec create: only own container
-    const ct = p.match(/^\/containers\/([^/]+)\/exec$/)?.[1];
-    if (ct && isOwn(ct, name, id, shortId)) return true;
+    // Spawn new container
+    if (p === '/containers/create') return true;
+    // Container management — blocked for all devcontainers (own + others)
+    const ct = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait)$/)?.[1];
+    if (ct) return !isDevcontainer(ct);
     return false;
   }
 
   return false;
 }
 
-// ── Per-container socket proxy ───────────────────────────────────────────────
+// ── Per-container socket proxy ────────────────────────────────────────────────
 
 export async function createContainerProxy(containerName: string, socketDir: string): Promise<net.Server> {
   const existing = proxyServers.get(containerName);
@@ -84,6 +94,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
   }
 
   const { id, shortId } = await lookupContainerId(containerName);
+  registerDevcontainer(containerName, id);
 
   const socketPath = path.join(socketDir, `${containerName}.sock`);
   try { fs.unlinkSync(socketPath); } catch {}
@@ -123,7 +134,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           return;
         }
 
-        if (!checkRequest(method, urlPath, containerName, id, shortId)) {
+        if (!checkRequest(method, urlPath)) {
           console.log(`[socket-proxy] DENY ${containerName}: ${method} ${urlPath} not allowed`);
           const body = '{"message":"operation not permitted"}';
           client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
@@ -145,9 +156,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
     });
 
     server.on('error', reject);
-
     try { fs.mkdirSync(socketDir, { recursive: true }); } catch {}
-
     server.listen(socketPath, () => {
       try { fs.chmodSync(socketPath, 0o777); } catch {}
       console.log(`[socket-proxy] ${containerName} (${shortId || 'id-unknown'}) → ${socketPath}`);
