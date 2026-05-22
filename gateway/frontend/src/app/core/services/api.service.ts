@@ -5,6 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { Container, ContainerDetail, DockerImage } from '../models/container.model';
 import { Rule, RuleStatus } from '../models/rule.model';
 import { Grant, GrantMap } from '../models/grant.model';
+import { AuditLog } from '../models/audit-log.model';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -31,8 +32,10 @@ export class ApiService {
     return this.handle(this.http.get<GrantMap>('/api/authz/grants'));
   }
 
-  updateRule(id: number, status: RuleStatus): Observable<Rule> {
-    return this.handle(this.http.put<Rule>(`/api/rules/${id}`, { status }));
+  updateRule(id: number, status: RuleStatus, expiresAt?: number): Observable<Rule> {
+    const body: any = { status };
+    if (expiresAt !== undefined) body.expires_at = expiresAt;
+    return this.handle(this.http.put<Rule>(`/api/rules/${id}`, body));
   }
 
   deleteRule(id: number): Observable<void> {
@@ -60,7 +63,12 @@ export class ApiService {
   }
 
   startContainer(params: { image: string; ide: string; workspace: string; containerName: string }): Observable<{ id: string; containerName: string }> {
-    return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', params));
+    return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
+      imageName: params.image,
+      workspaceDir: params.workspace,
+      containerName: params.containerName,
+      ideName: params.ide,
+    }));
   }
 
   setGrant(container: string, minutes: number): Observable<Grant> {
@@ -69,5 +77,27 @@ export class ApiService {
 
   deleteGrant(container: string): Observable<void> {
     return this.handle(this.http.delete<void>(`/api/authz/grants/${container}`));
+  }
+
+  deleteContainer(name: string): Observable<{ok: boolean}> {
+    return this.handle(this.http.delete<{ok: boolean}>(`/api/docker/containers/${name}`));
+  }
+
+  getContainerIds(): Observable<string[]> {
+    return this.handle(this.http.get<string[]>('/api/containers'));
+  }
+
+  reportBug(bug: { title: string; url: string; body?: string }): Observable<{ ok: boolean; filename: string }> {
+    return this.handle(this.http.post<{ ok: boolean; filename: string }>('/api/bugs', bug));
+  }
+
+  getAuditLogs(params?: { container?: string; domain?: string; action?: string; limit?: number }): Observable<AuditLog[]> {
+    const clean: Record<string, string> = {};
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null && v !== '') clean[k] = String(v);
+      }
+    }
+    return this.handle(this.http.get<AuditLog[]>('/api/audit', { params: clean }));
   }
 }

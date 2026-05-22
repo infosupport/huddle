@@ -1,0 +1,102 @@
+<div class="page-header"><h1>Audit Logs</h1></div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="filter-bar">
+      <select [formControl]="containerFilter">
+        <option value="">Alle containers</option>
+        @for (c of containers; track c) {
+          <option [value]="c">{{ c }}</option>
+        }
+      </select>
+      <input type="text" [formControl]="domainFilter" placeholder="Domein zoeken..." />
+      <select [formControl]="actionFilter">
+        <option value="">Alle acties</option>
+        <option value="allow">Allow</option>
+        <option value="deny">Deny</option>
+        <option value="requested">Requested</option>
+        <option value="admin">Admin</option>
+        <option value="system:start">Systeem start</option>
+      </select>
+    </div>
+    @if (logs$ | async; as logs) {
+      <span class="record-count">{{ logs.length }} vermeldingen</span>
+    }
+  </div>
+
+  @if (fetchError()) {
+    <p class="form-error">Fout bij ophalen: {{ fetchError() }}</p>
+  }
+  @if (logs$ | async; as logs) {
+    @if (logs.length === 0) {
+      <p class="empty-note">Geen audit logs gevonden — proxy verkeer verschijnt hier zodra er verzoeken zijn verwerkt</p>
+    } @else {
+      <table class="data-table audit-table">
+        <thead>
+          <tr>
+            <th>Tijd</th>
+            <th>Container</th>
+            <th>Methode</th>
+            <th>Domein / Pad</th>
+            <th>Status</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (log of logs; track log.id) {
+            <tr class="audit-row" [class.audit-row--expanded]="expandedId() === log.id" (click)="toggle(log.id)">
+              <td class="time-cell">{{ log.ts | relTime }}</td>
+              <td>{{ log.container_id || '—' }}</td>
+              <td><code>{{ log.method || '—' }}</code></td>
+              <td class="domain-cell">
+                <span>{{ log.domain }}</span>
+                @if (log.path) { <span class="path-hint">{{ log.path }}</span> }
+              </td>
+              <td>
+                @if (log.res_status) {
+                  <span class="badge" [ngClass]="statusClass(log.res_status)">{{ log.res_status }}</span>
+                }
+              </td>
+              <td><span class="badge" [ngClass]="actionClass(log.action)">{{ log.action }}</span></td>
+            </tr>
+            @if (expandedId() === log.id) {
+              <tr class="audit-detail">
+                <td colspan="6">
+                  <div class="audit-detail-grid">
+                    @if (log.req_headers) {
+                      <div>
+                        <h5>Request headers</h5>
+                        <pre>{{ prettyJson(log.req_headers) }}</pre>
+                      </div>
+                    }
+                    @if (log.req_body) {
+                      <div>
+                        <h5>Request body</h5>
+                        <pre>{{ log.req_body }}</pre>
+                      </div>
+                    }
+                    @if (log.res_headers) {
+                      <div>
+                        <h5>Response headers</h5>
+                        <pre>{{ prettyJson(log.res_headers) }}</pre>
+                      </div>
+                    }
+                    @if (log.res_body) {
+                      <div>
+                        <h5>Response body</h5>
+                        <pre>{{ log.res_body }}</pre>
+                      </div>
+                    }
+                    @if (!log.req_headers && !log.req_body && !log.res_headers && !log.res_body) {
+                      <p class="empty-note">Geen request/response data (HTTPS tunnel)</p>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    }
+  }
+</div>

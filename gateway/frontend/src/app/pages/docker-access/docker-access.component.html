@@ -22,21 +22,21 @@
     }
     <div class="grant-form">
       <label style="font-weight:600">Grant Access:</label>
-      <select [(ngModel)]="selectedContainer">
-        @if (vm.containers.length === 0) {
-          <option value="">Geen containers</option>
-        } @else {
+      @if (vm.containers.length > 0) {
+        <select [(ngModel)]="selectedContainer">
           @for (c of vm.containers; track c.name) {
             <option [value]="c.name">{{ c.presentableName || c.name }}</option>
           }
-        }
-      </select>
+        </select>
+      } @else {
+        <input type="text" [(ngModel)]="selectedContainer" placeholder="Container naam…" style="padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;background:var(--surface-1);color:var(--text)" />
+      }
       <select [(ngModel)]="selectedMinutes">
         @for (m of minuteOptions; track m) {
           <option [value]="m">{{ m }} min</option>
         }
       </select>
-      <button class="btn btn--accent btn-sm" (click)="grantAccess()">Grant</button>
+      <button class="btn btn--accent btn-sm" [disabled]="!selectedContainer" (click)="grantAccess()">Grant</button>
     </div>
   </div>
 }

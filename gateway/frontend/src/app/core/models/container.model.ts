@@ -20,6 +20,7 @@ export interface Container {
 
 export interface ContainerDetail extends Container {
   rules: Rule[];
+  globalRules: Rule[];
   grant?: Grant;
 }
 

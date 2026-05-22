@@ -8,7 +8,7 @@ export const routes: Routes = [
   { path: 'firewall', loadComponent: () => import('./pages/firewall/firewall.component').then(m => m.FirewallComponent) },
   { path: 'docker-access', loadComponent: () => import('./pages/docker-access/docker-access.component').then(m => m.DockerAccessComponent) },
   { path: 'policies', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Policies' } },
-  { path: 'audit', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Audit Logs' } },
+  { path: 'audit', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },
   { path: 'settings', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Settings' } },
   { path: '**', redirectTo: 'dashboard' },
 ];

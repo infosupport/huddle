@@ -1,4 +1,5 @@
-import { Injectable, inject, DestroyRef } from '@angular/core';
+import { Injectable, inject, DestroyRef, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { BehaviorSubject, forkJoin, timer } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ApiService } from './api.service';
@@ -10,6 +11,7 @@ import { GrantMap } from '../models/grant.model';
 export class StateService {
   private api = inject(ApiService);
   private destroyRef = inject(DestroyRef);
+  private platformId = inject(PLATFORM_ID);
 
   containers$ = new BehaviorSubject<Container[]>([]);
   rules$ = new BehaviorSubject<Rule[]>([]);
@@ -18,9 +20,21 @@ export class StateService {
 
   constructor() {
     this.loadAll();
-    timer(5000, 5000)
+    if (isPlatformBrowser(this.platformId)) {
+      this.connectWs();
+    }
+    // Fallback poll every 30s in case WS drops
+    timer(30_000, 30_000)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(() => this.loadAll());
+  }
+
+  private connectWs(): void {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onmessage = () => this.loadAll();
+    ws.onerror = () => ws.close();
+    ws.onclose = () => setTimeout(() => this.connectWs(), 3000);
   }
 
   loadAll(): void {

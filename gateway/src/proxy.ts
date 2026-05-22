@@ -4,8 +4,13 @@ import stream from 'stream';
 import { URL } from 'url';
 import { checkRule } from './rules';
 import { resolveContainerByIp } from './docker';
+import { logAudit } from './db';
 
 const PROXY_PORT = 80;
+
+const CAP = 20 * 1024; // 20 KB per field
+function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
+function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
 
 function send403(res: http.ServerResponse, domain: string, reason: string): void {
   const body = JSON.stringify({ error: 'forbidden', domain, reason });
@@ -52,14 +57,26 @@ export function createProxyServer(): http.Server {
       return;
     }
 
-    const status = checkRule(target.hostname, containerId);
+    const { status, ruleId } = checkRule(target.hostname, containerId);
     if (status !== 'allow') {
+      logAudit({
+        containerId,
+        domain: target.hostname,
+        action: status,
+        ruleId: null,
+        method: req.method ?? null,
+        path: `${target.pathname}${target.search}`,
+        resStatus: 403,
+      });
       send403(res, target.hostname, status);
       return;
     }
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
     delete outgoingHeaders['proxy-connection'];
+
+    const reqChunks: Buffer[] = [];
+    let reqBytes = 0;
 
     const upstream = http.request(
       {
@@ -71,15 +88,62 @@ export function createProxyServer(): http.Server {
       },
       (upstreamRes) => {
         res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-        upstreamRes.pipe(res);
+        const resChunks: Buffer[] = [];
+        let resBytes = 0;
+        let logged = false;
+        const doLog = (resStatus: number | null) => {
+          if (logged) return;
+          logged = true;
+          const reqBuf = Buffer.concat(reqChunks).slice(0, CAP);
+          const resBuf = Buffer.concat(resChunks).slice(0, CAP);
+          logAudit({
+            containerId,
+            domain: target.hostname,
+            action: 'allow',
+            ruleId,
+            method: req.method ?? null,
+            path: `${target.pathname}${target.search}`,
+            reqHeaders: headersToJson(req.headers),
+            reqBody: reqBytes > 0 ? cap(reqBuf.toString('utf8')) : null,
+            resStatus,
+            resHeaders: headersToJson(upstreamRes.headers as Record<string, any>),
+            resBody: resBytes > 0 ? cap(resBuf.toString('utf8')) : null,
+          });
+        };
+        upstreamRes.on('data', (chunk: Buffer) => {
+          if (!res.writableEnded) res.write(chunk);
+          if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
+        });
+        upstreamRes.on('end', () => {
+          if (!res.writableEnded) res.end();
+          doLog(upstreamRes.statusCode ?? null);
+        });
+        upstreamRes.on('error', () => {
+          if (!res.writableEnded) res.destroy();
+          doLog(0);
+        });
       }
     );
 
     upstream.on('error', (err) => {
-      send502(res, err.message);
+      if (!res.headersSent) send502(res, err.message);
+      logAudit({
+        containerId,
+        domain: target.hostname,
+        action: 'allow',
+        ruleId,
+        method: req.method ?? null,
+        path: `${target.pathname}${target.search}`,
+        resStatus: 502,
+      });
     });
 
-    req.pipe(upstream);
+    req.on('error', () => upstream.destroy());
+    req.on('data', (chunk: Buffer) => {
+      upstream.write(chunk);
+      if (reqBytes < CAP) { reqChunks.push(chunk); reqBytes += chunk.length; }
+    });
+    req.on('end', () => upstream.end());
   });
 
   server.on('connect', async (req, clientSocket, head) => {
@@ -94,14 +158,32 @@ export function createProxyServer(): http.Server {
       return;
     }
 
-    const status = checkRule(hostname, containerId);
+    const { status, ruleId } = checkRule(hostname, containerId);
     if (status !== 'allow') {
+      logAudit({
+        containerId,
+        domain: hostname,
+        port,
+        action: status,
+        ruleId: null,
+        method: 'CONNECT',
+        resStatus: 403,
+      });
       rejectSocket(clientSocket, 403, status);
       return;
     }
 
     const upstream = net.connect(port, hostname, () => {
       clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      logAudit({
+        containerId,
+        domain: hostname,
+        port,
+        action: 'allow',
+        ruleId,
+        method: 'CONNECT',
+        resStatus: 200,
+      });
       if (head && head.length) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);

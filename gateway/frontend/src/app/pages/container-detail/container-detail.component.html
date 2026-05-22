@@ -6,13 +6,16 @@
 
 @if (detail$ | async; as d) {
   @let cfg = d.inspect.Config;
-  @let net = d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
+  @let net = d.inspect.NetworkSettings?.Networks?.['dc-net-' + name] ?? d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
   @let workspace = cfg?.Labels?.['com.intellij.devcontainer.workspace.path'] ?? '—';
   @let sourcesPath = cfg?.Labels?.['com.intellij.devcontainer.sources.path'] ?? '—';
   @let inNetwork = !!net;
-  @let allow = allowRules(d.rules);
+  @let allow = permanentAllowRules(d.rules);
+  @let tempAllow = tempAllowRules(d.rules);
   @let deny = denyRules(d.rules);
   @let requested = requestedRules(d.rules);
+  @let gAllow = permanentAllowRules(d.globalRules);
+  @let gDeny = denyRules(d.globalRules);
 
   <div class="page-header">
     <h1>{{ name }}</h1>
@@ -53,15 +56,10 @@
             @if (rem > 0) {
               <button class="btn btn-delete btn-sm" (click)="revoke()">Intrekken</button>
             }
-            <div class="menu-wrap">
-              <details>
-                <summary class="btn btn-ghost btn-sm">Verlenen ▾</summary>
-                <div class="dropdown">
-                  @for (m of [5, 10, 15, 20, 30]; track m) {
-                    <button (click)="grant(m)">{{ m }} min</button>
-                  }
-                </div>
-              </details>
+            <div class="grant-btns">
+              @for (m of [5, 10, 15, 30]; track m) {
+                <button class="btn btn-ghost btn-sm" (click)="grant(m)">+{{ m }}m</button>
+              }
             </div>
           </div>
         }
@@ -69,7 +67,7 @@
     </div>
 
     <div class="card">
-      <div class="card-header"><h3>Rules</h3></div>
+      <div class="card-header"><h3>Container-specifieke regels</h3></div>
       <h4>✓ Toegestaan ({{ allow.length }})</h4>
       <div class="card-body tight">
         @if (allow.length === 0) { <p class="empty-note">Geen</p> } @else {
@@ -88,6 +86,23 @@
           </table>
         }
       </div>
+      @if (tempAllow.length > 0) {
+        <h4>⏱ Tijdelijk toegestaan ({{ tempAllow.length }})</h4>
+        <div class="card-body tight">
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Verloopt</th><th class="col-actions">Acties</th></tr></thead>
+            <tbody>
+              @for (r of tempAllow; track r.id) {
+                <tr>
+                  <td class="domain-cell">{{ r.domain }}</td>
+                  <td>{{ r.expires_at! | relTime }}</td>
+                  <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
       <h4>🚫 Geblokkeerd ({{ deny.length }})</h4>
       <div class="card-body tight">
         @if (deny.length === 0) { <p class="empty-note">Geen</p> } @else {
@@ -118,13 +133,44 @@
                   <td>{{ r.request_count }}</td>
                   <td>{{ r.last_seen | relTime }}</td>
                   <td class="col-actions">
-                    <div class="domain-actions">
-                      <button class="btn btn-deny btn-sm" title="Blokkeren" (click)="denyRule(r)">🚫</button>
-                      <button class="btn btn-deny-g btn-sm" title="Globaal blokkeren" (click)="openGlobalConfirm(r.domain, 'deny')">🚫🚫</button>
-                      <button class="btn btn-allow btn-sm" title="Toestaan" (click)="allowRule(r)">✓</button>
-                      <button class="btn btn-allow-g btn-sm" title="Globaal toestaan" (click)="openGlobalConfirm(r.domain, 'allow')">✓✓</button>
-                    </div>
+                    <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)"/>
                   </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+
+      <div class="card-header"><h3>Globale regels</h3></div>
+      <h4>✓ Globaal toegestaan ({{ gAllow.length }})</h4>
+      <div class="card-body tight">
+        @if (gAllow.length === 0) { <p class="empty-note">Geen</p> } @else {
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th></tr></thead>
+            <tbody>
+              @for (r of gAllow; track r.id) {
+                <tr>
+                  <td class="domain-cell">{{ r.domain }}</td>
+                  <td>{{ r.request_count }}</td>
+                  <td>{{ r.last_seen | relTime }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+      <h4>🚫 Globaal geblokkeerd ({{ gDeny.length }})</h4>
+      <div class="card-body tight">
+        @if (gDeny.length === 0) { <p class="empty-note">Geen</p> } @else {
+          <table class="data-table">
+            <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th></tr></thead>
+            <tbody>
+              @for (r of gDeny; track r.id) {
+                <tr>
+                  <td class="domain-cell">{{ r.domain }}</td>
+                  <td>{{ r.request_count }}</td>
+                  <td>{{ r.last_seen | relTime }}</td>
                 </tr>
               }
             </tbody>

@@ -1,14 +1,15 @@
 @if (vm$ | async; as vm) {
-  <div class="welcome">
-    <div class="welcome__bg"></div>
-    <div class="welcome__text">
-      <h1>Welcome back!</h1>
-      <p>Everything looks secure. Keep building amazing things.</p>
-    </div>
-  </div>
+  <div class="dashboard-grid">
 
-  <div class="kpis">
-    <div class="kpi">
+    <div class="welcome col-span-4">
+      <div class="welcome__bg"></div>
+      <div class="welcome__text">
+        <h1>Welcome back!</h1>
+        <p>Everything looks secure. Keep building amazing things.</p>
+      </div>
+    </div>
+
+    <a class="kpi" routerLink="/containers">
       <div class="kpi__head">
         <span class="kpi__label">Containers</span>
         <span class="kpi__icon">
@@ -20,8 +21,9 @@
         <span class="dot" [ngClass]="vm.runningCount > 0 ? 'dot--ok' : 'dot--warn'"></span>
         <b>{{ vm.runningCount }}</b> running
       </div>
-    </div>
-    <div class="kpi">
+    </a>
+
+    <a class="kpi" routerLink="/firewall">
       <div class="kpi__head">
         <span class="kpi__label">Firewall Rules</span>
         <span class="kpi__icon">
@@ -33,8 +35,9 @@
         <span class="dot" [ngClass]="vm.requestedRules.length > 0 ? 'dot--warn' : 'dot--ok'"></span>
         <b>{{ vm.requestedRules.length }}</b> pending
       </div>
-    </div>
-    <div class="kpi">
+    </a>
+
+    <a class="kpi" routerLink="/docker-access">
       <div class="kpi__head">
         <span class="kpi__label">Docker Access</span>
         <span class="kpi__icon">
@@ -43,10 +46,11 @@
       </div>
       <div class="kpi__value">{{ vm.activeGrants.length }}</div>
       <div class="kpi__foot"><span class="dot dot--ok"></span><b>{{ vm.activeGrants.length }}</b> active grants</div>
-    </div>
-    <div class="kpi">
+    </a>
+
+    <a class="kpi" routerLink="/firewall">
       <div class="kpi__head">
-        <span class="kpi__label">Policy Violations</span>
+        <span class="kpi__label">Blocked Traffic</span>
         <span class="kpi__icon">
           <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.7 17.3-8-13a2 2 0 0 0-3.4 0l-8 13A2 2 0 0 0 4 20h16a2 2 0 0 0 1.7-2.7Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
         </span>
@@ -54,16 +58,14 @@
       <div class="kpi__value">{{ vm.requestedRules.length }}</div>
       <div class="kpi__foot">
         @if (vm.requestedRules.length > 0) {
-          <span class="dot dot--err"></span><b>{{ vm.requestedRules.length }}</b> pending review
+          <span class="dot dot--err"></span><b>{{ vm.requestedRules.length }}</b> blocked
         } @else {
           <span class="dot dot--ok"></span>All clear
         }
       </div>
-    </div>
-  </div>
+    </a>
 
-  <div class="grid-2">
-    <div class="card">
+    <div class="card col-span-3">
       <div class="card__head">
         <h3 class="card__title">Recent Containers</h3>
         <a class="link" routerLink="/containers">View all
@@ -74,7 +76,7 @@
         <p class="empty-note">Geen containers</p>
       } @else {
         <table class="table">
-          <thead><tr><th>Container</th><th>Status</th><th>Owner</th><th>Score</th></tr></thead>
+          <thead><tr><th>Container</th><th>Status</th><th>Since</th></tr></thead>
           <tbody>
             @for (c of vm.recentContainers; track c.name) {
               <tr class="clickable" [routerLink]="['/container', c.name]">
@@ -83,22 +85,11 @@
                     <div class="cc-icon">
                       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
                     </div>
-                    <div>
-                      <div class="name">{{ c.presentableName || c.name }}</div>
-                      <div class="sub">{{ sourcesLeaf(c) }}</div>
-                    </div>
+                    <div class="name">{{ c.presentableName || c.name }}</div>
                   </div>
                 </td>
                 <td><span class="status" [ngClass]="'status--' + statusClass(c)">{{ statusLabel(c) }}</span></td>
-                <td>{{ sourcesLeaf(c) }}</td>
-                <td>
-                  @let score = scoreOf(c.name, vm.rules);
-                  @if (score === null) {
-                    <span class="badge-pill muted">—</span>
-                  } @else {
-                    <span class="badge-pill" [ngClass]="scoreClass(score)">{{ score }}%</span>
-                  }
-                </td>
+                <td class="muted">{{ c.created | relTime }}</td>
               </tr>
             }
           </tbody>
@@ -106,37 +97,34 @@
       }
     </div>
 
-    <div class="card">
+    <div class="card col-span-1">
       <div class="card__head">
-        <h3 class="card__title">Firewall Rules</h3>
+        <h3 class="card__title">Requested</h3>
         <a class="link" routerLink="/firewall">View all
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
         </a>
       </div>
-      @if (vm.topRules.length === 0) {
-        <p class="empty-note">Geen regels</p>
+      @if (vm.topRequested.length === 0) {
+        <p class="empty-note">Geen openstaande aanvragen</p>
       } @else {
-        @for (r of vm.topRules; track r.id) {
+        @for (r of vm.topRequested; track r.id) {
           <div class="fw-rule">
             <div class="fw-rule__icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
             </div>
             <div>
               <div class="fw-rule__name">{{ r.domain }}</div>
-              <div class="fw-rule__sub">{{ r.container_id || 'Global' }}</div>
+              <div class="fw-rule__sub">{{ r.container_name || r.container_id || 'Global' }}</div>
             </div>
-            <span class="pill" [ngClass]="'pill--' + (r.status === 'allow' ? 'allow' : r.status === 'deny' ? 'deny' : 'pending')">{{ r.status }}</span>
-            <span class="fw-rule__more">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
-            </span>
+            <div class="row-actions">
+              <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)"/>
+            </div>
           </div>
         }
       }
     </div>
-  </div>
 
-  <div class="grid-3">
-    <div class="card">
+    <div class="card col-span-1">
       <div class="card__head">
         <h3 class="card__title">Docker Access Grants</h3>
         <a class="link" routerLink="/docker-access">Manage</a>
@@ -161,36 +149,7 @@
       }
     </div>
 
-    <div class="card">
-      <div class="card__head"><h3 class="card__title">Policy Compliance</h3></div>
-      <div class="compliance">
-        <div class="donut">
-          <svg viewBox="0 0 140 140">
-            <circle cx="70" cy="70" [attr.r]="vm.R" fill="none" stroke="var(--border)" stroke-width="14"/>
-            <circle cx="70" cy="70" [attr.r]="vm.R" fill="none" stroke="var(--success)" stroke-width="14"
-              [attr.stroke-dasharray]="vm.allowDash.toFixed(2) + ' ' + vm.circ.toFixed(2)"
-              [attr.stroke-dashoffset]="vm.allowOff.toFixed(2)" stroke-linecap="butt"/>
-            <circle cx="70" cy="70" [attr.r]="vm.R" fill="none" stroke="var(--warning)" stroke-width="14"
-              [attr.stroke-dasharray]="vm.warnDash.toFixed(2) + ' ' + vm.circ.toFixed(2)"
-              [attr.stroke-dashoffset]="vm.warnOff.toFixed(2)" stroke-linecap="butt"/>
-            <circle cx="70" cy="70" [attr.r]="vm.R" fill="none" stroke="var(--danger)" stroke-width="14"
-              [attr.stroke-dasharray]="vm.denyDash.toFixed(2) + ' ' + vm.circ.toFixed(2)"
-              [attr.stroke-dashoffset]="vm.denyOff.toFixed(2)" stroke-linecap="butt"/>
-          </svg>
-          <div class="donut__center">
-            <b>{{ vm.compliancePct }}%</b>
-            <span>Compliant</span>
-          </div>
-        </div>
-        <div class="compliance__legend">
-          <div class="legend-row"><span class="dot dot--green"></span><span class="label">Compliant</span><span class="num">{{ vm.allowRules.length }}</span></div>
-          <div class="legend-row"><span class="dot dot--amber"></span><span class="label">Warnings</span><span class="num">{{ vm.requestedRules.length }}</span></div>
-          <div class="legend-row"><span class="dot dot--red"></span><span class="label">Violations</span><span class="num">{{ vm.denyRules.length }}</span></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
+    <div class="card col-span-3">
       <div class="card__head"><h3 class="card__title">Activity Feed</h3></div>
       <div class="feed">
         @if (vm.activityRules.length === 0) {
@@ -203,7 +162,7 @@
               </div>
               <div class="feed-item__body">
                 <div class="feed-item__title">{{ r.domain }}</div>
-                <div class="feed-item__sub">{{ r.container_id || 'Global' }} · {{ r.status === 'allow' ? 'allowed' : r.status === 'deny' ? 'blocked' : 'requested' }}</div>
+                <div class="feed-item__sub">{{ r.container_name || r.container_id || 'Global' }} · {{ r.status === 'allow' ? 'allowed' : r.status === 'deny' ? 'blocked' : 'requested' }}</div>
               </div>
               <span class="feed-item__time">{{ r.last_seen | relTime }}</span>
             </div>
@@ -211,20 +170,21 @@
         }
       </div>
     </div>
-  </div>
 
-  <div class="huddle-banner">
-    <div class="huddle-banner__bg"></div>
-    <div class="huddle-banner__hex"></div>
-    <div class="huddle-banner__text">
-      <b>Huddle together. Build boldly. <span class="accent">We've got your back.</span></b>
-      <span>Secure dev environments in the DMZ — protected from the cold outside.</span>
+    <div class="huddle-banner col-span-4">
+      <div class="huddle-banner__bg"></div>
+      <div class="huddle-banner__hex"></div>
+      <div class="huddle-banner__text">
+        <b>Huddle! <span class="accent">We've got your back.</span></b>
+        <span>Secure dev environments in the DMZ, protected from the cold outside.</span>
+      </div>
+      <div class="huddle-banner__cta">
+        <button class="btn btn--accent" (click)="modal.openStart()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          Start devcontainer
+        </button>
+      </div>
     </div>
-    <div class="huddle-banner__cta">
-      <button class="btn btn--accent" (click)="modal.openStart()">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-        Start devcontainer
-      </button>
-    </div>
+
   </div>
 }

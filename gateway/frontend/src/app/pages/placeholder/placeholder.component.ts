@@ -13,7 +13,7 @@ import { map } from 'rxjs/operators';
       <p class="empty-note">Binnenkort beschikbaar</p>
     </div>
   `,
-  styles: []
+  styles: [`:host { display: contents; }`]
 })
 export class PlaceholderComponent {
   private route = inject(ActivatedRoute);

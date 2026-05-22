@@ -10,4 +10,5 @@ export interface Rule {
   updated_at: number;
   last_seen: number;
   request_count: number;
+  expires_at?: number | null;
 }

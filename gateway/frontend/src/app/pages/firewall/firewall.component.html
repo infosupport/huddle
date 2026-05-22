@@ -18,12 +18,7 @@
                     <td>{{ r.request_count }}</td>
                     <td>{{ r.last_seen | relTime }}</td>
                     <td class="col-actions">
-                      <div class="domain-actions">
-                        <button class="btn btn-deny btn-sm" (click)="denyRule(r)">🚫</button>
-                        <button class="btn btn-deny-g btn-sm" (click)="openGlobalConfirm(r.domain, 'deny')">🚫🚫</button>
-                        <button class="btn btn-allow btn-sm" (click)="allowRule(r)">✓</button>
-                        <button class="btn btn-allow-g btn-sm" (click)="openGlobalConfirm(r.domain, 'allow')">✓✓</button>
-                      </div>
+                      <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)"/>
                     </td>
                   </tr>
                 }
@@ -34,6 +29,26 @@
       </div>
     </div>
     <div>
+      @if (vm.tempGroupNames.length > 0) {
+        <div class="card">
+          <div class="card-header"><h3>Tijdelijk toegestaan per container</h3></div>
+          @for (name of vm.tempGroupNames; track name) {
+            <h4>{{ name }}</h4>
+            <table class="data-table">
+              <thead><tr><th>Domein</th><th>Verloopt</th><th class="col-actions">Actie</th></tr></thead>
+              <tbody>
+                @for (r of vm.tempGroups[name]; track r.id) {
+                  <tr>
+                    <td class="domain-cell">{{ r.domain }}</td>
+                    <td>{{ r.expires_at! | relTime }}</td>
+                    <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+        </div>
+      }
       <div class="card">
         <div class="card-header"><h3>Globale regels</h3></div>
         <h4>Toegestaan ({{ vm.allow.length }})</h4>

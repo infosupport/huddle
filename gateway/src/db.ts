@@ -23,7 +23,40 @@ export function initDb(): void {
       container_id TEXT PRIMARY KEY,
       until INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL DEFAULT (unixepoch()),
+      container_id TEXT,
+      domain TEXT NOT NULL,
+      port INTEGER,
+      action TEXT NOT NULL,
+      rule_id INTEGER,
+      method TEXT,
+      path TEXT,
+      req_headers TEXT,
+      req_body TEXT,
+      res_status INTEGER,
+      res_headers TEXT,
+      res_body TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_container ON audit_log(container_id);
   `);
+
+  const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
+  if (!cols.some(c => c.name === 'expires_at')) {
+    db.exec('ALTER TABLE rules ADD COLUMN expires_at INTEGER');
+  }
+
+  db.exec("DELETE FROM audit_log WHERE ts < unixepoch() - 604800");
+
+  const count = (db.prepare("SELECT COUNT(*) as n FROM audit_log").get() as { n: number }).n;
+  console.log(`[audit] ${count} entries in audit_log`);
+
+  db.prepare(
+    `INSERT INTO audit_log (container_id, domain, port, action, rule_id, method, path, req_headers, req_body, res_status, res_headers, res_body)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(null, 'gateway', null, 'system:start', null, null, null, null, null, null, null, null);
 }
 
 // ── Docker access grants ─────────────────────────────────────────────────────
@@ -47,4 +80,50 @@ export function getAllGrants(): Record<string, { until: number }> {
   const rows = db.prepare(`SELECT container_id, until FROM docker_grants`).all() as
     { container_id: string; until: number }[];
   return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
+}
+
+// ── Audit logging ────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _insertAudit: any = null;
+function insertAudit() {
+  if (!_insertAudit) _insertAudit = db.prepare(
+    `INSERT INTO audit_log (container_id, domain, port, action, rule_id, method, path, req_headers, req_body, res_status, res_headers, res_body)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  return _insertAudit;
+}
+
+export interface AuditEntry {
+  containerId: string | null;
+  domain: string;
+  port?: number | null;
+  action: string;
+  ruleId?: number | null;
+  method?: string | null;
+  path?: string | null;
+  reqHeaders?: string | null;
+  reqBody?: string | null;
+  resStatus?: number | null;
+  resHeaders?: string | null;
+  resBody?: string | null;
+}
+
+export function logAudit(entry: AuditEntry): void {
+  try {
+    insertAudit().run(
+      entry.containerId ?? null,
+      entry.domain,
+      entry.port ?? null,
+      entry.action,
+      entry.ruleId ?? null,
+      entry.method ?? null,
+      entry.path ?? null,
+      entry.reqHeaders ?? null,
+      entry.reqBody ?? null,
+      entry.resStatus ?? null,
+      entry.resHeaders ?? null,
+      entry.resBody ?? null,
+    );
+  } catch (err) { console.error('[audit] log failed:', err); }
 }

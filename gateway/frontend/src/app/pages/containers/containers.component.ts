@@ -2,6 +2,7 @@ import { Component, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { AsyncPipe, NgClass } from '@angular/common';
 import { StateService } from '../../core/services/state.service';
+import { ApiService } from '../../core/services/api.service';
 import { ModalService } from '../../core/services/modal.service';
 import { Container } from '../../core/models/container.model';
 import { Rule } from '../../core/models/rule.model';
@@ -12,10 +13,11 @@ import { combineLatest, map } from 'rxjs';
   standalone: true,
   imports: [AsyncPipe, NgClass, RouterLink],
   templateUrl: './containers.component.html',
-  styles: []
+  styles: [`:host { display: contents; }`]
 })
 export class ContainersComponent {
   private state = inject(StateService);
+  private api = inject(ApiService);
   modal = inject(ModalService);
 
   vm$ = combineLatest([this.state.containers$, this.state.rules$, this.state.grants$]).pipe(
@@ -45,4 +47,7 @@ export class ContainersComponent {
     return rules.filter(r => r.container_id === name && r.status === 'requested').length;
   }
   openSnapshot(c: Container) { this.modal.openSnapshot(c.name); }
+  deleteContainer(name: string): void {
+    this.api.deleteContainer(name).subscribe(() => this.state.loadAll());
+  }
 }

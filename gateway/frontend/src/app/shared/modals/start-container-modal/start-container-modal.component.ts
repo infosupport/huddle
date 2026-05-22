@@ -50,7 +50,10 @@ export class StartContainerModalComponent {
     this.loading = false;
 
     this.api.getImages().subscribe({ next: imgs => { this.images = imgs; }, error: () => {} });
-    this.api.getBaseImage().subscribe({ next: b => { this.baseImage = b.imageName; }, error: () => {} });
+    this.api.getBaseImage().subscribe({
+      next: b => { this.baseImage = b.imageName; if (!this.selectedImage) this.selectedImage = b.imageName; },
+      error: () => {}
+    });
   }
 
   onWorkspaceInput(): void {

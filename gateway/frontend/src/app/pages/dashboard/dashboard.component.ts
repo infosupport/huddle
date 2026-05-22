@@ -7,19 +7,66 @@ import { ModalService } from '../../core/services/modal.service';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
 import { Container } from '../../core/models/container.model';
 import { Rule } from '../../core/models/rule.model';
+import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
+import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { combineLatest, map } from 'rxjs';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [AsyncPipe, NgClass, RouterLink, RelTimePipe],
+  imports: [AsyncPipe, NgClass, RouterLink, RelTimePipe, PieMenuComponent],
   templateUrl: './dashboard.component.html',
-  styles: []
+  styles: [`:host { display: contents; }`]
 })
 export class DashboardComponent {
   state = inject(StateService);
   api = inject(ApiService);
   modal = inject(ModalService);
+
+  readonly pieConfig: PieMenuConfig = {
+    families: [
+      {
+        id: 'approve',
+        label: 'Goedkeuren',
+        tone: 'green',
+        icon: 'approve',
+        variants: [
+          { id: 'approve-all', label: 'Voor iedereen', icon: 'approve-all' },
+        ],
+      },
+      {
+        id: 'temp',
+        label: 'Tijdelijk 5 min',
+        tone: 'blue',
+        icon: 'timer',
+        variants: [
+          { id: 'temp-10', label: 'Tijdelijk 10 min', icon: 'timer-long' },
+          { id: 'later',   label: 'Vraag later',      icon: 'later'      },
+        ],
+      },
+      {
+        id: 'deny',
+        label: 'Afkeuren',
+        tone: 'red',
+        icon: 'deny',
+        variants: [
+          { id: 'deny-all', label: 'Voor iedereen', icon: 'deny-all' },
+        ],
+      },
+    ],
+  };
+
+  onPieAction(actionId: string, rule: Rule): void {
+    switch (actionId) {
+      case 'approve':     this.allowRule(rule); break;
+      case 'approve-all': this.modal.openConfirm(rule.domain, 'allow'); break;
+      case 'temp':        this.allowTimed(rule, 5); break;
+      case 'temp-10':     this.allowTimed(rule, 10); break;
+      case 'later':       this.deleteRule(rule); break;
+      case 'deny':        this.denyRule(rule); break;
+      case 'deny-all':    this.modal.openConfirm(rule.domain, 'deny'); break;
+    }
+  }
 
   protected Math = Math;
 
@@ -27,30 +74,18 @@ export class DashboardComponent {
     map(([containers, rules, grants]) => {
       const now = Math.floor(Date.now() / 1000);
       const running = containers.filter(c => this.isRunning(c));
-      const allowRules = rules.filter(r => r.status === 'allow');
-      const denyRules = rules.filter(r => r.status === 'deny');
       const requestedRules = rules.filter(r => r.status === 'requested');
       const activeGrants = Object.entries(grants).filter(([, g]) => g.until > now);
-      const topRules = [...rules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 4);
+      const topRequested = [...requestedRules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 5);
       const activityRules = [...rules].sort((a, b) => b.last_seen - a.last_seen).slice(0, 8);
       const recentContainers = containers.slice(0, 6);
-
-      const total = allowRules.length + denyRules.length + requestedRules.length;
-      const compliancePct = total === 0 ? 100 : Math.round((allowRules.length / total) * 100);
-      const R = 56, circ = 2 * Math.PI * R;
-      const allowDash = total > 0 ? (allowRules.length / total) * circ : circ;
-      const warnDash = total > 0 ? (requestedRules.length / total) * circ : 0;
-      const denyDash = circ - allowDash - warnDash;
 
       return {
         containers, rules, grants, now,
         runningCount: running.length,
-        allowRules, denyRules, requestedRules,
+        requestedRules,
         activeGrants,
-        topRules, activityRules, recentContainers,
-        compliancePct, R, circ,
-        allowDash, warnDash, denyDash,
-        allowOff: 0, warnOff: -allowDash, denyOff: -(allowDash + warnDash),
+        topRequested, activityRules, recentContainers,
       };
     })
   );
@@ -67,24 +102,26 @@ export class DashboardComponent {
     if (this.isRunning(c)) return 'Running';
     return 'Stopped';
   }
-  scoreOf(containerName: string, rules: Rule[]): number | null {
-    const cRules = rules.filter(r => r.container_id === containerName);
-    const allow = cRules.filter(r => r.status === 'allow').length;
-    const deny = cRules.filter(r => r.status === 'deny').length;
-    const total = allow + deny;
-    return total === 0 ? null : Math.round((allow / total) * 100);
+  allowRule(rule: Rule): void {
+    this.api.updateRule(rule.id, 'allow').subscribe(() => this.state.loadAll());
   }
-  scoreClass(score: number | null): string {
-    if (score === null) return 'muted';
-    if (score > 70) return 'green';
-    if (score > 40) return 'yellow';
-    return 'red';
+  denyRule(rule: Rule): void {
+    this.api.updateRule(rule.id, 'deny').subscribe(() => this.state.loadAll());
   }
-  sourcesLeaf(c: Container): string {
-    const p = c.workspacePath || c.labels?.['com.intellij.devcontainer.sources.path'] || c.Labels?.['com.intellij.devcontainer.sources.path'] || '';
-    return p ? p.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '—' : '—';
+  deleteRule(rule: Rule): void {
+    this.api.deleteRule(rule.id).subscribe(() => this.state.loadAll());
+  }
+  allowGlobal(domain: string): void {
+    this.api.createRule(domain, null, 'allow').subscribe(() => this.state.loadAll());
+  }
+  denyGlobal(domain: string): void {
+    this.api.createRule(domain, null, 'deny').subscribe(() => this.state.loadAll());
   }
   revokeGrant(container: string): void {
     this.api.deleteGrant(container).subscribe(() => this.state.loadAll());
+  }
+  allowTimed(rule: Rule, minutes: number): void {
+    const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
+    this.api.updateRule(rule.id, 'allow', expires_at).subscribe(() => this.state.loadAll());
   }
 }

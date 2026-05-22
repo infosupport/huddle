@@ -87,16 +87,18 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
   const filters = JSON.stringify({ label: ['com.intellij.devcontainer.id'] });
   const containers: any[] = await dockerRequest('GET', `/containers/json?filters=${encodeURIComponent(filters)}`);
   return containers.map((c) => {
-    const devNet = c.NetworkSettings?.Networks?.['devcontainer-net'];
+    const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
+    const netName = `dc-net-${name}`;
+    const dcNet = c.NetworkSettings?.Networks?.[netName] ?? c.NetworkSettings?.Networks?.['devcontainer-net'];
     return {
       id: c.Id,
-      name: ((c.Names?.[0] as string) ?? '').replace(/^\//, ''),
+      name,
       image: c.Image,
       status: c.Status,
       workspacePath: c.Labels?.['com.intellij.devcontainer.sources.path'] ?? '',
       presentableName: c.Labels?.['com.intellij.devcontainer.presentable.name'] ?? '',
       created: c.Created,
-      inNetwork: Boolean(devNet?.IPAddress),
+      inNetwork: Boolean(dcNet?.IPAddress),
     };
   });
 }
@@ -156,6 +158,29 @@ export async function createNetwork(name: string): Promise<void> {
   await dockerRequest('POST', '/networks/create', { Name: name });
 }
 
+export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
+  await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
+}
+
+export async function disconnectNetwork(networkName: string, containerName: string): Promise<void> {
+  await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/disconnect`, { Container: containerName });
+}
+
+export async function deleteNetwork(name: string): Promise<void> {
+  await dockerRequest('DELETE', `/networks/${encodeURIComponent(name)}`);
+}
+
+export async function forceDeleteContainer(containerId: string): Promise<void> {
+  await dockerRequest('DELETE', `/containers/${encodeURIComponent(containerId)}?force=true`);
+}
+
+export async function cleanupContainerNetwork(containerName: string): Promise<void> {
+  const netName = `dc-net-${containerName}`;
+  if (!(await networkExists(netName))) return;
+  try { await disconnectNetwork(netName, 'huddle'); } catch {}
+  try { await deleteNetwork(netName); } catch {}
+}
+
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
 function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: 'intellij' | 'rider'): string {
@@ -202,9 +227,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const modelJson = '{"customizations":{"jetbrains":{"backend":"IntelliJ"}}}';
   const metadataJson = '[{"remoteUser":"vscode"}]';
 
-  if (!(await networkExists('devcontainer-net'))) {
-    await createNetwork('devcontainer-net');
-  }
+  const netName = `dc-net-${containerName}`;
+  await createNetwork(netName);
+  await connectNetwork(netName, 'huddle');
 
   // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
   await createContainerProxy(containerName, SOCKET_DIR);
@@ -252,7 +277,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
           Target: '/var/run/docker.sock',
         },
       ],
-      NetworkMode: 'devcontainer-net',
+      NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
     },
   };

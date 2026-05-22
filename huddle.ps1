@@ -39,8 +39,7 @@ function Show-Menu {
     Write-Host "   1  Snapshot maken van draaiende container" -ForegroundColor White
     Write-Host "   2  Devcontainer starten van snapshot" -ForegroundColor White
     Write-Host "   3  Base image bouwen" -ForegroundColor White
-    Write-Host "   4  Huddle image bouwen" -ForegroundColor White
-    Write-Host "   5  Huddle herstarten" -ForegroundColor White
+    Write-Host "   4  Huddle bouwen en herstarten" -ForegroundColor White
     Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
     Write-Host "   0  Afsluiten" -ForegroundColor DarkGray
     Write-Host ""
@@ -73,6 +72,10 @@ function Start-Huddle {
     if ($stopped) { docker rm $HUDDLE_CONTAINER | Out-Null }
 
     Write-Host "  Huddle starten..." -ForegroundColor DarkCyan
+    $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+    $bugtrackerDir = Join-Path $scriptDir "bugtracker"
+    New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "bugs") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "solved") | Out-Null
     $id = docker run -d `
         --name $HUDDLE_CONTAINER `
         --network devcontainer-net `
@@ -80,6 +83,7 @@ function Start-Huddle {
         -v "${HUDDLE_VOLUME}:/data" `
         -v "/var/run/docker.sock:/var/run/docker.sock" `
         -v "/tmp/dc-sockets:/tmp/dc-sockets" `
+        -v "${bugtrackerDir}:/bugtracker" `
         $HUDDLE_IMAGE
     Write-Host "  [OK] Gestart: $id" -ForegroundColor Green
     Write-Host "  Web UI: http://localhost:${HUDDLE_PORT}" -ForegroundColor Cyan
@@ -291,8 +295,7 @@ while ($running) {
         '1' { New-Snapshot;       Read-Host "`n  Druk Enter om terug te gaan" }
         '2' { Start-FromSnapshot; Read-Host "`n  Druk Enter om terug te gaan" }
         '3' { Build-BaseImage;    Read-Host "`n  Druk Enter om terug te gaan" }
-        '4' { Build-HuddleImage;  Read-Host "`n  Druk Enter om terug te gaan" }
-        '5' { Restart-Huddle;     Read-Host "`n  Druk Enter om terug te gaan" }
+        '4' { Build-HuddleImage; if ($LASTEXITCODE -eq 0) { Restart-Huddle }; Read-Host "`n  Druk Enter om terug te gaan" }
         '0' { $running = $false }
         default { Write-Host "  Ongeldige keuze." -ForegroundColor Red; Start-Sleep -Seconds 1 }
     }

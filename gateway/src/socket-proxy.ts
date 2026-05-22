@@ -7,11 +7,41 @@ const DOCKER_SOCKET = '/var/run/docker.sock';
 const proxyServers = new Map<string, net.Server>();
 
 // ── Policy ───────────────────────────────────────────────────────────────────
-// All Docker socket access requires an active time-limited grant from the UI.
+// Requires an active time-limited grant. Even with a grant:
+// DELETE is always blocked; POST is restricted to exec/attach/logs (IDE attach).
 
 function checkPolicy(containerName: string): boolean {
   const grant = getGrant(containerName);
   return Boolean(grant && grant.until > Math.floor(Date.now() / 1000));
+}
+
+function checkRequest(method: string, urlPath: string): boolean {
+  const m = method.toUpperCase();
+  // Strip optional Docker API version prefix (/v1.41/...)
+  const p = urlPath.replace(/^\/v[\d.]+/, '');
+
+  if (m === 'DELETE') return false;
+
+  if (m === 'GET' || m === 'HEAD') {
+    // Essential system info only
+    if (p === '/version' || p === '/info' || p === '/_ping') return true;
+    // Exec session inspection
+    if (/^\/exec\/[^/]+\/json$/.test(p)) return true;
+    // Single-container inspection and logs (any container ID/name, not list-all)
+    if (/^\/containers\/[^/]+\/(json|logs|top)$/.test(p)) return true;
+    return false;
+  }
+
+  if (m === 'POST') {
+    return (
+      /^\/exec\/[^/]+\/(start|resize)$/.test(p) ||
+      /^\/containers\/[^/]+\/exec$/.test(p) ||
+      /^\/containers\/[^/]+\/attach$/.test(p) ||
+      /^\/containers\/[^/]+\/logs$/.test(p) ||
+      /^\/containers\/[^/]+\/(start|stop)$/.test(p)
+    );
+  }
+  return false;
 }
 
 // ── Per-container socket proxy ───────────────────────────────────────────────
@@ -50,12 +80,21 @@ export function createContainerProxy(containerName: string, socketDir: string): 
         const afterHeaders = buf.slice(end);
         buf = Buffer.alloc(0);
 
+        const firstLine = headerPart.split('\r\n')[0] ?? '';
+        const [method = '', urlPath = ''] = firstLine.split(' ');
+
         if (!checkPolicy(containerName)) {
           console.log(`[socket-proxy] DENY ${containerName}: no active grant`);
           const body = '{"message":"authorization denied by policy"}';
-          client.write(
-            `HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`
-          );
+          client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
+          client.end();
+          return;
+        }
+
+        if (!checkRequest(method, urlPath)) {
+          console.log(`[socket-proxy] DENY ${containerName}: ${method} ${urlPath} not allowed`);
+          const body = '{"message":"operation not permitted"}';
+          client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
           client.end();
           return;
         }

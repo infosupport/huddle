@@ -10,7 +10,7 @@ import { combineLatest, map } from 'rxjs';
   standalone: true,
   imports: [AsyncPipe, NgClass, FormsModule],
   templateUrl: './docker-access.component.html',
-  styles: []
+  styles: [`:host { display: contents; }`]
 })
 export class DockerAccessComponent {
   private state = inject(StateService);
