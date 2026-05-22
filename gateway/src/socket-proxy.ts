@@ -8,23 +8,65 @@ const DOCKER_SOCKET = '/var/run/docker.sock';
 const proxyServers = new Map<string, net.Server>();
 
 // ── Devcontainer registry ─────────────────────────────────────────────────────
-// All known devcontainer identifiers (name + full ID + short ID).
-// Operations targeting any of these are blocked — containers may only
-// spawn and manage their OWN child containers, not touch other devcontainers
-// (including themselves).
 
 const devcontainerIds = new Set<string>();
 
 export function registerDevcontainer(name: string, id: string): void {
   devcontainerIds.add(name);
-  if (id) {
-    devcontainerIds.add(id);
-    devcontainerIds.add(id.slice(0, 12));
-  }
+  if (id) { devcontainerIds.add(id); devcontainerIds.add(id.slice(0, 12)); }
 }
 
-function isDevcontainer(target: string): boolean {
-  return devcontainerIds.has(target);
+// ── Docker helpers ────────────────────────────────────────────────────────────
+
+function dockerGet(urlPath: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { socketPath: DOCKER_SOCKET, path: urlPath, method: 'GET' },
+      (res) => {
+        let body = '';
+        res.on('data', (d: Buffer) => { body += d.toString(); });
+        res.on('end', () => { try { resolve(JSON.parse(body)); } catch { reject(new Error('parse')); } });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function hasOwnLabel(type: 'container' | 'image', targetId: string, containerName: string): Promise<boolean> {
+  try {
+    const urlPath = type === 'container'
+      ? `/containers/${encodeURIComponent(targetId)}/json`
+      : `/images/${encodeURIComponent(targetId)}/json`;
+    const data = await dockerGet(urlPath);
+    const labels: Record<string, string> = data.Config?.Labels ?? {};
+    return labels['huddle.parent'] === containerName;
+  } catch { return false; }
+}
+
+function lookupContainerId(containerName: string): Promise<{ id: string; shortId: string }> {
+  return dockerGet(`/containers/${encodeURIComponent(containerName)}/json`)
+    .then(data => { const id: string = data.Id ?? ''; return { id, shortId: id.slice(0, 12) }; })
+    .catch(() => ({ id: '', shortId: '' }));
+}
+
+// Add/merge a label filter into a Docker API query string.
+function withLabelFilter(rawUrl: string, label: string): string {
+  const qi = rawUrl.indexOf('?');
+  const base = qi === -1 ? rawUrl : rawUrl.slice(0, qi);
+  const params = new URLSearchParams(qi === -1 ? '' : rawUrl.slice(qi + 1));
+  let filters: Record<string, string[]> = {};
+  try { filters = JSON.parse(params.get('filters') ?? '{}'); } catch {}
+  filters.label = [...(filters.label ?? []), label];
+  params.set('filters', JSON.stringify(filters));
+  return `${base}?${params.toString()}`;
+}
+
+function rewriteFirstLine(headerPart: string, newUrl: string): string {
+  const lines = headerPart.split('\r\n');
+  const parts = (lines[0] ?? '').split(' ');
+  lines[0] = `${parts[0]} ${newUrl} ${parts[2]}`;
+  return lines.join('\r\n');
 }
 
 // ── Policy ────────────────────────────────────────────────────────────────────
@@ -34,64 +76,17 @@ function checkPolicy(containerName: string): boolean {
   return Boolean(grant && grant.until > Math.floor(Date.now() / 1000));
 }
 
-function lookupContainerId(containerName: string): Promise<{ id: string; shortId: string }> {
-  return new Promise((resolve) => {
-    const req = http.request(
-      { socketPath: DOCKER_SOCKET, path: `/containers/${encodeURIComponent(containerName)}/json`, method: 'GET' },
-      (res) => {
-        let body = '';
-        res.on('data', (d: Buffer) => { body += d.toString(); });
-        res.on('end', () => {
-          try {
-            const id: string = JSON.parse(body).Id ?? '';
-            resolve({ id, shortId: id.slice(0, 12) });
-          } catch { resolve({ id: '', shortId: '' }); }
-        });
-      }
-    );
-    req.on('error', () => resolve({ id: '', shortId: '' }));
-    req.end();
-  });
-}
-
-function checkRequest(method: string, urlPath: string): boolean {
-  const m = method.toUpperCase();
-  const p = urlPath.replace(/^\/v[\d.]+/, '');
-
-  // No destructive operations ever
-  if (m === 'DELETE') return false;
-
-  if (m === 'GET' || m === 'HEAD') {
-    if (p === '/version' || p === '/info' || p === '/_ping') return true;
-    if (p === '/containers/json' || p === '/containers/json') return true;
-    if (p === '/images/json' || /^\/images\/[^/]+\/json$/.test(p)) return true;
-    if (/^\/exec\/[^/]+\/json$/.test(p)) return true;
-    if (/^\/containers\/[^/]+\/(json|logs|top)$/.test(p)) return true;
-    return false;
-  }
-
-  if (m === 'POST') {
-    // Exec session control — exec IDs are opaque UUIDs
-    if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) return true;
-    // Spawn new container
-    if (p === '/containers/create') return true;
-    // Container management — blocked for all devcontainers (own + others)
-    const ct = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait)$/)?.[1];
-    if (ct) return !isDevcontainer(ct);
-    return false;
-  }
-
-  return false;
+function deny403(client: net.Socket, msg: string): void {
+  const body = JSON.stringify({ message: msg });
+  client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
+  client.end();
 }
 
 // ── Per-container socket proxy ────────────────────────────────────────────────
 
 export async function createContainerProxy(containerName: string, socketDir: string): Promise<net.Server> {
   const existing = proxyServers.get(containerName);
-  if (existing) {
-    existing.close();
-    proxyServers.delete(containerName);
-  }
+  if (existing) { existing.close(); proxyServers.delete(containerName); }
 
   const { id, shortId } = await lookupContainerId(containerName);
   registerDevcontainer(containerName, id);
@@ -102,56 +97,182 @@ export async function createContainerProxy(containerName: string, socketDir: str
   return new Promise((resolve, reject) => {
     const server = net.createServer((client) => {
       let upstream: net.Socket | null = null;
-      let headerDone = false;
-      let buf = Buffer.alloc(0);
+      let phase: 'headers' | 'body' | 'tunnel' = 'headers';
+      let headerBuf = Buffer.alloc(0);
+
+      // Body-accumulation state (for POST /containers/create)
+      let bodyBuf = Buffer.alloc(0);
+      let bodyContentLength = 0;
+      let savedHeaderPart = '';
 
       client.on('error', () => upstream?.destroy());
       client.on('end', () => upstream?.end());
 
-      client.on('data', (chunk: Buffer) => {
-        if (headerDone) {
-          upstream?.write(chunk);
-          return;
-        }
-
-        buf = Buffer.concat([buf, chunk]);
-        const end = buf.indexOf('\r\n\r\n');
-        if (end === -1) return;
-
-        headerDone = true;
-        const headerPart = buf.slice(0, end).toString();
-        const afterHeaders = buf.slice(end);
-        buf = Buffer.alloc(0);
-
-        const firstLine = headerPart.split('\r\n')[0] ?? '';
-        const [method = '', urlPath = ''] = firstLine.split(' ');
-
-        if (!checkPolicy(containerName)) {
-          console.log(`[socket-proxy] DENY ${containerName}: no active grant`);
-          const body = '{"message":"authorization denied by policy"}';
-          client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
-          client.end();
-          return;
-        }
-
-        if (!checkRequest(method, urlPath)) {
-          console.log(`[socket-proxy] DENY ${containerName}: ${method} ${urlPath} not allowed`);
-          const body = '{"message":"operation not permitted"}';
-          client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
-          client.end();
-          return;
-        }
-
+      function openUpstream(firstData: Buffer): void {
+        phase = 'tunnel';
         upstream = net.createConnection(DOCKER_SOCKET);
         upstream.on('error', (err) => {
-          if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET') {
+          if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET')
             console.error(`[socket-proxy] upstream error for ${containerName}:`, err.message);
-          }
           client.destroy();
         });
         upstream.on('end', () => client.end());
         upstream.pipe(client);
-        upstream.write(headerPart + `\r\nX-Container-Id: ${containerName}` + afterHeaders.toString());
+        upstream.write(firstData);
+      }
+
+      function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
+        const newHeader = rewriteFirstLine(headerPart, newUrl) + '\r\n\r\n';
+        openUpstream(Buffer.concat([Buffer.from(newHeader), remainder]));
+      }
+
+      function processInjectedBody(): void {
+        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+        const rest = bodyBuf.slice(bodyContentLength);
+        try {
+          const body = JSON.parse(bodyBytes.toString());
+          body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+          const newBodyBuf = Buffer.from(JSON.stringify(body));
+          const newHeader = savedHeaderPart.replace(
+            /content-length:\s*\d+/i,
+            `Content-Length: ${newBodyBuf.length}`
+          ) + '\r\n\r\n';
+          openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+        } catch {
+          openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBuf]));
+        }
+      }
+
+      client.on('data', (chunk: Buffer) => {
+        if (phase === 'tunnel') { upstream?.write(chunk); return; }
+
+        if (phase === 'body') {
+          bodyBuf = Buffer.concat([bodyBuf, chunk]);
+          if (bodyBuf.length >= bodyContentLength) processInjectedBody();
+          return;
+        }
+
+        // ── Header accumulation ──────────────────────────────────────────────
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        const end = headerBuf.indexOf('\r\n\r\n');
+        if (end === -1) return;
+
+        const headerPart = headerBuf.slice(0, end).toString();
+        const remainder = headerBuf.slice(end + 4);
+        headerBuf = Buffer.alloc(0);
+
+        const firstLine = headerPart.split('\r\n')[0] ?? '';
+        const parts = firstLine.split(' ');
+        const method = (parts[0] ?? '').toUpperCase();
+        const rawUrl = parts[1] ?? '';
+        const p = rawUrl.replace(/^\/v[\d.]+/, '').split('?')[0];
+
+        if (!checkPolicy(containerName)) {
+          deny403(client, 'authorization denied by policy');
+          return;
+        }
+
+        // ── DELETE ───────────────────────────────────────────────────────────
+        if (method === 'DELETE') {
+          const ctId = p.match(/^\/containers\/([^/]+)$/)?.[1];
+          const imgId = p.match(/^\/images\/([^/]+)$/)?.[1];
+          const targetId = ctId ?? imgId;
+          const type = ctId ? 'container' : 'image';
+
+          if (!targetId) { deny403(client, 'delete not permitted'); return; }
+
+          client.pause();
+          hasOwnLabel(type, targetId, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            } else {
+              deny403(client, `cannot delete ${type} not created by this container`);
+            }
+            client.resume();
+          });
+          return;
+        }
+
+        // ── GET / HEAD ───────────────────────────────────────────────────────
+        if (method === 'GET' || method === 'HEAD') {
+          if (p === '/version' || p === '/info' || p === '/_ping' ||
+              /^\/exec\/[^/]+\/json$/.test(p) ||
+              /^\/images\/[^/]+\/json$/.test(p) ||
+              /^\/containers\/[^/]+\/(json|logs|top)$/.test(p)) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+          if (p === '/images/json') {
+            // Show all images — agent needs to know available base images
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+          if (p === '/containers/json') {
+            // Filter to own containers only
+            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+            return;
+          }
+          deny403(client, 'path not allowed');
+          return;
+        }
+
+        // ── POST ─────────────────────────────────────────────────────────────
+        if (method === 'POST') {
+          // Exec session control (exec IDs are opaque)
+          if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Spawn container — inject huddle.parent label
+          if (p === '/containers/create') {
+            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            savedHeaderPart = headerPart;
+            phase = 'body';
+            bodyBuf = remainder;
+            if (bodyBuf.length >= bodyContentLength) processInjectedBody();
+            return;
+          }
+
+          // Docker build — add huddle.parent label via query param
+          if (p === '/build') {
+            const labelParam = encodeURIComponent(JSON.stringify({ 'huddle.parent': containerName }));
+            const newUrl = rawUrl.includes('?') ? `${rawUrl}&labels=${labelParam}` : `${rawUrl}?labels=${labelParam}`;
+            forwardWithRewrittenUrl(headerPart, newUrl, remainder);
+            return;
+          }
+
+          // Pull image — allow (no labeling possible, agent may need base images)
+          if (p === '/images/create') {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Container management: only for own spawned containers, never devcontainers
+          const ctId = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait)$/)?.[1];
+          if (ctId) {
+            if (devcontainerIds.has(ctId)) {
+              deny403(client, 'operation on devcontainer not permitted');
+              return;
+            }
+            client.pause();
+            hasOwnLabel('container', ctId, containerName).then(ok => {
+              if (ok) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              } else {
+                deny403(client, 'container was not created by this devcontainer');
+              }
+              client.resume();
+            });
+            return;
+          }
+
+          deny403(client, 'operation not permitted');
+          return;
+        }
+
+        deny403(client, 'method not allowed');
       });
     });
 
