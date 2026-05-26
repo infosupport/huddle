@@ -2,6 +2,7 @@ import { Injectable, inject, DestroyRef } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { StateService } from './state.service';
+import { Rule } from '../models/rule.model';
 
 @Injectable({ providedIn: 'root' })
 export class NotificationService {
@@ -14,6 +15,10 @@ export class NotificationService {
   private initialized = false;
 
   constructor() {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/notification-sw.js').catch(() => {});
+    }
+
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       this.enabled$.next(true);
     }
@@ -32,13 +37,35 @@ export class NotificationService {
       for (const r of requested) {
         if (!this.knownIds.has(r.id)) {
           this.knownIds.add(r.id);
-          new Notification('Huddle – URL aangevraagd', {
-            body: `${r.container_name || r.container_id || 'Onbekend'} → ${r.domain}`,
-            icon: '/assets/hex-2d.png',
-          });
+          this.showNotification(r);
         }
       }
     });
+  }
+
+  private async showNotification(r: Rule): Promise<void> {
+    const title = 'Huddle – URL aangevraagd';
+    const options = {
+      body: `${r.container_name || r.container_id || 'Onbekend'} → ${r.domain}`,
+      icon: '/assets/hex-2d.png',
+      requireInteraction: true,
+      data: { ruleId: r.id, domain: r.domain },
+      actions: [
+        { action: 'allow-all', title: 'Alles toestaan' },
+        { action: 'block-all', title: 'Alles blokkeren' },
+        { action: '5min',      title: '5 minuten'       },
+      ],
+    } as NotificationOptions;
+
+    if ('serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(title, options);
+        return;
+      } catch { /* val terug op standaard notificatie */ }
+    }
+
+    new Notification(title, { body: options.body, icon: options.icon });
   }
 
   async toggle(): Promise<void> {

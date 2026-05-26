@@ -22,7 +22,8 @@
             "tsConfig": "tsconfig.app.json",
             "assets": [
               { "glob": "**/*", "input": "src/assets", "output": "assets" },
-              "src/favicon.ico"
+              "src/favicon.ico",
+              { "glob": "notification-sw.js", "input": "src", "output": "/" }
             ],
             "styles": [
               "src/styles.css"
