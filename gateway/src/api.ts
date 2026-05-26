@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials } from './db';
 import {
   listDevcontainers,
   inspectContainer,
@@ -379,6 +379,32 @@ export function createApiServer(): FastifyInstance {
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
     }
+  });
+
+  // ── Container credentials ─────────────────────────────────────────────────
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/credentials', async (req, reply) => {
+    const creds = getCredentials(req.params.name);
+    if (!creds) return reply.code(404).send({ error: 'not_found' });
+    return { password: creds.password, createdAt: creds.created_at };
+  });
+
+  // ── Sudo audit ingest ─────────────────────────────────────────────────────
+  app.post<{ Body: { container: string; entry: string } }>('/api/audit/sudo', async (req) => {
+    const { container, entry } = req.body;
+    if (!container || !entry) return { ok: false };
+    // Parse sudo log: "... user : TTY=... ; PWD=... ; USER=root ; COMMAND=/usr/bin/foo bar"
+    const cmdMatch = entry.match(/COMMAND=(.+)$/);
+    const cmd = cmdMatch ? cmdMatch[1].trim() : entry;
+    const cmdBase = cmd.split('/').pop()?.split(' ')[0] ?? 'unknown';
+    logAudit({
+      containerId: container,
+      domain: 'sudo',
+      action: `sudo:${cmdBase}`,
+      method: null,
+      path: cmd.length > 200 ? cmd.slice(0, 200) : cmd,
+    });
+    notifyStateChanged();
+    return { ok: true };
   });
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)

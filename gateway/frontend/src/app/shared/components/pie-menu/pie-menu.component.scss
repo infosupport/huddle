@@ -1,0 +1,121 @@
+:host {
+  position: relative;
+  display: inline-block;
+}
+
+.pie-trigger {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 160ms, color 160ms, border-color 160ms;
+  box-sizing: border-box;
+
+  &:hover {
+    background: var(--surface-3);
+  }
+
+  &.pie-trigger--open {
+    background: #1a1a18;
+    color: #faf8f3;
+    border-color: #1a1a18;
+  }
+}
+
+.pie-menu {
+  overflow: visible;
+  position: relative;
+  display: flex;
+
+  &:hover,
+  &.active {
+    & .family {
+      display: block;
+    }
+
+    & .pie-trigger {
+      transform: rotate(45deg);
+    }
+  }
+}
+
+
+@for $count from 1 through 12 {
+  .pie-menu:has(> :nth-child(#{$count}):last-child) {
+    --count: calc(#{$count} - 1);
+    --to: calc(180deg / var(--count));
+  }
+}
+
+.family {
+  display: none;
+  position: absolute;
+  overflow: visible;
+  top: -40px;
+  left: -40px;
+  --cx: 50%;
+  --cy: 50%;
+  --r: 50%;
+  --inner-r: 10%;
+
+  --from: calc(0deg - var(--to));
+
+  --from-x: calc(var(--cx) + var(--r) * cos(var(--from) - 90deg));
+  --from-y: calc(var(--cy) + var(--r) * sin(var(--from) - 90deg));
+
+  --to-x: calc(var(--cx) + var(--r) * cos(var(--to) - 90deg));
+  --to-y: calc(var(--cy) + var(--r) * sin(var(--to) - 90deg));
+
+  --inner-from-x: calc(var(--cx) + var(--inner-r) * cos(var(--from) - 90deg));
+  --inner-from-y: calc(var(--cy) + var(--inner-r) * sin(var(--from) - 90deg));
+
+  --inner-to-x: calc(var(--cx) + var(--inner-r) * cos(var(--to) - 90deg));
+  --inner-to-y: calc(var(--cy) + var(--inner-r) * sin(var(--to) - 90deg));
+
+  pointer-events: none;
+  height: 100px;
+  aspect-ratio: 1;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    clip-path: shape(
+        from var(--from-x) var(--from-y),
+        arc to var(--to-x) var(--to-y) of var(--r) cw,
+        line to var(--inner-to-x) var(--inner-to-y),
+        arc to var(--inner-from-x) var(--inner-from-y) of var(--inner-r) ccw,
+        close
+    );
+    background: var(--bg);
+    pointer-events: auto;
+  }
+
+  @for $i from 1 through 20 {
+    &:nth-child(#{$i}) {
+      transform: rotate(calc(var(--to) * 2 * #{$i}));
+    }
+  }
+}
+.family-btn {
+  height: 50%;
+  aspect-ratio: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: unset;
+  border: none;
+  pointer-events: auto;
+}
+.members {
+  position: absolute;
+  display: none;
+}
+

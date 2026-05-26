@@ -1,6 +1,7 @@
 import http from 'http';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
+import { saveCredentials } from './db';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -208,7 +209,7 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: 'intellij' | 'rider'): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: 'intellij' | 'rider', password: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
@@ -225,6 +226,31 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+
+# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
+export DEBIAN_FRONTEND=noninteractive
+command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
+id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
+echo "noot:${password}" | chpasswd
+usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+
+# Fix workspace permissions
+chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
+chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+
+# Configure sudo audit logging
+mkdir -p /etc/sudoers.d
+printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
+chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+
+# Start sudo log forwarder (posts new lines to Huddle API)
+touch /tmp/sudo-audit.log
+( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
+    [ -z "\$line" ] && continue
+    curl -sf -X POST "http://huddle:3000/api/audit/sudo" \\
+      -H "Content-Type: application/json" \\
+      -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
+  done ) &
 
 rm -f /var/run/docker.sock
 ln -sf /tmp/dc-sockets/${containerName}.sock /var/run/docker.sock
@@ -254,6 +280,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const devcontainerId = crypto.randomUUID().replace(/-/g, '');
   const modelJson = '{"customizations":{"jetbrains":{"backend":"IntelliJ"}}}';
   const metadataJson = '[{"remoteUser":"vscode"}]';
+
+  const password = crypto.randomBytes(12).toString('base64url');
 
   const netName = `dc-net-${containerName}`;
   await createNetwork(netName);
@@ -315,12 +343,14 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
   // Run jb-config.sh via exec
-  const script = buildJbConfigScript(containerWorkspace, containerName, ideName);
+  const script = buildJbConfigScript(containerWorkspace, containerName, ideName, password);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
+
+  saveCredentials(containerName, password);
 
   return id;
 }

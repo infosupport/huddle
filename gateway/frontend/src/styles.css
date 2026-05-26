@@ -755,7 +755,7 @@ a.kpi:hover { border-color: var(--accent); box-shadow: var(--shadow-pop); }
 
 /* ===== Misc ===== */
 .hidden { display: none !important; }
-code { font-family: monospace; font-size: 12.5px; background: var(--surface-hover); padding: 2px 6px; border-radius: 5px; }
+code { font-family: monospace; font-size: 12.5px; background: var(--surface-hover); color: var(--text); padding: 2px 6px; border-radius: 5px; }
 h4 { font-size: 13px; font-weight: 600; color: var(--text-muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .08em; }
 
 /* ── Audit log ────────────────────────────────────────────────────────────── */
@@ -778,3 +778,16 @@ h4 { font-size: 13px; font-weight: 600; color: var(--text-muted); margin: 14px 0
 .audit-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .audit-detail-grid h5 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; color: var(--text-2); }
 .audit-detail-grid pre { margin: 0; font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px; overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-all; }
+@keyframes pie-pop { from { opacity:0; transform:scale(.6); } to { opacity:1; transform:scale(1); } }
+
+/* ── Noot credentials card ───────────────────────────────────────────────── */
+.info-text { font-size: 13px; color: var(--text); line-height: 1.6; margin: 0 0 12px; }
+.info-text.muted { color: var(--text-muted); }
+.credential-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.credential-row .label { font-size: 12px; font-weight: 600; color: var(--text-muted); min-width: 80px; }
+.password-field { display: flex; align-items: center; gap: 8px; }
+.password-value { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font-size: 13px; color: var(--text); letter-spacing: 0.05em; }
+.command-block { margin-top: 16px; }
+.command-block h4 { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin: 0 0 8px; }
+.command-block pre { margin: 0; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; color: var(--text); overflow-x: auto; white-space: pre; }
+.command-block pre code { background: transparent !important; border: none; padding: 0; border-radius: 0; color: inherit; font-size: inherit; }

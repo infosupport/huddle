@@ -67,6 +67,58 @@
     </div>
 
     <div class="card">
+      <div class="card-header">
+        <h2>Noot gebruiker</h2>
+      </div>
+      <div class="card-body">
+        <p class="info-text">
+          De container heeft twee gebruikers:
+          <code>vscode</code> (jouw normale werkgebruiker, <strong>zonder sudo</strong>) en
+          <code>noot</code> (beheerdersgebruiker <strong>met sudo-rechten</strong>).
+          Wissel naar <code>noot</code> alleen wanneer je iets als root moet uitvoeren —
+          alle sudo-acties worden automatisch bijgehouden in het audit log.
+        </p>
+
+        @if (credentials) {
+          <div class="credential-row">
+            <span class="label">Wachtwoord</span>
+            <div class="password-field">
+              <code class="password-value">{{ passwordVisible ? credentials.password : '••••••••••••••••' }}</code>
+              <button class="btn btn--sm" (click)="passwordVisible = !passwordVisible">
+                {{ passwordVisible ? 'Verbergen' : 'Tonen' }}
+              </button>
+              <button class="btn btn--sm" (click)="copyPassword()">
+                {{ copied ? 'Gekopieerd!' : 'Kopiëren' }}
+              </button>
+            </div>
+          </div>
+        } @else {
+          <p class="muted">Wachtwoord niet beschikbaar (container aangemaakt vóór deze versie).</p>
+        }
+
+        <div class="command-block">
+          <h4>Hoe wissel je van gebruiker?</h4>
+          <pre><code># Wissel naar noot (heeft sudo-rechten)
+su - noot
+
+# Voer vervolgens commando's als root uit
+sudo apt install &lt;pakket&gt;
+sudo systemctl restart &lt;service&gt;
+
+# Wissel terug naar vscode
+exit
+
+# Controleer recente sudo-acties
+sudo cat /tmp/sudo-audit.log</code></pre>
+          <p class="info-text muted">
+            Alle sudo-acties verschijnen ook in de
+            <a routerLink="/audit">Audit Logs</a> pagina gefilterd op jouw container.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-header"><h3>Container-specifieke regels</h3></div>
       <h4>✓ Toegestaan ({{ allow.length }})</h4>
       <div class="card-body tight">

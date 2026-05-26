@@ -41,6 +41,11 @@ export function initDb(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
     CREATE INDEX IF NOT EXISTS idx_audit_container ON audit_log(container_id);
+    CREATE TABLE IF NOT EXISTS container_credentials (
+      container_id TEXT PRIMARY KEY,
+      password TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -126,4 +131,18 @@ export function logAudit(entry: AuditEntry): void {
       entry.resBody ?? null,
     );
   } catch (err) { console.error('[audit] log failed:', err); }
+}
+
+// ── Container credentials ────────────────────────────────────────────────────
+
+export function saveCredentials(containerName: string, password: string): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO container_credentials (container_id, password) VALUES (?, ?)`
+  ).run(containerName, password);
+}
+
+export function getCredentials(containerName: string): { password: string; created_at: number } | undefined {
+  return db.prepare(
+    `SELECT password, created_at FROM container_credentials WHERE container_id = ?`
+  ).get(containerName) as { password: string; created_at: number } | undefined;
 }

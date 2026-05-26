@@ -50,6 +50,10 @@ export class ApiService {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
+  getContainerCredentials(name: string): Observable<{ password: string; createdAt: number }> {
+    return this.handle(this.http.get<{ password: string; createdAt: number }>(`/api/docker/containers/${name}/credentials`));
+  }
+
   snapshotContainer(name: string, imageName: string): Observable<{ imageId: string }> {
     return this.handle(this.http.post<{ imageId: string }>(`/api/docker/containers/${name}/snapshot`, { imageName }));
   }

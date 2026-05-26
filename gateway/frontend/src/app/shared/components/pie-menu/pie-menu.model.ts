@@ -1,22 +1,24 @@
-export type PieIconName = 'approve' | 'approve-all' | 'deny' | 'deny-all' | 'timer' | 'timer-long' | 'later';
+import type { ICONS } from '../../icons/icons';
+
+export type PieIconName = keyof typeof ICONS;
 export type PieTone = 'green' | 'red' | 'blue' | 'neutral';
 
 export interface PieVariant {
   id: string;
   label: string;
-  icon: PieIconName;
+  icon: string;
 }
 
 export interface PieFamily {
   id: string;
   label: string;
   tone: PieTone;
-  icon: PieIconName;
+  icon: string;
   variants?: PieVariant[];
 }
 
 export interface PieMenuConfig {
-  families: [PieFamily, PieFamily, PieFamily];
+  families: PieFamily[];
 }
 
 export const PIE_TONES: Record<PieTone, { fg: string; bg: string; bgHover: string; ring: string }> = {
@@ -25,10 +27,3 @@ export const PIE_TONES: Record<PieTone, { fg: string; bg: string; bgHover: strin
   blue:    { fg: '#2452a8', bg: '#e7ecfa', bgHover: '#d6def5', ring: '#8aa3df' },
   neutral: { fg: '#3a3a38', bg: '#efece6', bgHover: '#e4e0d6', ring: '#bdb8ac' },
 };
-
-// Three 120° arcs: top, bottom-right, bottom-left
-export const PIE_ARCS = [
-  { start: -150, end: -30  },
-  { start:  -30, end:  90  },
-  { start:   90, end:  210 },
-] as const;

@@ -87,13 +87,13 @@ import { ApiService } from '../../../core/services/api.service';
       box-shadow: 0 2px 8px rgba(0,0,0,.12);
     }
     .bug-trigger:hover, .bug-trigger--open {
-      background: var(--surface-3, #f0ede6);
+      background: var(--surface-hover);
       color: var(--text);
       border-color: var(--text-muted);
     }
     .bug-panel {
       width: 300px;
-      background: var(--surface-1, #fff);
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
       box-shadow: 0 8px 24px rgba(0,0,0,.14);
@@ -126,7 +126,7 @@ import { ApiService } from '../../../core/services/api.service';
       padding: 7px 10px;
       border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--surface-1);
+      background: var(--surface-2);
       color: var(--text);
       font-size: 13px;
       font-family: inherit;

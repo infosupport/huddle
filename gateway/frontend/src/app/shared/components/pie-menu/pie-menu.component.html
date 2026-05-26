@@ -1,0 +1,16 @@
+<button
+  #trigger
+  class="pie-trigger"
+  [class.pie-trigger--open]="isOpen"
+  [attr.aria-expanded]="isOpen"
+  aria-label="Acties"
+  (click)="onTriggerClick()"
+  (mouseenter)="onTriggerEnter()"
+  (mouseleave)="scheduleClose()"
+>
+  @if (isOpen) {
+    <app-icon name="x" [size]="14" />
+  } @else {
+    <app-icon name="plus" [size]="14" />
+  }
+</button>

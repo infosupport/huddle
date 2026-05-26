@@ -10,5 +10,5 @@ export const routes: Routes = [
   { path: 'policies', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Policies' } },
   { path: 'audit', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },
   { path: 'settings', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Settings' } },
-  { path: '**', redirectTo: 'dashboard' },
+{ path: '**', redirectTo: 'dashboard' },
 ];
