@@ -76,6 +76,62 @@ function checkPolicy(containerName: string): boolean {
   return Boolean(grant && grant.until > Math.floor(Date.now() / 1000));
 }
 
+// Reject HostConfig shapes that would let a spawned container escape the
+// devcontainer sandbox (read host fs, see host PIDs, talk to host dockerd).
+// Returns a denial reason, or null if the config is safe.
+function validateHostConfig(hostConfig: any): string | null {
+  if (!hostConfig || typeof hostConfig !== 'object') return null;
+
+  if (hostConfig.Privileged === true) return 'Privileged containers not permitted';
+  if (hostConfig.PidMode && hostConfig.PidMode !== '') return 'PidMode not permitted';
+  if (hostConfig.IpcMode === 'host') return 'IpcMode=host not permitted';
+  if (hostConfig.UsernsMode === 'host') return 'UsernsMode=host not permitted';
+  if (hostConfig.CgroupnsMode === 'host') return 'CgroupnsMode=host not permitted';
+  if (hostConfig.UTSMode === 'host') return 'UTSMode=host not permitted';
+  if (hostConfig.CgroupParent) return 'CgroupParent override not permitted';
+
+  if (Array.isArray(hostConfig.CapAdd) && hostConfig.CapAdd.length > 0)
+    return 'CapAdd not permitted';
+  if (Array.isArray(hostConfig.Devices) && hostConfig.Devices.length > 0)
+    return 'Devices not permitted';
+
+  const sys = hostConfig.Sysctls;
+  if (sys && typeof sys === 'object' && Object.keys(sys).length > 0)
+    return 'Sysctls not permitted';
+
+  if (Array.isArray(hostConfig.SecurityOpt)) {
+    for (const opt of hostConfig.SecurityOpt) {
+      if (typeof opt !== 'string') continue;
+      const norm = opt.toLowerCase().replace(/\s+/g, '');
+      if (norm === 'apparmor=unconfined' ||
+          norm === 'seccomp=unconfined' ||
+          norm === 'label=disable' ||
+          norm === 'systempaths=unconfined' ||
+          norm === 'no-new-privileges=false')
+        return `SecurityOpt ${opt} not permitted`;
+    }
+  }
+
+  // Bind mounts from the host fs are the main escape vector
+  // (`-v /:/host`, `-v /var/run/docker.sock:/var/run/docker.sock`).
+  // Source paths starting with `/` are host paths; anything else is a named volume.
+  if (Array.isArray(hostConfig.Binds)) {
+    for (const bind of hostConfig.Binds) {
+      if (typeof bind !== 'string') continue;
+      const src = bind.split(':')[0] ?? '';
+      if (src.startsWith('/')) return `host-path bind not permitted: ${bind}`;
+    }
+  }
+
+  if (Array.isArray(hostConfig.Mounts)) {
+    for (const mount of hostConfig.Mounts) {
+      if (mount && mount.Type === 'bind') return 'bind-type mounts not permitted';
+    }
+  }
+
+  return null;
+}
+
 function deny403(client: net.Socket, msg: string): void {
   const body = JSON.stringify({ message: msg });
   client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
@@ -118,7 +174,22 @@ export async function createContainerProxy(containerName: string, socketDir: str
         });
         upstream.on('end', () => client.end());
         upstream.pipe(client);
-        upstream.write(firstData);
+
+        // Force Connection: close so docker CLI cannot reuse this TCP socket
+        // for a second request — every request must reopen and re-enter our
+        // header parser (otherwise we'd tunnel subsequent requests raw and
+        // bypass /containers/json filtering).
+        const sep = firstData.indexOf('\r\n\r\n');
+        if (sep === -1) { upstream.write(firstData); return; }
+        const headerStr = firstData.slice(0, sep).toString();
+        const tail = firstData.slice(sep + 4);
+        const lines = headerStr.split('\r\n');
+        const fixed = [
+          lines[0],
+          'Connection: close',
+          ...lines.slice(1).filter(l => !/^connection:\s*/i.test(l)),
+        ].join('\r\n');
+        upstream.write(Buffer.concat([Buffer.from(fixed + '\r\n\r\n'), tail]));
       }
 
       function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
@@ -129,18 +200,26 @@ export async function createContainerProxy(containerName: string, socketDir: str
       function processInjectedBody(): void {
         const bodyBytes = bodyBuf.slice(0, bodyContentLength);
         const rest = bodyBuf.slice(bodyContentLength);
+        let body: any;
         try {
-          const body = JSON.parse(bodyBytes.toString());
-          body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
-          const newBodyBuf = Buffer.from(JSON.stringify(body));
-          const newHeader = savedHeaderPart.replace(
-            /content-length:\s*\d+/i,
-            `Content-Length: ${newBodyBuf.length}`
-          ) + '\r\n\r\n';
-          openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+          body = JSON.parse(bodyBytes.toString());
         } catch {
-          openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBuf]));
+          // Unparseable body must not bypass HostConfig validation.
+          deny403(client, 'invalid container create body');
+          return;
         }
+        const denial = validateHostConfig(body.HostConfig);
+        if (denial) { deny403(client, denial); return; }
+        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+        // Force spawned containers onto the parent devcontainer's network only.
+        body.HostConfig = { ...(body.HostConfig ?? {}), NetworkMode: `dc-net-${containerName}` };
+        delete body.NetworkingConfig;
+        const newBodyBuf = Buffer.from(JSON.stringify(body));
+        const newHeader = savedHeaderPart.replace(
+          /content-length:\s*\d+/i,
+          `Content-Length: ${newBodyBuf.length}`
+        ) + '\r\n\r\n';
+        openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
       }
 
       client.on('data', (chunk: Buffer) => {
@@ -197,8 +276,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         if (method === 'GET' || method === 'HEAD') {
           if (p === '/version' || p === '/info' || p === '/_ping' ||
               /^\/exec\/[^/]+\/json$/.test(p) ||
-              /^\/images\/[^/]+\/json$/.test(p) ||
-              /^\/containers\/[^/]+\/(json|logs|top)$/.test(p)) {
+              /^\/images\/[^/]+\/json$/.test(p)) {
             openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             return;
           }
@@ -210,6 +288,24 @@ export async function createContainerProxy(containerName: string, socketDir: str
           if (p === '/containers/json') {
             // Filter to own containers only
             forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+            return;
+          }
+          // Inspect / logs / top — only on containers labeled by this devcontainer
+          const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top)$/)?.[1];
+          if (inspectCt) {
+            if (devcontainerIds.has(inspectCt)) {
+              deny403(client, 'inspect of devcontainer not permitted');
+              return;
+            }
+            client.pause();
+            hasOwnLabel('container', inspectCt, containerName).then(ok => {
+              if (ok) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              } else {
+                deny403(client, 'container not owned by this devcontainer');
+              }
+              client.resume();
+            });
             return;
           }
           deny403(client, 'path not allowed');
