@@ -76,6 +76,7 @@ function Start-Huddle {
     $bugtrackerDir = Join-Path $scriptDir "bugtracker"
     New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "bugs") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "solved") | Out-Null
+    $baseDevimageDir = Join-Path $scriptDir "base-devimage"
     $id = docker run -d `
         --name $HUDDLE_CONTAINER `
         --network devcontainer-net `
@@ -84,6 +85,7 @@ function Start-Huddle {
         -v "/var/run/docker.sock:/var/run/docker.sock" `
         -v "/tmp/dc-sockets:/tmp/dc-sockets" `
         -v "${bugtrackerDir}:/bugtracker" `
+        -v "${baseDevimageDir}:/base-devimage:ro" `
         $HUDDLE_IMAGE
     Write-Host "  [OK] Gestart: $id" -ForegroundColor Green
     Write-Host "  Web UI: http://localhost:${HUDDLE_PORT}" -ForegroundColor Cyan

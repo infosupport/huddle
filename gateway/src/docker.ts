@@ -1,4 +1,5 @@
 import http from 'http';
+import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
 import { saveCredentials } from './db';
@@ -184,6 +185,72 @@ export async function createNetwork(name: string): Promise<void> {
   await dockerRequest('POST', '/networks/create', { Name: name });
 }
 
+export async function imageExists(name: string): Promise<boolean> {
+  try {
+    await dockerRequest('GET', `/images/${encodeURIComponent(name)}/json`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function makeTar(filename: string, content: Buffer): Buffer {
+  const header = Buffer.alloc(512);
+  Buffer.from(filename).copy(header, 0, 0, Math.min(filename.length, 99));
+  Buffer.from('0000644\0').copy(header, 100);
+  Buffer.from('0000000\0').copy(header, 108);
+  Buffer.from('0000000\0').copy(header, 116);
+  Buffer.from(content.length.toString(8).padStart(11, '0') + '\0').copy(header, 124);
+  Buffer.from(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0').copy(header, 136);
+  header[156] = 0x30;
+  Buffer.from('ustar\0').copy(header, 257);
+  Buffer.from('00').copy(header, 263);
+  Buffer.from('        ').copy(header, 148);
+  let checksum = 0;
+  for (let i = 0; i < 512; i++) checksum += header[i];
+  Buffer.from(checksum.toString(8).padStart(6, '0') + '\0 ').copy(header, 148);
+  const padded = Buffer.alloc(Math.ceil(content.length / 512) * 512);
+  content.copy(padded);
+  return Buffer.concat([header, padded, Buffer.alloc(1024)]);
+}
+
+export async function buildImage(imageName: string, dockerfilePath: string): Promise<void> {
+  const dockerfile = fs.readFileSync(dockerfilePath);
+  const tarData = makeTar('Dockerfile', dockerfile);
+
+  await new Promise<void>((resolve, reject) => {
+    const options: http.RequestOptions = {
+      socketPath: '/var/run/docker.sock',
+      method: 'POST',
+      path: `/build?t=${encodeURIComponent(imageName)}`,
+      headers: {
+        'content-type': 'application/x-tar',
+        'content-length': tarData.length,
+      },
+    };
+    const req = http.request(options, (res) => {
+      let output = '';
+      res.on('data', (chunk: string) => (output += chunk));
+      res.on('end', () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`Docker build ${imageName} → ${res.statusCode}: ${output}`));
+          return;
+        }
+        for (const line of output.split('\n').filter(Boolean)) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj.error) { reject(new Error(`Docker build failed: ${obj.error}`)); return; }
+          } catch { /* non-JSON line is fine */ }
+        }
+        resolve();
+      });
+    });
+    req.on('error', reject);
+    req.write(tarData);
+    req.end();
+  });
+}
+
 export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
 }
@@ -284,8 +351,24 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const password = crypto.randomBytes(12).toString('base64url');
 
   const netName = `dc-net-${containerName}`;
-  await createNetwork(netName);
-  await connectNetwork(netName, 'huddle');
+  if (!(await networkExists(netName))) {
+    await createNetwork(netName);
+  }
+  try {
+    await connectNetwork(netName, 'huddle');
+  } catch (err: any) {
+    if (!String(err.message).includes('already exists in network')) throw err;
+  }
+
+  if (!(await imageExists(imageName))) {
+    const dockerfilePath = '/base-devimage/Dockerfile';
+    if (!fs.existsSync(dockerfilePath)) {
+      throw new Error(`Image '${imageName}' not found and /base-devimage/Dockerfile is not mounted`);
+    }
+    console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
+    await buildImage(imageName, dockerfilePath);
+    console.log(`[huddle] Base image '${imageName}' built successfully`);
+  }
 
   // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
   await createContainerProxy(containerName, SOCKET_DIR);
