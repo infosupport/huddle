@@ -53,6 +53,14 @@ export function initDb(): void {
     db.exec('ALTER TABLE rules ADD COLUMN expires_at INTEGER');
   }
 
+  // Seed the global allow rule for huddle's own domain so the sudo-audit
+  // forwarder (and any future self-traffic) doesn't auto-create a 'requested'
+  // entry every time a fresh DB is used. Path-level enforcement still lives in
+  // proxy.ts / api.ts — this only authorises the domain itself.
+  db.prepare(
+    `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES ('huddle', NULL, 'allow')`
+  ).run();
+
   db.exec("DELETE FROM audit_log WHERE ts < unixepoch() - 604800");
 
   const count = (db.prepare("SELECT COUNT(*) as n FROM audit_log").get() as { n: number }).n;

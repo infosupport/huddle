@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
@@ -14,6 +15,8 @@ import {
   getBaseImageName,
   forceDeleteContainer,
   cleanupContainerNetwork,
+  listNetworks,
+  resolveContainerByIp,
   type StartParams,
 } from './docker';
 
@@ -34,8 +37,74 @@ interface Rule {
   request_count: number;
 }
 
+// ── Source-IP gate: deny management-API access from devcontainer networks ──
+// The API listens on 0.0.0.0 so the host port forward (-p 3000:3000) works,
+// but Huddle is also attached to devcontainer-net and every dc-net-* — without
+// this filter, any container on those networks can reach unauth'd /api/* routes.
+type IpRange = [base: number, mask: number];
+let blockedSubnets: IpRange[] = [];
+
+function ipv4ToInt(ip: string): number {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return -1;
+  return ((parts[0] * 0x1000000) + (parts[1] * 0x10000) + (parts[2] * 0x100) + parts[3]) >>> 0;
+}
+
+async function refreshBlockedSubnets(): Promise<void> {
+  try {
+    const nets = await listNetworks();
+    const next: IpRange[] = [];
+    for (const n of nets) {
+      const name: string = n.Name ?? '';
+      if (name !== 'devcontainer-net' && !/^dc-net-/.test(name)) continue;
+      for (const cfg of (n.IPAM?.Config ?? [])) {
+        const cidr: string | undefined = cfg.Subnet;
+        if (!cidr || !cidr.includes('.')) continue;
+        const [base, bitsStr] = cidr.split('/');
+        const baseInt = ipv4ToInt(base);
+        if (baseInt < 0) continue;
+        const bits = parseInt(bitsStr ?? '32');
+        const mask = bits === 0 ? 0 : ((0xFFFFFFFF << (32 - bits)) >>> 0);
+        next.push([baseInt & mask, mask]);
+      }
+    }
+    blockedSubnets = next;
+  } catch (e) {
+    console.error('[api] failed to refresh blocked subnets:', (e as Error).message);
+  }
+}
+
+function isDevcontainerSource(remoteAddr: string | null | undefined): boolean {
+  if (!remoteAddr) return false;
+  const ip = remoteAddr.replace(/^::ffff:/, '');
+  if (!ip.includes('.')) return false;
+  const ipInt = ipv4ToInt(ip);
+  if (ipInt < 0) return false;
+  return blockedSubnets.some(([base, mask]) => (ipInt & mask) === base);
+}
+
 export function createApiServer(): FastifyInstance {
   const app = Fastify({ logger: false });
+
+  // Build the blocked-subnet cache and refresh it periodically so new
+  // dc-net-* networks (created when a devcontainer starts) get picked up.
+  refreshBlockedSubnets().catch(() => {});
+  setInterval(refreshBlockedSubnets, 5000).unref();
+
+  // Devcontainers may only reach a tiny whitelist of endpoints (currently just
+  // the sudo audit ingest). Everything else on the API is admin-only.
+  const devcontainerWhitelist: Array<{ method: string; path: string }> = [
+    { method: 'POST', path: '/api/audit/sudo' },
+  ];
+  app.addHook('onRequest', async (req, reply) => {
+    if (!isDevcontainerSource(req.socket.remoteAddress)) return;
+    const ok = devcontainerWhitelist.some(
+      w => w.method === req.method && w.path === req.url,
+    );
+    if (!ok) {
+      reply.code(403).send({ error: 'forbidden', reason: 'endpoint not allowed from devcontainer network' });
+    }
+  });
 
   // ── WebSocket push ────────────────────────────────────────────────────────
   const wss = new WebSocketServer({ noServer: true });
@@ -57,6 +126,11 @@ export function createApiServer(): FastifyInstance {
   stateEvents.on('changed', broadcast);
 
   app.server.on('upgrade', (req, socket, head) => {
+    if (isDevcontainerSource((socket as net.Socket).remoteAddress)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     if (new URL(req.url ?? '', 'http://x').pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } else {
@@ -389,9 +463,17 @@ export function createApiServer(): FastifyInstance {
   });
 
   // ── Sudo audit ingest ─────────────────────────────────────────────────────
-  app.post<{ Body: { container: string; entry: string } }>('/api/audit/sudo', async (req) => {
-    const { container, entry } = req.body;
-    if (!container || !entry) return { ok: false };
+  // Container identity is derived from the source IP — the body's `container`
+  // field is ignored. A devcontainer cannot impersonate another container by
+  // sending a forged name.
+  app.post<{ Body: { entry: string } }>('/api/audit/sudo', async (req, reply) => {
+    const { entry } = req.body;
+    if (!entry) return { ok: false };
+    const container = await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    if (!container) {
+      reply.code(403);
+      return { ok: false, error: 'unknown source container' };
+    }
     // Parse sudo log: "... user : TTY=... ; PWD=... ; USER=root ; COMMAND=/usr/bin/foo bar"
     const cmdMatch = entry.match(/COMMAND=(.+)$/);
     const cmd = cmdMatch ? cmdMatch[1].trim() : entry;

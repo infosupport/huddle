@@ -172,6 +172,10 @@ export async function commitContainer(containerId: string, imageName: string): P
   return result.Id ?? '';
 }
 
+export async function listNetworks(): Promise<any[]> {
+  return dockerRequest('GET', '/networks');
+}
+
 export async function networkExists(name: string): Promise<boolean> {
   try {
     await dockerRequest('GET', `/networks/${encodeURIComponent(name)}`);
@@ -310,7 +314,7 @@ mkdir -p /etc/sudoers.d
 printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
 chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
 
-# Start sudo log forwarder (posts new lines to Huddle API)
+# Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
 ( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
     [ -z "\$line" ] && continue
@@ -318,9 +322,6 @@ touch /tmp/sudo-audit.log
       -H "Content-Type: application/json" \\
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
-
-rm -f /var/run/docker.sock
-ln -sf /tmp/dc-sockets/${containerName}.sock /var/run/docker.sock
 `;
 }
 
@@ -412,8 +413,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
         },
         {
           Type: 'bind',
-          Source: SOCKET_DIR,
-          Target: '/tmp/dc-sockets',
+          Source: `${SOCKET_DIR}/${containerName}.sock`,
+          Target: '/var/run/docker.sock',
         },
       ],
       NetworkMode: netName,

@@ -57,19 +57,43 @@ export function createProxyServer(): http.Server {
       return;
     }
 
-    const { status, ruleId } = checkRule(target.hostname, containerId);
-    if (status !== 'allow') {
-      logAudit({
-        containerId,
-        domain: target.hostname,
-        action: status,
-        ruleId: null,
-        method: req.method ?? null,
-        path: `${target.pathname}${target.search}`,
-        resStatus: 403,
-      });
-      send403(res, target.hostname, status);
-      return;
+    let ruleId: number | null;
+    if (target.hostname === 'huddle') {
+      // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
+      const allowed =
+        target.port === '3000' &&
+        req.method === 'POST' &&
+        target.pathname === '/api/audit/sudo';
+      if (!allowed) {
+        logAudit({
+          containerId,
+          domain: 'huddle',
+          action: 'deny',
+          ruleId: null,
+          method: req.method ?? null,
+          path: `${target.pathname}${target.search}`,
+          resStatus: 403,
+        });
+        send403(res, 'huddle', 'huddle-internal endpoint not allowed');
+        return;
+      }
+      ruleId = null;
+    } else {
+      const result = checkRule(target.hostname, containerId);
+      if (result.status !== 'allow') {
+        logAudit({
+          containerId,
+          domain: target.hostname,
+          action: result.status,
+          ruleId: null,
+          method: req.method ?? null,
+          path: `${target.pathname}${target.search}`,
+          resStatus: 403,
+        });
+        send403(res, target.hostname, result.status);
+        return;
+      }
+      ruleId = result.ruleId;
     }
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
@@ -158,6 +182,20 @@ export function createProxyServer(): http.Server {
       return;
     }
 
+    if (hostname === 'huddle') {
+      // No HTTPS endpoint on huddle's own API — always reject CONNECT to self.
+      logAudit({
+        containerId,
+        domain: 'huddle',
+        port,
+        action: 'deny',
+        ruleId: null,
+        method: 'CONNECT',
+        resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, 'huddle-internal endpoint not allowed');
+      return;
+    }
     const { status, ruleId } = checkRule(hostname, containerId);
     if (status !== 'allow') {
       logAudit({
