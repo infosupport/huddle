@@ -185,17 +185,14 @@ export function createProxyServer(): http.Server {
         resStatus: 200,
       });
       if (head && head.length) upstream.write(head);
-      upstream.pipe(clientSocket);
-      clientSocket.pipe(upstream);
+      upstream.pipe(clientSocket, { end: false });
+      clientSocket.pipe(upstream, { end: false });
+      upstream.on('end', () => clientSocket.destroy());
+      clientSocket.on('end', () => upstream.destroy());
     });
 
-    upstream.on('error', () => {
-      rejectSocket(clientSocket, 502, 'upstream connect failed');
-    });
-
-    clientSocket.on('error', () => {
-      upstream.destroy();
-    });
+    upstream.on('error', () => clientSocket.destroy());
+    clientSocket.on('error', () => upstream.destroy());
   });
 
   server.listen(PROXY_PORT, () => {

@@ -4,6 +4,15 @@ import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
 import { createContainerProxy } from './socket-proxy';
 
+// ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
+// Without this handler Node.js crashes the process on unhandled 'error' events
+// from sockets that lose their connection unexpectedly.
+process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'ECONNRESET' || err.code === 'EPIPE') return;
+  console.error('[fatal] uncaught exception:', err);
+  process.exit(1);
+});
+
 const SOCKET_DIR = '/tmp/dc-sockets';
 
 initDb();
