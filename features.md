@@ -1,4 +1,0 @@
-- folders hernoemen naar huddle en daar nog alles van wall poc er uithalen
-- de baseimage uitbreiden zodat er 3 dingen in de terminal al werken in intelij: claude, codex, docker
-- security annalyse -> wegschrijven naar een file waar alle mogelijke security issues zitten
-- commit alles 

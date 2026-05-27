@@ -270,19 +270,41 @@
       <section class="section">
         <h2>Wat Is Huddle?</h2>
         <p>Huddle is een veiligheidsproxy die fungeert als DMZ (Demilitarized Zone) tussen uw devcontainers en het externe netwerk. Het biedt een geconsolideerde laag voor netwerkbeveiliging, proxying en containerbeheer—speciaal ontworpen voor <strong>JetBrains DevContainers</strong> die via de IntelliJ IDEA / Rider IDE werken.</p>
-        
-        <p class="highlight">Huddle beschermt uw开发omgevingen door verkeer te filteren, Docker-toegang te beheren en gedetailleerde audit Logs bij te houden—terwijl het de devcontainer-erfvaring volledig behoudt.</p>
+
+        <p class="highlight">Huddle beschermt uw ontwikkelomgevingen door verkeer te filteren, Docker-toegang te beheren en gedetailleerde audit logs bij te houden—terwijl het de devcontainer-ervaring volledig behoudt.</p>
+      </section>
+
+      <section class="section">
+        <h2>Snel starten</h2>
+        <p><code>huddle.ps1</code> in de repo-root is het centrale startpunt. Het start een interactief PowerShell-menu waarmee je de gateway bouwt, herstart en snapshots beheert.</p>
+
+        <div class="code-example">
+<span class="comment"># In de repo-root</span>
+.\huddle.ps1
+        </div>
+
+        <p>Het menu biedt:</p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.8;">
+          <li><strong>1</strong> — Snapshot maken van draaiende container</li>
+          <li><strong>2</strong> — Devcontainer starten van snapshot (gebruikt <code>Start-Snapshot.ps1</code>)</li>
+          <li><strong>3</strong> — Base image bouwen (<code>base-devimage/</code>)</li>
+          <li><strong>4</strong> — Huddle bouwen en herstarten (<code>gateway/</code>)</li>
+          <li><strong>0</strong> — Afsluiten</li>
+        </ul>
+        <p>Na een Huddle-start is de Web UI bereikbaar op <code>http://localhost:3000</code>.</p>
       </section>
 
       <section class="section">
         <h2>Hoogtepunten van Huddle</h2>
         <ul class="feature-list">
-          <li><strong>Firewall Proxy</strong> — HTTP/HTTPS verkeer wordt automatisch omgeleid door Huddle, waar regels op per-container en globaal worden toegepast</li>
+          <li><strong>Firewall Proxy</strong> — HTTP/HTTPS verkeer wordt automatisch omgeleid door Huddle, waar regels per container en globaal worden toegepast</li>
           <li><strong>Time-Limited Docker Access</strong> — Docker socket-toegang is tijdelijk en moet expliciet worden goedgekeurd via de UI</li>
-          <li><strong>Per-Container Proxy Sockets</strong> — Elke container heeft een eigen Docker socket proxy met toegangscontrole</li>
-          <li><strong>Management UI</strong> — Gebruiksvriendelijke webinterface voor het beheren van containers, firewallregels en Docker-toegang</li>
+          <li><strong>Per-Container Proxy Sockets</strong> — Elke container heeft een eigen Docker socket proxy met toegangscontrole en label-isolatie</li>
+          <li><strong>HostConfig validatie</strong> — Sandbox-escape vectoren (<code>Privileged</code>, <code>CapAdd</code>, host-binds, etc.) worden geweigerd bij container-spawn</li>
+          <li><strong>Management UI</strong> — Angular 21 webinterface voor containers, firewallregels, Docker-grants en audit logs</li>
           <li><strong>JetBrains Integration</strong> — Volledige automatische configuratie voor IntelliJ IDEA en Rider remote development</li>
-          <li><strong>SQLite Database</strong> — Persistente opslag van firewallregels, Docker-toegangsvergunningen en audit Logs</li>
+          <li><strong>SQLite Database</strong> — Persistente opslag van firewallregels, Docker-toegangsgrants en audit logs</li>
+          <li><strong>Bugtracker</strong> — Ingebouwde bug-rapportage opslag (<code>bugtracker/bugs</code>, <code>bugtracker/solved</code>)</li>
         </ul>
       </section>
 
@@ -314,18 +336,18 @@
           
           <div class="diagram-box box-jetbrains">
             💻 JetBrains IDE
-            <div class="diagram-label">Lcl host — beheer via UI</div>
+            <div class="diagram-label">Localhost — beheer via UI</div>
           </div>
         </div>
-        
+
         <p><strong>Dataflow:</strong></p>
         <ol style="margin-left: 2rem; margin-top: 1.5rem; color: #64748b; font-size: 0.95rem; line-height: 1.8;">
-          <li>Devcontainer maakt HTTP/HTTPS request → proxy via huddle:80 (geset via <code>http_proxy</code> env var)</li>
-          <li>Huddle proxy ontvanger request, controleert firewall regel voor deze domain + container_id</li>
+          <li>Devcontainer maakt HTTP/HTTPS request → proxy via huddle:80 (afgedwongen via iptables DNAT + <code>http_proxy</code> env var)</li>
+          <li>Huddle proxy ontvangt request, controleert firewall-regel voor dit domein + container_id</li>
           <li>Als <strong>allow</strong> → forward naar doel; als <strong>deny</strong> → 403 Forbidden; als <strong>requested</strong> → 403 + create rule</li>
           <li>Als container Docker socket nodig heeft → bind-mount naar <code>/tmp/dc-sockets/[container].sock</code></li>
           <li>Socket proxy controleert Docker grant in SQLite—tijdgebonden (1-120 minuten)</li>
-          <li>Management UI (port 3000) helpt beheren: containers, rules, grants—alleen bestemde voor host</li>
+          <li>Management API (poort 3000) is alleen bereikbaar vanaf de host — een source-IP gate weert alle requests vanaf <code>devcontainer-net</code> en <code>dc-net-*</code></li>
         </ol>
       </section>
 
@@ -346,7 +368,7 @@
           </div>
           <div class="card">
             <h4>🎨 UI Dashboard</h4>
-            <p>React-achtige frontend met dark/light mode, container overzicht, firewall rules, audit logs en Docker access control.</p>
+            <p>Angular 21 frontend (in <code>gateway/frontend/</code>) met dark/light mode, container overzicht, firewall rules, audit logs, Docker access control en bugtracker.</p>
           </div>
         </div>
       </section>
@@ -397,87 +419,89 @@
       <section class="section">
         <h2>Container Start Workflow</h2>
         <p>Als u een devcontainer start via de UI:</p>
-        
+
         <div class="code-example">
 <span class="function">POST</span> /api/docker/start
 <span class="keyword">{</span>
   "imageName": <span class="string">"base-devimage"</span>,
   "workspaceDir": <span class="string">"C:/projects/my-project"</span>,
+  "containerWorkspace": <span class="string">"/workspaces/my-project"</span>,
   "containerName": <span class="string">"dc-my-project"</span>,
-  "ideName": <span class="string">"intellij"</span>
+  "presentableName": <span class="string">"my-project"</span>,
+  "ideName": <span class="string">"intellij"</span>,
+  "empty": <span class="number">false</span>
 <span class="keyword">}</span>
         </div>
-        
+
         <p>Huddle voert deze stappen uit:</p>
         <ol style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.8;">
-          <li>Check of <code>devcontainer-net</code> network bestaat</li>
+          <li>Check of <code>devcontainer-net</code> en een eigen <code>dc-net-&lt;name&gt;</code> network bestaan</li>
           <li>Maak per-container socket proxy via <code>createContainerProxy(containerName, SOCKET_DIR)</code></li>
-          <li>Build Docker container met:
+          <li>Start Docker container met:
             <ul style="margin-left: 1.5rem; color: #64748b; font-size: 0.9rem; line-height: 1.7;">
               <li>Env vars voor http_proxy/https_proxy naar huddle:80</li>
-              <li>Mount volume JetBrains Remote Dev dist</li>
-              <li>Bind-mount workspace naar container</li>
-              <li>Bind-mount Docker socket proxy naar <code>/var/run/docker.sock</code></li>
-              <li>Mounts <code>NET_ADMIN</code> capability</li>
+              <li>Volume voor JetBrains Remote Dev dist</li>
+              <li>Bind-mount workspace naar container (alleen als <code>empty=false</code>)</li>
+              <li>Bind-mount per-container socket proxy naar <code>/var/run/docker.sock</code></li>
+              <li><code>NET_ADMIN</code> capability voor iptables DNAT</li>
+              <li>Label <code>huddle.parent=&lt;containerName&gt;</code> voor isolatie</li>
             </ul>
           </li>
           <li>Start container</li>
-          <li>Run <code>jb-config.sh</code> via <code>exec</code> met <code>User: 'root'</code></li>
+          <li>Voer het container init-script uit via <code>docker exec</code> als <code>root</code></li>
         </ol>
       </section>
 
       <section class="section">
-        <h2>jb-config.sh — Container Setup Script</h2>
-        <p>Elke container krijgt dit script uitgevoerd bij start (via <code>docker exec</code> root):</p>
-        
+        <h2>Container init script</h2>
+        <p>Bij elke container-start voert <code>docker.ts</code> een inline shell-script uit (geen los <code>jb-config.sh</code> bestand meer — alle logica leeft in <code>gateway/src/docker.ts</code>). Het script:</p>
+
         <div class="code-example">
 <span class="keyword">#!/bin/sh</span>
-<span class="comment"># Locate JetBrains Remote Dev directory & build number</span>
+<span class="comment"># Locate JetBrains Remote Dev directory &amp; build number</span>
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i <span class="string">"idea"</span> | sort -t- -k2 -V | tail -1)
-IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
+IDEA_PATH=<span class="string">"/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"</span>
 BUILD=$(grep -o <span class="string">'"buildNumber":"[^"]*"'</span> <span class="string">"$IDEA_PATH/product-info.json"</span> | cut -d<span class="string">'"'</span> -f4)
 CODE=$(grep -o <span class="string">'"productCode":"[^"]*"'</span> <span class="string">"$IDEA_PATH/product-info.json"</span> | cut -d<span class="string">'"'</span> -f4)
 
 <span class="comment"># Write host-config.json voor JetBrains remote development</span>
-printf <span class="string">'{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}'</span> <span class="string">"$PROJ"</span> <span class="string">"$IDEA_PATH"</span> <span class="string">"$BUILD"</span> <span class="string">"$CODE"</span> <span class="keyword">&gt;</span> /.jbdevcontainer/config/JetBrains/host-config.json
-
-<span class="comment"># Configure curl to send X-Container-ID header (voor policy audit)</span>
-CURL_LINE=<span class="string">'--proxy-header "X-Container-ID: ${containerName}"'</span>
-grep -qF <span class="string">"$CURL_LINE"</span> /home/vscode/.curlrc 2&gt;/dev/null || echo <span class="string">"$CURL_LINE"</span> <span class="keyword">&gt;&gt;</span> /home/vscode/.curlrc
+printf <span class="string">'{"connectionParams":{"type":"docker", ... }}'</span> &gt; /.jbdevcontainer/config/JetBrains/host-config.json
 
 <span class="comment"># Configure iptables DNAT for HTTP egress via Huddle</span>
-HUDDLE_IP=$(getent hosts huddle | awk <span class="string">'{print $1}'</span>
-iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d <span class="string">"$HUDDLE_IP"</span> -j DNAT --to-destination <span class="string">"$HUDDLE_IP:80"</span> 2&gt;/dev/null || \
-  iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d <span class="string">"$HUDDLE_IP"</span> -j DNAT --to-destination <span class="string">"$HUDDLE_IP:80"</span>
+HUDDLE_IP=$(getent hosts huddle 2&gt;/dev/null | awk <span class="string">'{print $1}'</span>)
+iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d <span class="string">"$HUDDLE_IP"</span> \
+  -j DNAT --to-destination <span class="string">"$HUDDLE_IP:80"</span>
         </div>
-        
-        <p><strong>Wat dit script doet:</strong></p>
+
+        <p><strong>Wat dit doet:</strong></p>
         <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
           <li>Leest JetBrains Remote Dev build info → schrijft <code>host-config.json</code></li>
-          <li>Voegt <code>X-Container-ID</code> proxy-header toe aan <code>.curlrc</code> (voor policy logging)</li>
-          <li>Configureert iptables DNAT: alle HTTP traffic (port 80) wordt omgeleid naar huddle:80</li>
-          <li>Container moet <code>NET_ADMIN</code> capability hebben (kan firewall regels wijzigen!)</li>
+          <li>Configureert iptables DNAT: alle HTTP traffic (poort 80) wordt omgeleid naar huddle:80</li>
+          <li>Na een Huddle-restart worden de DNAT-regels automatisch geactualiseerd met het nieuwe Huddle IP</li>
+          <li>Container heeft <code>NET_ADMIN</code> capability — vereist voor iptables, maar betekent dat container-interne firewall niet als security boundary kan dienen (egress wordt afgedwongen door het netwerk, niet door iptables in de container)</li>
         </ul>
       </section>
 
       <section class="section">
         <h2>Beveiligingsoverwegingen</h2>
-        <p>Huddle is ontworpen als <strong>high-trust gateway</strong> met toegang tot de host Docker socket. De huidige implementatie heeft enkele bekende kwetsbaarheden die worden vermeld in de <code>SECURITY.md</code> bestand:</p>
-        
-        <p><span class="security-badge security-critical">CRIT-01</span> Docker socket grant bypass via X-Container-ID header injection</p>
-        <p><span class="security-badge security-critical">CRIT-02</span> Container identity spoofing via client-controlled IP/cached headers</p>
-        <p><span class="security-badge security-critical">CRIT-03</span> Geen authenticatie op management API (port 3000) — bereikbaar van alle containers</p>
-        
-        <p><span class="security-badge security-high">HIGH-02</span> Unvalidated container/image/workspace inputs in Docker API & shell scripts</p>
-        <p><span class="security-badge security-high">HIGH-03</span> Egress firewall ingewikkeld in container (met <code>NET_ADMIN</code>) → container kan iptables bypassen</p>
-        
-        <p><strong>Aanbevolen remediatie:</strong></p>
+        <p>Huddle is ontworpen als <strong>high-trust gateway</strong> met toegang tot de host Docker socket. De security review uit <code>SECURITY.md</code> identificeerde meerdere critical/high-severity issues; de belangrijkste daarvan zijn inmiddels geadresseerd. Verificatie van de fixes loopt via <code>SECURITY.md</code> (Part B).</p>
+
+        <p><strong>Geadresseerd (gefixt + verifieerbaar):</strong></p>
         <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
-          <li>Bind management API naar <code>127.0.0.1</code> of UNIX socket (niet op devcontainer-net)</li>
-          <li>Vereis bear token of mTLS op alle <code>/api/*</code> routes</li>
-          <li>Verwijder <code>NET_ADMIN</code> capability of verplaats iptables filtering naar host bridge</li>
-          <li>Validate container/image/workspace inputs strikt met regex/allow-list</li>
+          <li><span class="security-badge security-critical">CRIT-03</span> Management API source-IP gate weert alle requests vanaf <code>devcontainer-net</code> en <code>dc-net-*</code> — alleen host kan de API bereiken (geverifieerd in T4)</li>
+          <li><span class="security-badge security-critical">CRIT-01/02</span> Per-container socket proxy + label-isolatie via <code>huddle.parent</code>; identity spoofing via X-Container-ID wordt geweigerd (T6)</li>
+          <li><span class="security-badge security-high">HIGH-02</span> <code>validateHostConfig()</code> in <code>socket-proxy.ts</code> blokkeert <code>Privileged</code>, <code>PidMode/IpcMode/UTSMode/CgroupnsMode/UsernsMode=host</code>, <code>CgroupParent</code>, non-empty <code>CapAdd</code>/<code>Devices</code>/<code>Sysctls</code>, gevaarlijke <code>SecurityOpt</code>, host-path <code>Binds</code> en bind-type <code>Mounts</code> (T11)</li>
+          <li><span class="security-badge security-high">HIGH-01</span> Pad-traversal op de static asset route is dichtgetimmerd</li>
         </ul>
+
+        <p><strong>Inherent ontwerprestriciës (geen "bug" maar wel goed te weten):</strong></p>
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li>Container krijgt <code>NET_ADMIN</code> voor iptables DNAT — egress filtering wordt daarom niet in de container afgedwongen maar door netwerk-routing naar Huddle</li>
+          <li>Huddle heeft de host Docker socket gemount; compromise van Huddle = root-equivalent op de host</li>
+          <li>Transitieve npm-dependencies kunnen alsnog CVE's bevatten; periodiek <code>npm audit</code> blijft nodig</li>
+        </ul>
+
+        <p>Volledige historische analyse en het verificatieplan zijn samengevoegd in <code>SECURITY.md</code>.</p>
       </section>
 
       <section class="section">
@@ -537,51 +561,80 @@ iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d <span class="string">"$HUDDLE_I
 
       <section class="section">
         <h2>Veiligheid</h2>
-        <p>⚠️ <strong>Belangrijke waarschuwing:</strong> De huidige implementatie is <em>not suitable for production deployment</em> zonder beveiligingsfixes. De belangrijkste problemen:</p>
-        
-        <p><span class="security-badge security-critical">CRIT-03</span> Geen authentication op management API — elke container kan arbitrary containers starten, snapshot images maken, grants geven.</p>
-        
-        <p>Lees <code>SECURITY.md</code> voor complete audit en remediation steps.</p>
+        <p>Huddle is een high-trust component. Implementatie is gehard tegen de issues uit de eerste security review, maar bevat per ontwerp toegang tot de Docker socket. Houd het volgende aan:</p>
+
+        <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
+          <li>Stel Huddle nooit bloot aan onbetrouwbare netwerken — bind <code>0.0.0.0:3000</code> alleen op een vertrouwde host</li>
+          <li>Gebruik <code>SECURITY.md</code> (Part B) als regressie-suite na elke wijziging aan <code>api.ts</code>, <code>proxy.ts</code>, <code>socket-proxy.ts</code> of <code>docker.ts</code></li>
+          <li>Behandel containers als ondertrouw — Huddle staat tussen container en internet, niet andersom</li>
+        </ul>
+
+        <p>De volledige analyse en het verificatieplan staan in <code>SECURITY.md</code>.</p>
       </section>
 
       <section class="section">
-        <h2>Development & Deployment</h2>
-        
-        <h3>Build & Run (Local)</h3>
+        <h2>Development &amp; Deployment</h2>
+
+        <h3>Via huddle.ps1 (aanbevolen)</h3>
+        <p>De standaard workflow loopt via het CLI-menu in de repo-root:</p>
         <div class="code-example">
-<span class="comment"># Build TypeScript</span>
+.\huddle.ps1
+<span class="comment"># Kies 4: Huddle bouwen en herstarten</span>
+        </div>
+        <p>Dit roept <code>docker build -t huddle gateway/</code> aan, herstart de container, en mount <code>bugtracker/</code> en <code>base-devimage/</code> in.</p>
+
+        <h3>Handmatig (voor debug)</h3>
+        <div class="code-example">
+<span class="comment"># Frontend + TypeScript bouwen</span>
 <span class="keyword">cd</span> gateway
 npm install
-npm run build
+npm install --prefix frontend
+npm run build   <span class="comment"># draait build:ui (Angular) + build:ts</span>
 
-<span class="comment"># Start gateway</span>
+<span class="comment"># Start direct</span>
 <span class="function">node</span> dist/index.js
         </div>
-        
-        <h3>Docker Build</h3>
-        <div class="code-example">
-<span class="comment"># Build image</span>
-<span class="function">docker</span> build -t huddle gateway/
 
-<span class="comment"># Run container</span>
-<span class="function">docker</span> run -p 80:80 -p 3000:3000 -v /var/run/docker.sock:/var/run/docker.sock huddle
+        <h3>Docker build</h3>
+        <div class="code-example">
+<span class="function">docker</span> build -t huddle gateway/
+<span class="function">docker</span> run -d --name huddle --network devcontainer-net \
+  -p 3000:3000 \
+  -v huddle-data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /tmp/dc-sockets:/tmp/dc-sockets \
+  huddle
         </div>
-        
-        <h3>Devcontainer Configuration</h3>
-        <p>Huddle draait in een eigen devcontainer met <code>.devcontainer/devcontainer.json</code> settings.</p>
+
+        <h3>Devcontainer configuratie</h3>
+        <p>Huddle zelf draait in een eigen devcontainer; zie <code>.devcontainer/devcontainer.json</code>. De repo-layout is plat:</p>
+        <div class="code-example">
+.
+├── huddle.ps1            <span class="comment"># startpunt — CLI menu</span>
+├── Start-Snapshot.ps1    <span class="comment"># helper voor menu-optie 1</span>
+├── .devcontainer/        <span class="comment"># devcontainer setup</span>
+├── base-devimage/        <span class="comment"># Dockerfile voor de base dev image</span>
+├── gateway/              <span class="comment"># Huddle gateway (Fastify API + Angular UI)</span>
+└── bugtracker/           <span class="comment"># bug-rapportage opslag</span>
+        </div>
       </section>
 
       <section class="section">
         <h2>Verwijzingen</h2>
         <ul style="margin-left: 2rem; color: #64748b; font-size: 0.95rem; line-height: 1.7;">
-          <li><code>gateway/src/index.ts</code> — Main entry point (proxy + api + init)</li>
-          <li><code>gateway/src/proxy.ts</code> — HTTP/HTTPS proxy logic</li>
-          <li><code>gateway/src/socket-proxy.ts</code> — Docker socket proxy per container</li>
-          <li><code>gateway/src/api.ts</code> — Management API endpoints</li>
-          <li><code>gateway/src/docker.ts</code> — Docker API client + container management</li>
-          <li><code>gateway/src/rules.ts</code> — Firewall policy engine</li>
-          <li><code>gateway/src/db.ts</code> — SQLite database initialization & grant management</li>
-          <li><code>gateway/src/ui/</code> — Frontend (HTML/CSS/JS)</li>
+          <li><code>huddle.ps1</code> — CLI startpunt (snapshot, build, restart)</li>
+          <li><code>Start-Snapshot.ps1</code> — helper: commit draaiende container naar image en herstart</li>
+          <li><code>gateway/src/index.ts</code> — main entry point (proxy + api + init)</li>
+          <li><code>gateway/src/proxy.ts</code> — HTTP/HTTPS proxy logica</li>
+          <li><code>gateway/src/socket-proxy.ts</code> — per-container Docker socket proxy + <code>validateHostConfig()</code></li>
+          <li><code>gateway/src/api.ts</code> — Management API endpoints + source-IP gate</li>
+          <li><code>gateway/src/docker.ts</code> — Docker API client + container lifecycle + init-script</li>
+          <li><code>gateway/src/rules.ts</code> — firewall policy engine</li>
+          <li><code>gateway/src/db.ts</code> — SQLite initialisatie + grant management</li>
+          <li><code>gateway/src/events.ts</code> — WebSocket event broadcasting naar de UI</li>
+          <li><code>gateway/frontend/</code> — Angular 21 frontend (dashboard, containers, firewall, audit, docker-access, bugtracker)</li>
+          <li><code>SECURITY.md</code> — security review + verificatieplan</li>
+          <li><code>PRESENTATION.html</code> — presentatiedeck</li>
         </ul>
       </section>
 
