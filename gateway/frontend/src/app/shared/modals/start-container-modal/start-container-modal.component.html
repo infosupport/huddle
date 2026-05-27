@@ -25,8 +25,13 @@
           <option value="rider">Rider</option>
         </select>
 
+        <label class="empty-toggle">
+          <input type="checkbox" [(ngModel)]="empty" (ngModelChange)="onEmptyToggle()" />
+          Leeg (clone handmatig)
+        </label>
+
         <label for="start-workspace">Workspace directory</label>
-        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" />
+        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" [disabled]="empty" />
 
         <label for="start-name">Containernaam</label>
         <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-mijn-project" />

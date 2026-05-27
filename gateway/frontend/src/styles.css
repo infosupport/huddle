@@ -719,6 +719,16 @@ a.kpi:hover { border-color: var(--accent); box-shadow: var(--shadow-pop); }
 .modal-body input:focus, .modal-body select:focus {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
+.modal-body label.empty-toggle {
+  display: flex; align-items: center; gap: .5rem;
+  font-weight: 500; cursor: pointer;
+}
+.modal-body label.empty-toggle input[type="checkbox"] {
+  width: auto; margin: 0;
+}
+.modal-body input:disabled {
+  opacity: .55; cursor: not-allowed;
+}
 .modal-footer {
   display: flex; gap: .5rem; justify-content: flex-end;
   padding: .75rem 1.25rem 1rem;

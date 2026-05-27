@@ -313,23 +313,29 @@ export function createApiServer(): FastifyInstance {
     return { imageName: getBaseImageName() };
   });
 
-  app.post<{ Body: { imageName: string; workspaceDir: string; containerName: string; ideName?: string } }>(
+  app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, containerName, ideName } = req.body;
-      if (!imageName || !workspaceDir || !containerName) {
-        return reply.code(400).send({ error: 'imageName, workspaceDir and containerName required' });
+      const { imageName, workspaceDir, containerName, ideName, empty } = req.body;
+      if (!imageName || !containerName) {
+        return reply.code(400).send({ error: 'imageName and containerName required' });
       }
-      const fwd = workspaceDir.replace(/\\/g, '/').replace(/\/$/, '');
-      const leaf = fwd.split('/').pop() ?? containerName;
+      if (!empty && !workspaceDir) {
+        return reply.code(400).send({ error: 'workspaceDir required when empty is not set' });
+      }
+      const fwd = (workspaceDir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+      const leaf = empty
+        ? containerName.replace(/^devcontainer-/, '') || containerName
+        : (fwd.split('/').pop() ?? containerName);
       const ide: 'intellij' | 'rider' = ideName === 'rider' ? 'rider' : 'intellij';
       const params: StartParams = {
         imageName,
-        workspaceDir: fwd,
+        workspaceDir: empty ? '' : fwd,
         containerName,
         containerWorkspace: `/workspaces/${leaf}`,
         presentableName: leaf,
         ideName: ide,
+        empty: empty === true,
       };
       try {
         const id = await createAndStartContainer(params);

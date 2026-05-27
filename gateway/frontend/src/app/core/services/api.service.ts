@@ -66,12 +66,13 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string }>('/api/docker/base-image'));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; containerName: string }): Observable<{ id: string; containerName: string }> {
+  startContainer(params: { image: string; ide: string; workspace: string; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
     return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
       imageName: params.image,
       workspaceDir: params.workspace,
       containerName: params.containerName,
       ideName: params.ide,
+      empty: params.empty === true,
     }));
   }
 

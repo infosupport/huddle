@@ -25,6 +25,7 @@ export class StartContainerModalComponent {
   workspace = '';
   containerName = '';
   nameTouched = false;
+  empty = false;
   error = '';
   status = '';
   loading = false;
@@ -45,6 +46,7 @@ export class StartContainerModalComponent {
     this.workspace = '';
     this.containerName = '';
     this.nameTouched = false;
+    this.empty = false;
     this.error = '';
     this.status = '';
     this.loading = false;
@@ -63,8 +65,17 @@ export class StartContainerModalComponent {
     }
   }
 
+  onEmptyToggle(): void {
+    if (this.empty) {
+      this.workspace = '';
+      if (!this.nameTouched && !this.containerName) {
+        this.containerName = 'devcontainer-empty';
+      }
+    }
+  }
+
   confirm(): void {
-    if (!this.selectedImage || !this.workspace || !this.containerName) {
+    if (!this.selectedImage || !this.containerName || (!this.empty && !this.workspace)) {
       this.error = 'Alle velden zijn verplicht'; return;
     }
     this.error = '';
@@ -75,6 +86,7 @@ export class StartContainerModalComponent {
       ide: this.ide,
       workspace: this.workspace,
       containerName: this.containerName,
+      empty: this.empty,
     }).subscribe({
       next: () => { this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },

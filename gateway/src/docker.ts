@@ -306,6 +306,7 @@ echo "noot:${password}" | chpasswd
 usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
 
 # Fix workspace permissions
+mkdir -p "${containerWorkspace}" 2>/dev/null || true
 chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
@@ -335,16 +336,18 @@ function toLinuxPath(p: string): string {
 
 export interface StartParams {
   imageName: string;
-  workspaceDir: string;     // host path, forward slashes
+  workspaceDir: string;     // host path, forward slashes; empty string when empty=true
   containerName: string;
   containerWorkspace: string; // /workspaces/<leaf>
   presentableName: string;
   ideName?: 'intellij' | 'rider';
+  empty?: boolean;
 }
 
 export async function createAndStartContainer(params: StartParams): Promise<string> {
   const { imageName, workspaceDir, containerName, containerWorkspace, presentableName } = params;
   const ideName = params.ideName ?? 'intellij';
+  const empty = params.empty === true;
   const devcontainerId = crypto.randomUUID().replace(/-/g, '');
   const modelJson = '{"customizations":{"jetbrains":{"backend":"IntelliJ"}}}';
   const metadataJson = '[{"remoteUser":"vscode"}]';
@@ -394,7 +397,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     Labels: {
       'com.intellij.devcontainer.id': devcontainerId,
       'com.intellij.devcontainer.presentable.name': presentableName,
-      'com.intellij.devcontainer.sources.path': workspaceDir,
+      'com.intellij.devcontainer.sources.path': empty ? '' : workspaceDir,
       'com.intellij.devcontainer.workspace.path': containerWorkspace,
       'com.intellij.devcontainer.model': modelJson,
       'devcontainer.metadata': metadataJson,
@@ -406,11 +409,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
           Source: 'jb_devcontainers_shared_volume',
           Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
         },
-        {
+        ...(empty ? [] : [{
           Type: 'bind',
           Source: toLinuxPath(workspaceDir),
           Target: containerWorkspace,
-        },
+        }]),
         {
           Type: 'bind',
           Source: `${SOCKET_DIR}/${containerName}.sock`,
