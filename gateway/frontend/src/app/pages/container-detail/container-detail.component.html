@@ -261,15 +261,7 @@ sudo cat /tmp/sudo-audit.log</code></pre>
     <div class="card">
       <div class="card-header"><h3>Terminal</h3></div>
       <div class="card-body">
-        <p class="info-text muted">
-          Embedded terminal staat klaar in de planning maar nog niet geïmplementeerd.
-          Zie het plan onderaan <code>bugtracker/bugs/2026-05-28-08-58-tabs-ipv-cards.md</code>.
-        </p>
-        <p class="info-text">
-          Tot dan: gebruik je lokale terminal en draai
-          <code>docker exec -it {{ name }} bash</code>
-          om in de container te springen.
-        </p>
+        <app-container-terminal [container]="name"/>
       </div>
     </div>
   }

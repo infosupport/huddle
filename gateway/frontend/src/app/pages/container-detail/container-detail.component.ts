@@ -9,6 +9,7 @@ import { Rule } from '../../core/models/rule.model';
 import { GrantMap } from '../../core/models/grant.model';
 import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
+import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { BehaviorSubject } from 'rxjs';
 
 interface DetailData {
@@ -23,7 +24,7 @@ type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, ContainerTerminalComponent],
   templateUrl: './container-detail.component.html',
   styles: [`:host { display: contents; }`]
 })

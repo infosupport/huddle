@@ -1,0 +1,8 @@
+<div class="terminal-shell">
+  <div class="terminal-bar">
+    <span class="terminal-status" [class.error]="status.startsWith('Verbinding')">{{ status }}</span>
+    <span class="terminal-hint">Verbonden als <code>vscode</code>. Wissel naar noot via <code>su - noot</code>.</span>
+    <button class="btn btn-ghost btn-sm" (click)="reconnect()">Opnieuw verbinden</button>
+  </div>
+  <div #host class="terminal-host"></div>
+</div>
