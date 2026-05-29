@@ -15,7 +15,10 @@ interface DetailData {
   inspect: any;
   rules: Rule[];
   globalRules: Rule[];
+  huddleInNetwork?: boolean;
 }
+
+type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
 
 @Component({
   selector: 'app-container-detail',
@@ -84,6 +87,8 @@ export class ContainerDetailComponent implements OnInit {
   credentials: { password: string; createdAt: number } | null = null;
   passwordVisible = false;
   copied = false;
+  activeTab: DetailTab = 'firewall';
+  reconnectStatus = '';
 
   ngOnInit(): void {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
@@ -150,5 +155,15 @@ export class ContainerDetailComponent implements OnInit {
   }
   revoke(): void {
     this.api.deleteGrant(this.name).subscribe(() => this.state.loadAll());
+  }
+
+  setTab(t: DetailTab): void { this.activeTab = t; }
+
+  reconnectHuddle(): void {
+    this.reconnectStatus = 'Bezig...';
+    this.api.reconnectHuddle(this.name).subscribe({
+      next: () => { this.reconnectStatus = 'Verbonden'; this.load(); setTimeout(() => this.reconnectStatus = '', 2000); },
+      error: (err) => { this.reconnectStatus = err.message; },
+    });
   }
 }
