@@ -6,7 +6,14 @@ $HUDDLE_CONTAINER = "huddle"
 $HUDDLE_IMAGE     = "huddle"
 $HUDDLE_VOLUME    = "huddle-data"
 $HUDDLE_PORT      = 3000
-$BASE_IMAGE       = "base-devimage"
+
+# Per-IDE base images. Elke IDE heeft een eigen base-devimage-<ide>/ folder met
+# een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
+# datzelfde label zodat de spawn-flow ze per IDE kan filteren.
+$IDE_DEFS = @(
+    [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'base-devimage-rider';    Folder = 'base-devimage-rider' }
+    [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'base-devimage-intellij'; Folder = 'base-devimage-intellij' }
+)
 
 function Write-Banner {
     Clear-Host
@@ -37,8 +44,8 @@ function Show-Menu {
     Write-Status
     Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
     Write-Host "   1  Snapshot maken van draaiende container" -ForegroundColor White
-    Write-Host "   2  Devcontainer starten van snapshot" -ForegroundColor White
-    Write-Host "   3  Base image bouwen" -ForegroundColor White
+    Write-Host "   2  Devcontainer starten (IDE -> standaard of snapshot)" -ForegroundColor White
+    Write-Host "   3  Base image bouwen per IDE" -ForegroundColor White
     Write-Host "   4  Huddle bouwen en herstarten" -ForegroundColor White
     Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
     Write-Host "   0  Afsluiten" -ForegroundColor DarkGray
@@ -76,17 +83,24 @@ function Start-Huddle {
     $bugtrackerDir = Join-Path $scriptDir "bugtracker"
     New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "bugs") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "solved") | Out-Null
-    $baseDevimageDir = Join-Path $scriptDir "base-devimage"
-    $id = docker run -d `
-        --name $HUDDLE_CONTAINER `
-        --network devcontainer-net `
-        -p "${HUDDLE_PORT}:3000" `
-        -v "${HUDDLE_VOLUME}:/data" `
-        -v "/var/run/docker.sock:/var/run/docker.sock" `
-        -v "/tmp/dc-sockets:/tmp/dc-sockets" `
-        -v "${bugtrackerDir}:/bugtracker" `
-        -v "${baseDevimageDir}:/base-devimage:ro" `
-        $HUDDLE_IMAGE
+    $runArgs = @(
+        '-d',
+        '--name', $HUDDLE_CONTAINER,
+        '--network', 'devcontainer-net',
+        '-p', "${HUDDLE_PORT}:3000",
+        '-v', "${HUDDLE_VOLUME}:/data",
+        '-v', '/var/run/docker.sock:/var/run/docker.sock',
+        '-v', '/tmp/dc-sockets:/tmp/dc-sockets',
+        '-v', "${bugtrackerDir}:/bugtracker"
+    )
+    foreach ($ide in $IDE_DEFS) {
+        $folderHost = Join-Path $scriptDir $ide.Folder
+        if (Test-Path $folderHost) {
+            $runArgs += @('-v', "${folderHost}:/$($ide.Folder):ro")
+        }
+    }
+    $runArgs += $HUDDLE_IMAGE
+    $id = docker run @runArgs
     Write-Host "  [OK] Gestart: $id" -ForegroundColor Green
     Write-Host "  Web UI: http://localhost:${HUDDLE_PORT}" -ForegroundColor Cyan
 }
@@ -113,6 +127,36 @@ function Build-HuddleImage {
     }
 }
 
+# ── IDE picker (gemeenschappelijk voor build + spawn) ────────────────────────
+
+function Select-Ide {
+    Write-Host ""
+    Write-Host "  IDE:" -ForegroundColor DarkCyan
+    for ($i = 0; $i -lt $IDE_DEFS.Count; $i++) {
+        Write-Host ("   {0})  {1}" -f ($i + 1), $IDE_DEFS[$i].Display)
+    }
+    $sel = [int](Read-Host "`n  Kies IDE") - 1
+    if ($sel -lt 0 -or $sel -ge $IDE_DEFS.Count) { return $null }
+    return $IDE_DEFS[$sel]
+}
+
+# Detecteer welke IDE bij een snapshot/image hoort — eerst via het label
+# com.devcontainer.ide, dan via fallback op de naam-conventie base-devimage-<ide>.
+function Get-ImageIde {
+    param([string]$ImageRef)
+    $json = docker inspect $ImageRef 2>$null | Out-String
+    if ($json) {
+        try {
+            $label = (ConvertFrom-Json $json)[0].Config.Labels.'com.devcontainer.ide'
+            if ($label) { return $label.Trim() }
+        } catch {}
+    }
+    foreach ($ide in $IDE_DEFS) {
+        if ($ImageRef -like "*$($ide.Image)*") { return $ide.Key }
+    }
+    return $null
+}
+
 # ── Snapshot ──────────────────────────────────────────────────────────────────
 
 function New-Snapshot {
@@ -136,42 +180,87 @@ function New-Snapshot {
     if ($sel -lt 0 -or $sel -ge $rows.Count) { Write-Host "  Ongeldige keuze." -ForegroundColor Red; return }
     $container = $rows[$sel]
 
+    # Detecteer IDE uit het bestaande JB-model-label van de bron-container
+    # (`customizations.jetbrains.backend`). Dan kan de spawn-UI dit snapshot
+    # filteren als "Rider-snapshot" / "IntelliJ-snapshot".
+    $ideKey = $null
+    $inspectJson = docker inspect $container.ID 2>$null | Out-String
+    if ($inspectJson) {
+        try {
+            $modelLabel = (ConvertFrom-Json $inspectJson)[0].Config.Labels.'com.intellij.devcontainer.model'
+            if ($modelLabel) {
+                $backend = (ConvertFrom-Json $modelLabel).customizations.jetbrains.backend
+                $ideKey  = ($IDE_DEFS | Where-Object { $_.Backend -eq $backend } | Select-Object -First 1).Key
+            }
+        } catch {}
+    }
+    if (-not $ideKey) {
+        Write-Host "  Kon IDE niet uit container-labels lezen -- kies handmatig:" -ForegroundColor Yellow
+        $picked = Select-Ide
+        if (-not $picked) { Write-Host "  Geen IDE gekozen, snapshot afgebroken." -ForegroundColor Red; return }
+        $ideKey = $picked.Key
+    }
+
     $defaultName = "snapshot-$($container.Name)"
     $imageName   = Read-Host "  Snapshot naam [$defaultName]"
     if (-not $imageName) { $imageName = $defaultName }
 
-    Write-Host "  Commit $($container.Name) -> $imageName ..." -ForegroundColor DarkCyan
+    Write-Host "  Commit $($container.Name) -> $imageName  (IDE: $ideKey)" -ForegroundColor DarkCyan
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     docker commit `
         --change 'LABEL com.devcontainer.snapshot=true' `
         --change "LABEL com.devcontainer.source=$($container.Name)" `
         --change "LABEL com.devcontainer.created=$timestamp" `
+        --change "LABEL com.devcontainer.ide=$ideKey" `
         $container.ID $imageName | Out-Null
     Write-Host "  [OK] Snapshot '$imageName' klaar." -ForegroundColor Green
 }
 
-# ── Start from snapshot ───────────────────────────────────────────────────────
+# ── Start devcontainer (IDE-first → standaard/snapshot) ──────────────────────
 
-function Start-FromSnapshot {
+function Start-Devcontainer {
+    # Stap 1: IDE kiezen — bepaalt welke base image + welke snapshots in beeld.
+    $ide = Select-Ide
+    if (-not $ide) { Write-Host "  Ongeldige IDE-keuze." -ForegroundColor Red; return }
+
+    # Stap 2: standaard (per-IDE base image) of een snapshot van die IDE.
     Write-Host ""
-    Write-Host "  Beschikbare snapshots:" -ForegroundColor DarkCyan
+    Write-Host "  Beschikbare images voor $($ide.Display):" -ForegroundColor DarkCyan
+    $options = @()
 
-    $fmt = "{{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}|{{.CreatedSince}}"
-    $rows = @(docker images --filter 'label=com.devcontainer.snapshot=true' --format $fmt |
-        ForEach-Object {
-            $p = $_ -split '\|'
-            [PSCustomObject]@{ Name = $p[0]; ID = $p[1]; Size = $p[2]; Created = $p[3] }
-        })
-
-    if (-not $rows) { Write-Host "  Geen snapshots gevonden." -ForegroundColor Yellow; return }
-
-    for ($i = 0; $i -lt $rows.Count; $i++) {
-        Write-Host ("   {0})  {1,-45}  {2,8}  ({3})" -f ($i + 1), $rows[$i].Name, $rows[$i].Size, $rows[$i].Created)
+    $baseExists = docker image inspect $ide.Image *>$null 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $options += [PSCustomObject]@{ Name = $ide.Image; Kind = 'standaard'; Detail = 'base image' }
+    } else {
+        $options += [PSCustomObject]@{ Name = $ide.Image; Kind = 'standaard'; Detail = '(nog niet gebouwd -- wordt direct gebouwd voor je)' }
     }
 
-    $sel = [int](Read-Host "`n  Kies snapshot") - 1
-    if ($sel -lt 0 -or $sel -ge $rows.Count) { Write-Host "  Ongeldige keuze." -ForegroundColor Red; return }
-    $image = $rows[$sel]
+    $fmt = "{{.Repository}}:{{.Tag}}|{{.Size}}|{{.CreatedSince}}"
+    $snapRows = @(docker images --filter 'label=com.devcontainer.snapshot=true' --filter "label=com.devcontainer.ide=$($ide.Key)" --format $fmt |
+        ForEach-Object {
+            $p = $_ -split '\|'
+            # base-devimage-* zelf óók een snapshot; sla over zodat hij niet dubbel staat.
+            if ($p[0] -ne "$($ide.Image):latest" -and $p[0] -ne $ide.Image) {
+                [PSCustomObject]@{ Name = $p[0]; Kind = 'snapshot'; Detail = "$($p[1])  $($p[2])" }
+            }
+        })
+    foreach ($r in $snapRows) { $options += $r }
+
+    for ($i = 0; $i -lt $options.Count; $i++) {
+        Write-Host ("   {0})  [{1,-9}]  {2,-45}  {3}" -f ($i + 1), $options[$i].Kind, $options[$i].Name, $options[$i].Detail)
+    }
+
+    $sel = [int](Read-Host "`n  Kies image") - 1
+    if ($sel -lt 0 -or $sel -ge $options.Count) { Write-Host "  Ongeldige keuze." -ForegroundColor Red; return }
+    $picked = $options[$sel]
+
+    # Auto-build de standaard-image als die nog niet bestaat.
+    if ($picked.Kind -eq 'standaard' -and $LASTEXITCODE -ne 0) {
+        Write-Host "  Image '$($picked.Name)' nog niet aanwezig -- bouwen..." -ForegroundColor DarkCyan
+        $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+        docker build -t $picked.Name (Join-Path $scriptDir $ide.Folder)
+        if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
+    }
 
     $workspaceDir = Read-Host "  Workspace directory"
     if (-not (Test-Path $workspaceDir)) {
@@ -195,7 +284,9 @@ function Start-FromSnapshot {
         docker rm -f $containerName | Out-Null
     }
 
-    $modelJson    = '{"customizations":{"jetbrains":{"backend":"IntelliJ"}}}'
+    # Model JSON komt overeen met de IDE-keuze; JB Gateway leest dit label
+    # om te beslissen welk backend-distro het downloadt.
+    $modelJson    = "{`"customizations`":{`"jetbrains`":{`"backend`":`"$($ide.Backend)`"}}}"
     $metadataJson = '[{"remoteUser":"vscode"}]'
 
     $labelFile = Join-Path $env:TEMP "dc-labels-${devcontainerId}.txt"
@@ -234,14 +325,17 @@ function Start-FromSnapshot {
         -v "${workspaceDirFwd}:${containerWorkspace}" `
         --network devcontainer-net `
         --cap-add NET_ADMIN `
-        $image.Name | Out-Null
+        $picked.Name | Out-Null
 
     Remove-Item $labelFile -Force -ErrorAction SilentlyContinue
 
     Write-Host "  Host config aanmaken..." -ForegroundColor DarkCyan
+    # Filter het IDE-distro op naam — Rider-distros heten `*JetBrains.Rider-*`,
+    # IntelliJ-distros `*idea-*`. Tail -1 pakt de hoogste versie.
+    $ideFilter = if ($ide.Key -eq 'rider') { 'rider' } else { 'idea' }
     $configCmd = @'
 #!/bin/sh
-IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep idea | sort -t- -k2 -V | tail -1)
+IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i IDE_FILTER_PLACEHOLDER | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
 BUILD=$(grep -o '"buildNumber":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
 CODE=$(grep -o '"productCode":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
@@ -256,7 +350,10 @@ HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
 '@
-    $configCmd = ($configCmd -replace 'WORKSPACE_PLACEHOLDER', $containerWorkspace) -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName -replace "`r`n", "`n"
+    $configCmd = (($configCmd `
+        -replace 'WORKSPACE_PLACEHOLDER', $containerWorkspace) `
+        -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) `
+        -replace 'IDE_FILTER_PLACEHOLDER', $ideFilter -replace "`r`n", "`n"
     $configScriptFile = Join-Path $env:TEMP "jb-config-${devcontainerId}.sh"
     [IO.File]::WriteAllText($configScriptFile, $configCmd, [Text.UTF8Encoding]::new($false))
     docker cp $configScriptFile "${containerName}:/tmp/jb-config.sh" | Out-Null
@@ -270,15 +367,19 @@ iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
 # ── Build base image ──────────────────────────────────────────────────────────
 
 function Build-BaseImage {
-    $defaultName = $BASE_IMAGE
-    $imageName   = Read-Host "  Image naam [$defaultName]"
-    if (-not $imageName) { $imageName = $defaultName }
+    $ide = Select-Ide
+    if (-not $ide) { Write-Host "  Ongeldige IDE-keuze." -ForegroundColor Red; return }
+
     $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
-    $buildPath = Join-Path $scriptDir "base-devimage"
-    Write-Host "  Image '$imageName' bouwen..." -ForegroundColor DarkCyan
-    docker build -t $imageName $buildPath
+    $buildPath = Join-Path $scriptDir $ide.Folder
+    if (-not (Test-Path (Join-Path $buildPath 'Dockerfile'))) {
+        Write-Host "  Dockerfile niet gevonden: $buildPath\Dockerfile" -ForegroundColor Red
+        return
+    }
+    Write-Host "  Image '$($ide.Image)' bouwen ($($ide.Display))..." -ForegroundColor DarkCyan
+    docker build -t $ide.Image $buildPath
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  [OK] Image '$imageName' klaar." -ForegroundColor Green
+        Write-Host "  [OK] Image '$($ide.Image)' klaar." -ForegroundColor Green
     } else {
         Write-Host "  [FAIL] Build mislukt." -ForegroundColor Red
     }
@@ -295,7 +396,7 @@ while ($running) {
     Write-Host ""
     switch ($choice) {
         '1' { New-Snapshot;       Read-Host "`n  Druk Enter om terug te gaan" }
-        '2' { Start-FromSnapshot; Read-Host "`n  Druk Enter om terug te gaan" }
+        '2' { Start-Devcontainer; Read-Host "`n  Druk Enter om terug te gaan" }
         '3' { Build-BaseImage;    Read-Host "`n  Druk Enter om terug te gaan" }
         '4' { Build-HuddleImage; if ($LASTEXITCODE -eq 0) { Restart-Huddle }; Read-Host "`n  Druk Enter om terug te gaan" }
         '0' { $running = $false }

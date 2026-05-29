@@ -13,11 +13,16 @@ import {
   listSnapshotImages,
   createAndStartContainer,
   getBaseImageName,
+  getHuddleNetworks,
+  connectNetwork,
+  networkExists,
   forceDeleteContainer,
   cleanupContainerNetwork,
   listNetworks,
   resolveContainerByIp,
+  isIdeName,
   type StartParams,
+  type IdeName,
 } from './docker';
 
 const API_PORT = 3000;
@@ -258,7 +263,7 @@ export function createApiServer(): FastifyInstance {
 
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name', async (req, reply) => {
     try {
-      const [inspect, rules, globalRules] = await Promise.all([
+      const [inspect, rules, globalRules, huddleNets] = await Promise.all([
         inspectContainer(req.params.name),
         Promise.resolve(
           db
@@ -270,10 +275,32 @@ export function createApiServer(): FastifyInstance {
             .prepare(`SELECT * FROM rules WHERE container_id IS NULL ORDER BY status, domain`)
             .all() as Rule[]
         ),
+        getHuddleNetworks(),
       ]);
-      return { inspect, rules, globalRules };
+      const huddleInNetwork = huddleNets.has(`dc-net-${req.params.name}`);
+      return { inspect, rules, globalRules, huddleInNetwork };
     } catch (err: any) {
       return reply.code(404).send({ error: err.message });
+    }
+  });
+
+  // Herverbind huddle aan het dc-net-<name> netwerk van een devcontainer.
+  // Nodig wanneer een container na een herstart-cyclus zijn netwerk opnieuw
+  // aanmaakt; huddle's oude attachment is dan stale en moet worden opgewerkt.
+  app.post<{ Params: { name: string } }>('/api/docker/containers/:name/reconnect-huddle', async (req, reply) => {
+    const netName = `dc-net-${req.params.name}`;
+    try {
+      if (!(await networkExists(netName))) {
+        return reply.code(404).send({ error: `network ${netName} does not exist` });
+      }
+      try { await connectNetwork(netName, 'huddle'); }
+      catch (err: any) {
+        if (!String(err.message).includes('already exists in network')) throw err;
+      }
+      notifyStateChanged();
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
     }
   });
 
@@ -305,12 +332,16 @@ export function createApiServer(): FastifyInstance {
     }
   });
 
-  app.get('/api/docker/images', async () => {
-    return listSnapshotImages();
+  app.get<{ Querystring: { ide?: string } }>('/api/docker/images', async (req) => {
+    const ide = isIdeName(req.query.ide) ? req.query.ide : undefined;
+    return listSnapshotImages(ide);
   });
 
-  app.get('/api/docker/base-image', async () => {
-    return { imageName: getBaseImageName() };
+  app.get<{ Querystring: { ide?: string } }>('/api/docker/base-image', async (req, reply) => {
+    if (!isIdeName(req.query.ide)) {
+      return reply.code(400).send({ error: 'ide query param must be "rider" or "intellij"' });
+    }
+    return { imageName: getBaseImageName(req.query.ide), ide: req.query.ide };
   });
 
   app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean } }>(
@@ -327,7 +358,7 @@ export function createApiServer(): FastifyInstance {
       const leaf = empty
         ? containerName.replace(/^devcontainer-/, '') || containerName
         : (fwd.split('/').pop() ?? containerName);
-      const ide: 'intellij' | 'rider' = ideName === 'rider' ? 'rider' : 'intellij';
+      const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,

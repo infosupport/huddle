@@ -83,11 +83,29 @@ export interface DevcontainerInfo {
   presentableName: string;
   created: number;
   inNetwork: boolean;
+  huddleInNetwork: boolean;
+}
+
+// Set van dc-net-* netwerken waar de huddle-container zelf in zit. Wordt
+// gebruikt om per devcontainer te detecteren of huddle nog aan zijn dc-net is
+// gekoppeld (na een herstart van de container kan deze koppeling sneuvelen
+// als het netwerk opnieuw is aangemaakt).
+export async function getHuddleNetworks(): Promise<Set<string>> {
+  try {
+    const inspect = await dockerRequest('GET', '/containers/huddle/json');
+    const nets = inspect?.NetworkSettings?.Networks ?? {};
+    return new Set(Object.keys(nets));
+  } catch {
+    return new Set();
+  }
 }
 
 export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
   const filters = JSON.stringify({ label: ['com.intellij.devcontainer.id'] });
-  const containers: any[] = await dockerRequest('GET', `/containers/json?filters=${encodeURIComponent(filters)}`);
+  const [containers, huddleNets] = await Promise.all([
+    dockerRequest('GET', `/containers/json?filters=${encodeURIComponent(filters)}`) as Promise<any[]>,
+    getHuddleNetworks(),
+  ]);
   return containers.map((c) => {
     const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
     const netName = `dc-net-${name}`;
@@ -101,6 +119,7 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
       presentableName: c.Labels?.['com.intellij.devcontainer.presentable.name'] ?? '',
       created: c.Created,
       inNetwork: Boolean(dcNet?.IPAddress),
+      huddleInNetwork: huddleNets.has(netName),
     };
   });
 }
@@ -130,8 +149,15 @@ iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
   }
 }
 
-export function getBaseImageName(): string {
-  return process.env.BASE_IMAGE ?? 'base-devimage';
+export type IdeName = 'rider' | 'intellij';
+
+export function isIdeName(value: unknown): value is IdeName {
+  return value === 'rider' || value === 'intellij';
+}
+
+export function getBaseImageName(ide: IdeName): string {
+  const envKey = `BASE_IMAGE_${ide.toUpperCase()}`;
+  return process.env[envKey] ?? `base-devimage-${ide}`;
 }
 
 export async function inspectContainer(name: string): Promise<any> {
@@ -143,31 +169,55 @@ export interface SnapshotImage {
   name: string;
   size: number;
   created: number;
+  ide?: IdeName;
 }
 
-export async function listSnapshotImages(): Promise<SnapshotImage[]> {
-  const filters = JSON.stringify({ label: ['com.devcontainer.snapshot=true'] });
+export async function listSnapshotImages(ide?: IdeName): Promise<SnapshotImage[]> {
+  const labelFilters = ['com.devcontainer.snapshot=true'];
+  if (ide) labelFilters.push(`com.devcontainer.ide=${ide}`);
+  const filters = JSON.stringify({ label: labelFilters });
   const images: any[] = await dockerRequest('GET', `/images/json?filters=${encodeURIComponent(filters)}`);
-  return images.map((img) => ({
-    id: img.Id,
-    name: (img.RepoTags?.[0] as string) ?? img.Id.substring(7, 19),
-    size: img.Size,
-    created: img.Created,
-  }));
+  return images.map((img) => {
+    const labels: Record<string, string> = img.Labels ?? {};
+    const labelIde = labels['com.devcontainer.ide'];
+    return {
+      id: img.Id,
+      name: (img.RepoTags?.[0] as string) ?? img.Id.substring(7, 19),
+      size: img.Size,
+      created: img.Created,
+      ide: isIdeName(labelIde) ? labelIde : undefined,
+    };
+  });
+}
+
+// Read the IDE that a running container is configured for, by parsing the JB
+// devcontainer model label (`customizations.jetbrains.backend`).
+function ideFromContainerLabels(labels: Record<string, string> | undefined): IdeName | undefined {
+  const raw = labels?.['com.intellij.devcontainer.model'];
+  if (!raw) return undefined;
+  try {
+    const backend = JSON.parse(raw)?.customizations?.jetbrains?.backend;
+    if (backend === 'Rider') return 'rider';
+    if (backend === 'IntelliJ') return 'intellij';
+  } catch { /* fallthrough */ }
+  return undefined;
 }
 
 export async function commitContainer(containerId: string, imageName: string): Promise<string> {
   const [repo, tag = 'latest'] = imageName.split(':');
+  // Inherit the IDE label from the source container so the snapshot is filterable per IDE.
+  const inspect = await inspectContainer(containerId);
+  const sourceIde = ideFromContainerLabels(inspect?.Config?.Labels);
+  const labels: Record<string, string> = {
+    'com.devcontainer.snapshot': 'true',
+    'com.devcontainer.source': containerId,
+    'com.devcontainer.created': new Date().toISOString(),
+  };
+  if (sourceIde) labels['com.devcontainer.ide'] = sourceIde;
   const result = await dockerRequest(
     'POST',
     `/commit?container=${encodeURIComponent(containerId)}&repo=${encodeURIComponent(repo)}&tag=${encodeURIComponent(tag)}`,
-    {
-      Labels: {
-        'com.devcontainer.snapshot': 'true',
-        'com.devcontainer.source': containerId,
-        'com.devcontainer.created': new Date().toISOString(),
-      },
-    }
+    { Labels: labels }
   );
   return result.Id ?? '';
 }
@@ -280,13 +330,13 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: 'intellij' | 'rider', password: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
-BUILD=$(grep -o '"buildNumber":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
-CODE=$(grep -o '"productCode":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
+BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json")
+CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json")
 PROJ="${containerWorkspace}"
 mkdir -p /.jbdevcontainer/config/JetBrains
 printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
@@ -340,7 +390,7 @@ export interface StartParams {
   containerName: string;
   containerWorkspace: string; // /workspaces/<leaf>
   presentableName: string;
-  ideName?: 'intellij' | 'rider';
+  ideName?: IdeName;
   empty?: boolean;
 }
 
@@ -349,7 +399,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const ideName = params.ideName ?? 'intellij';
   const empty = params.empty === true;
   const devcontainerId = crypto.randomUUID().replace(/-/g, '');
-  const modelJson = '{"customizations":{"jetbrains":{"backend":"IntelliJ"}}}';
+  const backend = ideName === 'rider' ? 'Rider' : 'IntelliJ';
+  const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
 
   const password = crypto.randomBytes(12).toString('base64url');
@@ -365,9 +416,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   }
 
   if (!(await imageExists(imageName))) {
-    const dockerfilePath = '/base-devimage/Dockerfile';
+    const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
     if (!fs.existsSync(dockerfilePath)) {
-      throw new Error(`Image '${imageName}' not found and /base-devimage/Dockerfile is not mounted`);
+      throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
     }
     console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
     await buildImage(imageName, dockerfilePath);
