@@ -24,6 +24,7 @@ import {
   type StartParams,
   type IdeName,
 } from './docker';
+import { attachTerminal } from './terminal';
 
 const API_PORT = 3000;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
@@ -121,6 +122,20 @@ export function createApiServer(): FastifyInstance {
     ws.on('error', () => wsClients.delete(ws));
   });
 
+  // Aparte WSS voor de embedded terminal-tab (/ws/exec/<container>).
+  // Houden we los van de state-push wss zodat lifecycle en errorhandling
+  // niet door elkaar lopen.
+  const wssTerminal = new WebSocketServer({ noServer: true });
+  wssTerminal.on('connection', (ws, req) => {
+    const m = (req.url ?? '').match(/^\/ws\/exec\/([^/?#]+)/);
+    const containerName = m ? decodeURIComponent(m[1]) : '';
+    if (!containerName) { ws.close(1008, 'missing container'); return; }
+    attachTerminal(ws, containerName).catch((err) => {
+      console.warn('[terminal] attach failed:', err.message);
+      try { ws.close(1011, 'attach failed'); } catch {}
+    });
+  });
+
   function broadcast(): void {
     const msg = JSON.stringify({ type: 'reload' });
     wsClients.forEach((ws) => {
@@ -136,8 +151,11 @@ export function createApiServer(): FastifyInstance {
       socket.destroy();
       return;
     }
-    if (new URL(req.url ?? '', 'http://x').pathname === '/ws') {
+    const pathname = new URL(req.url ?? '', 'http://x').pathname;
+    if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    } else if (pathname.startsWith('/ws/exec/')) {
+      wssTerminal.handleUpgrade(req, socket, head, (ws) => wssTerminal.emit('connection', ws, req));
     } else {
       socket.destroy();
     }
