@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
 import { saveCredentials } from './db';
+import { getCaCertPem } from './tls-ca';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -330,8 +331,12 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
+  // CA-cert wordt base64 ingebed in het script zodat de installatie geen
+  // netwerkverkeer nodig heeft (de proxy zou nog niet klaar zijn om HTTPS te
+  // intercepten op het moment dat we de CA juist proberen te installeren).
+  const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
@@ -347,6 +352,15 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+
+# Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
+# tools die niet uit de system store lezen (node, java).
+mkdir -p /usr/local/share/ca-certificates
+echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
+chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
+command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
+printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
+chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 # Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
 export DEBIAN_FRONTEND=noninteractive
@@ -481,7 +495,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
   // Run jb-config.sh via exec
-  const script = buildJbConfigScript(containerWorkspace, containerName, ideName, password);
+  const script = buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem());
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],

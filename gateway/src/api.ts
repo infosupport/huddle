@@ -25,6 +25,7 @@ import {
   type IdeName,
 } from './docker';
 import { attachTerminal } from './terminal';
+import { getCaCertPem } from './tls-ca';
 
 const API_PORT = 3000;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
@@ -101,6 +102,7 @@ export function createApiServer(): FastifyInstance {
   // the sudo audit ingest). Everything else on the API is admin-only.
   const devcontainerWhitelist: Array<{ method: string; path: string }> = [
     { method: 'POST', path: '/api/audit/sudo' },
+    { method: 'GET',  path: '/api/tls/ca.crt' },
   ];
   app.addHook('onRequest', async (req, reply) => {
     if (!isDevcontainerSource(req.socket.remoteAddress)) return;
@@ -360,6 +362,14 @@ export function createApiServer(): FastifyInstance {
       return reply.code(400).send({ error: 'ide query param must be "rider" or "intellij"' });
     }
     return { imageName: getBaseImageName(req.query.ide), ide: req.query.ide };
+  });
+
+  // Huddle's MITM root-CA voor HTTPS-interceptie. Devcontainers downloaden dit
+  // certificaat (via de whitelist) en installeren het in de system trust store.
+  app.get('/api/tls/ca.crt', async (_req, reply) => {
+    return reply
+      .header('content-type', 'application/x-x509-ca-cert')
+      .send(getCaCertPem());
   });
 
   app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean } }>(
