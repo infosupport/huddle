@@ -93,6 +93,10 @@ export class ApiService {
     return this.handle(this.http.post<{ok: boolean}>(`/api/docker/containers/${name}/reconnect-huddle`, {}));
   }
 
+  getIdeLink(name: string): Observable<{ link: string }> {
+    return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
+  }
+
   getContainerIds(): Observable<string[]> {
     return this.handle(this.http.get<string[]>('/api/containers'));
   }

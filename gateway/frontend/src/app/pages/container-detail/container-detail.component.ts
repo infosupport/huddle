@@ -90,6 +90,7 @@ export class ContainerDetailComponent implements OnInit {
   copied = false;
   activeTab: DetailTab = 'firewall';
   reconnectStatus = '';
+  ideLinkStatus = '';
 
   ngOnInit(): void {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
@@ -159,6 +160,17 @@ export class ContainerDetailComponent implements OnInit {
   }
 
   setTab(t: DetailTab): void { this.activeTab = t; }
+
+  openIde(): void {
+    this.ideLinkStatus = 'Ophalen...';
+    this.api.getIdeLink(this.name).subscribe({
+      next: ({ link }) => {
+        this.ideLinkStatus = '';
+        window.open(link, '_self');
+      },
+      error: (err) => { this.ideLinkStatus = err.message; },
+    });
+  }
 
   reconnectHuddle(): void {
     this.reconnectStatus = 'Bezig...';

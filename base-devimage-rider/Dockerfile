@@ -28,6 +28,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Global CLIs
 RUN npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 
+# Standaard AI-config per provider (zie ../.ai). Legt elke agent uit dat hij in
+# een Huddle DMZ-devcontainer draait. Build-context is de repo-root (zie huddle.ps1
+# + .dockerignore) zodat deze COPY bij .ai/ kan. Dirs eerst vscode-owned maken
+# zodat de tools hun eigen state ernaast kunnen schrijven.
+RUN mkdir -p /home/vscode/.claude /home/vscode/.codex /home/vscode/.config/opencode /home/vscode/.ai/mcp \
+    && chown -R vscode:vscode /home/vscode/.claude /home/vscode/.codex /home/vscode/.config /home/vscode/.ai
+COPY --chown=vscode:vscode .ai/claude/CLAUDE.md   /home/vscode/.claude/CLAUDE.md
+COPY --chown=vscode:vscode .ai/codex/AGENTS.md    /home/vscode/.codex/AGENTS.md
+COPY --chown=vscode:vscode .ai/opencode/AGENTS.md /home/vscode/.config/opencode/AGENTS.md
+COPY --chown=vscode:vscode .ai/mcp/mcp.json       /home/vscode/.ai/mcp/mcp.json
+
 # vscode user lid maken van docker group (mcr base zet hem er niet automatisch in)
 RUN groupadd -f docker && usermod -aG docker vscode
 

@@ -1,0 +1,8 @@
+# Base-image builds (base-devimage-*/Dockerfile) gebruiken de repo-root als
+# build-context zodat de `COPY .ai/…` regels bij de gedeelde AI-config kunnen.
+# We sturen daarom alléén .ai mee; al het andere (node_modules, logs, .git, …)
+# blijft buiten de context. De Dockerfile zelf komt via `-f` binnen en hoeft
+# niet in de context te zitten.
+*
+!.ai
+!.ai/**

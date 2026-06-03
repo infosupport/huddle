@@ -1,9 +1,13 @@
 FROM mcr.microsoft.com/devcontainers/base:debian
 
 # mcr base levert al: vscode user (uid 1000) met passwordless sudo,
-# zsh + oh-my-zsh, git, curl, wget, common-utils. Voor IntelliJ download
-# JB Gateway zelf de JBR/JDK in de RemoteDev-dist; als je `java`/`mvn`
-# ook in je terminal wil, voeg dan apt-install temurin-21-jdk maven toe.
+# zsh + oh-my-zsh, git, curl, wget, common-utils.
+#
+# Belangrijk verschil met de JetBrains-varianten: voor VS Code hoeft er hier
+# GEEN backend geïnstalleerd te worden. VS Code installeert zijn eigen
+# "VS Code Server" automatisch in de container zodra je via de Dev Containers-
+# extensie attached ("Attach to Running Container"). Dus geen RemoteDev-dist,
+# geen JBR/.NET-runtime, geen host-config.
 
 # Docker apt repo + iptables (NAT-rule huddle) + Docker CLI + compose plugin
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,8 +47,7 @@ COPY --chown=vscode:vscode .ai/mcp/mcp.json       /home/vscode/.ai/mcp/mcp.json
 RUN groupadd -f docker && usermod -aG docker vscode
 
 LABEL com.devcontainer.snapshot=true
-LABEL com.devcontainer.source=base-devimage-intellij
-LABEL com.devcontainer.ide=intellij
+LABEL com.devcontainer.source=base-devimage-vscode
+LABEL com.devcontainer.ide=vscode
 
 # Geen USER/ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.
-# Default upstream USER is root.

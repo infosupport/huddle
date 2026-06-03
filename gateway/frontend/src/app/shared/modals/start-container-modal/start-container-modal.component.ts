@@ -21,7 +21,7 @@ export class StartContainerModalComponent {
   images: DockerImage[] = [];
   baseImage = '';
   selectedImage = '';
-  ide: 'rider' | 'intellij' = 'intellij';
+  ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
   workspace = '';
   containerName = '';
   nameTouched = false;

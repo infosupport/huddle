@@ -7,6 +7,7 @@
 @if (detail$ | async; as d) {
   @let cfg = d.inspect.Config;
   @let net = d.inspect.NetworkSettings?.Networks?.['dc-net-' + name] ?? d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
+  @let ide = cfg?.Labels?.['com.devcontainer.ide'] ?? '';
   @let workspace = cfg?.Labels?.['com.intellij.devcontainer.workspace.path'] ?? '—';
   @let sourcesPath = cfg?.Labels?.['com.intellij.devcontainer.sources.path'] ?? '—';
   @let inNetwork = !!net;
@@ -21,6 +22,13 @@
   <div class="page-header">
     <h1>{{ name }}</h1>
     <div class="actions">
+      @if (ide === 'vscode') {
+        <!-- VS Code attached via z'n eigen Dev Containers-extensie; geen deep-link. -->
+        <span class="muted">VS Code → 'Dev Containers: Attach to Running Container' → {{ name }}</span>
+      } @else {
+        <button class="btn btn-ghost btn-sm" (click)="openIde()">Connect IDE</button>
+        @if (ideLinkStatus) { <span class="muted">{{ ideLinkStatus }}</span> }
+      }
       <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
     </div>
   </div>

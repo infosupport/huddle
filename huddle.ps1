@@ -13,6 +13,9 @@ $HUDDLE_PORT      = 3000
 $IDE_DEFS = @(
     [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'base-devimage-rider';    Folder = 'base-devimage-rider' }
     [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'base-devimage-intellij'; Folder = 'base-devimage-intellij' }
+    # VS Code installeert zijn eigen backend (VS Code Server) in de container bij
+    # het attachen — er hoeft dus geen IDE-distro gedownload te worden zoals bij JB.
+    [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'base-devimage-vscode';   Folder = 'base-devimage-vscode' }
 )
 
 function Write-Banner {
@@ -98,6 +101,12 @@ function Start-Huddle {
         if (Test-Path $folderHost) {
             $runArgs += @('-v', "${folderHost}:/$($ide.Folder):ro")
         }
+    }
+    # Gedeelde AI-config (.ai) mee zodat de gateway base-images kan bouwen met de
+    # `COPY .ai/…` regels (zie gateway/src/docker.ts buildImage).
+    $aiHost = Join-Path $scriptDir ".ai"
+    if (Test-Path $aiHost) {
+        $runArgs += @('-v', "${aiHost}:/.ai:ro")
     }
     $runArgs += $HUDDLE_IMAGE
     $id = docker run @runArgs
@@ -258,7 +267,8 @@ function Start-Devcontainer {
     if ($picked.Kind -eq 'standaard' -and $LASTEXITCODE -ne 0) {
         Write-Host "  Image '$($picked.Name)' nog niet aanwezig -- bouwen..." -ForegroundColor DarkCyan
         $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
-        docker build -t $picked.Name (Join-Path $scriptDir $ide.Folder)
+        # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
+        docker build -t $picked.Name -f (Join-Path $scriptDir "$($ide.Folder)/Dockerfile") $scriptDir
         if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
     }
 
@@ -282,6 +292,76 @@ function Start-Devcontainer {
         $confirm = Read-Host "  Container '$containerName' bestaat al. Verwijderen? [j/N]"
         if ($confirm -ne 'j') { return }
         docker rm -f $containerName | Out-Null
+    }
+
+    # ── VS Code-variant ──────────────────────────────────────────────────────
+    # VS Code installeert zijn eigen backend (VS Code Server) bij het attachen, dus
+    # geen JB host-config / RemoteDev-distro / model-backend nodig. Wel exact dezelfde
+    # com.intellij.devcontainer.* tracking-labels zodat snapshots en de listing-flow
+    # ongewijzigd blijven werken. Daarna alleen de firewall-redirect + curlrc zetten.
+    if ($ide.Key -eq 'vscode') {
+        $modelJson    = "{`"customizations`":{`"jetbrains`":{`"backend`":`"$($ide.Backend)`"}}}"
+        $metadataJson = '[{"remoteUser":"vscode"}]'
+
+        $labelFile = Join-Path $env:TEMP "dc-labels-${devcontainerId}.txt"
+        $lines = @(
+            "com.intellij.devcontainer.id=${devcontainerId}",
+            "com.intellij.devcontainer.presentable.name=${presentableName}",
+            "com.intellij.devcontainer.sources.path=${workspaceDirFwd}",
+            "com.intellij.devcontainer.workspace.path=${containerWorkspace}",
+            "com.intellij.devcontainer.model=${modelJson}",
+            "com.devcontainer.ide=vscode",
+            "devcontainer.metadata=${metadataJson}"
+        )
+        [IO.File]::WriteAllLines($labelFile, $lines, [Text.UTF8Encoding]::new($false))
+
+        $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
+        if (-not $netExists) {
+            Write-Host "  Netwerk 'devcontainer-net' aanmaken..." -ForegroundColor DarkCyan
+            docker network create devcontainer-net | Out-Null
+        }
+
+        Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
+        docker run -d `
+            --name $containerName `
+            --label-file $labelFile `
+            -e "_CONTAINER_USER=vscode" `
+            -e "_CONTAINER_USER_HOME=/home/vscode" `
+            -e "_REMOTE_USER=vscode" `
+            -e "_REMOTE_USER_HOME=/home/vscode" `
+            -e "http_proxy=http://huddle:80" `
+            -e "https_proxy=http://huddle:80" `
+            -e "HTTP_PROXY=http://huddle:80" `
+            -e "HTTPS_PROXY=http://huddle:80" `
+            -v "${workspaceDirFwd}:${containerWorkspace}" `
+            --network devcontainer-net `
+            --cap-add NET_ADMIN `
+            $picked.Name | Out-Null
+
+        Remove-Item $labelFile -Force -ErrorAction SilentlyContinue
+
+        Write-Host "  Firewall-redirect instellen..." -ForegroundColor DarkCyan
+        $vscCmd = @'
+#!/bin/sh
+CURL_LINE='--proxy-header "X-Container-ID: CONTAINER_NAME_PLACEHOLDER"'
+grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
+
+HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
+iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \
+  iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+'@
+        $vscCmd = ($vscCmd `
+            -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) -replace "`r`n", "`n"
+        $vscScriptFile = Join-Path $env:TEMP "vsc-config-${devcontainerId}.sh"
+        [IO.File]::WriteAllText($vscScriptFile, $vscCmd, [Text.UTF8Encoding]::new($false))
+        docker cp $vscScriptFile "${containerName}:/tmp/vsc-config.sh" | Out-Null
+        docker exec -u root $containerName sh /tmp/vsc-config.sh
+        Remove-Item $vscScriptFile -Force -ErrorAction SilentlyContinue
+
+        Write-Host "  [OK] Container '$containerName' klaar." -ForegroundColor Green
+        Write-Host "  Verbind via VS Code: 'Dev Containers: Attach to Running Container' -> '$containerName'," -ForegroundColor Cyan
+        Write-Host "  open daarna de map '$containerWorkspace'." -ForegroundColor Cyan
+        return
     }
 
     # Model JSON komt overeen met de IDE-keuze; JB Gateway leest dit label
@@ -377,7 +457,8 @@ function Build-BaseImage {
         return
     }
     Write-Host "  Image '$($ide.Image)' bouwen ($($ide.Display))..." -ForegroundColor DarkCyan
-    docker build -t $ide.Image $buildPath
+    # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
+    docker build -t $ide.Image -f (Join-Path $buildPath 'Dockerfile') $scriptDir
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  [OK] Image '$($ide.Image)' klaar." -ForegroundColor Green
     } else {
