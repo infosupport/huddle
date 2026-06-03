@@ -68,8 +68,8 @@ function Show-Menu {
 
 # ── Sparky LLM-forwarder ────────────────────────────────────────────────────────
 
-# socat-container op het host-netwerk die :SPARKY_PORT doorzet naar sparky. Idempotent:
-# draait hij al, dan niets; bestaat hij gestopt, dan opnieuw aanmaken.
+# Host-net container die WSL2 :SPARKY_PORT doorzet naar de Windows-host (vanwaar netsh
+# het naar sparky stuurt). Idempotent: draait hij al -> niets; gestopt -> opnieuw aanmaken.
 function Start-SparkyProxy {
     $running = docker ps --filter "name=^${SPARKY_PROXY}$" --format "{{.Names}}"
     if ($running) { return }
