@@ -48,7 +48,7 @@ function Show-Menu {
     Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
     Write-Host "   1  Snapshot maken van draaiende container" -ForegroundColor White
     Write-Host "   2  Devcontainer starten (IDE -> standaard of snapshot)" -ForegroundColor White
-    Write-Host "   3  Base image bouwen per IDE" -ForegroundColor White
+    Write-Host "   3  Base image bouwen per IDE (of alle parallel)" -ForegroundColor White
     Write-Host "   4  Huddle bouwen en herstarten" -ForegroundColor White
     Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
     Write-Host "   0  Afsluiten" -ForegroundColor DarkGray
@@ -447,8 +447,18 @@ iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
 # ── Build base image ──────────────────────────────────────────────────────────
 
 function Build-BaseImage {
-    $ide = Select-Ide
-    if (-not $ide) { Write-Host "  Ongeldige IDE-keuze." -ForegroundColor Red; return }
+    # Eigen picker (niet de gedeelde Select-Ide): naast de losse IDE's ook een
+    # 'Alle (parallel)'-keuze die alle base images tegelijk bouwt.
+    Write-Host ""
+    Write-Host "  IDE:" -ForegroundColor DarkCyan
+    for ($i = 0; $i -lt $IDE_DEFS.Count; $i++) {
+        Write-Host ("   {0})  {1}" -f ($i + 1), $IDE_DEFS[$i].Display)
+    }
+    Write-Host ("   {0})  Alle (parallel)" -f ($IDE_DEFS.Count + 1))
+    $sel = [int](Read-Host "`n  Kies IDE") - 1
+    if ($sel -eq $IDE_DEFS.Count) { Build-AllBaseImages; return }
+    if ($sel -lt 0 -or $sel -ge $IDE_DEFS.Count) { Write-Host "  Ongeldige IDE-keuze." -ForegroundColor Red; return }
+    $ide = $IDE_DEFS[$sel]
 
     $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
     $buildPath = Join-Path $scriptDir $ide.Folder
@@ -463,6 +473,64 @@ function Build-BaseImage {
         Write-Host "  [OK] Image '$($ide.Image)' klaar." -ForegroundColor Green
     } else {
         Write-Host "  [FAIL] Build mislukt." -ForegroundColor Red
+    }
+}
+
+# ── Build alle base images parallel ─────────────────────────────────────────────
+
+# Bouwt elke IDE-base-image tegelijk via losse `docker build`-achtergrondprocessen.
+# Output per build gaat naar een eigen logbestand in $env:TEMP (parallelle builds
+# door elkaar op de console is onleesbaar); aan het eind volgt een overzicht.
+function Build-AllBaseImages {
+    $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+    Write-Host "  Alle base images parallel bouwen..." -ForegroundColor DarkCyan
+    Write-Host ""
+
+    $builds = @()
+    foreach ($ide in $IDE_DEFS) {
+        $dockerfile = Join-Path (Join-Path $scriptDir $ide.Folder) 'Dockerfile'
+        if (-not (Test-Path $dockerfile)) {
+            Write-Host "  [SKIP] Dockerfile niet gevonden voor $($ide.Display): $dockerfile" -ForegroundColor Yellow
+            continue
+        }
+        $logOut = Join-Path $env:TEMP "huddle-build-$($ide.Key).out.log"
+        $logErr = Join-Path $env:TEMP "huddle-build-$($ide.Key).err.log"
+        # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
+        $proc = Start-Process -FilePath 'docker' `
+            -ArgumentList @('build', '-t', $ide.Image, '-f', $dockerfile, $scriptDir) `
+            -NoNewWindow -PassThru `
+            -RedirectStandardOutput $logOut -RedirectStandardError $logErr
+        # Forceer het cachen van de proces-handle; zonder dit blijft .ExitCode na
+        # afloop leeg (bekende Start-Process -PassThru valkuil).
+        try { [void]$proc.Handle } catch {}
+        Write-Host "  -> $($ide.Image) ($($ide.Display)) gestart  [pid $($proc.Id)]  log: $logOut" -ForegroundColor DarkGray
+        $builds += [PSCustomObject]@{ Ide = $ide; Proc = $proc; LogErr = $logErr }
+    }
+
+    if (-not $builds) { Write-Host "  Geen images om te bouwen." -ForegroundColor Yellow; return }
+
+    Write-Host ""
+    Write-Host "  Wachten tot $($builds.Count) build(s) klaar zijn..." -ForegroundColor DarkCyan
+    foreach ($b in $builds) { $b.Proc.WaitForExit() }
+
+    Write-Host ""
+    $allOk = $true
+    foreach ($b in $builds) {
+        if ($b.Proc.ExitCode -eq 0) {
+            Write-Host "  [OK]   $($b.Ide.Image)" -ForegroundColor Green
+        } else {
+            $allOk = $false
+            Write-Host "  [FAIL] $($b.Ide.Image) (exit $($b.Proc.ExitCode)) -- zie $($b.LogErr)" -ForegroundColor Red
+            if (Test-Path $b.LogErr) {
+                Get-Content $b.LogErr -Tail 15 | ForEach-Object { Write-Host "         | $_" -ForegroundColor DarkGray }
+            }
+        }
+    }
+    Write-Host ""
+    if ($allOk) {
+        Write-Host "  [OK] Alle base images klaar." -ForegroundColor Green
+    } else {
+        Write-Host "  [FAIL] Niet alle builds zijn geslaagd." -ForegroundColor Red
     }
 }
 
