@@ -7,10 +7,13 @@ $HUDDLE_IMAGE     = "huddle"
 $HUDDLE_VOLUME    = "huddle-data"
 $HUDDLE_PORT      = 3000
 
-# Sparky LLM (vLLM) forwarder. De devcontainers/huddle kunnen het aparte LAN-IP van
-# sparky niet routeren, maar de WSL2-host wel. Deze socat-container luistert op de
-# host (:SPARKY_PORT) en zet door naar sparky, zodat huddle er via
-# host.docker.internal:SPARKY_PORT (172.17.0.1) bij kan. Pas SPARKY_HOST aan indien nodig.
+# Sparky LLM (vLLM) forwarder. docker-engine in WSL2 kan sparky's aparte LAN-IP niet
+# routeren; alleen de Windows-host bereikt het. Daarom twee hops:
+#   1) Windows (eenmalig, admin): netsh portproxy :SPARKY_PORT -> SPARKY_HOST:SPARKY_PORT
+#      netsh interface portproxy add v4tov4 listenport=11434 connectaddress=192.168.100.2 connectport=11434
+#   2) deze host-net container zet WSL2 :SPARKY_PORT door naar de Windows-host (de
+#      default gateway van de WSL2-distro), zodat huddle er via
+#      host.docker.internal:SPARKY_PORT (172.17.0.1) bij kan.
 $SPARKY_PROXY = "sparky-proxy"
 $SPARKY_HOST  = "192.168.100.2"
 $SPARKY_PORT  = 11434
@@ -74,12 +77,17 @@ function Start-SparkyProxy {
     $stopped = docker ps -aq --filter "name=^${SPARKY_PROXY}$" 2>$null
     if ($stopped) { docker rm -f $SPARKY_PROXY | Out-Null }
 
-    Write-Host "  Sparky-proxy starten (host:${SPARKY_PORT} -> ${SPARKY_HOST}:${SPARKY_PORT})..." -ForegroundColor DarkCyan
+    Write-Host "  Sparky-proxy starten (WSL2 :${SPARKY_PORT} -> Windows-host :${SPARKY_PORT})..." -ForegroundColor DarkCyan
+    # Zet :PORT door naar de default gateway van de WSL2-distro = de Windows-host,
+    # waar de netsh portproxy het naar sparky stuurt. De gateway wordt IN de container
+    # bepaald (kan na een WSL-herstart wijzigen). socat + iproute2 worden runtime
+    # geïnstalleerd (de WSL2-host heeft normale internettoegang).
+    $fwd = 'apk add --no-cache socat iproute2 >/dev/null 2>&1; GW=$(ip route show default | awk "{print \$3; exit}"); echo "sparky-proxy: :PORT -> Windows $GW:PORT"; exec socat TCP-LISTEN:PORT,fork,reuseaddr TCP:$GW:PORT'
+    $fwd = $fwd -replace 'PORT', "$SPARKY_PORT"
     docker run -d --name $SPARKY_PROXY --restart unless-stopped `
-        --network host alpine/socat `
-        "TCP-LISTEN:${SPARKY_PORT},fork,reuseaddr" "TCP:${SPARKY_HOST}:${SPARKY_PORT}" | Out-Null
+        --network host alpine sh -c $fwd | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  [OK] Sparky-proxy gestart." -ForegroundColor Green
+        Write-Host "  [OK] Sparky-proxy gestart. Vereist op Windows: netsh portproxy :${SPARKY_PORT} -> ${SPARKY_HOST}:${SPARKY_PORT}" -ForegroundColor Green
     } else {
         Write-Host "  [FAIL] Sparky-proxy kon niet starten (model blijft dan onbereikbaar)." -ForegroundColor Red
     }
