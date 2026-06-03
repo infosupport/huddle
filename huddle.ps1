@@ -7,6 +7,14 @@ $HUDDLE_IMAGE     = "huddle"
 $HUDDLE_VOLUME    = "huddle-data"
 $HUDDLE_PORT      = 3000
 
+# Sparky LLM (vLLM) forwarder. De devcontainers/huddle kunnen het aparte LAN-IP van
+# sparky niet routeren, maar de WSL2-host wel. Deze socat-container luistert op de
+# host (:SPARKY_PORT) en zet door naar sparky, zodat huddle er via
+# host.docker.internal:SPARKY_PORT (172.17.0.1) bij kan. Pas SPARKY_HOST aan indien nodig.
+$SPARKY_PROXY = "sparky-proxy"
+$SPARKY_HOST  = "192.168.100.2"
+$SPARKY_PORT  = 11434
+
 # Per-IDE base images. Elke IDE heeft een eigen base-devimage-<ide>/ folder met
 # een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
 # datzelfde label zodat de spawn-flow ze per IDE kan filteren.
@@ -55,9 +63,33 @@ function Show-Menu {
     Write-Host ""
 }
 
+# ── Sparky LLM-forwarder ────────────────────────────────────────────────────────
+
+# socat-container op het host-netwerk die :SPARKY_PORT doorzet naar sparky. Idempotent:
+# draait hij al, dan niets; bestaat hij gestopt, dan opnieuw aanmaken.
+function Start-SparkyProxy {
+    $running = docker ps --filter "name=^${SPARKY_PROXY}$" --format "{{.Names}}"
+    if ($running) { return }
+
+    $stopped = docker ps -aq --filter "name=^${SPARKY_PROXY}$" 2>$null
+    if ($stopped) { docker rm -f $SPARKY_PROXY | Out-Null }
+
+    Write-Host "  Sparky-proxy starten (host:${SPARKY_PORT} -> ${SPARKY_HOST}:${SPARKY_PORT})..." -ForegroundColor DarkCyan
+    docker run -d --name $SPARKY_PROXY --restart unless-stopped `
+        --network host alpine/socat `
+        "TCP-LISTEN:${SPARKY_PORT},fork,reuseaddr" "TCP:${SPARKY_HOST}:${SPARKY_PORT}" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  [OK] Sparky-proxy gestart." -ForegroundColor Green
+    } else {
+        Write-Host "  [FAIL] Sparky-proxy kon niet starten (model blijft dan onbereikbaar)." -ForegroundColor Red
+    }
+}
+
 # ── Start Huddle ──────────────────────────────────────────────────────────────
 
 function Start-Huddle {
+    Start-SparkyProxy
+
     $running = docker ps --filter "name=^${HUDDLE_CONTAINER}$" --format "{{.Names}}"
     if ($running) {
         Write-Host "  Huddle draait al." -ForegroundColor Green
