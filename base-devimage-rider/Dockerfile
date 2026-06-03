@@ -28,16 +28,29 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Global CLIs
 RUN npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 
+# markitdown: converteert PDF/Office/HTML/afbeeldingen → Markdown.
+# Wordt gebruikt door de markitdown-skill (.ai/claude/skills/markitdown.md).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip \
+    && pip install --break-system-packages 'markitdown[all]' \
+    && rm -rf /var/lib/apt/lists/*
+
 # Standaard AI-config per provider (zie ../.ai). Legt elke agent uit dat hij in
 # een Huddle DMZ-devcontainer draait. Build-context is de repo-root (zie huddle.ps1
 # + .dockerignore) zodat deze COPY bij .ai/ kan. Dirs eerst vscode-owned maken
 # zodat de tools hun eigen state ernaast kunnen schrijven.
-RUN mkdir -p /home/vscode/.claude /home/vscode/.codex /home/vscode/.config/opencode /home/vscode/.ai/mcp \
+RUN mkdir -p /home/vscode/.claude/agents /home/vscode/.claude/skills /home/vscode/.codex /home/vscode/.config/opencode/agents /home/vscode/.ai/mcp \
     && chown -R vscode:vscode /home/vscode/.claude /home/vscode/.codex /home/vscode/.config /home/vscode/.ai
-COPY --chown=vscode:vscode .ai/claude/CLAUDE.md   /home/vscode/.claude/CLAUDE.md
-COPY --chown=vscode:vscode .ai/codex/AGENTS.md    /home/vscode/.codex/AGENTS.md
-COPY --chown=vscode:vscode .ai/opencode/AGENTS.md /home/vscode/.config/opencode/AGENTS.md
-COPY --chown=vscode:vscode .ai/mcp/mcp.json       /home/vscode/.ai/mcp/mcp.json
+COPY --chown=vscode:vscode .ai/claude/CLAUDE.md             /home/vscode/.claude/CLAUDE.md
+COPY --chown=vscode:vscode .ai/claude/settings.json         /home/vscode/.claude/settings.json
+COPY --chown=vscode:vscode .ai/claude/statusline-command.sh /home/vscode/.claude/statusline-command.sh
+COPY --chown=vscode:vscode .ai/claude/agents/               /home/vscode/.claude/agents/
+COPY --chown=vscode:vscode .ai/claude/skills/               /home/vscode/.claude/skills/
+COPY --chown=vscode:vscode .ai/codex/AGENTS.md              /home/vscode/.codex/AGENTS.md
+COPY --chown=vscode:vscode .ai/opencode/AGENTS.md           /home/vscode/.config/opencode/AGENTS.md
+COPY --chown=vscode:vscode .ai/opencode/opencode.json       /home/vscode/.config/opencode/opencode.json
+COPY --chown=vscode:vscode .ai/opencode/agents/             /home/vscode/.config/opencode/agents/
+COPY --chown=vscode:vscode .ai/mcp/mcp.json                 /home/vscode/.ai/mcp/mcp.json
+RUN chmod +x /home/vscode/.claude/statusline-command.sh
 
 # vscode user lid maken van docker group (mcr base zet hem er niet automatisch in)
 RUN groupadd -f docker && usermod -aG docker vscode

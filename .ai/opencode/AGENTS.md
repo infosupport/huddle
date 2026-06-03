@@ -36,3 +36,17 @@ Docker-acties uitvoert.
 
 Sudo (via gebruiker `noot`) en netwerk/Docker-acties worden gelogd en zijn zichtbaar
 voor operators in de Huddle-UI. Werk transparant.
+
+## Model
+
+opencode is preconfigured (see opencode.json) to use the Sparky vLLM model
+`Intel/Qwen3-Coder-Next-int4-AutoRound` at http://192.168.100.2:11434/v1. For this to
+work, the Huddle operator must allowlist `192.168.100.2`, and (on first run)
+`registry.npmjs.org` so opencode can fetch the @ai-sdk/openai-compatible provider package.
+
+## Available Agents
+
+- **bugfix-agent** – Autonomously fixes bugs from reports, logs, and failing tests.
+- **plan-agent** – Plans and verifies multi-step tasks with staff-engineer rigor.
+- **committer** – Commits all staged changes using Conventional Commits.
+- **subagent-strategy** – Delegates focused tasks to subagents for parallel execution.

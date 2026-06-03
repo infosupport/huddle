@@ -9,11 +9,36 @@ hoe hij zich daar hoort te gedragen.
 
 ```
 .ai/
-├── claude/CLAUDE.md       → /home/vscode/.claude/CLAUDE.md      (Claude Code, @anthropic-ai/claude-code)
-├── codex/AGENTS.md        → /home/vscode/.codex/AGENTS.md       (Codex CLI, @openai/codex)
-├── opencode/AGENTS.md     → /home/vscode/.config/opencode/AGENTS.md  (OpenCode, opencode-ai)
-└── mcp/mcp.json           → /home/vscode/.ai/mcp/mcp.json       (gedeelde MCP-serverconfig)
+├── claude/                                                     (Claude Code, @anthropic-ai/claude-code)
+│   ├── CLAUDE.md              → /home/vscode/.claude/CLAUDE.md             (DMZ-uitleg + team-delegatie verplicht)
+│   ├── settings.json          → /home/vscode/.claude/settings.json        (agent-teams aan, permissions, statusline)
+│   ├── statusline-command.sh  → /home/vscode/.claude/statusline-command.sh
+│   ├── agents/                → /home/vscode/.claude/agents/              (bugfix, plan, committer, subagent-strategy)
+│   └── skills/                → /home/vscode/.claude/skills/              (markitdown, docker, task-management, screenshot-asset-builder)
+├── codex/AGENTS.md            → /home/vscode/.codex/AGENTS.md             (Codex CLI, @openai/codex)
+├── opencode/                                                   (OpenCode, opencode-ai)
+│   ├── AGENTS.md              → /home/vscode/.config/opencode/AGENTS.md
+│   ├── opencode.json          → /home/vscode/.config/opencode/opencode.json (Sparky vLLM provider, default model)
+│   └── agents/                → /home/vscode/.config/opencode/agents/
+└── mcp/mcp.json               → /home/vscode/.ai/mcp/mcp.json             (gedeelde MCP-serverconfig)
 ```
+
+## Claude-standaard (teams + agents + skills)
+
+`claude/CLAUDE.md` verplicht agents om werk te delegeren via `TeamCreate` /
+`SendMessage` (de agent-teams-feature staat aan via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+in `claude/settings.json`). De `agents/` en `skills/` worden globaal geladen. De
+**markitdown**-skill vereist de `markitdown`-CLI; die wordt in elke base-image
+geïnstalleerd (`pip install 'markitdown[all]'`, zie de Dockerfiles).
+
+## opencode-model (Sparky)
+
+`opencode/opencode.json` registreert de Sparky vLLM-server
+(`http://192.168.100.2:11434/v1`, model `Intel/Qwen3-Coder-Next-int4-AutoRound`,
+geen API-key) als OpenAI-compatible provider en zet hem als default. Opdat dit
+werkt moet de operator in Huddle **`192.168.100.2`** op de allowlist zetten, en bij
+de eerste run ook **`registry.npmjs.org`** (opencode haalt dan het
+`@ai-sdk/openai-compatible` providerpakket op).
 
 Elke map hoort bij één geïnstalleerde CLI (zie `base-devimage-*/Dockerfile`,
 regel `npm install -g …`). Het config-bestand staat op de plek waar die tool zijn

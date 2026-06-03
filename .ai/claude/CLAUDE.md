@@ -36,3 +36,25 @@ uitvoert.
 
 Sudo (via gebruiker `noot`) en netwerk/Docker-acties worden gelogd en zijn zichtbaar
 voor operators in de Huddle-UI. Werk transparant.
+
+## Orchestration & Delegation
+
+You must delegate your work to other agents. Use `TeamCreate` to start a team relevant to the task. Use `SendMessage` to communicate work to team members and instruct them to communicate amongst themselves. Members use `TaskCreate`, `TaskGet`, `TaskList`, `TaskOutput`, `TaskStop`, `TaskUpdate` to delegate and track work.
+
+## Principles
+
+- **Simplicity First**: Make every change as simple as possible.
+- **No Laziness**: Find root causes, no temporary fixes.
+- **Minimal Impact**: Only touch what's necessary, avoid introducing bugs.
+- **File reads**: prefer `grep -n` to locate, then `Read` with `offset`/`limit` for files >300 lines. Delegate full-file summaries to Explore subagents so the raw content stays out of main context.
+
+## Agents & Skills
+
+- `agents/plan-agent.md` — planning and verification of multi-step tasks with staff-engineer rigor.
+- `agents/subagent-strategy.md` — delegating focused tasks to subagents for parallel execution.
+- `agents/bugfix-agent.md` — autonomously fixing bugs from reports, logs, and failing tests, with a self-improvement loop.
+- `agents/committer.md` — committing staged changes using conventional commits.
+- `skills/markitdown.md` — converting non-text files (PDF, Office, images, etc.) to Markdown for analysis.
+- `skills/docker.md` — Docker container and compose workflows (time-boxed access in Huddle).
+- `skills/task-management.md` — planning, tracking, and documenting task progress and lessons.
+- `skills/screenshot-asset-builder.md` — turning UI screenshots into implementation-ready visual assets and manifests.
