@@ -1,1 +1,13 @@
 .ijdevc/
+
+# Local Claude Code settings (per-machine permission allowlist)
+.claude/settings.local.json
+
+# Runtime / debug logs (incl. rider-client-diagnose.log generated in workspaces)
+*.log
+
+# Ad-hoc devcontainer comparison / diagnose captures
+rider_working.json
+rider_not_working.json
+compare-broken-devcontainer-empty1.json
+compare-working-devcontainer-empty2.json
