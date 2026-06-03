@@ -55,9 +55,12 @@ RUN chmod +x /home/vscode/.claude/statusline-command.sh
 # vscode user lid maken van docker group (mcr base zet hem er niet automatisch in)
 RUN groupadd -f docker && usermod -aG docker vscode
 
+# Draai als non-root. Root-only setup (iptables NAT) doet de spawn-flow via een
+# aparte `docker exec -u root` (zie huddle.ps1), dus pid 1 hoeft geen root te zijn.
+USER vscode
+
 LABEL com.devcontainer.snapshot=true
 LABEL com.devcontainer.source=base-devimage-intellij
 LABEL com.devcontainer.ide=intellij
 
-# Geen USER/ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.
-# Default upstream USER is root.
+# Geen ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.

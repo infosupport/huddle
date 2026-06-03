@@ -55,10 +55,15 @@ RUN chmod +x /home/vscode/.claude/statusline-command.sh
 # vscode user lid maken van docker group (mcr base zet hem er niet automatisch in)
 RUN groupadd -f docker && usermod -aG docker vscode
 
+# Draai als non-root. Root-only setup (iptables NAT) doet de spawn-flow via een
+# aparte `docker exec -u root` (zie huddle.ps1), dus pid 1 hoeft geen root te zijn.
+# LET OP: dit draait pid 1 nu als vscode i.p.v. root. De eerder werkende JB-snapshot
+# (empty2) had pid 1 = root; als de Rider-backend hierop breekt, is dit de plek om
+# terug te draaien (de RemoteDev-dist-volume kan root-ownership nodig hebben).
+USER vscode
+
 LABEL com.devcontainer.snapshot=true
 LABEL com.devcontainer.source=base-devimage-rider
 LABEL com.devcontainer.ide=rider
 
-# Geen USER/ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.
-# Default upstream USER is root, wat aansluit bij wat de werkende JB-snapshot
-# (empty2) had: pid 1 als root i.p.v. vscode.
+# Geen ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.
