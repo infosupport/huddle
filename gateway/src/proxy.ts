@@ -6,7 +6,7 @@ import stream from 'stream';
 import { URL } from 'url';
 import { checkRule } from './rules';
 import { resolveContainerByIp } from './docker';
-import { logAudit } from './db';
+import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
 
 const PROXY_PORT = 80;
@@ -113,6 +113,32 @@ export function createProxyServer(): http.Server {
 
     const reqChunks: Buffer[] = [];
     let reqBytes = 0;
+    const resChunks: Buffer[] = [];
+    let resBytes = 0;
+
+    // Zelfde in-flight-aanpak als het MITM-pad: log de request meteen, vul de
+    // response (en de volledige req_body) bij zodra upstream afrondt.
+    const auditId = logAudit({
+      containerId,
+      domain: target.hostname,
+      action: 'allow',
+      ruleId,
+      method: req.method ?? null,
+      path: `${target.pathname}${target.search}`,
+      reqHeaders: headersToJson(req.headers),
+    });
+    let completed = false;
+    const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
+      if (completed) return;
+      completed = true;
+      if (auditId == null) return;
+      updateAuditResponse(auditId, {
+        reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).slice(0, CAP).toString('utf8')) : null,
+        resStatus,
+        resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
+        resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).slice(0, CAP).toString('utf8')) : null,
+      });
+    };
 
     const upstream = http.request(
       {
@@ -124,54 +150,24 @@ export function createProxyServer(): http.Server {
       },
       (upstreamRes) => {
         res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-        const resChunks: Buffer[] = [];
-        let resBytes = 0;
-        let logged = false;
-        const doLog = (resStatus: number | null) => {
-          if (logged) return;
-          logged = true;
-          const reqBuf = Buffer.concat(reqChunks).slice(0, CAP);
-          const resBuf = Buffer.concat(resChunks).slice(0, CAP);
-          logAudit({
-            containerId,
-            domain: target.hostname,
-            action: 'allow',
-            ruleId,
-            method: req.method ?? null,
-            path: `${target.pathname}${target.search}`,
-            reqHeaders: headersToJson(req.headers),
-            reqBody: reqBytes > 0 ? cap(reqBuf.toString('utf8')) : null,
-            resStatus,
-            resHeaders: headersToJson(upstreamRes.headers as Record<string, any>),
-            resBody: resBytes > 0 ? cap(resBuf.toString('utf8')) : null,
-          });
-        };
         upstreamRes.on('data', (chunk: Buffer) => {
           if (!res.writableEnded) res.write(chunk);
           if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
         });
         upstreamRes.on('end', () => {
           if (!res.writableEnded) res.end();
-          doLog(upstreamRes.statusCode ?? null);
+          complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
         });
         upstreamRes.on('error', () => {
           if (!res.writableEnded) res.destroy();
-          doLog(0);
+          complete(0, upstreamRes.headers);
         });
       }
     );
 
     upstream.on('error', (err) => {
       if (!res.headersSent) send502(res, err.message);
-      logAudit({
-        containerId,
-        domain: target.hostname,
-        action: 'allow',
-        ruleId,
-        method: req.method ?? null,
-        path: `${target.pathname}${target.search}`,
-        resStatus: 502,
-      });
+      complete(502);
     });
 
     req.on('error', () => upstream.destroy());
@@ -298,7 +294,34 @@ export function createProxyServer(): http.Server {
       let reqBytes = 0;
       const resChunks: Buffer[] = [];
       let resBytes = 0;
-      let logged = false;
+
+      // Log de request meteen (method/path/headers) zodat de call al in de audit
+      // log verschijnt zodra hij binnenkomt — res_status blijft NULL ("in-flight")
+      // tot de upstream-response afrondt. Cruciaal voor streaming responses (bv.
+      // Anthropic SSE) die seconden tot minuten open blijven: zonder dit zou de
+      // hele call onzichtbaar zijn tot hij klaar is.
+      const auditId = logAudit({
+        containerId,
+        domain: hostname,
+        port,
+        action: 'allow',
+        ruleId,
+        method: innerReq.method ?? null,
+        path: innerReq.url ?? null,
+        reqHeaders: headersToJson(innerReq.headers),
+      });
+      let completed = false;
+      const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
+        if (completed) return;
+        completed = true;
+        if (auditId == null) return;
+        updateAuditResponse(auditId, {
+          reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
+          resStatus,
+          resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
+          resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).toString('utf8')) : null,
+        });
+      };
 
       const upstreamReq = https.request(
         {
@@ -311,35 +334,17 @@ export function createProxyServer(): http.Server {
         },
         (upstreamRes) => {
           innerRes.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-          const finish = (resStatus: number | null) => {
-            if (logged) return;
-            logged = true;
-            logAudit({
-              containerId,
-              domain: hostname,
-              port,
-              action: 'allow',
-              ruleId,
-              method: innerReq.method ?? null,
-              path: innerReq.url ?? null,
-              reqHeaders: headersToJson(innerReq.headers),
-              reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
-              resStatus,
-              resHeaders: headersToJson(upstreamRes.headers as Record<string, any>),
-              resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).toString('utf8')) : null,
-            });
-          };
           upstreamRes.on('data', (chunk: Buffer) => {
             if (!innerRes.writableEnded) innerRes.write(chunk);
             if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
           });
           upstreamRes.on('end', () => {
             if (!innerRes.writableEnded) innerRes.end();
-            finish(upstreamRes.statusCode ?? null);
+            complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
           });
           upstreamRes.on('error', () => {
             if (!innerRes.writableEnded) innerRes.destroy();
-            finish(0);
+            complete(0, upstreamRes.headers);
           });
         },
       );
@@ -351,21 +356,7 @@ export function createProxyServer(): http.Server {
             innerRes.end(JSON.stringify({ error: 'bad_gateway', message: err.message }));
           } catch {}
         }
-        if (!logged) {
-          logged = true;
-          logAudit({
-            containerId,
-            domain: hostname,
-            port,
-            action: 'allow',
-            ruleId,
-            method: innerReq.method ?? null,
-            path: innerReq.url ?? null,
-            reqHeaders: headersToJson(innerReq.headers),
-            reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
-            resStatus: 502,
-          });
-        }
+        complete(502);
       });
 
       innerReq.on('data', (chunk: Buffer) => {
