@@ -6,7 +6,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "Sparky (vLLM)",
       "options": {
-        "baseURL": "http://192.168.100.2:11434/v1",
+        "baseURL": "http://host.docker.internal:11434/v1",
         "apiKey": "local"
       },
       "models": {

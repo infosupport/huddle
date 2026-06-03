@@ -90,6 +90,9 @@ function Start-Huddle {
         '-d',
         '--name', $HUDDLE_CONTAINER,
         '--network', 'devcontainer-net',
+        # Laat huddle de Windows-host bereiken (voor o.a. de sparky port-proxy op
+        # host.docker.internal:11434). Modelverkeer blijft zo via de proxy lopen.
+        '--add-host', 'host.docker.internal:host-gateway',
         '-p', "${HUDDLE_PORT}:3000",
         '-v', "${HUDDLE_VOLUME}:/data",
         '-v', '/var/run/docker.sock:/var/run/docker.sock',

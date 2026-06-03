@@ -33,12 +33,19 @@ geïnstalleerd (`pip install 'markitdown[all]'`, zie de Dockerfiles).
 
 ## opencode-model (Sparky)
 
-`opencode/opencode.json` registreert de Sparky vLLM-server
-(`http://192.168.100.2:11434/v1`, model `Intel/Qwen3-Coder-Next-int4-AutoRound`,
-geen API-key) als OpenAI-compatible provider en zet hem als default. Opdat dit
-werkt moet de operator in Huddle **`192.168.100.2`** op de allowlist zetten, en bij
-de eerste run ook **`registry.npmjs.org`** (opencode haalt dan het
-`@ai-sdk/openai-compatible` providerpakket op).
+`opencode/opencode.json` registreert de Sparky vLLM-server (model
+`Intel/Qwen3-Coder-Next-int4-AutoRound`, geen API-key) als OpenAI-compatible provider
+en zet hem als default.
+
+Sparky (`192.168.100.2`) zit op een apart netwerk dat de Docker/WSL-containers niet
+direct kunnen routeren — alleen de Windows-host bereikt het. Daarom:
+- draait sparky via een **Windows port-proxy**:
+  `netsh interface portproxy add v4tov4 listenport=11434 connectaddress=192.168.100.2 connectport=11434`;
+- wijst opencode naar `http://host.docker.internal:11434/v1` en loopt het verkeer via
+  de Huddle-proxy (geaudit; Bun's `fetch` respecteert `HTTP(S)_PROXY`);
+- start de huddle-container met `--add-host=host.docker.internal:host-gateway` (zie `huddle.ps1`);
+- moet de operator **`host.docker.internal`** op de allowlist zetten, en op de eerste
+  run **`registry.npmjs.org`** (opencode haalt dan het `@ai-sdk/openai-compatible`-pakket op).
 
 Elke map hoort bij één geïnstalleerde CLI (zie `base-devimage-*/Dockerfile`,
 regel `npm install -g …`). Het config-bestand staat op de plek waar die tool zijn
