@@ -1,8 +1,27 @@
-<div class="terminal-shell">
-  <div class="terminal-bar">
-    <span class="terminal-status" [class.error]="status.startsWith('Verbinding')">{{ status }}</span>
-    <span class="terminal-hint">Verbonden als <code>vscode</code>. Wissel naar noot via <code>su - noot</code>.</span>
-    <button class="btn btn-ghost btn-sm" (click)="reconnect()">Opnieuw verbinden</button>
-  </div>
-  <div #host class="terminal-host"></div>
+<div class="toolbar">
+  <button (click)="doFit()">Refit</button>
+  <button (click)="term.clear()">Clear</button>
+  <button (click)="autoScroll = !autoScroll" [class.active]="autoScroll">
+    Scroll: {{ autoScroll ? 'On' : 'Off' }}
+  </button>
+  <span class="indicator" [class.connected]="connected">
+    {{ connected ? 'OK' : '...' }}
+  </span>
+</div>
+
+<div class="term-wrap" (mousemove)="onMouseMove($event)" (mouseleave)="hoveredRow = null">
+  <div #termRef class="term-host"></div>
+  @if (hoveredRow !== null) {
+    @for (u of detectedUrls; track u.url) {
+      @if (u.row === hoveredRow) {
+        <button class="open-url" (click)="openUrl(u.url)">Open URL</button>
+      }
+    }
+  }
+</div>
+
+<div class="quick-keys">
+  @for (k of quickKeys; track k.label) {
+    <button (mousedown)="$event.preventDefault()" (click)="sendKey(k.data)">{{ k.label }}</button>
+  }
 </div>

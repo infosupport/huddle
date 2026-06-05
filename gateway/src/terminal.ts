@@ -19,7 +19,7 @@ interface ExecHandle {
   stream: NodeJS.ReadWriteStream;
 }
 
-function dockerExec(containerName: string): Promise<string> {
+export function dockerExec(containerName: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       AttachStdin: true,
@@ -56,7 +56,7 @@ function dockerExec(containerName: string): Promise<string> {
   });
 }
 
-function dockerExecStart(execId: string): Promise<NodeJS.ReadWriteStream> {
+export function dockerExecStart(execId: string): Promise<NodeJS.ReadWriteStream> {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ Detach: false, Tty: true });
     const req = http.request(
@@ -90,7 +90,7 @@ function dockerExecStart(execId: string): Promise<NodeJS.ReadWriteStream> {
   });
 }
 
-function dockerExecResize(execId: string, cols: number, rows: number): Promise<void> {
+export function dockerExecResize(execId: string, cols: number, rows: number): Promise<void> {
   return new Promise((resolve) => {
     const req = http.request(
       {
@@ -105,7 +105,7 @@ function dockerExecResize(execId: string, cols: number, rows: number): Promise<v
   });
 }
 
-async function openExec(containerName: string): Promise<ExecHandle> {
+export async function openExec(containerName: string): Promise<ExecHandle> {
   const execId = await dockerExec(containerName);
   const stream = await dockerExecStart(execId);
   return { execId, stream };

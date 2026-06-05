@@ -1,21 +1,89 @@
 @import '@xterm/xterm/css/xterm.css';
 
-:host { display: block; }
-.terminal-shell { display: flex; flex-direction: column; gap: 0; }
-.terminal-bar {
-  display: flex; align-items: center; gap: 12px; padding: 8px 12px;
-  border: 1px solid var(--border); border-bottom: none; border-radius: 8px 8px 0 0;
-  background: var(--surface-2); font-size: 12px;
-}
-.terminal-status { color: var(--text-muted); font-weight: 600; }
-.terminal-status.error { color: var(--danger, #ef4444); }
-.terminal-hint { flex: 1; color: var(--text-muted); }
-.terminal-hint code {
-  background: var(--surface); padding: 1px 6px; border-radius: 4px;
-  border: 1px solid var(--border); font-size: 11px;
-}
-.terminal-host {
-  height: 480px; padding: 8px; background: #0f1117;
-  border: 1px solid var(--border); border-radius: 0 0 8px 8px;
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #161b22;
+  font-size: 12px;
+  border-radius: 8px 8px 0 0;
+}
+.toolbar button {
+  padding: 2px 8px;
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.toolbar button.active { background: #1f6feb; }
+
+.indicator {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #c9d1d9;
+}
+.indicator::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6e7681;
+}
+.indicator.connected::before { background: #3fb950; }
+
+.term-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 480px;
+  background: #0d1117;
+  padding: 4px;
+}
+.term-host { width: 100%; height: 100%; }
+
+.open-url {
+  position: absolute;
+  right: 8px;
+  top: 4px;
+  background: #1f6feb;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.quick-keys { display: none; }
+
+@media (max-width: 767px) {
+  .quick-keys {
+    display: flex;
+    overflow-x: auto;
+    gap: 4px;
+    padding: 4px 8px;
+    background: #161b22;
+    border-radius: 0 0 8px 8px;
+  }
+  .quick-keys button {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+  }
 }

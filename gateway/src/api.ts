@@ -27,6 +27,7 @@ import {
 } from './docker';
 import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
 import { attachTerminal } from './terminal';
+import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
 import { registerExtensions, listExtensions } from './extensions/registry';
 
@@ -126,6 +127,19 @@ export function createApiServer(): FastifyInstance {
     });
   });
 
+  // Multi-attach terminal (/ws/terminal/<container>): meerdere clients delen
+  // dezelfde Docker exec via de ptyManager. Vervangt op termijn /ws/exec.
+  const wssPty = new WebSocketServer({ noServer: true });
+  wssPty.on('connection', (ws, req) => {
+    const m = (req.url ?? '').match(/^\/ws\/terminal\/([^/?#]+)/);
+    const containerName = m ? decodeURIComponent(m[1]) : '';
+    if (!containerName) { ws.close(1008, 'missing container'); return; }
+    ptyManager.attach(ws, containerName).catch((err) => {
+      console.warn('[terminal] pty attach failed:', err.message);
+      try { ws.close(1011, 'attach failed'); } catch {}
+    });
+  });
+
   function broadcast(): void {
     const msg = JSON.stringify({ type: 'reload' });
     wsClients.forEach((ws) => {
@@ -146,6 +160,8 @@ export function createApiServer(): FastifyInstance {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } else if (pathname.startsWith('/ws/exec/')) {
       wssTerminal.handleUpgrade(req, socket, head, (ws) => wssTerminal.emit('connection', ws, req));
+    } else if (pathname.startsWith('/ws/terminal/')) {
+      wssPty.handleUpgrade(req, socket, head, (ws) => wssPty.emit('connection', ws, req));
     } else {
       socket.destroy();
     }
