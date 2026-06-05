@@ -32,6 +32,7 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
               <app-icon [name]="ext.icon" [size]="22" />
               <span class="ext-name">{{ ext.name }}</span>
               @if (ext.version) { <span class="ext-version">v{{ ext.version }}</span> }
+              <a class="ext-open" [href]="'/ext/' + ext.id + '/'" target="_blank">Openen</a>
               @if (ext.settings.length > 0) {
                 <a class="ext-link" [routerLink]="['/extensions', ext.id, 'settings']">Instellingen</a>
               }
@@ -52,6 +53,8 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
     .ext-name { font-weight: 600; }
     .ext-version { color: var(--muted, #888); font-size: 0.85em; flex: 1; }
     .ext-name:last-of-type { flex: 1; }
+    .ext-open { background: var(--accent, #4da3ff); color: #fff; text-decoration: none; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; }
+    .ext-open:hover { opacity: 0.85; }
     .ext-link { color: var(--accent, #4da3ff); text-decoration: none; }
     .ext-link:hover { text-decoration: underline; }
     .ext-del { background: none; border: none; color: var(--danger, #e06c75); cursor: pointer; padding: 0; }
