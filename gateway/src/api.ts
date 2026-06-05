@@ -517,11 +517,21 @@ export function createApiServer(): FastifyInstance {
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ide-link', async (req, reply) => {
     try {
       const inspect = await inspectContainer(req.params.name);
-      const workspacePath: string | undefined = inspect?.Config?.Labels?.['com.intellij.devcontainer.workspace.path'];
+      const labels = inspect?.Config?.Labels;
+      const workspacePath: string | undefined = labels?.['com.intellij.devcontainer.workspace.path'];
       if (!workspacePath) return reply.code(404).send({ error: 'workspace path label not found' });
+      const ide = labels?.['com.devcontainer.ide'];
+      // VS Code installeert zijn eigen backend bij het attachen en schrijft geen
+      // jetbrains-gateway://-link; een deep-link bestaat hier niet.
+      if (ide === 'vscode') {
+        return reply.code(404).send({ error: 'VS Code gebruikt geen JetBrains deep-link' });
+      }
+      // Rider en IntelliJ draaien beide remote-dev-server.sh, dat de gateway-link
+      // naar <workspace>/rider-client-diagnose.log schrijft.
+      const logFile = `${workspacePath}/rider-client-diagnose.log`;
       const output = await execContainerOutput(inspect.Id, [
         'sh', '-c',
-        `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${workspacePath}/rider-client-diagnose.log" 2>/dev/null | tail -1`,
+        `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${logFile}" 2>/dev/null | tail -1`,
       ]);
       const links = output.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('jetbrains-gateway://'));
       if (links.length === 0) return reply.code(404).send({ error: 'IDE backend nog niet gestart — even geduld en probeer opnieuw' });
