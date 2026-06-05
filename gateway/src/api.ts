@@ -30,7 +30,14 @@ import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
-import { registerExtensions, listExtensions } from './extensions/registry';
+import {
+  initLoader,
+  loadAllExtensions,
+  installExtension,
+  removeExtension,
+  listExtensions,
+  EXT_DIR,
+} from './extensions/registry';
 
 const API_PORT = 3000;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
@@ -173,6 +180,8 @@ export function createApiServer(): FastifyInstance {
     prefix: '/',
     wildcard: false,
   });
+
+  app.register(import('@fastify/multipart'), { limits: { fileSize: 10 * 1024 * 1024 } });
 
   app.get<{ Querystring: { status?: string; container?: string } }>(
     '/api/rules',
@@ -604,8 +613,50 @@ export function createApiServer(): FastifyInstance {
   });
 
   // ── Extensions ────────────────────────────────────────────────────────────
-  void registerExtensions(app, db);
+  initLoader(app, db);
+  void loadAllExtensions();
+
   app.get('/api/extensions', async () => listExtensions());
+
+  app.post('/api/extensions/upload', async (req, reply) => {
+    const data = await req.file();
+    if (!data) return reply.code(400).send({ error: 'Geen bestand' });
+    const buffer = await data.toBuffer();
+    try {
+      const result = await installExtension(buffer);
+      notifyStateChanged();
+      return result;
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/extensions/:id', async (req, reply) => {
+    if (!/^[a-z0-9-]+$/.test(req.params.id)) {
+      return reply.code(400).send({ error: 'ongeldige id' });
+    }
+    removeExtension(req.params.id);
+    notifyStateChanged();
+    return { ok: true };
+  });
+
+  // Serveer de statische frontend-assets van een extensie uit
+  // <EXT_DIR>/<id>/frontend/. Het opgeloste pad moet binnen die map blijven,
+  // anders is het een traversal-poging (bv. ../../).
+  app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
+    const { id } = req.params;
+    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('ongeldige id');
+    const subPath = req.params['*'] || 'index.html';
+    const baseDir = path.join(EXT_DIR, id, 'frontend');
+    const filePath = path.join(baseDir, subPath);
+    if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
+      return reply.code(403).send('verboden');
+    }
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return reply.code(404).send('Niet gevonden');
+    }
+    return reply.send(fs.createReadStream(filePath));
+  });
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
   app.setNotFoundHandler(async (_req, reply) => {

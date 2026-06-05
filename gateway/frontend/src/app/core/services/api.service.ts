@@ -116,6 +116,18 @@ export class ApiService {
     return this.handle(this.http.get<Extension[]>('/api/extensions'));
   }
 
+  uploadExtension(file: File): Observable<{ id: string; name: string; restartRequired: boolean }> {
+    const form = new FormData();
+    form.append('file', file);
+    return this.handle(
+      this.http.post<{ id: string; name: string; restartRequired: boolean }>('/api/extensions/upload', form),
+    );
+  }
+
+  deleteExtension(id: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/extensions/${id}`));
+  }
+
   getExtensionSettings(id: string): Observable<Record<string, unknown>> {
     return this.handle(this.http.get<Record<string, unknown>>(`/api/ext/${id}/settings`));
   }

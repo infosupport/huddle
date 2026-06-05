@@ -1,0 +1,167 @@
+import AdmZip from 'adm-zip';
+import path from 'path';
+import fs from 'fs';
+import type { FastifyInstance } from 'fastify';
+import type { Database } from 'better-sqlite3';
+import { stateEvents } from '../events';
+
+export const EXT_DIR = process.env.EXT_DIR ?? '/data/extensions';
+
+export interface ExtensionManifest {
+  id: string;
+  name: string;
+  version?: string;
+  icon?: string;
+  settings?: Array<{ key: string; label: string; secret?: boolean }>;
+}
+
+interface LoadedExtension {
+  manifest: ExtensionManifest;
+  enabled: boolean;
+}
+
+export interface ExtensionContext {
+  app: FastifyInstance;
+  events: typeof stateEvents;
+  db: Database;
+  log: (msg: string) => void;
+  getSetting: (key: string) => string | null;
+  setSetting: (key: string, value: string) => void;
+}
+
+const loaded = new Map<string, LoadedExtension>();
+let _app: FastifyInstance | undefined;
+let _db: Database | undefined;
+
+export function initLoader(app: FastifyInstance, db: Database): void {
+  _app = app;
+  _db = db;
+}
+
+function buildContext(id: string): ExtensionContext {
+  const db = _db;
+  const app = _app;
+  if (!app || !db) throw new Error('loader not initialised — roep initLoader() eerst aan');
+  return {
+    app,
+    events: stateEvents,
+    db,
+    log: (msg: string) => console.log(`[ext:${id}] ${msg}`),
+    getSetting: (key: string): string | null => {
+      const row = db.prepare('SELECT value FROM ext_kv WHERE ext_id = ? AND key = ?').get(id, key) as
+        | { value: string }
+        | undefined;
+      return row?.value ?? null;
+    },
+    setSetting: (key: string, value: string): void => {
+      db.prepare(
+        'INSERT INTO ext_kv (ext_id, key, value) VALUES (?, ?, ?) ' +
+          'ON CONFLICT(ext_id, key) DO UPDATE SET value = excluded.value',
+      ).run(id, key, value);
+    },
+  };
+}
+
+function parseManifest(raw: string): ExtensionManifest {
+  const manifest = JSON.parse(raw) as ExtensionManifest;
+  if (!manifest.id || !manifest.name) throw new Error('manifest.json vereist id en name');
+  if (!/^[a-z0-9-]+$/.test(manifest.id)) {
+    throw new Error('manifest.id mag alleen a-z, 0-9 en - bevatten');
+  }
+  return manifest;
+}
+
+export async function installExtension(
+  zipBuffer: Buffer,
+): Promise<{ id: string; name: string; restartRequired: boolean }> {
+  const zip = new AdmZip(zipBuffer);
+
+  const manifestEntry = zip.getEntry('manifest.json');
+  if (!manifestEntry) throw new Error('manifest.json ontbreekt in zip');
+  const manifest = parseManifest(manifestEntry.getData().toString('utf8'));
+
+  if (!zip.getEntry('index.js')) throw new Error('index.js ontbreekt in zip');
+
+  // Fastify staat geen route-verwijdering of -herdeclaratie toe op een draaiende
+  // instantie. Een al-geladen extensie kunnen we daarom niet live herladen: we
+  // schrijven de nieuwe bestanden wel naar schijf, maar de nieuwe code wordt pas
+  // bij een server-restart actief (loadAllExtensions bij opstart).
+  const alreadyLoaded = loaded.has(manifest.id);
+
+  const destDir = path.join(EXT_DIR, manifest.id);
+  if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
+  fs.mkdirSync(destDir, { recursive: true });
+  zip.extractAllTo(destDir, true);
+
+  if (alreadyLoaded) {
+    return { id: manifest.id, name: manifest.name, restartRequired: true };
+  }
+
+  await loadExtension(manifest.id);
+  return { id: manifest.id, name: manifest.name, restartRequired: false };
+}
+
+// Verwijder de extensie-module (en alles eronder) uit de CommonJS require-cache,
+// zodat een her-upload de nieuwe code laadt i.p.v. de gecachede oude versie.
+function unloadModule(id: string): void {
+  const dir = path.join(EXT_DIR, id);
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(dir + path.sep)) delete require.cache[key];
+  }
+}
+
+export async function loadExtension(id: string): Promise<void> {
+  const dir = path.join(EXT_DIR, id);
+  const manifestPath = path.join(dir, 'manifest.json');
+  const indexPath = path.join(dir, 'index.js');
+  if (!fs.existsSync(manifestPath) || !fs.existsSync(indexPath)) {
+    throw new Error(`Extensie '${id}' niet gevonden in ${EXT_DIR}`);
+  }
+
+  const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf8'));
+
+  unloadModule(id);
+  const mod = await import(indexPath);
+  const registerFn = mod.register ?? mod.default?.register;
+  if (typeof registerFn !== 'function') {
+    throw new Error('index.js exporteert geen register functie');
+  }
+
+  await registerFn(buildContext(id));
+  loaded.set(id, { manifest, enabled: true });
+  console.log(`[ext] geladen: ${id} v${manifest.version ?? '?'}`);
+}
+
+export async function loadAllExtensions(): Promise<void> {
+  if (!fs.existsSync(EXT_DIR)) return;
+  for (const entry of fs.readdirSync(EXT_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    try {
+      await loadExtension(entry.name);
+    } catch (err: any) {
+      console.error(`[ext:${entry.name}] laden mislukt:`, err.message);
+    }
+  }
+}
+
+export function removeExtension(id: string): void {
+  const dir = path.join(EXT_DIR, id);
+  unloadModule(id);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  loaded.delete(id);
+}
+
+export function listLoadedExtensions() {
+  return Array.from(loaded.entries()).map(([id, { manifest, enabled }]) => ({
+    id,
+    name: manifest.name,
+    version: manifest.version ?? null,
+    icon: manifest.icon ?? 'puzzle',
+    enabled,
+    settings: (manifest.settings ?? []).map((s) => ({
+      key: s.key,
+      label: s.label,
+      secret: s.secret ?? false,
+    })),
+  }));
+}
