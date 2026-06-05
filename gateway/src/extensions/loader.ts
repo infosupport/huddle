@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip';
 import path from 'path';
 import fs from 'fs';
+import net from 'net';
 import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
 import { stateEvents } from '../events';
@@ -27,6 +28,8 @@ export interface ExtensionContext {
   log: (msg: string) => void;
   getSetting: (key: string) => string | null;
   setSetting: (key: string, value: string) => void;
+  /** Voer een shell-commando uit in een draaiende devcontainer via Docker exec. */
+  runInContainer: (containerName: string, command: string) => Promise<void>;
 }
 
 const loaded = new Map<string, LoadedExtension>();
@@ -59,7 +62,46 @@ function buildContext(id: string): ExtensionContext {
           'ON CONFLICT(ext_id, key) DO UPDATE SET value = excluded.value',
       ).run(id, key, value);
     },
+    runInContainer: (containerName: string, command: string): Promise<void> =>
+      dockerExecSimple(containerName, command),
   };
+}
+
+function dockerRequest(method: string, urlPath: string, body?: unknown): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const payload = body !== undefined ? JSON.stringify(body) : undefined;
+    const headers = [
+      `${method} ${urlPath} HTTP/1.1`,
+      'Host: localhost',
+      'Content-Type: application/json',
+      `Content-Length: ${payload ? Buffer.byteLength(payload) : 0}`,
+      'Connection: close',
+    ].join('\r\n') + '\r\n\r\n' + (payload ?? '');
+
+    const sock = net.connect('/var/run/docker.sock');
+    let raw = '';
+    sock.on('data', (d) => { raw += d.toString(); });
+    sock.on('end', () => {
+      const [head, ...rest] = raw.split('\r\n\r\n');
+      const status = parseInt((head.split('\r\n')[0] ?? '').split(' ')[1] ?? '0', 10);
+      const bodyStr = rest.join('\r\n\r\n').replace(/^[0-9a-f]+\r\n/gm, '').replace(/\r\n/g, '');
+      try {
+        const parsed = bodyStr ? JSON.parse(bodyStr) : {};
+        if (status >= 400) reject(new Error(`Docker ${method} ${urlPath} → ${status}: ${bodyStr}`));
+        else resolve(parsed);
+      } catch { resolve({}); }
+    });
+    sock.on('error', reject);
+    sock.write(headers);
+  });
+}
+
+async function dockerExecSimple(containerName: string, command: string): Promise<void> {
+  const exec = await dockerRequest('POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
+    AttachStdout: false, AttachStderr: false, Tty: false,
+    Cmd: ['sh', '-c', command],
+  }) as { Id: string };
+  await dockerRequest('POST', `/exec/${exec.Id}/start`, { Detach: true });
 }
 
 function parseManifest(raw: string): ExtensionManifest {
