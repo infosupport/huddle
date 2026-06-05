@@ -57,3 +57,86 @@ VS Code-container gaat via *Dev Containers: Attach to Running Container*.
 De `.ai/`-folder bevat per geïnstalleerde AI-CLI (Claude Code, Codex, OpenCode) een
 standaardconfiguratie die elke agent uitlegt dat hij in een afgeschermde Huddle
 DMZ-devcontainer draait. Die config wordt in elke base-image meegebakken.
+
+## Extensies
+
+Huddle heeft een runtime extensie-platform. Extensies zijn `.zip` bestanden die via
+de UI worden geüpload — geen code-deployment of herstart nodig.
+
+**Navigatie:** *Extensies* in de sidebar toont geïnstalleerde extensies als sub-items.
+Klikken opent de extensie-UI direct binnen Huddle (geen iframe, geen nieuw tabblad).
+
+### Een extensie bouwen
+
+Een extensie-zip bevat drie onderdelen:
+
+```
+mijn-extensie.zip
+├── manifest.json       ← id, naam, versie, instellingen-declaratie
+├── index.js            ← backend logica (CommonJS, Node.js)
+└── frontend/
+    └── component.js    ← UI als Web Component (optioneel)
+```
+
+**`manifest.json`** — minimaal vereist:
+```json
+{
+  "id": "mijn-extensie",
+  "name": "Mijn Extensie",
+  "version": "1.0.0",
+  "settings": [
+    { "key": "apiKey", "label": "API-sleutel", "secret": true }
+  ]
+}
+```
+
+**`index.js`** — exporteert een `register(ctx)` functie:
+```js
+exports.register = async function(ctx) {
+  ctx.app.get('/api/ext/mijn-extensie/data', async (req, reply) => {
+    const key = ctx.getSetting('apiKey');
+    // ... doe iets met de externe service
+    return { data: '...' };
+  });
+};
+```
+
+**`frontend/component.js`** — Web Component voor de in-app UI:
+```js
+class MijnExtensie extends HTMLElement {
+  connectedCallback() {
+    this.innerHTML = '<h1>Hallo vanuit de extensie</h1>';
+  }
+}
+customElements.define('ext-mijn-extensie', MijnExtensie);
+```
+
+### Wat de extensie-context (`ctx`) biedt
+
+| | |
+|---|---|
+| `ctx.app.get/post/put/delete(pad, handler)` | Route registreren onder `/api/ext/<id>/` |
+| `ctx.app.inject(...)` | Interne Huddle-API aanroepen |
+| `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Instellingen lezen/schrijven (SQLite) |
+| `ctx.fetch(url, opts)` | HTTP-call via Huddle-proxy — verschijnt als `ext:<id>` in firewall |
+| `ctx.runInContainer(naam, cmd)` | Shell-commando uitvoeren in een draaiende devcontainer |
+| `ctx.events` | Luisteren op Huddle-events (`changed`, etc.) |
+| `ctx.db` | Directe SQLite-toegang |
+| `ctx.log(msg)` | Loggen naar de Huddle-console |
+
+### Firewall en externe calls
+
+Externe HTTP-calls via `ctx.fetch()` lopen door de Huddle-proxy. Het domein moet op
+de firewall-allowlist staan (*Firewall* → zoek het requested domein → Allow).
+Requests verschijnen in de audit-log als `ext:<id>` zodat duidelijk is welke extensie
+welk domein nodig heeft.
+
+### Voorbeeld: Freshdesk
+
+Een Freshdesk-extensie is beschikbaar als voorbeeld in
+`features/03-extensie-architectuur/example-extensions/freshdesk-1.0.zip`.
+
+Na uploaden en instellen (subdomein + API-sleutel via *Instellingen*):
+- Ticketlijst zichtbaar in de Huddle-sidebar onder *Freshdesk*
+- Per ticket een container starten — het ticket staat als `ticket.md` in de workspace
+- Domein `<subdomein>.freshdesk.com` toestaan in de firewall voor API-toegang
