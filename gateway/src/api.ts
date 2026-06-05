@@ -87,7 +87,7 @@ function isFromDevcontainer(remoteAddr: string | null | undefined): boolean {
   return isDevcontainerSource(remoteAddr, blockedSubnets);
 }
 
-export function createApiServer(): FastifyInstance {
+export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   // Build the blocked-subnet cache and refresh it periodically so new
@@ -614,7 +614,7 @@ export function createApiServer(): FastifyInstance {
 
   // ── Extensions ────────────────────────────────────────────────────────────
   initLoader(app, db);
-  void loadAllExtensions();
+  await loadAllExtensions();
 
   app.get('/api/extensions', async () => listExtensions());
 
@@ -663,13 +663,8 @@ export function createApiServer(): FastifyInstance {
     return reply.sendFile('index.html');
   });
 
-  app.listen({ port: API_PORT, host: '0.0.0.0' }, (err, address) => {
-    if (err) {
-      console.error('[api] failed to start', err);
-      process.exit(1);
-    }
-    console.log(`[api] listening on ${address}`);
-  });
+  const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
+  console.log(`[api] listening on ${address}`);
 
   return app;
 }

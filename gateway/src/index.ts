@@ -19,7 +19,10 @@ const SOCKET_DIR = '/tmp/dc-sockets';
 initDb();
 initCa();
 createProxyServer();
-createApiServer();
+createApiServer().catch(err => {
+  console.error('[api] failed to start', err);
+  process.exit(1);
+});
 
 // Re-create proxy sockets for all existing devcontainers (survives huddle restart)
 async function initContainerProxies(): Promise<void> {
