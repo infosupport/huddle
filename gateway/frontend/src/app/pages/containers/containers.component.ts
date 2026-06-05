@@ -28,7 +28,7 @@ export class ContainersComponent {
   );
 
   isRunning(c: Container) { return (c.status || '').toLowerCase().includes('up'); }
-  isRogue(c: Container) { return c.inNetwork === false; }
+  isRogue(c: Container) { return this.isRunning(c) && c.inNetwork === false; }
   statusClass(c: Container) { return this.isRogue(c) ? 'rogue' : this.isRunning(c) ? 'running' : 'stopped'; }
   statusLabel(c: Container) { return this.isRogue(c) ? 'Rogue' : this.isRunning(c) ? 'Running' : 'Stopped'; }
   scoreOf(name: string, rules: Rule[]) {
