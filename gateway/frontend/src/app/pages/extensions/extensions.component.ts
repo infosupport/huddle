@@ -32,7 +32,7 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
               <app-icon [name]="ext.icon" [size]="22" />
               <span class="ext-name">{{ ext.name }}</span>
               @if (ext.version) { <span class="ext-version">v{{ ext.version }}</span> }
-              <a class="ext-open" [href]="'/ext/' + ext.id + '/'" target="_blank">Openen</a>
+              <a class="ext-open" [routerLink]="['/extensions/view', ext.id]">Openen</a>
               @if (ext.settings.length > 0) {
                 <a class="ext-link" [routerLink]="['/extensions', ext.id, 'settings']">Instellingen</a>
               }
