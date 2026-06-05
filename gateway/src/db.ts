@@ -46,6 +46,12 @@ export function initDb(): void {
       password TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    CREATE TABLE IF NOT EXISTS ext_kv (
+      ext_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (ext_id, key)
+    );
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -195,4 +201,19 @@ export function getCredentials(containerName: string): { password: string; creat
   return db.prepare(
     `SELECT password, created_at FROM container_credentials WHERE container_id = ?`
   ).get(containerName) as { password: string; created_at: number } | undefined;
+}
+
+// ── Extension key-value store ────────────────────────────────────────────────
+
+export function getExtValue(extId: string, key: string): string | undefined {
+  const row = db.prepare(`SELECT value FROM ext_kv WHERE ext_id = ? AND key = ?`)
+    .get(extId, key) as { value: string } | undefined;
+  return row?.value;
+}
+
+export function setExtValue(extId: string, key: string, value: string): void {
+  db.prepare(
+    `INSERT INTO ext_kv (ext_id, key, value) VALUES (?, ?, ?)
+     ON CONFLICT(ext_id, key) DO UPDATE SET value = excluded.value`
+  ).run(extId, key, value);
 }

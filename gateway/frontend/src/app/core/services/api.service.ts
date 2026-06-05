@@ -6,6 +6,7 @@ import { Container, ContainerDetail, DockerImage } from '../models/container.mod
 import { Rule, RuleStatus } from '../models/rule.model';
 import { Grant, GrantMap } from '../models/grant.model';
 import { AuditLog } from '../models/audit-log.model';
+import { Extension } from '../extensions/extension.model';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -105,6 +106,18 @@ export class ApiService {
 
   reportBug(bug: { title: string; url: string; body?: string }): Observable<{ ok: boolean; filename: string }> {
     return this.handle(this.http.post<{ ok: boolean; filename: string }>('/api/bugs', bug));
+  }
+
+  getExtensions(): Observable<Extension[]> {
+    return this.handle(this.http.get<Extension[]>('/api/extensions'));
+  }
+
+  getExtensionSettings(id: string): Observable<Record<string, unknown>> {
+    return this.handle(this.http.get<Record<string, unknown>>(`/api/ext/${id}/settings`));
+  }
+
+  saveExtensionSettings(id: string, values: Record<string, string>): Observable<void> {
+    return this.handle(this.http.post<void>(`/api/ext/${id}/settings`, values));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; limit?: number }): Observable<AuditLog[]> {

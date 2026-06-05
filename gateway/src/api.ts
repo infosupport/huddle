@@ -28,6 +28,7 @@ import {
 import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
 import { attachTerminal } from './terminal';
 import { getCaCertPem } from './tls-ca';
+import { registerExtensions, listExtensions } from './extensions/registry';
 
 const API_PORT = 3000;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
@@ -570,6 +571,10 @@ export function createApiServer(): FastifyInstance {
     notifyStateChanged();
     return { ok: true };
   });
+
+  // ── Extensions ────────────────────────────────────────────────────────────
+  void registerExtensions(app, db);
+  app.get('/api/extensions', async () => listExtensions());
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
   app.setNotFoundHandler(async (_req, reply) => {
