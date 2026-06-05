@@ -11,3 +11,4 @@ rider_working.json
 rider_not_working.json
 compare-broken-devcontainer-empty1.json
 compare-working-devcontainer-empty2.json
+.idea/
