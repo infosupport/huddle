@@ -36,6 +36,7 @@ import {
   installExtension,
   removeExtension,
   listExtensions,
+  extDispatch,
   EXT_DIR,
 } from './extensions/registry';
 
@@ -613,8 +614,21 @@ export async function createApiServer(): Promise<FastifyInstance> {
   });
 
   // ── Extensions ────────────────────────────────────────────────────────────
-  initLoader(app, db);
-  await loadAllExtensions();
+  // Catch-all voor extensie API-routes. Moet VOOR loadAllExtensions() staan
+  // zodat hij geregistreerd is vóór listen() — extensies schrijven naar
+  // extDispatch i.p.v. direct routes op Fastify te zetten.
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+    url: '/api/ext/:extId/*',
+    handler: async (req: any, reply) => {
+      const extId: string = req.params.extId;
+      const sub: string = req.params['*'] ?? '';
+      const fullPath = `/api/ext/${extId}/${sub}`;
+      const handler = extDispatch.get(`${req.method}:${fullPath}`);
+      if (!handler) return reply.code(404).send({ error: `Geen handler voor ${req.method} ${fullPath}` });
+      return handler(req, reply);
+    },
+  });
 
   app.get('/api/extensions', async () => listExtensions());
 
@@ -639,6 +653,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
     notifyStateChanged();
     return { ok: true };
   });
+
+  initLoader(app, db);
+  await loadAllExtensions();
 
   // Serveer de statische frontend-assets van een extensie uit
   // <EXT_DIR>/<id>/frontend/. Het opgeloste pad moet binnen die map blijven,

@@ -21,17 +21,31 @@ interface LoadedExtension {
   enabled: boolean;
 }
 
+type RouteHandler = (req: any, reply: any) => Promise<unknown>;
+
+/** Centrale dispatch-map: "METHOD:/api/ext/id/pad" → handler.
+ *  Wordt gevuld door extensies; de catch-all in api.ts dispatcht ernaar.
+ *  Zo hoeven extensies nooit rechtstreeks routes op Fastify te registreren
+ *  en kunnen ze op elk moment (her)geladen worden. */
+export const extDispatch = new Map<string, RouteHandler>();
+
+export interface VirtualApp {
+  get(path: string, handler: RouteHandler): void;
+  post(path: string, handler: RouteHandler): void;
+  put(path: string, handler: RouteHandler): void;
+  delete(path: string, handler: RouteHandler): void;
+  inject: FastifyInstance['inject'];
+}
+
 export interface ExtensionContext {
-  app: FastifyInstance;
+  /** Virtuele app: registreer routes zonder Fastify rechtstreeks aan te raken. */
+  app: VirtualApp;
   events: typeof stateEvents;
   db: Database;
   log: (msg: string) => void;
   getSetting: (key: string) => string | null;
   setSetting: (key: string, value: string) => void;
-  /** Voer een shell-commando uit in een draaiende devcontainer via Docker exec. */
   runInContainer: (containerName: string, command: string) => Promise<void>;
-  /** fetch() wrapper die X-Huddle-Ext header toevoegt zodat requests in de firewall
-   *  onder de extensie-naam verschijnen i.p.v. anoniem. */
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -44,12 +58,29 @@ export function initLoader(app: FastifyInstance, db: Database): void {
   _db = db;
 }
 
+function makeVirtualApp(extId: string, realApp: FastifyInstance): VirtualApp {
+  const reg = (method: string) => (path: string, handler: RouteHandler) => {
+    extDispatch.set(`${method}:${path}`, handler);
+  };
+  return {
+    get: reg('GET'),
+    post: reg('POST'),
+    put: reg('PUT'),
+    delete: reg('DELETE'),
+    inject: realApp.inject.bind(realApp),
+  };
+}
+
 function buildContext(id: string): ExtensionContext {
   const db = _db;
   const app = _app;
   if (!app || !db) throw new Error('loader not initialised — roep initLoader() eerst aan');
+  // Verwijder eventuele oude routes van een vorige versie van deze extensie
+  for (const key of extDispatch.keys()) {
+    if (key.includes(`/api/ext/${id}/`)) extDispatch.delete(key);
+  }
   return {
-    app,
+    app: makeVirtualApp(id, app),
     events: stateEvents,
     db,
     log: (msg: string) => console.log(`[ext:${id}] ${msg}`),
