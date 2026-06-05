@@ -40,6 +40,7 @@ interface Rule {
   container_id: string | null;
   status: RuleStatus;
   expires_at: number | null;
+  path_pattern: string | null;
   created_at: number;
   updated_at: number;
   last_seen: number;
@@ -197,8 +198,8 @@ export function createApiServer(): FastifyInstance {
         .run(status, expires_at, id);
       if (result.changes === 0) return reply.code(404).send({ error: 'not_found' });
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
-      if (updated.container_id === null && (status === 'allow' || status === 'deny')) {
-        db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested'`).run(updated.domain);
+      if (updated.container_id === null && updated.path_pattern === null && (status === 'allow' || status === 'deny')) {
+        db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(updated.domain);
       }
       logAudit({ containerId: updated.container_id, domain: updated.domain, action: `admin:rule-${status}`, ruleId: id });
       notifyStateChanged();
@@ -217,21 +218,23 @@ export function createApiServer(): FastifyInstance {
   });
 
   app.post<{
-    Body: { domain: string; container_id?: string | null; status: RuleStatus; expires_at?: number | null };
+    Body: { domain: string; container_id?: string | null; status: RuleStatus; expires_at?: number | null; path_pattern?: string | null };
   }>('/api/rules', async (req, reply) => {
-    const { domain, container_id = null, status, expires_at = null } = req.body;
+    const { domain, container_id = null, status, expires_at = null, path_pattern = null } = req.body;
     if (!domain || !['requested', 'allow', 'deny'].includes(status)) {
       return reply.code(400).send({ error: 'invalid payload' });
     }
     try {
       const info = db
         .prepare(
-          `INSERT INTO rules (domain, container_id, status, expires_at) VALUES (?, ?, ?, ?)`
+          `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern) VALUES (?, ?, ?, ?, ?)`
         )
-        .run(domain, container_id, status, expires_at);
+        .run(domain, container_id, status, expires_at, path_pattern);
       const inserted = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(info.lastInsertRowid) as Rule;
-      if (container_id === null && (status === 'allow' || status === 'deny')) {
-        db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested'`).run(domain);
+      // Ruim alleen de host-only requested-rij op; padregels per domein blijven
+      // staan zodat fijnmazig beleid naast elkaar kan bestaan.
+      if (container_id === null && path_pattern === null && (status === 'allow' || status === 'deny')) {
+        db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(domain);
       }
       logAudit({ containerId: container_id, domain, action: `admin:rule-${status}`, ruleId: Number(info.lastInsertRowid) });
       notifyStateChanged();

@@ -52,6 +52,18 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'expires_at')) {
     db.exec('ALTER TABLE rules ADD COLUMN expires_at INTEGER');
   }
+  if (!cols.some(c => c.name === 'path_pattern')) {
+    db.exec('ALTER TABLE rules ADD COLUMN path_pattern TEXT');
+  }
+
+  // Uniciteit geldt nu op (domain, container, pad): meerdere padregels per
+  // domein moeten naast elkaar kunnen bestaan. De oude domain+container index
+  // wordt vervangen.
+  db.exec('DROP INDEX IF EXISTS idx_rules_domain_container');
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_domain_container_path
+       ON rules (domain, COALESCE(container_id, ''), COALESCE(path_pattern, ''))`
+  );
 
   // Seed the global allow rule for huddle's own domain so the sudo-audit
   // forwarder (and any future self-traffic) doesn't auto-create a 'requested'

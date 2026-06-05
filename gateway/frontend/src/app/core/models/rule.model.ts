@@ -11,4 +11,5 @@ export interface Rule {
   last_seen: number;
   request_count: number;
   expires_at?: number | null;
+  path_pattern?: string | null;
 }

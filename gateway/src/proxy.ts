@@ -91,7 +91,7 @@ export function createProxyServer(): http.Server {
       }
       ruleId = null;
     } else {
-      const result = checkRule(target.hostname, containerId);
+      const result = checkRule(target.hostname, containerId, target.pathname);
       if (result.status !== 'allow') {
         logAudit({
           containerId,
@@ -204,7 +204,7 @@ export function createProxyServer(): http.Server {
       rejectSocket(clientSocket, 403, 'huddle-internal endpoint not allowed');
       return;
     }
-    const { status, ruleId } = checkRule(hostname, containerId);
+    const { status, ruleId } = checkRule(hostname, containerId, null);
     if (status !== 'allow') {
       logAudit({
         containerId,
@@ -287,6 +287,26 @@ export function createProxyServer(): http.Server {
     // Per CONNECT één lichtgewicht http.Server die de gewrapte TLS-socket leest.
     const innerHttp = http.createServer();
     innerHttp.on('request', (innerReq, innerRes) => {
+      // De CONNECT stond de host al toe (pad was toen versleuteld). Nu de TLS
+      // getermineerd is kennen we het pad: pas padbeleid alsnog toe per request.
+      const pathResult = checkRule(hostname, containerId, innerReq.url ?? null);
+      if (pathResult.status === 'deny') {
+        logAudit({
+          containerId,
+          domain: hostname,
+          port,
+          action: 'deny',
+          ruleId: pathResult.ruleId,
+          method: innerReq.method ?? null,
+          path: innerReq.url ?? null,
+          reqHeaders: headersToJson(innerReq.headers),
+          resStatus: 403,
+        });
+        innerRes.writeHead(403, { 'content-type': 'text/plain' });
+        innerRes.end('Huddle: pad geblokkeerd door firewallregel');
+        return;
+      }
+
       const upstreamHeaders = { ...innerReq.headers };
       delete upstreamHeaders['proxy-connection'];
 

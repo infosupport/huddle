@@ -42,8 +42,10 @@ export class ApiService {
     return this.handle(this.http.delete<void>(`/api/rules/${id}`));
   }
 
-  createRule(domain: string, container_id: string | null, status: RuleStatus): Observable<Rule> {
-    return this.handle(this.http.post<Rule>('/api/rules', { domain, container_id, status }));
+  createRule(domain: string, container_id: string | null, status: RuleStatus, path_pattern?: string | null): Observable<Rule> {
+    const body: Record<string, unknown> = { domain, container_id, status };
+    if (path_pattern != null) body['path_pattern'] = path_pattern;
+    return this.handle(this.http.post<Rule>('/api/rules', body));
   }
 
   getContainerDetail(name: string): Observable<ContainerDetail> {
