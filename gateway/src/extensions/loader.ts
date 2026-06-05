@@ -30,6 +30,9 @@ export interface ExtensionContext {
   setSetting: (key: string, value: string) => void;
   /** Voer een shell-commando uit in een draaiende devcontainer via Docker exec. */
   runInContainer: (containerName: string, command: string) => Promise<void>;
+  /** fetch() wrapper die X-Huddle-Ext header toevoegt zodat requests in de firewall
+   *  onder de extensie-naam verschijnen i.p.v. anoniem. */
+  fetch: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
 const loaded = new Map<string, LoadedExtension>();
@@ -64,6 +67,8 @@ function buildContext(id: string): ExtensionContext {
     },
     runInContainer: (containerName: string, command: string): Promise<void> =>
       dockerExecSimple(containerName, command),
+    fetch: (url: string, init?: RequestInit): Promise<Response> =>
+      fetch(url, { ...init, headers: { ...(init?.headers ?? {}), 'x-huddle-ext': id } }),
   };
 }
 

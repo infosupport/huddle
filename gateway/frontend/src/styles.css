@@ -180,6 +180,9 @@ a { color: inherit; text-decoration: none; }
 }
 .nav__item--active:hover { background: var(--accent-soft); color: var(--accent); }
 .nav__item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.nav__section { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); padding: 14px 12px 4px; opacity: .6; }
+.nav__item--sub { padding-left: 24px; font-size: 13px; }
+.nav__item--manage { font-size: 12px; opacity: .7; padding: 6px 12px 6px 24px; }
 
 .sidebar__footer {
   padding: 12px 14px;

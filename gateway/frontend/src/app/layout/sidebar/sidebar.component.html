@@ -31,10 +31,26 @@
       <app-icon name="file-text" [size]="20" />
       <span>Audit Logs</span>
     </a>
-    <a class="nav__item" routerLink="extensions" routerLinkActive="nav__item--active">
-      <app-icon name="box" [size]="20" />
-      <span>Extensies</span>
-    </a>
+
+    @if (extensions().length > 0) {
+      <div class="nav__section">Extensies</div>
+      @for (ext of extensions(); track ext.id) {
+        <a class="nav__item nav__item--sub" [routerLink]="['/extensions/view', ext.id]" routerLinkActive="nav__item--active">
+          <app-icon [name]="ext.icon || 'box'" [size]="18" />
+          <span>{{ ext.name }}</span>
+        </a>
+      }
+      <a class="nav__item nav__item--manage" routerLink="extensions" routerLinkActive="nav__item--active">
+        <app-icon name="settings" [size]="16" />
+        <span>Beheer extensies</span>
+      </a>
+    } @else {
+      <a class="nav__item" routerLink="extensions" routerLinkActive="nav__item--active">
+        <app-icon name="box" [size]="20" />
+        <span>Extensies</span>
+      </a>
+    }
+
     <a class="nav__item" routerLink="settings" routerLinkActive="nav__item--active">
       <app-icon name="settings" [size]="20" />
       <span>Settings</span>

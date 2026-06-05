@@ -58,7 +58,11 @@ export function createProxyServer(): http.Server {
   const server = http.createServer();
 
   server.on('request', async (req, res) => {
-    const containerId = await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    // Extension server-side fetch wordt geïdentificeerd via X-Huddle-Ext header
+    const extHeader = req.headers['x-huddle-ext'];
+    const containerId = extHeader
+      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
+      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
     const rawUrl = req.url || '';
 
     let target: URL;
