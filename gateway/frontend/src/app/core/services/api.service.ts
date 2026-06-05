@@ -80,6 +80,10 @@ export class ApiService {
     }));
   }
 
+  resumeContainer(name: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean }>(`/api/docker/containers/${encodeURIComponent(name)}/start`, {}));
+  }
+
   setGrant(container: string, minutes: number): Observable<Grant> {
     return this.handle(this.http.put<Grant>(`/api/authz/grants/${container}`, { minutes }));
   }

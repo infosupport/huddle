@@ -17,6 +17,7 @@ import {
   connectNetwork,
   networkExists,
   forceDeleteContainer,
+  startExistingContainer,
   cleanupContainerNetwork,
   listNetworks,
   resolveContainerByIp,
@@ -344,6 +345,20 @@ export function createApiServer(): FastifyInstance {
       }
     }
   );
+
+  app.post<{ Params: { name: string } }>('/api/docker/containers/:name/start', async (req, reply) => {
+    const { name } = req.params;
+    try {
+      const inspect = await inspectContainer(name);
+      if (inspect.State?.Running) return { ok: true };
+      await startExistingContainer(inspect.Id);
+      logAudit({ containerId: name, domain: 'docker', action: 'container:start' });
+      notifyStateChanged();
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
+  });
 
   app.delete<{ Params: { name: string } }>('/api/docker/containers/:name', async (req, reply) => {
     const { name } = req.params;

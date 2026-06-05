@@ -66,6 +66,9 @@
               </td>
               <td class="col-actions" (click)="$event.stopPropagation()">
                 <button class="btn btn-ghost btn-sm" [routerLink]="['/container', c.name]">Detail</button>
+                @if (!isRunning(c)) {
+                  <button class="btn btn--accent btn-sm" (click)="resumeContainer(c.name)">Start</button>
+                }
                 <button class="btn btn-delete btn-sm" (click)="openSnapshot(c)">Snapshot</button>
                 <button class="btn btn-delete btn-sm" (click)="deleteContainer(c.name)">Delete</button>
               </td>

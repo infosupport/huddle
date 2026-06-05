@@ -47,6 +47,9 @@ export class ContainersComponent {
     return rules.filter(r => r.container_id === name && r.status === 'requested').length;
   }
   openSnapshot(c: Container) { this.modal.openSnapshot(c.name); }
+  resumeContainer(name: string): void {
+    this.api.resumeContainer(name).subscribe(() => this.state.loadAll());
+  }
   deleteContainer(name: string): void {
     this.api.deleteContainer(name).subscribe(() => this.state.loadAll());
   }

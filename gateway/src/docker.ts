@@ -104,7 +104,7 @@ export async function getHuddleNetworks(): Promise<Set<string>> {
 export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
   const filters = JSON.stringify({ label: ['com.intellij.devcontainer.id'] });
   const [containers, huddleNets] = await Promise.all([
-    dockerRequest('GET', `/containers/json?filters=${encodeURIComponent(filters)}`) as Promise<any[]>,
+    dockerRequest('GET', `/containers/json?all=1&filters=${encodeURIComponent(filters)}`) as Promise<any[]>,
     getHuddleNetworks(),
   ]);
   return containers.map((c) => {
@@ -400,6 +400,10 @@ export async function deleteNetwork(name: string): Promise<void> {
 
 export async function forceDeleteContainer(containerId: string): Promise<void> {
   await dockerRequest('DELETE', `/containers/${encodeURIComponent(containerId)}?force=true`);
+}
+
+export async function startExistingContainer(containerId: string): Promise<void> {
+  await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/start`, {});
 }
 
 export async function cleanupContainerNetwork(containerName: string): Promise<void> {
