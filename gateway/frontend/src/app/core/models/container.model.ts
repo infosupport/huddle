@@ -12,6 +12,7 @@ export interface Container {
   workspacePath?: string;
   presentableName?: string;
   inNetwork?: boolean;
+  huddleInNetwork?: boolean;
   ipAddress?: string;
   securityScore?: number;
   labels?: Record<string, string>;
@@ -22,6 +23,7 @@ export interface ContainerDetail extends Container {
   rules: Rule[];
   globalRules: Rule[];
   grant?: Grant;
+  huddleInNetwork?: boolean;
 }
 
 export interface DockerImage {
@@ -30,4 +32,5 @@ export interface DockerImage {
   tag: string;
   size: number;
   created: number;
+  ide?: 'rider' | 'intellij';
 }

@@ -1,12 +1,24 @@
 import http from 'http';
+import https from 'https';
 import net from 'net';
+import tls from 'tls';
 import stream from 'stream';
 import { URL } from 'url';
 import { checkRule } from './rules';
 import { resolveContainerByIp } from './docker';
-import { logAudit } from './db';
+import { logAudit, updateAuditResponse } from './db';
+import { signLeafCert } from './tls-ca';
 
 const PROXY_PORT = 80;
+
+// Domains die de MITM overslaan (raw TCP-tunnel houden). Voor clients met
+// cert-pinning (npm registry, sommige Java libs) is MITM een breaker.
+const NO_INTERCEPT_DOMAINS: Set<string> = new Set(
+  (process.env.NO_INTERCEPT_DOMAINS ?? '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
@@ -101,6 +113,32 @@ export function createProxyServer(): http.Server {
 
     const reqChunks: Buffer[] = [];
     let reqBytes = 0;
+    const resChunks: Buffer[] = [];
+    let resBytes = 0;
+
+    // Zelfde in-flight-aanpak als het MITM-pad: log de request meteen, vul de
+    // response (en de volledige req_body) bij zodra upstream afrondt.
+    const auditId = logAudit({
+      containerId,
+      domain: target.hostname,
+      action: 'allow',
+      ruleId,
+      method: req.method ?? null,
+      path: `${target.pathname}${target.search}`,
+      reqHeaders: headersToJson(req.headers),
+    });
+    let completed = false;
+    const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
+      if (completed) return;
+      completed = true;
+      if (auditId == null) return;
+      updateAuditResponse(auditId, {
+        reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).slice(0, CAP).toString('utf8')) : null,
+        resStatus,
+        resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
+        resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).slice(0, CAP).toString('utf8')) : null,
+      });
+    };
 
     const upstream = http.request(
       {
@@ -112,54 +150,24 @@ export function createProxyServer(): http.Server {
       },
       (upstreamRes) => {
         res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-        const resChunks: Buffer[] = [];
-        let resBytes = 0;
-        let logged = false;
-        const doLog = (resStatus: number | null) => {
-          if (logged) return;
-          logged = true;
-          const reqBuf = Buffer.concat(reqChunks).slice(0, CAP);
-          const resBuf = Buffer.concat(resChunks).slice(0, CAP);
-          logAudit({
-            containerId,
-            domain: target.hostname,
-            action: 'allow',
-            ruleId,
-            method: req.method ?? null,
-            path: `${target.pathname}${target.search}`,
-            reqHeaders: headersToJson(req.headers),
-            reqBody: reqBytes > 0 ? cap(reqBuf.toString('utf8')) : null,
-            resStatus,
-            resHeaders: headersToJson(upstreamRes.headers as Record<string, any>),
-            resBody: resBytes > 0 ? cap(resBuf.toString('utf8')) : null,
-          });
-        };
         upstreamRes.on('data', (chunk: Buffer) => {
           if (!res.writableEnded) res.write(chunk);
           if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
         });
         upstreamRes.on('end', () => {
           if (!res.writableEnded) res.end();
-          doLog(upstreamRes.statusCode ?? null);
+          complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
         });
         upstreamRes.on('error', () => {
           if (!res.writableEnded) res.destroy();
-          doLog(0);
+          complete(0, upstreamRes.headers);
         });
       }
     );
 
     upstream.on('error', (err) => {
       if (!res.headersSent) send502(res, err.message);
-      logAudit({
-        containerId,
-        domain: target.hostname,
-        action: 'allow',
-        ruleId,
-        method: req.method ?? null,
-        path: `${target.pathname}${target.search}`,
-        resStatus: 502,
-      });
+      complete(502);
     });
 
     req.on('error', () => upstream.destroy());
@@ -211,26 +219,158 @@ export function createProxyServer(): http.Server {
       return;
     }
 
-    const upstream = net.connect(port, hostname, () => {
-      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      logAudit({
+    // Domeinen met cert-pinning kunnen niet door MITM. Voor die domeinen
+    // vallen we terug op de oude raw TCP-tunnel; request/response inhoud
+    // blijft dan onzichtbaar in de audit log (alleen CONNECT geregistreerd).
+    if (NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) || port !== 443) {
+      const upstream = net.connect(port, hostname, () => {
+        clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        logAudit({
+          containerId,
+          domain: hostname,
+          port,
+          action: 'allow',
+          ruleId,
+          method: 'CONNECT',
+          resStatus: 200,
+        });
+        if (head && head.length) upstream.write(head);
+        upstream.pipe(clientSocket, { end: false });
+        clientSocket.pipe(upstream, { end: false });
+        upstream.on('end', () => clientSocket.destroy());
+        clientSocket.on('end', () => upstream.destroy());
+      });
+      upstream.on('error', () => clientSocket.destroy());
+      clientSocket.on('error', () => upstream.destroy());
+      return;
+    }
+
+    // MITM-pad: presenteer een dynamisch gegenereerd leaf-cert aan de client,
+    // termineer TLS, parse HTTP en forward naar upstream over een echte TLS-
+    // verbinding. Alle req/res-headers en bodies belanden in de audit log.
+    clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    logAudit({
+      containerId,
+      domain: hostname,
+      port,
+      action: 'allow',
+      ruleId,
+      method: 'CONNECT',
+      resStatus: 200,
+    });
+
+    let leaf: { certPem: string; keyPem: string };
+    try {
+      leaf = signLeafCert(hostname);
+    } catch (err: any) {
+      console.warn(`[proxy-mitm] leaf cert generation failed for ${hostname}:`, err.message);
+      clientSocket.destroy();
+      return;
+    }
+
+    const innerTls = new tls.TLSSocket(clientSocket, {
+      isServer: true,
+      cert: leaf.certPem,
+      key: leaf.keyPem,
+      ALPNProtocols: ['http/1.1'],
+    });
+    innerTls.on('error', (err: NodeJS.ErrnoException) => {
+      // ECONNRESET en self-signed-rejected zijn normaal als de container
+      // de CA nog niet vertrouwt — log één keer en sluit netjes.
+      if (err.code !== 'ECONNRESET') {
+        console.warn(`[proxy-mitm] inner TLS error (${hostname}):`, err.message);
+      }
+      try { clientSocket.destroy(); } catch {}
+    });
+    if (head && head.length) innerTls.unshift(head);
+
+    // Per CONNECT één lichtgewicht http.Server die de gewrapte TLS-socket leest.
+    const innerHttp = http.createServer();
+    innerHttp.on('request', (innerReq, innerRes) => {
+      const upstreamHeaders = { ...innerReq.headers };
+      delete upstreamHeaders['proxy-connection'];
+
+      const reqChunks: Buffer[] = [];
+      let reqBytes = 0;
+      const resChunks: Buffer[] = [];
+      let resBytes = 0;
+
+      // Log de request meteen (method/path/headers) zodat de call al in de audit
+      // log verschijnt zodra hij binnenkomt — res_status blijft NULL ("in-flight")
+      // tot de upstream-response afrondt. Cruciaal voor streaming responses (bv.
+      // Anthropic SSE) die seconden tot minuten open blijven: zonder dit zou de
+      // hele call onzichtbaar zijn tot hij klaar is.
+      const auditId = logAudit({
         containerId,
         domain: hostname,
         port,
         action: 'allow',
         ruleId,
-        method: 'CONNECT',
-        resStatus: 200,
+        method: innerReq.method ?? null,
+        path: innerReq.url ?? null,
+        reqHeaders: headersToJson(innerReq.headers),
       });
-      if (head && head.length) upstream.write(head);
-      upstream.pipe(clientSocket, { end: false });
-      clientSocket.pipe(upstream, { end: false });
-      upstream.on('end', () => clientSocket.destroy());
-      clientSocket.on('end', () => upstream.destroy());
-    });
+      let completed = false;
+      const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
+        if (completed) return;
+        completed = true;
+        if (auditId == null) return;
+        updateAuditResponse(auditId, {
+          reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
+          resStatus,
+          resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
+          resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).toString('utf8')) : null,
+        });
+      };
 
-    upstream.on('error', () => clientSocket.destroy());
-    clientSocket.on('error', () => upstream.destroy());
+      const upstreamReq = https.request(
+        {
+          hostname,
+          port,
+          method: innerReq.method,
+          path: innerReq.url,
+          headers: upstreamHeaders,
+          servername: hostname,
+        },
+        (upstreamRes) => {
+          innerRes.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+          upstreamRes.on('data', (chunk: Buffer) => {
+            if (!innerRes.writableEnded) innerRes.write(chunk);
+            if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
+          });
+          upstreamRes.on('end', () => {
+            if (!innerRes.writableEnded) innerRes.end();
+            complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
+          });
+          upstreamRes.on('error', () => {
+            if (!innerRes.writableEnded) innerRes.destroy();
+            complete(0, upstreamRes.headers);
+          });
+        },
+      );
+
+      upstreamReq.on('error', (err) => {
+        if (!innerRes.headersSent) {
+          try {
+            innerRes.writeHead(502, { 'content-type': 'application/json' });
+            innerRes.end(JSON.stringify({ error: 'bad_gateway', message: err.message }));
+          } catch {}
+        }
+        complete(502);
+      });
+
+      innerReq.on('data', (chunk: Buffer) => {
+        upstreamReq.write(chunk);
+        if (reqBytes < CAP) { reqChunks.push(chunk); reqBytes += chunk.length; }
+      });
+      innerReq.on('end', () => upstreamReq.end());
+      innerReq.on('error', () => upstreamReq.destroy());
+    });
+    innerHttp.on('clientError', (_err, sock) => { try { sock.destroy(); } catch {} });
+
+    innerHttp.emit('connection', innerTls);
+
+    clientSocket.on('close', () => { try { innerTls.destroy(); } catch {} });
   });
 
   server.listen(PROXY_PORT, () => {

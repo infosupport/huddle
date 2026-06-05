@@ -21,7 +21,7 @@ export class StartContainerModalComponent {
   images: DockerImage[] = [];
   baseImage = '';
   selectedImage = '';
-  ide = 'intellij';
+  ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
   workspace = '';
   containerName = '';
   nameTouched = false;
@@ -50,11 +50,21 @@ export class StartContainerModalComponent {
     this.error = '';
     this.status = '';
     this.loading = false;
+    this.loadImagesForIde();
+  }
 
-    this.api.getImages().subscribe({ next: imgs => { this.images = imgs; }, error: () => {} });
-    this.api.getBaseImage().subscribe({
+  // De IDE-keuze stuurt zowel de default base-image als het snapshot-filter.
+  // Beide endpoints zijn nu IDE-specifiek; deze methode haalt ze opnieuw op.
+  onIdeChange(): void {
+    this.selectedImage = '';
+    this.loadImagesForIde();
+  }
+
+  private loadImagesForIde(): void {
+    this.api.getImages(this.ide).subscribe({ next: imgs => { this.images = imgs; }, error: () => {} });
+    this.api.getBaseImage(this.ide).subscribe({
       next: b => { this.baseImage = b.imageName; if (!this.selectedImage) this.selectedImage = b.imageName; },
-      error: () => {}
+      error: () => { this.baseImage = ''; }
     });
   }
 

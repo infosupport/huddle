@@ -9,18 +9,22 @@ import { Rule } from '../../core/models/rule.model';
 import { GrantMap } from '../../core/models/grant.model';
 import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
+import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { BehaviorSubject } from 'rxjs';
 
 interface DetailData {
   inspect: any;
   rules: Rule[];
   globalRules: Rule[];
+  huddleInNetwork?: boolean;
 }
+
+type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
 
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, ContainerTerminalComponent],
   templateUrl: './container-detail.component.html',
   styles: [`:host { display: contents; }`]
 })
@@ -84,6 +88,9 @@ export class ContainerDetailComponent implements OnInit {
   credentials: { password: string; createdAt: number } | null = null;
   passwordVisible = false;
   copied = false;
+  activeTab: DetailTab = 'firewall';
+  reconnectStatus = '';
+  ideLinkStatus = '';
 
   ngOnInit(): void {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
@@ -150,5 +157,26 @@ export class ContainerDetailComponent implements OnInit {
   }
   revoke(): void {
     this.api.deleteGrant(this.name).subscribe(() => this.state.loadAll());
+  }
+
+  setTab(t: DetailTab): void { this.activeTab = t; }
+
+  openIde(): void {
+    this.ideLinkStatus = 'Ophalen...';
+    this.api.getIdeLink(this.name).subscribe({
+      next: ({ link }) => {
+        this.ideLinkStatus = '';
+        window.open(link, '_self');
+      },
+      error: (err) => { this.ideLinkStatus = err.message; },
+    });
+  }
+
+  reconnectHuddle(): void {
+    this.reconnectStatus = 'Bezig...';
+    this.api.reconnectHuddle(this.name).subscribe({
+      next: () => { this.reconnectStatus = 'Verbonden'; this.load(); setTimeout(() => this.reconnectStatus = '', 2000); },
+      error: (err) => { this.reconnectStatus = err.message; },
+    });
   }
 }

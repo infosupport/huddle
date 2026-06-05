@@ -3,6 +3,7 @@ import { createProxyServer } from './proxy';
 import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
 import { createContainerProxy } from './socket-proxy';
+import { initCa } from './tls-ca';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -16,6 +17,7 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 const SOCKET_DIR = '/tmp/dc-sockets';
 
 initDb();
+initCa();
 createProxyServer();
 createApiServer();
 

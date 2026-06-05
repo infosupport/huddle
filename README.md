@@ -37,10 +37,23 @@ Na een Huddle-start is de Web UI bereikbaar op `http://localhost:3000`.
 
 ```
 .
-├── huddle.ps1            ← startpunt (interactief CLI menu)
-├── Start-Snapshot.ps1    ← helper voor menu-optie 1
-├── .devcontainer/        ← devcontainer setup
-├── base-devimage/        ← Dockerfile voor de base dev image
-├── gateway/              ← Huddle gateway (Fastify API + Angular UI)
-└── bugtracker/           ← bug-rapportage opslag (bugs/, solved/)
+├── huddle.ps1               ← startpunt (interactief CLI menu)
+├── Start-Snapshot.ps1       ← helper voor menu-optie 1
+├── .devcontainer/           ← devcontainer setup
+├── .ai/                     ← standaard AI-CLI config per provider (zie .ai/README.md)
+├── base-devimage-rider/     ← Dockerfile voor de Rider base dev image
+├── base-devimage-intellij/  ← Dockerfile voor de IntelliJ base dev image
+├── base-devimage-vscode/    ← Dockerfile voor de VS Code base dev image
+├── gateway/                 ← Huddle gateway (Fastify API + Angular UI)
+└── bugtracker/              ← bug-rapportage opslag (bugs/, solved/)
 ```
+
+Elke IDE heeft een eigen base-image. **Rider** en **IntelliJ** gebruiken JetBrains
+Gateway (de backend-distro wordt door Gateway gedownload). **VS Code** installeert
+zijn eigen backend (VS Code Server) in de container bij het attachen — voor die
+variant hoeft er dus niets backend-specifieks in de image. Verbinden met een
+VS Code-container gaat via *Dev Containers: Attach to Running Container*.
+
+De `.ai/`-folder bevat per geïnstalleerde AI-CLI (Claude Code, Codex, OpenCode) een
+standaardconfiguratie die elke agent uitlegt dat hij in een afgeschermde Huddle
+DMZ-devcontainer draait. Die config wordt in elke base-image meegebakken.

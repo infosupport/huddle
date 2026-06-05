@@ -122,9 +122,12 @@ export interface AuditEntry {
   resBody?: string | null;
 }
 
-export function logAudit(entry: AuditEntry): void {
+// Insert één audit-rij. Geeft het nieuwe row-id terug (of null bij fout) zodat
+// een in-flight request meteen gelogd kan worden en later via
+// updateAuditResponse aangevuld met de response.
+export function logAudit(entry: AuditEntry): number | null {
   try {
-    insertAudit().run(
+    const info = insertAudit().run(
       entry.containerId ?? null,
       entry.domain,
       entry.port ?? null,
@@ -138,7 +141,34 @@ export function logAudit(entry: AuditEntry): void {
       entry.resHeaders ?? null,
       entry.resBody ?? null,
     );
-  } catch (err) { console.error('[audit] log failed:', err); }
+    return Number(info.lastInsertRowid);
+  } catch (err) { console.error('[audit] log failed:', err); return null; }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _updateAudit: any = null;
+export interface AuditResponse {
+  reqBody?: string | null;
+  resStatus?: number | null;
+  resHeaders?: string | null;
+  resBody?: string | null;
+}
+
+// Vul de response-velden (en de inmiddels volledig gebufferde req_body) aan op
+// een eerder ingevoegde in-flight audit-rij.
+export function updateAuditResponse(id: number, r: AuditResponse): void {
+  try {
+    if (!_updateAudit) _updateAudit = db.prepare(
+      `UPDATE audit_log SET req_body = ?, res_status = ?, res_headers = ?, res_body = ? WHERE id = ?`
+    );
+    _updateAudit.run(
+      r.reqBody ?? null,
+      r.resStatus ?? null,
+      r.resHeaders ?? null,
+      r.resBody ?? null,
+      id,
+    );
+  } catch (err) { console.error('[audit] update failed:', err); }
 }
 
 // ── Container credentials ────────────────────────────────────────────────────

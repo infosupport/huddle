@@ -58,12 +58,13 @@ export class ApiService {
     return this.handle(this.http.post<{ imageId: string }>(`/api/docker/containers/${name}/snapshot`, { imageName }));
   }
 
-  getImages(): Observable<DockerImage[]> {
-    return this.handle(this.http.get<DockerImage[]>('/api/docker/images'));
+  getImages(ide?: string): Observable<DockerImage[]> {
+    const params = ide ? { ide } : undefined;
+    return this.handle(this.http.get<DockerImage[]>('/api/docker/images', params ? { params } : undefined));
   }
 
-  getBaseImage(): Observable<{ imageName: string }> {
-    return this.handle(this.http.get<{ imageName: string }>('/api/docker/base-image'));
+  getBaseImage(ide: string): Observable<{ imageName: string; ide: string }> {
+    return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
   startContainer(params: { image: string; ide: string; workspace: string; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
@@ -86,6 +87,14 @@ export class ApiService {
 
   deleteContainer(name: string): Observable<{ok: boolean}> {
     return this.handle(this.http.delete<{ok: boolean}>(`/api/docker/containers/${name}`));
+  }
+
+  reconnectHuddle(name: string): Observable<{ok: boolean}> {
+    return this.handle(this.http.post<{ok: boolean}>(`/api/docker/containers/${name}/reconnect-huddle`, {}));
+  }
+
+  getIdeLink(name: string): Observable<{ link: string }> {
+    return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
   }
 
   getContainerIds(): Observable<string[]> {

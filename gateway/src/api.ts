@@ -13,12 +13,21 @@ import {
   listSnapshotImages,
   createAndStartContainer,
   getBaseImageName,
+  getHuddleNetworks,
+  connectNetwork,
+  networkExists,
   forceDeleteContainer,
   cleanupContainerNetwork,
   listNetworks,
   resolveContainerByIp,
+  isIdeName,
+  execContainerOutput,
   type StartParams,
+  type IdeName,
 } from './docker';
+import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
+import { attachTerminal } from './terminal';
+import { getCaCertPem } from './tls-ca';
 
 const API_PORT = 3000;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
@@ -41,14 +50,9 @@ interface Rule {
 // The API listens on 0.0.0.0 so the host port forward (-p 3000:3000) works,
 // but Huddle is also attached to devcontainer-net and every dc-net-* — without
 // this filter, any container on those networks can reach unauth'd /api/* routes.
-type IpRange = [base: number, mask: number];
+// Pure IPv4/CIDR-logica zit in net-gate.ts (los testbaar). Hier alleen de live
+// cache + Docker-refresh eromheen.
 let blockedSubnets: IpRange[] = [];
-
-function ipv4ToInt(ip: string): number {
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return -1;
-  return ((parts[0] * 0x1000000) + (parts[1] * 0x10000) + (parts[2] * 0x100) + parts[3]) >>> 0;
-}
 
 async function refreshBlockedSubnets(): Promise<void> {
   try {
@@ -58,14 +62,8 @@ async function refreshBlockedSubnets(): Promise<void> {
       const name: string = n.Name ?? '';
       if (name !== 'devcontainer-net' && !/^dc-net-/.test(name)) continue;
       for (const cfg of (n.IPAM?.Config ?? [])) {
-        const cidr: string | undefined = cfg.Subnet;
-        if (!cidr || !cidr.includes('.')) continue;
-        const [base, bitsStr] = cidr.split('/');
-        const baseInt = ipv4ToInt(base);
-        if (baseInt < 0) continue;
-        const bits = parseInt(bitsStr ?? '32');
-        const mask = bits === 0 ? 0 : ((0xFFFFFFFF << (32 - bits)) >>> 0);
-        next.push([baseInt & mask, mask]);
+        const range = cidrToRange(cfg.Subnet);
+        if (range) next.push(range);
       }
     }
     blockedSubnets = next;
@@ -74,13 +72,8 @@ async function refreshBlockedSubnets(): Promise<void> {
   }
 }
 
-function isDevcontainerSource(remoteAddr: string | null | undefined): boolean {
-  if (!remoteAddr) return false;
-  const ip = remoteAddr.replace(/^::ffff:/, '');
-  if (!ip.includes('.')) return false;
-  const ipInt = ipv4ToInt(ip);
-  if (ipInt < 0) return false;
-  return blockedSubnets.some(([base, mask]) => (ipInt & mask) === base);
+function isFromDevcontainer(remoteAddr: string | null | undefined): boolean {
+  return isDevcontainerSource(remoteAddr, blockedSubnets);
 }
 
 export function createApiServer(): FastifyInstance {
@@ -95,9 +88,10 @@ export function createApiServer(): FastifyInstance {
   // the sudo audit ingest). Everything else on the API is admin-only.
   const devcontainerWhitelist: Array<{ method: string; path: string }> = [
     { method: 'POST', path: '/api/audit/sudo' },
+    { method: 'GET',  path: '/api/tls/ca.crt' },
   ];
   app.addHook('onRequest', async (req, reply) => {
-    if (!isDevcontainerSource(req.socket.remoteAddress)) return;
+    if (!isFromDevcontainer(req.socket.remoteAddress)) return;
     const ok = devcontainerWhitelist.some(
       w => w.method === req.method && w.path === req.url,
     );
@@ -116,6 +110,20 @@ export function createApiServer(): FastifyInstance {
     ws.on('error', () => wsClients.delete(ws));
   });
 
+  // Aparte WSS voor de embedded terminal-tab (/ws/exec/<container>).
+  // Houden we los van de state-push wss zodat lifecycle en errorhandling
+  // niet door elkaar lopen.
+  const wssTerminal = new WebSocketServer({ noServer: true });
+  wssTerminal.on('connection', (ws, req) => {
+    const m = (req.url ?? '').match(/^\/ws\/exec\/([^/?#]+)/);
+    const containerName = m ? decodeURIComponent(m[1]) : '';
+    if (!containerName) { ws.close(1008, 'missing container'); return; }
+    attachTerminal(ws, containerName).catch((err) => {
+      console.warn('[terminal] attach failed:', err.message);
+      try { ws.close(1011, 'attach failed'); } catch {}
+    });
+  });
+
   function broadcast(): void {
     const msg = JSON.stringify({ type: 'reload' });
     wsClients.forEach((ws) => {
@@ -126,13 +134,16 @@ export function createApiServer(): FastifyInstance {
   stateEvents.on('changed', broadcast);
 
   app.server.on('upgrade', (req, socket, head) => {
-    if (isDevcontainerSource((socket as net.Socket).remoteAddress)) {
+    if (isFromDevcontainer((socket as net.Socket).remoteAddress)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
-    if (new URL(req.url ?? '', 'http://x').pathname === '/ws') {
+    const pathname = new URL(req.url ?? '', 'http://x').pathname;
+    if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    } else if (pathname.startsWith('/ws/exec/')) {
+      wssTerminal.handleUpgrade(req, socket, head, (ws) => wssTerminal.emit('connection', ws, req));
     } else {
       socket.destroy();
     }
@@ -258,7 +269,7 @@ export function createApiServer(): FastifyInstance {
 
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name', async (req, reply) => {
     try {
-      const [inspect, rules, globalRules] = await Promise.all([
+      const [inspect, rules, globalRules, huddleNets] = await Promise.all([
         inspectContainer(req.params.name),
         Promise.resolve(
           db
@@ -270,10 +281,32 @@ export function createApiServer(): FastifyInstance {
             .prepare(`SELECT * FROM rules WHERE container_id IS NULL ORDER BY status, domain`)
             .all() as Rule[]
         ),
+        getHuddleNetworks(),
       ]);
-      return { inspect, rules, globalRules };
+      const huddleInNetwork = huddleNets.has(`dc-net-${req.params.name}`);
+      return { inspect, rules, globalRules, huddleInNetwork };
     } catch (err: any) {
       return reply.code(404).send({ error: err.message });
+    }
+  });
+
+  // Herverbind huddle aan het dc-net-<name> netwerk van een devcontainer.
+  // Nodig wanneer een container na een herstart-cyclus zijn netwerk opnieuw
+  // aanmaakt; huddle's oude attachment is dan stale en moet worden opgewerkt.
+  app.post<{ Params: { name: string } }>('/api/docker/containers/:name/reconnect-huddle', async (req, reply) => {
+    const netName = `dc-net-${req.params.name}`;
+    try {
+      if (!(await networkExists(netName))) {
+        return reply.code(404).send({ error: `network ${netName} does not exist` });
+      }
+      try { await connectNetwork(netName, 'huddle'); }
+      catch (err: any) {
+        if (!String(err.message).includes('already exists in network')) throw err;
+      }
+      notifyStateChanged();
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
     }
   });
 
@@ -305,12 +338,24 @@ export function createApiServer(): FastifyInstance {
     }
   });
 
-  app.get('/api/docker/images', async () => {
-    return listSnapshotImages();
+  app.get<{ Querystring: { ide?: string } }>('/api/docker/images', async (req) => {
+    const ide = isIdeName(req.query.ide) ? req.query.ide : undefined;
+    return listSnapshotImages(ide);
   });
 
-  app.get('/api/docker/base-image', async () => {
-    return { imageName: getBaseImageName() };
+  app.get<{ Querystring: { ide?: string } }>('/api/docker/base-image', async (req, reply) => {
+    if (!isIdeName(req.query.ide)) {
+      return reply.code(400).send({ error: 'ide query param must be "rider", "intellij" or "vscode"' });
+    }
+    return { imageName: getBaseImageName(req.query.ide), ide: req.query.ide };
+  });
+
+  // Huddle's MITM root-CA voor HTTPS-interceptie. Devcontainers downloaden dit
+  // certificaat (via de whitelist) en installeren het in de system trust store.
+  app.get('/api/tls/ca.crt', async (_req, reply) => {
+    return reply
+      .header('content-type', 'application/x-x509-ca-cert')
+      .send(getCaCertPem());
   });
 
   app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean } }>(
@@ -327,7 +372,7 @@ export function createApiServer(): FastifyInstance {
       const leaf = empty
         ? containerName.replace(/^devcontainer-/, '') || containerName
         : (fwd.split('/').pop() ?? containerName);
-      const ide: 'intellij' | 'rider' = ideName === 'rider' ? 'rider' : 'intellij';
+      const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,
@@ -466,6 +511,24 @@ export function createApiServer(): FastifyInstance {
     const creds = getCredentials(req.params.name);
     if (!creds) return reply.code(404).send({ error: 'not_found' });
     return { password: creds.password, createdAt: creds.created_at };
+  });
+
+  // ── IDE gateway link ─────────────────────────────────────────────────────
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ide-link', async (req, reply) => {
+    try {
+      const inspect = await inspectContainer(req.params.name);
+      const workspacePath: string | undefined = inspect?.Config?.Labels?.['com.intellij.devcontainer.workspace.path'];
+      if (!workspacePath) return reply.code(404).send({ error: 'workspace path label not found' });
+      const output = await execContainerOutput(inspect.Id, [
+        'sh', '-c',
+        `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${workspacePath}/rider-client-diagnose.log" 2>/dev/null | tail -1`,
+      ]);
+      const links = output.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('jetbrains-gateway://'));
+      if (links.length === 0) return reply.code(404).send({ error: 'IDE backend nog niet gestart — even geduld en probeer opnieuw' });
+      return { link: links[links.length - 1] };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
   });
 
   // ── Sudo audit ingest ─────────────────────────────────────────────────────

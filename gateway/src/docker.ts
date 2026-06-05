@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
 import { saveCredentials } from './db';
+import { getCaCertPem } from './tls-ca';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -83,11 +84,29 @@ export interface DevcontainerInfo {
   presentableName: string;
   created: number;
   inNetwork: boolean;
+  huddleInNetwork: boolean;
+}
+
+// Set van dc-net-* netwerken waar de huddle-container zelf in zit. Wordt
+// gebruikt om per devcontainer te detecteren of huddle nog aan zijn dc-net is
+// gekoppeld (na een herstart van de container kan deze koppeling sneuvelen
+// als het netwerk opnieuw is aangemaakt).
+export async function getHuddleNetworks(): Promise<Set<string>> {
+  try {
+    const inspect = await dockerRequest('GET', '/containers/huddle/json');
+    const nets = inspect?.NetworkSettings?.Networks ?? {};
+    return new Set(Object.keys(nets));
+  } catch {
+    return new Set();
+  }
 }
 
 export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
   const filters = JSON.stringify({ label: ['com.intellij.devcontainer.id'] });
-  const containers: any[] = await dockerRequest('GET', `/containers/json?filters=${encodeURIComponent(filters)}`);
+  const [containers, huddleNets] = await Promise.all([
+    dockerRequest('GET', `/containers/json?filters=${encodeURIComponent(filters)}`) as Promise<any[]>,
+    getHuddleNetworks(),
+  ]);
   return containers.map((c) => {
     const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
     const netName = `dc-net-${name}`;
@@ -101,6 +120,7 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
       presentableName: c.Labels?.['com.intellij.devcontainer.presentable.name'] ?? '',
       created: c.Created,
       inNetwork: Boolean(dcNet?.IPAddress),
+      huddleInNetwork: huddleNets.has(netName),
     };
   });
 }
@@ -130,8 +150,15 @@ iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
   }
 }
 
-export function getBaseImageName(): string {
-  return process.env.BASE_IMAGE ?? 'base-devimage';
+export type IdeName = 'rider' | 'intellij' | 'vscode';
+
+export function isIdeName(value: unknown): value is IdeName {
+  return value === 'rider' || value === 'intellij' || value === 'vscode';
+}
+
+export function getBaseImageName(ide: IdeName): string {
+  const envKey = `BASE_IMAGE_${ide.toUpperCase()}`;
+  return process.env[envKey] ?? `base-devimage-${ide}`;
 }
 
 export async function inspectContainer(name: string): Promise<any> {
@@ -143,31 +170,98 @@ export interface SnapshotImage {
   name: string;
   size: number;
   created: number;
+  ide?: IdeName;
 }
 
-export async function listSnapshotImages(): Promise<SnapshotImage[]> {
-  const filters = JSON.stringify({ label: ['com.devcontainer.snapshot=true'] });
+export async function listSnapshotImages(ide?: IdeName): Promise<SnapshotImage[]> {
+  const labelFilters = ['com.devcontainer.snapshot=true'];
+  if (ide) labelFilters.push(`com.devcontainer.ide=${ide}`);
+  const filters = JSON.stringify({ label: labelFilters });
   const images: any[] = await dockerRequest('GET', `/images/json?filters=${encodeURIComponent(filters)}`);
-  return images.map((img) => ({
-    id: img.Id,
-    name: (img.RepoTags?.[0] as string) ?? img.Id.substring(7, 19),
-    size: img.Size,
-    created: img.Created,
-  }));
+  return images.map((img) => {
+    const labels: Record<string, string> = img.Labels ?? {};
+    const labelIde = labels['com.devcontainer.ide'];
+    return {
+      id: img.Id,
+      name: (img.RepoTags?.[0] as string) ?? img.Id.substring(7, 19),
+      size: img.Size,
+      created: img.Created,
+      ide: isIdeName(labelIde) ? labelIde : undefined,
+    };
+  });
+}
+
+// Read the IDE that a running container is configured for, by parsing the JB
+// devcontainer model label (`customizations.jetbrains.backend`).
+function ideFromContainerLabels(labels: Record<string, string> | undefined): IdeName | undefined {
+  const raw = labels?.['com.intellij.devcontainer.model'];
+  if (!raw) return undefined;
+  try {
+    const backend = JSON.parse(raw)?.customizations?.jetbrains?.backend;
+    if (backend === 'Rider') return 'rider';
+    if (backend === 'IntelliJ') return 'intellij';
+  } catch { /* fallthrough */ }
+  return undefined;
+}
+
+export async function execContainerOutput(containerId: string, cmd: string[]): Promise<string> {
+  const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/exec`, {
+    AttachStdout: true,
+    AttachStderr: false,
+    Tty: false,
+    Cmd: cmd,
+    User: 'root',
+  });
+  return new Promise((resolve, reject) => {
+    const startBody = JSON.stringify({ Detach: false, Tty: false });
+    const req = http.request(
+      {
+        socketPath: '/var/run/docker.sock',
+        method: 'POST',
+        path: `/exec/${execCreate.Id}/start`,
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks);
+          // Docker multiplexed stream: 8-byte header [type,0,0,0, size(4 BE)] + payload
+          let stdout = '';
+          let offset = 0;
+          while (offset + 8 <= raw.length) {
+            const streamType = raw[offset];
+            const size = raw.readUInt32BE(offset + 4);
+            offset += 8;
+            if (offset + size > raw.length) break;
+            if (streamType === 1) stdout += raw.subarray(offset, offset + size).toString('utf8');
+            offset += size;
+          }
+          resolve(stdout);
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(startBody);
+    req.end();
+  });
 }
 
 export async function commitContainer(containerId: string, imageName: string): Promise<string> {
   const [repo, tag = 'latest'] = imageName.split(':');
+  // Inherit the IDE label from the source container so the snapshot is filterable per IDE.
+  const inspect = await inspectContainer(containerId);
+  const sourceIde = ideFromContainerLabels(inspect?.Config?.Labels);
+  const labels: Record<string, string> = {
+    'com.devcontainer.snapshot': 'true',
+    'com.devcontainer.source': containerId,
+    'com.devcontainer.created': new Date().toISOString(),
+  };
+  if (sourceIde) labels['com.devcontainer.ide'] = sourceIde;
   const result = await dockerRequest(
     'POST',
     `/commit?container=${encodeURIComponent(containerId)}&repo=${encodeURIComponent(repo)}&tag=${encodeURIComponent(tag)}`,
-    {
-      Labels: {
-        'com.devcontainer.snapshot': 'true',
-        'com.devcontainer.source': containerId,
-        'com.devcontainer.created': new Date().toISOString(),
-      },
-    }
+    { Labels: labels }
   );
   return result.Id ?? '';
 }
@@ -198,7 +292,9 @@ export async function imageExists(name: string): Promise<boolean> {
   }
 }
 
-function makeTar(filename: string, content: Buffer): Buffer {
+// One ustar file entry (header + zero-padded content). No EOF blocks — those are
+// appended once by makeTar() after all entries.
+function tarEntry(filename: string, content: Buffer): Buffer {
   const header = Buffer.alloc(512);
   Buffer.from(filename).copy(header, 0, 0, Math.min(filename.length, 99));
   Buffer.from('0000644\0').copy(header, 100);
@@ -215,12 +311,47 @@ function makeTar(filename: string, content: Buffer): Buffer {
   Buffer.from(checksum.toString(8).padStart(6, '0') + '\0 ').copy(header, 148);
   const padded = Buffer.alloc(Math.ceil(content.length / 512) * 512);
   content.copy(padded);
-  return Buffer.concat([header, padded, Buffer.alloc(1024)]);
+  return Buffer.concat([header, padded]);
 }
 
+// Build a tar archive (build-context) from {name, content} entries.
+function makeTar(entries: Array<{ name: string; content: Buffer }>): Buffer {
+  const parts = entries.map((e) => tarEntry(e.name, e.content));
+  parts.push(Buffer.alloc(1024)); // two zero blocks = archive end
+  return Buffer.concat(parts);
+}
+
+// Recursively collect files under `dir`, returning {name, content} with `name`
+// relative to (and including) `prefix`, e.g. ".ai/claude/CLAUDE.md".
+function collectDir(dir: string, prefix: string): Array<{ name: string; content: Buffer }> {
+  const out: Array<{ name: string; content: Buffer }> = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = `${dir}/${entry.name}`;
+    const rel = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) {
+      out.push(...collectDir(abs, rel));
+    } else if (entry.isFile()) {
+      out.push({ name: rel, content: fs.readFileSync(abs) });
+    }
+  }
+  return out;
+}
+
+// The shared AI-config tree is mounted into huddle here (see huddle.ps1
+// Start-Huddle). The base-image Dockerfiles `COPY .ai/…`, so it must be part of
+// the build-context tar we send to the Docker build endpoint.
+const AI_CONFIG_DIR = '/.ai';
+
 export async function buildImage(imageName: string, dockerfilePath: string): Promise<void> {
-  const dockerfile = fs.readFileSync(dockerfilePath);
-  const tarData = makeTar('Dockerfile', dockerfile);
+  const entries: Array<{ name: string; content: Buffer }> = [
+    { name: 'Dockerfile', content: fs.readFileSync(dockerfilePath) },
+  ];
+  if (fs.existsSync(AI_CONFIG_DIR)) {
+    entries.push(...collectDir(AI_CONFIG_DIR, '.ai'));
+  } else {
+    console.warn(`[huddle] ${AI_CONFIG_DIR} not mounted — base image may fail at "COPY .ai/…"`);
+  }
+  const tarData = makeTar(entries);
 
   await new Promise<void>((resolve, reject) => {
     const options: http.RequestOptions = {
@@ -280,13 +411,17 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: 'intellij' | 'rider', password: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
+  // CA-cert wordt base64 ingebed in het script zodat de installatie geen
+  // netwerkverkeer nodig heeft (de proxy zou nog niet klaar zijn om HTTPS te
+  // intercepten op het moment dat we de CA juist proberen te installeren).
+  const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
-BUILD=$(grep -o '"buildNumber":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
-CODE=$(grep -o '"productCode":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
+BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json")
+CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json")
 PROJ="${containerWorkspace}"
 mkdir -p /.jbdevcontainer/config/JetBrains
 printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
@@ -297,6 +432,87 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+
+# Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
+# tools die niet uit de system store lezen (node).
+mkdir -p /usr/local/share/ca-certificates
+echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
+chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
+command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
+printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
+chmod 644 /etc/profile.d/99-huddle-ca.sh
+
+# De JetBrains-IDE (IntelliJ/Rider) draait op de JBR, een eigen JVM die TLS niet
+# tegen de system store of NODE_EXTRA_CA_CERTS valideert maar tegen z'n eigen
+# cacerts-keystore. Zonder import hieronder weigert de IDE het MITM-leaf-cert en
+# sterft de handshake, waardoor IDE-HTTPS (bv. api.github.com) alleen als lege
+# CONNECT-tunnel in de audit log belandt. Default keystore-wachtwoord: changeit.
+JBR_KEYTOOL="$IDEA_PATH/jbr/bin/keytool"
+JBR_CACERTS="$IDEA_PATH/jbr/lib/security/cacerts"
+if [ -x "$JBR_KEYTOOL" ] && [ -f "$JBR_CACERTS" ]; then
+  "$JBR_KEYTOOL" -delete -alias huddle-ca -keystore "$JBR_CACERTS" -storepass changeit >/dev/null 2>&1 || true
+  "$JBR_KEYTOOL" -importcert -noprompt -trustcacerts -alias huddle-ca \\
+    -file /usr/local/share/ca-certificates/huddle-ca.crt \\
+    -keystore "$JBR_CACERTS" -storepass changeit >/dev/null 2>&1 \\
+    && echo "[jb-config] huddle CA in JBR-keystore geimporteerd" \\
+    || echo "[jb-config] WAARSCHUWING: JBR-keystore import faalde"
+else
+  echo "[jb-config] WAARSCHUWING: JBR keytool/cacerts niet gevonden op $IDEA_PATH/jbr"
+fi
+
+# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
+export DEBIAN_FRONTEND=noninteractive
+command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
+id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
+echo "noot:${password}" | chpasswd
+usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+
+# Fix workspace permissions
+mkdir -p "${containerWorkspace}" 2>/dev/null || true
+chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
+chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+
+# Configure sudo audit logging
+mkdir -p /etc/sudoers.d
+printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
+chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+
+# Start sudo log forwarder (posts new lines to Huddle API via the proxy)
+touch /tmp/sudo-audit.log
+( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
+    [ -z "\$line" ] && continue
+    curl -sf -X POST "http://huddle:3000/api/audit/sudo" \\
+      -H "Content-Type: application/json" \\
+      -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
+  done ) &
+
+# Start IDE backend in background; its startup output contains the gateway link
+nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
+`;
+}
+
+// ── vsc-config.sh — VS Code-variant ─────────────────────────────────────────
+// Zelfde firewall/sudo/audit-setup als de JB-flow, maar zónder JB host-config en
+// zónder remote-dev-server: VS Code installeert zijn eigen backend (VS Code Server)
+// bij het attachen. Houd dit in sync met de vscode-branch in huddle.ps1.
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string): string {
+  const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
+  return `#!/bin/sh
+CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
+grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
+
+HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
+iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
+  iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+
+# Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
+# tools die niet uit de system store lezen (node, java).
+mkdir -p /usr/local/share/ca-certificates
+echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
+chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
+command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
+printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
+chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 # Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
 export DEBIAN_FRONTEND=noninteractive
@@ -340,7 +556,7 @@ export interface StartParams {
   containerName: string;
   containerWorkspace: string; // /workspaces/<leaf>
   presentableName: string;
-  ideName?: 'intellij' | 'rider';
+  ideName?: IdeName;
   empty?: boolean;
 }
 
@@ -348,8 +564,12 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const { imageName, workspaceDir, containerName, containerWorkspace, presentableName } = params;
   const ideName = params.ideName ?? 'intellij';
   const empty = params.empty === true;
+  // VS Code installeert zijn eigen backend (VS Code Server) bij het attachen: geen
+  // JB host-config, geen RemoteDev-distro-volume, geen remote-dev-server launch.
+  const isVscode = ideName === 'vscode';
   const devcontainerId = crypto.randomUUID().replace(/-/g, '');
-  const modelJson = '{"customizations":{"jetbrains":{"backend":"IntelliJ"}}}';
+  const backend = ideName === 'rider' ? 'Rider' : isVscode ? 'VSCode' : 'IntelliJ';
+  const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
 
   const password = crypto.randomBytes(12).toString('base64url');
@@ -365,9 +585,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   }
 
   if (!(await imageExists(imageName))) {
-    const dockerfilePath = '/base-devimage/Dockerfile';
+    const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
     if (!fs.existsSync(dockerfilePath)) {
-      throw new Error(`Image '${imageName}' not found and /base-devimage/Dockerfile is not mounted`);
+      throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
     }
     console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
     await buildImage(imageName, dockerfilePath);
@@ -377,49 +597,70 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
   await createContainerProxy(containerName, SOCKET_DIR);
 
+  // JB-specifieke env (host-config pad, JBR/RemoteDev data, java-proxy) slaan we
+  // over voor VS Code; de proxy- en user-env blijven gelijk.
+  const env = [
+    '_CONTAINER_USER=vscode',
+    '_CONTAINER_USER_HOME=/home/vscode',
+    '_REMOTE_USER=vscode',
+    '_REMOTE_USER_HOME=/home/vscode',
+    'http_proxy=http://huddle:80',
+    'https_proxy=http://huddle:80',
+    'HTTP_PROXY=http://huddle:80',
+    'HTTPS_PROXY=http://huddle:80',
+    // CA-trust op container-niveau zodat ELK proces de MITM-CA vertrouwt — niet
+    // alleen login-shells die /etc/profile.d sourcen. Zonder dit valideren tools
+    // die door de IDE/non-login-shell gestart worden tegen hun eigen bundle,
+    // weigeren ze het leaf-cert en zie je enkel een lege CONNECT-tunnel.
+    // NODE_EXTRA_CA_CERTS = los huddle-cert (Node voegt het toe aan z'n bundle).
+    // SSL_CERT_FILE/REQUESTS_CA_BUNDLE = de gecombineerde system-bundle (huddle
+    // + alle normale roots) die update-ca-certificates regenereert, zodat TLS
+    // naar niet-geïntercepte hosts blijft werken.
+    'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
+    'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
+    'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
+    ...(isVscode ? [] : [
+      'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
+      'XDG_DATA_HOME=/.jbdevcontainer/data',
+      'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=',
+    ]),
+  ];
+
+  // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
+  const mounts = [
+    ...(isVscode ? [] : [{
+      Type: 'volume',
+      Source: 'jb_devcontainers_shared_volume',
+      Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
+    }]),
+    ...(empty ? [] : [{
+      Type: 'bind',
+      Source: toLinuxPath(workspaceDir),
+      Target: containerWorkspace,
+    }]),
+    {
+      Type: 'bind',
+      Source: `${SOCKET_DIR}/${containerName}.sock`,
+      Target: '/var/run/docker.sock',
+    },
+  ];
+
   const createBody = {
     Image: imageName,
     Entrypoint: ['/bin/sh'],
     Cmd: ['-c', 'while sleep 1000; do :; done'],
-    Env: [
-      'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
-      '_CONTAINER_USER=vscode',
-      '_CONTAINER_USER_HOME=/home/vscode',
-      '_REMOTE_USER=vscode',
-      '_REMOTE_USER_HOME=/home/vscode',
-      'XDG_DATA_HOME=/.jbdevcontainer/data',
-      'http_proxy=http://huddle:80',
-      'https_proxy=http://huddle:80',
-      'HTTP_PROXY=http://huddle:80',
-      'HTTPS_PROXY=http://huddle:80',
-      'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=',
-    ],
+    Env: env,
     Labels: {
       'com.intellij.devcontainer.id': devcontainerId,
       'com.intellij.devcontainer.presentable.name': presentableName,
       'com.intellij.devcontainer.sources.path': empty ? '' : workspaceDir,
       'com.intellij.devcontainer.workspace.path': containerWorkspace,
       'com.intellij.devcontainer.model': modelJson,
+      'com.devcontainer.ide': ideName,
       'devcontainer.metadata': metadataJson,
     },
     HostConfig: {
-      Mounts: [
-        {
-          Type: 'volume',
-          Source: 'jb_devcontainers_shared_volume',
-          Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
-        },
-        ...(empty ? [] : [{
-          Type: 'bind',
-          Source: toLinuxPath(workspaceDir),
-          Target: containerWorkspace,
-        }]),
-        {
-          Type: 'bind',
-          Source: `${SOCKET_DIR}/${containerName}.sock`,
-          Target: '/var/run/docker.sock',
-        },
-      ],
+      Mounts: mounts,
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
     },
@@ -429,8 +670,10 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const id: string = created.Id;
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
-  // Run jb-config.sh via exec
-  const script = buildJbConfigScript(containerWorkspace, containerName, ideName, password);
+  // Run config script via exec — VS Code-variant zonder JB host-config/backend.
+  const script = isVscode
+    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem())
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem());
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],

@@ -7,9 +7,11 @@
 @if (detail$ | async; as d) {
   @let cfg = d.inspect.Config;
   @let net = d.inspect.NetworkSettings?.Networks?.['dc-net-' + name] ?? d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
+  @let ide = cfg?.Labels?.['com.devcontainer.ide'] ?? '';
   @let workspace = cfg?.Labels?.['com.intellij.devcontainer.workspace.path'] ?? '—';
   @let sourcesPath = cfg?.Labels?.['com.intellij.devcontainer.sources.path'] ?? '—';
   @let inNetwork = !!net;
+  @let huddleConnected = d.huddleInNetwork !== false;
   @let allow = permanentAllowRules(d.rules);
   @let tempAllow = tempAllowRules(d.rules);
   @let deny = denyRules(d.rules);
@@ -20,104 +22,57 @@
   <div class="page-header">
     <h1>{{ name }}</h1>
     <div class="actions">
+      @if (ide === 'vscode') {
+        <!-- VS Code attached via z'n eigen Dev Containers-extensie; geen deep-link. -->
+        <span class="muted">VS Code → 'Dev Containers: Attach to Running Container' → {{ name }}</span>
+      } @else {
+        <button class="btn btn-ghost btn-sm" (click)="openIde()">Connect IDE</button>
+        @if (ideLinkStatus) { <span class="muted">{{ ideLinkStatus }}</span> }
+      }
       <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
     </div>
   </div>
 
-  <div class="detail-grid">
-    <div class="card">
-      <div class="card-header"><h3>Container info</h3></div>
-      <div class="card-body">
-        <dl class="info-grid">
-          <dt>Image</dt><dd>{{ cfg?.Image ?? d.inspect.Image }}</dd>
-          <dt>Aangemaakt</dt><dd>{{ d.inspect.Created | date:'dd-MM-yyyy HH:mm' }}</dd>
-          <dt>Workspace</dt><dd>{{ workspace }}</dd>
-          <dt>Bronmap</dt><dd>{{ sourcesPath }}</dd>
-          <dt>IP</dt><dd>{{ net?.IPAddress ?? '—' }}</dd>
-          <dt>Netwerk</dt>
-          <dd>
-            @if (inNetwork) {
-              <span class="status-text ok">✓ In netwerk</span>
-            } @else {
-              <span class="status-text rogue">✗ Rogue</span>
-            }
-          </dd>
-        </dl>
-      </div>
-
-      <div class="card-header"><h3>Docker access</h3></div>
-      <div class="card-body">
-        @if (grants$ | async; as grants) {
-          @let rem = grantRemaining(grants);
-          <div class="docker-access-row">
-            <span class="grant-timer" [class.active]="rem > 0">
-              🐳 {{ rem > 0 ? (Math.ceil(rem / 60) + 'm over') : 'Geen toegang' }}
-            </span>
-            @if (rem > 0) {
-              <button class="btn btn-delete btn-sm" (click)="revoke()">Intrekken</button>
-            }
-            <div class="grant-btns">
-              @for (m of [5, 10, 15, 30]; track m) {
-                <button class="btn btn-ghost btn-sm" (click)="grant(m)">+{{ m }}m</button>
-              }
-            </div>
-          </div>
-        }
-      </div>
+  <!-- Altijd zichtbare info-strip + statusbadges (kosten te veel context om in een tab te verstoppen) -->
+  <div class="card">
+    <div class="card-body">
+      <dl class="info-grid">
+        <dt>Image</dt><dd>{{ cfg?.Image ?? d.inspect.Image }}</dd>
+        <dt>Aangemaakt</dt><dd>{{ d.inspect.Created | date:'dd-MM-yyyy HH:mm' }}</dd>
+        <dt>Workspace</dt><dd>{{ workspace }}</dd>
+        <dt>Bronmap</dt><dd>{{ sourcesPath }}</dd>
+        <dt>IP</dt><dd>{{ net?.IPAddress ?? '—' }}</dd>
+        <dt>Netwerk</dt>
+        <dd>
+          @if (inNetwork) {
+            <span class="status-text ok">✓ In netwerk</span>
+          } @else {
+            <span class="status-text rogue">✗ Rogue</span>
+          }
+        </dd>
+        <dt>Huddle ↔ dc-net</dt>
+        <dd>
+          @if (huddleConnected) {
+            <span class="status-text ok">✓ Verbonden</span>
+          } @else {
+            <span class="status-text rogue">✗ Losgekoppeld</span>
+            <button class="btn btn-ghost btn-sm" (click)="reconnectHuddle()">Herverbinden</button>
+            @if (reconnectStatus) { <span class="muted">{{ reconnectStatus }}</span> }
+          }
+        </dd>
+      </dl>
     </div>
+  </div>
 
-    <div class="card">
-      <div class="card-header">
-        <h2>Noot gebruiker</h2>
-      </div>
-      <div class="card-body">
-        <p class="info-text">
-          De container heeft twee gebruikers:
-          <code>vscode</code> (jouw normale werkgebruiker, <strong>zonder sudo</strong>) en
-          <code>noot</code> (beheerdersgebruiker <strong>met sudo-rechten</strong>).
-          Wissel naar <code>noot</code> alleen wanneer je iets als root moet uitvoeren —
-          alle sudo-acties worden automatisch bijgehouden in het audit log.
-        </p>
+  <!-- Tab-strip: firewall / docker / noot / terminal -->
+  <div class="tabs">
+    <button class="tab" [class.active]="activeTab === 'firewall'" (click)="setTab('firewall')">Firewall</button>
+    <button class="tab" [class.active]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
+    <button class="tab" [class.active]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
+    <button class="tab" [class.active]="activeTab === 'terminal'" (click)="setTab('terminal')">Terminal</button>
+  </div>
 
-        @if (credentials) {
-          <div class="credential-row">
-            <span class="label">Wachtwoord</span>
-            <div class="password-field">
-              <code class="password-value">{{ passwordVisible ? credentials.password : '••••••••••••••••' }}</code>
-              <button class="btn btn--sm" (click)="passwordVisible = !passwordVisible">
-                {{ passwordVisible ? 'Verbergen' : 'Tonen' }}
-              </button>
-              <button class="btn btn--sm" (click)="copyPassword()">
-                {{ copied ? 'Gekopieerd!' : 'Kopiëren' }}
-              </button>
-            </div>
-          </div>
-        } @else {
-          <p class="muted">Wachtwoord niet beschikbaar (container aangemaakt vóór deze versie).</p>
-        }
-
-        <div class="command-block">
-          <h4>Hoe wissel je van gebruiker?</h4>
-          <pre><code># Wissel naar noot (heeft sudo-rechten)
-su - noot
-
-# Voer vervolgens commando's als root uit
-sudo apt install &lt;pakket&gt;
-sudo systemctl restart &lt;service&gt;
-
-# Wissel terug naar vscode
-exit
-
-# Controleer recente sudo-acties
-sudo cat /tmp/sudo-audit.log</code></pre>
-          <p class="info-text muted">
-            Alle sudo-acties verschijnen ook in de
-            <a routerLink="/audit">Audit Logs</a> pagina gefilterd op jouw container.
-          </p>
-        </div>
-      </div>
-    </div>
-
+  @if (activeTab === 'firewall') {
     <div class="card">
       <div class="card-header"><h3>Container-specifieke regels</h3></div>
       <h4>✓ Toegestaan ({{ allow.length }})</h4>
@@ -230,5 +185,92 @@ sudo cat /tmp/sudo-audit.log</code></pre>
         }
       </div>
     </div>
-  </div>
+  }
+
+  @if (activeTab === 'docker') {
+    <div class="card">
+      <div class="card-header"><h3>Docker access</h3></div>
+      <div class="card-body">
+        @if (grants$ | async; as grants) {
+          @let rem = grantRemaining(grants);
+          <div class="docker-access-row">
+            <span class="grant-timer" [class.active]="rem > 0">
+              🐳 {{ rem > 0 ? (Math.ceil(rem / 60) + 'm over') : 'Geen toegang' }}
+            </span>
+            @if (rem > 0) {
+              <button class="btn btn-delete btn-sm" (click)="revoke()">Intrekken</button>
+            }
+            <div class="grant-btns">
+              @for (m of [5, 10, 15, 30]; track m) {
+                <button class="btn btn-ghost btn-sm" (click)="grant(m)">+{{ m }}m</button>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+
+  @if (activeTab === 'noot') {
+    <div class="card">
+      <div class="card-header">
+        <h2>Noot gebruiker</h2>
+      </div>
+      <div class="card-body">
+        <p class="info-text">
+          De container heeft twee gebruikers:
+          <code>vscode</code> (jouw normale werkgebruiker, <strong>zonder sudo</strong>) en
+          <code>noot</code> (beheerdersgebruiker <strong>met sudo-rechten</strong>).
+          Wissel naar <code>noot</code> alleen wanneer je iets als root moet uitvoeren —
+          alle sudo-acties worden automatisch bijgehouden in het audit log.
+        </p>
+
+        @if (credentials) {
+          <div class="credential-row">
+            <span class="label">Wachtwoord</span>
+            <div class="password-field">
+              <code class="password-value">{{ passwordVisible ? credentials.password : '••••••••••••••••' }}</code>
+              <button class="btn btn--sm" (click)="passwordVisible = !passwordVisible">
+                {{ passwordVisible ? 'Verbergen' : 'Tonen' }}
+              </button>
+              <button class="btn btn--sm" (click)="copyPassword()">
+                {{ copied ? 'Gekopieerd!' : 'Kopiëren' }}
+              </button>
+            </div>
+          </div>
+        } @else {
+          <p class="muted">Wachtwoord niet beschikbaar (container aangemaakt vóór deze versie).</p>
+        }
+
+        <div class="command-block">
+          <h4>Hoe wissel je van gebruiker?</h4>
+          <pre><code># Wissel naar noot (heeft sudo-rechten)
+su - noot
+
+# Voer vervolgens commando's als root uit
+sudo apt install &lt;pakket&gt;
+sudo systemctl restart &lt;service&gt;
+
+# Wissel terug naar vscode
+exit
+
+# Controleer recente sudo-acties
+sudo cat /tmp/sudo-audit.log</code></pre>
+          <p class="info-text muted">
+            Alle sudo-acties verschijnen ook in de
+            <a routerLink="/audit">Audit Logs</a> pagina gefilterd op jouw container.
+          </p>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (activeTab === 'terminal') {
+    <div class="card">
+      <div class="card-header"><h3>Terminal</h3></div>
+      <div class="card-body">
+        <app-container-terminal [container]="name"/>
+      </div>
+    </div>
+  }
 }
