@@ -505,7 +505,7 @@ touch /tmp/sudo-audit.log
 nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
 
 ${mcpServers.length > 0 ? `# Injecteer MCP server configuratie in Claude Code settings
-MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude/settings.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
+MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
 `;
 }
 
@@ -568,7 +568,7 @@ touch /tmp/sudo-audit.log
   done ) &
 
 ${mcpServers.length > 0 ? `# Injecteer MCP server configuratie in Claude Code settings
-MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude/settings.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
+MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
 `;
 }
 
