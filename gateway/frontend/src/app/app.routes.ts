@@ -13,5 +13,7 @@ export const routes: Routes = [
   { path: 'extensions', loadComponent: () => import('./pages/extensions/extensions.component').then(m => m.ExtensionsPageComponent) },
   { path: 'extensions/:id/settings', loadComponent: () => import('./pages/extensions/settings/extension-settings.component').then(m => m.ExtensionSettingsComponent) },
   { path: 'extensions/view/:id', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
+  { path: 'mcp', loadComponent: () => import('./pages/mcp/mcp.component').then(m => m.McpPageComponent) },
+  { path: 'mcp/:id/settings', loadComponent: () => import('./pages/mcp/mcp-settings.component').then(m => m.McpSettingsComponent) },
 { path: '**', redirectTo: 'dashboard' },
 ];

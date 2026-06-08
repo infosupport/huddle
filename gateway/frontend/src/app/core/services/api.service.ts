@@ -7,6 +7,7 @@ import { Rule, RuleStatus } from '../models/rule.model';
 import { Grant, GrantMap } from '../models/grant.model';
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
+import { McpServer } from '../models/mcp.model';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -134,6 +135,34 @@ export class ApiService {
 
   saveExtensionSettings(id: string, values: Record<string, string>): Observable<void> {
     return this.handle(this.http.post<void>(`/api/ext/${id}/settings`, values));
+  }
+
+  getMcpServers(): Observable<McpServer[]> {
+    return this.handle(this.http.get<McpServer[]>('/api/mcp'));
+  }
+
+  uploadMcpManifest(manifest: object): Observable<{ id: string; name: string }> {
+    return this.handle(this.http.post<{ id: string; name: string }>('/api/mcp/upload', manifest));
+  }
+
+  deleteMcpServer(id: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/mcp/${id}`));
+  }
+
+  startMcpServer(id: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean }>(`/api/mcp/${id}/start`, {}));
+  }
+
+  stopMcpServer(id: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean }>(`/api/mcp/${id}/stop`, {}));
+  }
+
+  getMcpSettings(id: string): Observable<Record<string, string>> {
+    return this.handle(this.http.get<Record<string, string>>(`/api/mcp/${id}/settings`));
+  }
+
+  saveMcpSettings(id: string, values: Record<string, string>): Observable<void> {
+    return this.handle(this.http.post<void>(`/api/mcp/${id}/settings`, values));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; limit?: number }): Observable<AuditLog[]> {

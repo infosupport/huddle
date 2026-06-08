@@ -52,6 +52,19 @@ export function initDb(): void {
       value TEXT NOT NULL,
       PRIMARY KEY (ext_id, key)
     );
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      image TEXT NOT NULL,
+      port INTEGER NOT NULL,
+      transport TEXT NOT NULL DEFAULT 'sse',
+      manifest_json TEXT NOT NULL,
+      container_id TEXT,
+      status TEXT NOT NULL DEFAULT 'stopped',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -216,4 +229,69 @@ export function setExtValue(extId: string, key: string, value: string): void {
     `INSERT INTO ext_kv (ext_id, key, value) VALUES (?, ?, ?)
      ON CONFLICT(ext_id, key) DO UPDATE SET value = excluded.value`
   ).run(extId, key, value);
+}
+
+// ── MCP Servers ──────────────────────────────────────────────────────────────
+
+export interface McpServerRow {
+  id: string;
+  name: string;
+  version: string;
+  image: string;
+  port: number;
+  transport: string;
+  manifest_json: string;
+  container_id: string | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export function getMcpServer(id: string): McpServerRow | undefined {
+  return db.prepare(`SELECT * FROM mcp_servers WHERE id = ?`).get(id) as McpServerRow | undefined;
+}
+
+export function listMcpServers(): McpServerRow[] {
+  return db.prepare(`SELECT * FROM mcp_servers ORDER BY created_at ASC`).all() as McpServerRow[];
+}
+
+export function upsertMcpServer(row: McpServerRow): void {
+  db.prepare(
+    `INSERT INTO mcp_servers (id, name, version, image, port, transport, manifest_json, container_id, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       version = excluded.version,
+       image = excluded.image,
+       port = excluded.port,
+       transport = excluded.transport,
+       manifest_json = excluded.manifest_json,
+       container_id = excluded.container_id,
+       status = excluded.status,
+       updated_at = excluded.updated_at`
+  ).run(row.id, row.name, row.version, row.image, row.port, row.transport, row.manifest_json, row.container_id, row.status, row.created_at, row.updated_at);
+}
+
+export function deleteMcpServer(id: string): void {
+  db.prepare(`DELETE FROM mcp_servers WHERE id = ?`).run(id);
+}
+
+export function updateMcpServerStatus(id: string, status: string, containerId: string | null): void {
+  db.prepare(
+    `UPDATE mcp_servers SET status = ?, container_id = ?, updated_at = unixepoch() WHERE id = ?`
+  ).run(status, containerId, id);
+}
+
+// ── MCP key-value store (reuses ext_kv with prefix 'mcp-<id>') ──────────────
+
+export function getMcpValue(id: string, key: string): string | undefined {
+  return getExtValue('mcp-' + id, key);
+}
+
+export function setMcpValue(id: string, key: string, value: string): void {
+  setExtValue('mcp-' + id, key, value);
+}
+
+export function deleteMcpValues(id: string): void {
+  db.prepare(`DELETE FROM ext_kv WHERE ext_id = ?`).run('mcp-' + id);
 }
