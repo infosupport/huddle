@@ -77,9 +77,8 @@ export function createProxyServer(): http.Server {
     if (target.hostname === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
       const allowed =
-        target.port === '3000' &&
-        req.method === 'POST' &&
-        target.pathname === '/api/audit/sudo';
+        (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo') ||
+        (target.port === '3000' && target.pathname.startsWith('/mcp/'));
       if (!allowed) {
         logAudit({
           containerId,

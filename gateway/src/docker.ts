@@ -426,7 +426,7 @@ function buildJbConfigScript(containerWorkspace: string, containerName: string, 
   const mcpJson = JSON.stringify(Object.fromEntries(
     mcpServers.map(s => [s.id, {
       type: s.transport === 'sse' ? 'sse' : 'http',
-      url: `http://huddle:3000/mcp/${s.id}${s.transport === 'sse' ? '/sse' : ''}`,
+      url: `http://huddle:80/mcp/${s.id}${s.transport === 'sse' ? '/sse' : ''}`,
     }])
   ));
   return `#!/bin/sh
@@ -518,7 +518,7 @@ function buildVscodeConfigScript(containerWorkspace: string, containerName: stri
   const mcpJson = JSON.stringify(Object.fromEntries(
     mcpServers.map(s => [s.id, {
       type: s.transport === 'sse' ? 'sse' : 'http',
-      url: `http://huddle:3000/mcp/${s.id}${s.transport === 'sse' ? '/sse' : ''}`,
+      url: `http://huddle:80/mcp/${s.id}${s.transport === 'sse' ? '/sse' : ''}`,
     }])
   ));
   return `#!/bin/sh
