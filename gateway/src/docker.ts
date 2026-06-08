@@ -126,8 +126,8 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
 }
 
 export async function refreshContainerIptables(containerId: string, containerName: string): Promise<void> {
-  // After a huddle restart the container's iptables DNAT rule still points to the old huddle IP.
-  // Re-run the rule inside the container so HTTP traffic routes to the new huddle IP.
+  // After a huddle restart the container's iptables rules still point to the old huddle IP.
+  // Rebuild both the nat DNAT rule and the filter DROP rules with the new huddle IP.
   const script = `
 HUDDLE_IP=$(getent hosts huddle 2>/dev/null | awk '{print $1}')
 [ -z "$HUDDLE_IP" ] && exit 0
@@ -135,6 +135,10 @@ iptables -t nat -L OUTPUT --line-numbers -n 2>/dev/null \
   | awk '/DNAT.*dpt:80/{print $1}' | sort -rn \
   | while read LINE; do iptables -t nat -D OUTPUT "$LINE" 2>/dev/null || true; done
 iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || true
+iptables -F OUTPUT 2>/dev/null || true
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+iptables -A OUTPUT -p tcp -j DROP
 `;
   try {
     const exec = await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/exec`, {
@@ -436,6 +440,9 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
+iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
 # tools die niet uit de system store lezen (node).
@@ -508,6 +515,9 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
+iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
 # tools die niet uit de system store lezen (node, java).

@@ -31,14 +31,14 @@ $IDE_DEFS = @(
 
 function Write-Banner {
     Clear-Host
-    Write-Host ""
-    Write-Host "  ██╗  ██╗██╗   ██╗██████╗ ██████╗ ██╗     ███████╗" -ForegroundColor Cyan
-    Write-Host "  ██║  ██║██║   ██║██╔══██╗██╔══██╗██║     ██╔════╝" -ForegroundColor Cyan
-    Write-Host "  ███████║██║   ██║██║  ██║██║  ██║██║     █████╗  " -ForegroundColor Cyan
-    Write-Host "  ██╔══██║██║   ██║██║  ██║██║  ██║██║     ██╔══╝  " -ForegroundColor Cyan
-    Write-Host "  ██║  ██║╚██████╔╝██████╔╝██████╔╝███████╗███████╗" -ForegroundColor Cyan
-    Write-Host "  ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝" -ForegroundColor Cyan
-    Write-Host ""
+#     Write-Host ""
+#     Write-Host "  ██╗  ██╗██╗   ██╗██████╗ ██████╗ ██╗     ███████╗" -ForegroundColor Cyan
+#     Write-Host "  ██║  ██║██║   ██║██╔══██╗██╔══██╗██║     ██╔════╝" -ForegroundColor Cyan
+#     Write-Host "  ███████║██║   ██║██║  ██║██║  ██║██║     █████╗  " -ForegroundColor Cyan
+#     Write-Host "  ██╔══██║██║   ██║██║  ██║██║  ██║██║     ██╔══╝  " -ForegroundColor Cyan
+#     Write-Host "  ██║  ██║╚██████╔╝██████╔╝██████╔╝███████╗███████╗" -ForegroundColor Cyan
+#     Write-Host "  ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝" -ForegroundColor Cyan
+#     Write-Host ""
     Write-Host "  DMZ Portal  --  Secure dev environments" -ForegroundColor DarkCyan
     Write-Host ""
 }
@@ -82,7 +82,7 @@ function Start-SparkyProxy {
     # waar de netsh portproxy het naar sparky stuurt. De gateway wordt IN de container
     # bepaald (kan na een WSL-herstart wijzigen). socat + iproute2 worden runtime
     # geïnstalleerd (de WSL2-host heeft normale internettoegang).
-    $fwd = 'apk add --no-cache socat iproute2 >/dev/null 2>&1; GW=$(ip route show default | awk "{print \$3; exit}"); echo "sparky-proxy: :PORT -> Windows $GW:PORT"; exec socat TCP-LISTEN:PORT,fork,reuseaddr TCP:$GW:PORT'
+    $fwd = 'apk add --no-cache socat iproute2 >/dev/null 2>&1; set -- $(ip route show default); GW=$3; echo sparky-proxy :PORT -\> Windows $GW:PORT; exec socat TCP-LISTEN:PORT,fork,reuseaddr TCP:$GW:PORT'
     $fwd = $fwd -replace 'PORT', "$SPARKY_PORT"
     docker run -d --name $SPARKY_PROXY --restart unless-stopped `
         --network host alpine sh -c $fwd | Out-Null
@@ -106,8 +106,13 @@ function Start-Huddle {
 
     $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
     if (-not $netExists) {
-        Write-Host "  Netwerk 'devcontainer-net' aanmaken..." -ForegroundColor DarkCyan
-        docker network create devcontainer-net | Out-Null
+        Write-Host "  Netwerk 'devcontainer-net' aanmaken (intern)..." -ForegroundColor DarkCyan
+        docker network create --internal devcontainer-net | Out-Null
+    } else {
+        $netInternal = docker network inspect devcontainer-net --format '{{.Internal}}' 2>$null
+        if ($netInternal -ne 'true') {
+            Write-Host "  WAARSCHUWING: 'devcontainer-net' is niet intern. Voer 'docker network rm devcontainer-net' uit (stop eerst alle containers) en herstart Huddle." -ForegroundColor Yellow
+        }
     }
 
     $imageExists = docker images --filter "reference=${HUDDLE_IMAGE}" --format "{{.Repository}}"
@@ -153,6 +158,9 @@ function Start-Huddle {
     }
     $runArgs += $HUDDLE_IMAGE
     $id = docker run @runArgs
+    # Verbind Huddle ook met de default bridge zodat het zelf internet kan bereiken
+    # voor proxy-verzoeken, terwijl devcontainers alleen op het interne netwerk zitten.
+    docker network connect bridge $HUDDLE_CONTAINER | Out-Null
     Write-Host "  [OK] Gestart: $id" -ForegroundColor Green
     Write-Host "  Web UI: http://localhost:${HUDDLE_PORT}" -ForegroundColor Cyan
 }
@@ -360,8 +368,8 @@ function Start-Devcontainer {
 
         $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
         if (-not $netExists) {
-            Write-Host "  Netwerk 'devcontainer-net' aanmaken..." -ForegroundColor DarkCyan
-            docker network create devcontainer-net | Out-Null
+            Write-Host "  Netwerk 'devcontainer-net' aanmaken (intern)..." -ForegroundColor DarkCyan
+            docker network create --internal devcontainer-net | Out-Null
         }
 
         Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
@@ -392,6 +400,9 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
+iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 '@
         $vscCmd = ($vscCmd `
             -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) -replace "`r`n", "`n"
@@ -425,8 +436,8 @@ iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
 
     $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
     if (-not $netExists) {
-        Write-Host "  Netwerk 'devcontainer-net' aanmaken..." -ForegroundColor DarkCyan
-        docker network create devcontainer-net | Out-Null
+        Write-Host "  Netwerk 'devcontainer-net' aanmaken (intern)..." -ForegroundColor DarkCyan
+        docker network create --internal devcontainer-net | Out-Null
     }
 
     Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
@@ -472,6 +483,9 @@ grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
+iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 '@
     $configCmd = (($configCmd `
         -replace 'WORKSPACE_PLACEHOLDER', $containerWorkspace) `
