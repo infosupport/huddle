@@ -107,7 +107,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   ];
   app.addHook('onRequest', async (req, reply) => {
     if (!isFromDevcontainer(req.socket.remoteAddress)) return;
-    const ok = devcontainerWhitelist.some(
+    const isMcp = (req.url ?? '').startsWith('/mcp/');
+    const ok = isMcp || devcontainerWhitelist.some(
       w => w.method === req.method && w.path === req.url,
     );
     if (!ok) {
