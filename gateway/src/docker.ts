@@ -430,13 +430,42 @@ function buildJbConfigScript(containerWorkspace: string, containerName: string, 
     }])
   ));
   return `#!/bin/sh
-IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
+IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
-BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json")
-CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json")
+BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
+CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
 PROJ="${containerWorkspace}"
 mkdir -p /.jbdevcontainer/config/JetBrains
-printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
+if [ -n "$IDEA_DIR" ]; then
+  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
+else
+  # IDE nog niet in dist/ (lege gedeelde volume op nieuwe machine).
+  # deploy:true laat IntelliJ de backend zelf downloaden en installeren.
+  # Na die eerste deploy staat de IDE in de volume en werkt alles daarna normaal.
+  echo "[jb-config] IDE niet gevonden in dist/, host-config met deploy:true schrijven zodat IntelliJ de backend installeert"
+  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"true"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" > /.jbdevcontainer/config/JetBrains/host-config.json
+  # Achtergrond-watcher: zodra IntelliJ de IDE heeft geïnstalleerd, importeer de
+  # Huddle CA alsnog in het JBR-keystore (de huddle-ca.crt is dan al aangemaakt).
+  ( i=0
+    while [ $i -lt 60 ]; do
+      INST=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
+      if [ -n "$INST" ]; then
+        INST_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$INST"
+        j=0
+        while [ ! -x "$INST_PATH/jbr/bin/keytool" ] && [ $j -lt 30 ]; do sleep 10; j=$((j+1)); done
+        if [ -x "$INST_PATH/jbr/bin/keytool" ] && [ -f "$INST_PATH/jbr/lib/security/cacerts" ]; then
+          "$INST_PATH/jbr/bin/keytool" -delete -alias huddle-ca -keystore "$INST_PATH/jbr/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 || true
+          "$INST_PATH/jbr/bin/keytool" -importcert -noprompt -trustcacerts -alias huddle-ca \\
+            -file /usr/local/share/ca-certificates/huddle-ca.crt \\
+            -keystore "$INST_PATH/jbr/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 \\
+            && echo "[jb-config] huddle CA in JBR-keystore geimporteerd (na deploy)" \\
+            || echo "[jb-config] WAARSCHUWING: JBR-keystore import faalde (na deploy)"
+        fi
+        break
+      fi
+      sleep 30; i=$((i+1))
+    done ) &
+fi
 
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
@@ -462,6 +491,9 @@ chmod 644 /etc/profile.d/99-huddle-ca.sh
 # cacerts-keystore. Zonder import hieronder weigert de IDE het MITM-leaf-cert en
 # sterft de handshake, waardoor IDE-HTTPS (bv. api.github.com) alleen als lege
 # CONNECT-tunnel in de audit log belandt. Default keystore-wachtwoord: changeit.
+# Sla over als IDE nog niet in dist/ staat (eerste connect op nieuwe machine);
+# IntelliJ importeert de CA zelf na de eerste deployment.
+if [ -n "$IDEA_DIR" ]; then
 JBR_KEYTOOL="$IDEA_PATH/jbr/bin/keytool"
 JBR_CACERTS="$IDEA_PATH/jbr/lib/security/cacerts"
 if [ -x "$JBR_KEYTOOL" ] && [ -f "$JBR_CACERTS" ]; then
@@ -473,6 +505,7 @@ if [ -x "$JBR_KEYTOOL" ] && [ -f "$JBR_CACERTS" ]; then
     || echo "[jb-config] WAARSCHUWING: JBR-keystore import faalde"
 else
   echo "[jb-config] WAARSCHUWING: JBR keytool/cacerts niet gevonden op $IDEA_PATH/jbr"
+fi
 fi
 
 # Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
@@ -501,8 +534,10 @@ touch /tmp/sudo-audit.log
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
 
-# Start IDE backend in background; its startup output contains the gateway link
+# Start IDE backend in background; sla over als IDE nog niet in dist/ staat
+if [ -n "$IDEA_DIR" ]; then
 nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
+fi
 
 ${mcpServers.length > 0 ? `# Injecteer MCP server configuratie in Claude Code settings
 MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
