@@ -76,9 +76,12 @@ export function createProxyServer(): http.Server {
     let ruleId: number | null;
     if (target.hostname === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
+      const isMcpPath = target.pathname.startsWith('/mcp/');
       const allowed =
         (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo') ||
-        (target.port === '3000' && target.pathname.startsWith('/mcp/'));
+        (target.port === '3000' && isMcpPath) ||
+        (target.port === '80'  && isMcpPath) ||
+        (target.port === ''    && isMcpPath);
       if (!allowed) {
         logAudit({
           containerId,
@@ -143,10 +146,16 @@ export function createProxyServer(): http.Server {
       });
     };
 
+    // MCP-verkeer naar huddle altijd via de API-poort (3000), niet de proxypoort (80).
+    const upstreamPort =
+      target.hostname === 'huddle' && target.pathname.startsWith('/mcp/')
+        ? 3000
+        : (target.port || 80);
+
     const upstream = http.request(
       {
         hostname: target.hostname,
-        port: target.port || 80,
+        port: upstreamPort,
         method: req.method,
         path: `${target.pathname}${target.search}`,
         headers: outgoingHeaders,

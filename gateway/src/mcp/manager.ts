@@ -58,10 +58,10 @@ export async function startMcpContainer(id: string): Promise<void> {
     // Bouw env vars uit opgeslagen settings
     const manifest = JSON.parse(row.manifest_json);
     const settings: Array<{ key: string }> = manifest.settings ?? [];
-    const env = settings.map(s => {
-      const val = getMcpValue(id, s.key) ?? '';
-      return `${s.key.toUpperCase()}=${val}`;
-    });
+    const env = [
+      `HUDDLE_MCP_BASE=/mcp/${id}`,
+      ...settings.map(s => `${s.key.toUpperCase()}=${getMcpValue(id, s.key) ?? ''}`),
+    ];
 
     const containerName = `mcp-${id}`;
     // Verwijder eventuele oude container

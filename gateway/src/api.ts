@@ -843,8 +843,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
           }
         );
         proxyReq.on('error', reject);
-        if (req.raw) {
-          req.raw.pipe(proxyReq);
+        const parsedBody = (req as any).body;
+        if (parsedBody !== undefined && parsedBody !== null) {
+          const bodyStr = typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody);
+          proxyReq.setHeader('content-length', String(Buffer.byteLength(bodyStr)));
+          proxyReq.end(bodyStr);
         } else {
           proxyReq.end();
         }

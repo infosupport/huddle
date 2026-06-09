@@ -2,7 +2,7 @@
   "id": "freshdesk",
   "name": "Freshdesk",
   "version": "1.0.0",
-  "image": "ghcr.io/mijn-org/freshdesk-mcp:1.0",
+  "image": "freshdesk-mcp:1.0",
   "port": 8080,
   "transport": "sse",
   "settings": [
