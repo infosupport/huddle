@@ -34,10 +34,15 @@ export class ApiService {
     return this.handle(this.http.get<GrantMap>('/api/authz/grants'));
   }
 
-  updateRule(id: number, status: RuleStatus, expiresAt?: number): Observable<Rule> {
+  updateRule(id: number, status: RuleStatus, expiresAt?: number, pathPattern?: string | null): Observable<Rule> {
     const body: any = { status };
     if (expiresAt !== undefined) body.expires_at = expiresAt;
+    if (pathPattern !== undefined) body.path_pattern = pathPattern;
     return this.handle(this.http.put<Rule>(`/api/rules/${id}`, body));
+  }
+
+  setPathMode(id: number, enabled: boolean): Observable<Rule> {
+    return this.handle(this.http.post<Rule>(`/api/rules/${id}/path-mode`, { enabled }));
   }
 
   deleteRule(id: number): Observable<void> {

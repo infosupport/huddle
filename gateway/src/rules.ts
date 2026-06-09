@@ -10,6 +10,7 @@ interface RuleRow {
   expires_at: number | null;
   container_id: string | null;
   path_pattern: string | null;
+  path_mode: number;
 }
 
 // ── Pure match-helpers (geen DB) ─────────────────────────────────────────────
@@ -47,27 +48,44 @@ export function matchPath(pattern: string | null, path: string | null): boolean 
   return reqPath === pattern;
 }
 
+// Groepeert een pad op zijn eerste segment tot een prefix-patroon, bv.
+// `/api/v1/users?x=1` → `/api/*`. Dit is het patroon waarmee een onbekend subpad
+// van een pad-allowlist-domein als 'requested' wordt opgevoerd; de operator kan
+// het later verfijnen naar iets specifiekers (`/api/v1/*` of exact `/api/v1/x`).
+export function firstSegmentPattern(path: string): string {
+  const clean = path.split('?')[0].split('#')[0];
+  const segs = clean.split('/').filter(Boolean);
+  if (segs.length === 0) return '/*';
+  return `/${segs[0]}/*`;
+}
+
 let stmts: ReturnType<typeof prepareStmts> | null = null;
 
 function prepareStmts() {
   return {
     selectPerContainer: db.prepare<[string, string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern FROM rules WHERE domain = ? AND container_id = ?`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? AND container_id = ?`
     ),
     selectGlobal: db.prepare<[string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern FROM rules WHERE domain = ? AND container_id IS NULL`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? AND container_id IS NULL`
     ),
     selectWildcardPerContainer: db.prepare<[string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern FROM rules WHERE domain LIKE '*.%' AND container_id = ?`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain LIKE '*.%' AND container_id = ?`
     ),
     selectWildcardGlobal: db.prepare(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern FROM rules WHERE domain LIKE '*.%' AND container_id IS NULL`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain LIKE '*.%' AND container_id IS NULL`
     ),
     touchRule: db.prepare<[number]>(
       `UPDATE rules SET last_seen = unixepoch(), request_count = request_count + 1 WHERE id = ?`
     ),
+    setLastPath: db.prepare<[string, number]>(
+      `UPDATE rules SET last_path = ? WHERE id = ?`
+    ),
     insertRequested: db.prepare<[string, string | null]>(
       `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES (?, ?, 'requested')`
+    ),
+    insertRequestedPath: db.prepare<[string, string | null, string]>(
+      `INSERT OR IGNORE INTO rules (domain, container_id, status, path_pattern) VALUES (?, ?, 'requested', ?)`
     ),
     resetExpired: db.prepare<[number]>(
       `UPDATE rules SET status='requested', updated_at=unixepoch() WHERE id=?`
@@ -99,7 +117,7 @@ export function checkRule(
 ): { status: RuleStatus; ruleId: number | null } {
   const {
     selectPerContainer, selectGlobal, selectWildcardPerContainer, selectWildcardGlobal,
-    touchRule, insertRequested, resetExpired,
+    touchRule, setLastPath, insertRequested, insertRequestedPath, resetExpired,
   } = s();
 
   // Verzamel alle kandidaat-regels: exacte-host (per-container + globaal) en
@@ -137,6 +155,38 @@ export function checkRule(
     });
     const best = candidates[0];
 
+    // Pad-allowlist modus: er bestaat een host-only marker-regel (path_mode=1).
+    // Matchte alléén die marker (geen specifiekere padregel), dan is dit subpad
+    // nog onbekend: voer het — gegroepeerd op het eerste padsegment — als
+    // 'requested' op zodat de operator het kan beoordelen, i.p.v. het stil te
+    // weigeren. Een wél matchende padregel (allow/deny/requested) wordt hieronder
+    // gewoon gehonoreerd.
+    const inPathMode = candidates.some(c => c.path_pattern === null && c.path_mode === 1);
+    if (inPathMode && path !== null) {
+      const hostOnlyBest = best.path_pattern === null || best.path_pattern === '';
+      if (hostOnlyBest) {
+        // Alléén de host-only marker matchte → onbekend subpad: groepeer op het
+        // eerste segment en voer het als requested op. Bewaar het volledige pad
+        // als concreet voorbeeld voor de operator.
+        const grp = firstSegmentPattern(path);
+        const containerForRule = best.container_id;
+        const inserted = insertRequestedPath.run(domain, containerForRule, grp);
+        if (inserted.changes > 0) notifyStateChanged();
+        const created = (containerForRule
+          ? (selectPerContainer.all(domain, containerForRule) as RuleRow[])
+          : (selectGlobal.all(domain) as RuleRow[])).find(r => r.path_pattern === grp);
+        if (created) { setLastPath.run(path, created.id); touchRule.run(created.id); }
+        return { status: 'requested', ruleId: created?.id ?? null };
+      }
+      if (best.status === 'requested') {
+        // Bestaande requested-groep opnieuw geraakt → ververs het voorbeeld-pad.
+        setLastPath.run(path, best.id);
+        touchRule.run(best.id);
+        return { status: 'requested', ruleId: best.id };
+      }
+      // Anders won een expliciete allow/deny-padregel → normale afhandeling.
+    }
+
     if (best.status === 'allow' && best.expires_at !== null && best.expires_at < Math.floor(Date.now() / 1000)) {
       resetExpired.run(best.id);
       return { status: 'requested', ruleId: null };
@@ -157,4 +207,17 @@ export function checkRule(
   }
 
   return { status: 'requested', ruleId: created?.id ?? null };
+}
+
+// Staat dit domein in pad-allowlist modus? D.w.z. bestaat er een host-only
+// marker-regel (path_mode=1) die geldt voor deze container of globaal. De proxy
+// gebruikt dit bij CONNECT (pad nog versleuteld) om de HTTPS-tunnel tóch toe te
+// laten, zodat MITM het pad kan zien en de echte handhaving per request gebeurt.
+export function isPathMode(domain: string, containerId: string | null): boolean {
+  const { selectPerContainer, selectGlobal } = s();
+  const rows = [
+    ...(containerId ? (selectPerContainer.all(domain, containerId) as RuleRow[]) : []),
+    ...(selectGlobal.all(domain) as RuleRow[]),
+  ];
+  return rows.some(r => r.path_pattern === null && r.path_mode === 1);
 }

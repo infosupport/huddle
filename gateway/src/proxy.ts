@@ -4,7 +4,7 @@ import net from 'net';
 import tls from 'tls';
 import stream from 'stream';
 import { URL } from 'url';
-import { checkRule } from './rules';
+import { checkRule, isPathMode } from './rules';
 import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
@@ -208,7 +208,16 @@ export function createProxyServer(): http.Server {
       return;
     }
     const { status, ruleId } = checkRule(hostname, containerId, null);
-    if (status !== 'allow') {
+    // Pad-allowlist domeinen staan op host-niveau dicht, maar de CONNECT-tunnel
+    // moet wél open zodat MITM ná TLS-terminatie het pad ziet en per request kan
+    // handhaven (zie de innerHttp-handler). Alleen zinvol als we kúnnen
+    // inspecteren: 443 + niet cert-pinned. Anders blijft het host-only dicht.
+    const pathModeTunnel =
+      status !== 'allow' &&
+      port === 443 &&
+      !NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) &&
+      isPathMode(hostname, containerId);
+    if (status !== 'allow' && !pathModeTunnel) {
       logAudit({
         containerId,
         domain: hostname,
@@ -293,12 +302,15 @@ export function createProxyServer(): http.Server {
       // De CONNECT stond de host al toe (pad was toen versleuteld). Nu de TLS
       // getermineerd is kennen we het pad: pas padbeleid alsnog toe per request.
       const pathResult = checkRule(hostname, containerId, innerReq.url ?? null);
-      if (pathResult.status === 'deny') {
+      // Alles behalve 'allow' blokkeren: een 'deny'-padregel, maar ook een nog
+      // niet beoordeeld subpad ('requested') van een pad-allowlist-domein —
+      // fail-closed tot de operator het pad expliciet toestaat.
+      if (pathResult.status !== 'allow') {
         logAudit({
           containerId,
           domain: hostname,
           port,
-          action: 'deny',
+          action: pathResult.status,
           ruleId: pathResult.ruleId,
           method: innerReq.method ?? null,
           path: innerReq.url ?? null,
@@ -306,7 +318,11 @@ export function createProxyServer(): http.Server {
           resStatus: 403,
         });
         innerRes.writeHead(403, { 'content-type': 'text/plain' });
-        innerRes.end('Huddle: pad geblokkeerd door firewallregel');
+        innerRes.end(
+          pathResult.status === 'requested'
+            ? 'Huddle: pad wacht op goedkeuring door een operator'
+            : 'Huddle: pad geblokkeerd door firewallregel',
+        );
         return;
       }
 

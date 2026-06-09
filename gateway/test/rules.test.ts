@@ -28,6 +28,8 @@ let db: typeof import('../src/db').db;
 let checkRule: typeof import('../src/rules').checkRule;
 let matchDomain: typeof import('../src/rules').matchDomain;
 let matchPath: typeof import('../src/rules').matchPath;
+let firstSegmentPattern: typeof import('../src/rules').firstSegmentPattern;
+let isPathMode: typeof import('../src/rules').isPathMode;
 
 const CID = 'container-abc';
 
@@ -37,10 +39,11 @@ function setRule(
   status: string,
   expiresAt: number | null = null,
   pathPattern: string | null = null,
+  pathMode = 0,
 ) {
   db.prepare(
-    `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern) VALUES (?, ?, ?, ?, ?)`
-  ).run(domain, containerId, status, expiresAt, pathPattern);
+    `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(domain, containerId, status, expiresAt, pathPattern, pathMode);
 }
 
 describe.skipIf(!sqliteAvailable)('checkRule', () => {
@@ -51,6 +54,8 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     checkRule = rulesMod.checkRule;
     matchDomain = rulesMod.matchDomain;
     matchPath = rulesMod.matchPath;
+    firstSegmentPattern = rulesMod.firstSegmentPattern;
+    isPathMode = rulesMod.isPathMode;
     dbMod.initDb();
   });
   beforeEach(() => { db.exec('DELETE FROM rules'); });
@@ -185,6 +190,64 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
       setRule('*.npmjs.org', null, 'allow');
       setRule('*.org', null, 'deny');
       expect(checkRule('registry.npmjs.org', CID).status).toBe('deny');
+    });
+  });
+
+  describe('firstSegmentPattern (pure helper)', () => {
+    it('groepeert op het eerste padsegment', () => {
+      expect(firstSegmentPattern('/api/v1/users')).toBe('/api/*');
+      expect(firstSegmentPattern('/api')).toBe('/api/*');
+    });
+    it('negeert query- en fragment-delen', () => {
+      expect(firstSegmentPattern('/api/v1?x=1')).toBe('/api/*');
+      expect(firstSegmentPattern('/repos/foo#frag')).toBe('/repos/*');
+    });
+    it('root-pad wordt /*', () => {
+      expect(firstSegmentPattern('/')).toBe('/*');
+      expect(firstSegmentPattern('')).toBe('/*');
+    });
+  });
+
+  describe('pad-allowlist modus (path_mode)', () => {
+    it('host-only marker blokkeert het kale domein, maar voert subpaden op als requested', () => {
+      setRule('github.com', CID, 'deny', null, null, 1); // marker
+
+      // Onbekend subpad → requested, en er ontstaat een gegroepeerde padregel.
+      expect(checkRule('github.com', CID, '/anthropics/claude').status).toBe('requested');
+      const row = db.prepare(
+        `SELECT status, path_pattern, last_path FROM rules WHERE domain=? AND container_id=? AND path_pattern=?`
+      ).get('github.com', CID, '/anthropics/*') as any;
+      expect(row?.status).toBe('requested');
+      // Het volledige pad wordt als voorbeeld bewaard en bij een nieuwe hit ververst.
+      expect(row?.last_path).toBe('/anthropics/claude');
+      checkRule('github.com', CID, '/anthropics/codex?x=1');
+      const row2 = db.prepare(
+        `SELECT last_path FROM rules WHERE domain=? AND container_id=? AND path_pattern=?`
+      ).get('github.com', CID, '/anthropics/*') as any;
+      expect(row2?.last_path).toBe('/anthropics/codex?x=1');
+
+      // Het kale domein (geen pad / null) blijft dicht.
+      expect(checkRule('github.com', CID, null).status).toBe('deny');
+    });
+
+    it('een toegestaan subpad wint van de host-only marker', () => {
+      setRule('github.com', CID, 'deny', null, null, 1);          // marker
+      setRule('github.com', CID, 'allow', null, '/anthropics/*');  // toegestaan pad
+      expect(checkRule('github.com', CID, '/anthropics/claude').status).toBe('allow');
+      // Ander pad blijft onbekend → requested
+      expect(checkRule('github.com', CID, '/torvalds/linux').status).toBe('requested');
+    });
+
+    it('een afgekeurd subpad blijft deny (geen her-opvoeren als requested)', () => {
+      setRule('github.com', CID, 'deny', null, null, 1);        // marker
+      setRule('github.com', CID, 'deny', null, '/secret/*');     // expliciet geblokkeerd pad
+      expect(checkRule('github.com', CID, '/secret/x').status).toBe('deny');
+    });
+
+    it('isPathMode herkent een domein in pad-modus', () => {
+      setRule('github.com', null, 'deny', null, null, 1);
+      expect(isPathMode('github.com', CID)).toBe(true);
+      expect(isPathMode('elders.test', CID)).toBe(false);
     });
   });
 

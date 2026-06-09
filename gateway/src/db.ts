@@ -17,8 +17,6 @@ export function initDb(): void {
       last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
       request_count INTEGER NOT NULL DEFAULT 1
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_domain_container
-      ON rules(domain, COALESCE(container_id, ''));
     CREATE TABLE IF NOT EXISTS docker_grants (
       container_id TEXT PRIMARY KEY,
       until INTEGER NOT NULL
@@ -74,10 +72,31 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'path_pattern')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_pattern TEXT');
   }
+  // path_mode markeert een host-only regel als "pad-allowlist": het kale domein
+  // is dan dicht (status deny), maar onbekende subpaden worden als 'requested'
+  // opgevoerd zodat de operator ze één voor één kan toestaan.
+  if (!cols.some(c => c.name === 'path_mode')) {
+    db.exec('ALTER TABLE rules ADD COLUMN path_mode INTEGER NOT NULL DEFAULT 0');
+  }
+  // last_path bewaart het laatst geziene volledige pad dat een (gegroepeerde)
+  // requested-padregel triggerde, als concreet voorbeeld voor de operator.
+  if (!cols.some(c => c.name === 'last_path')) {
+    db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
+  }
 
   // Uniciteit geldt nu op (domain, container, pad): meerdere padregels per
   // domein moeten naast elkaar kunnen bestaan. De oude domain+container index
   // wordt vervangen.
+  // Opschonen voorkomt dat een migratie crasht wanneer oude data per ongeluk
+  // meerdere rijen met dezelfde unieke sleutel bevat.
+  db.exec(`
+    DELETE FROM rules
+    WHERE id NOT IN (
+      SELECT MAX(id)
+      FROM rules
+      GROUP BY domain, COALESCE(container_id, ''), COALESCE(path_pattern, '')
+    )
+  `);
   db.exec('DROP INDEX IF EXISTS idx_rules_domain_container');
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_domain_container_path

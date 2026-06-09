@@ -12,4 +12,6 @@ export interface Rule {
   request_count: number;
   expires_at?: number | null;
   path_pattern?: string | null;
+  path_mode?: number;
+  last_path?: string | null;
 }

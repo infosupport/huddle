@@ -55,6 +55,7 @@ interface Rule {
   status: RuleStatus;
   expires_at: number | null;
   path_pattern: string | null;
+  path_mode: number;
   created_at: number;
   updated_at: number;
   last_seen: number;
@@ -217,17 +218,27 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  app.put<{ Params: { id: string }; Body: { status: RuleStatus; expires_at?: number | null } }>(
+  app.put<{ Params: { id: string }; Body: { status: RuleStatus; expires_at?: number | null; path_pattern?: string | null } }>(
     '/api/rules/:id',
     async (req, reply) => {
       const id = Number(req.params.id);
-      const { status, expires_at = null } = req.body;
+      const { status, expires_at = null, path_pattern } = req.body;
       if (!['requested', 'allow', 'deny'].includes(status)) {
         return reply.code(400).send({ error: 'invalid status' });
       }
-      const result = db
-        .prepare(`UPDATE rules SET status = ?, expires_at = ?, updated_at = unixepoch() WHERE id = ?`)
-        .run(status, expires_at, id);
+      // path_pattern alleen meewijzigen wanneer de client het expliciet meestuurt
+      // (bv. operator verfijnt een requested-subpad bij het goedkeuren). Kan de
+      // unieke index (domain, container, pad) raken → 409 bij een duplicaat.
+      let result;
+      try {
+        result = path_pattern !== undefined
+          ? db.prepare(`UPDATE rules SET status = ?, expires_at = ?, path_pattern = ?, updated_at = unixepoch() WHERE id = ?`)
+              .run(status, expires_at, path_pattern, id)
+          : db.prepare(`UPDATE rules SET status = ?, expires_at = ?, updated_at = unixepoch() WHERE id = ?`)
+              .run(status, expires_at, id);
+      } catch (err: any) {
+        return reply.code(409).send({ error: 'duplicate', message: err.message });
+      }
       if (result.changes === 0) return reply.code(404).send({ error: 'not_found' });
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       if (updated.container_id === null && updated.path_pattern === null && (status === 'allow' || status === 'deny')) {
@@ -248,6 +259,33 @@ export async function createApiServer(): Promise<FastifyInstance> {
     notifyStateChanged();
     return { ok: true };
   });
+
+  // Zet een domein in/uit pad-allowlist modus. Werkt op de host-only regel
+  // (path_pattern IS NULL): bij aanzetten wordt het kale domein op 'deny' gezet
+  // met path_mode=1, zodat onbekende subpaden voortaan als 'requested' worden
+  // opgevoerd i.p.v. stil geweigerd. Uitzetten herstelt 'm naar een gewone
+  // host-only deny-regel.
+  app.post<{ Params: { id: string }; Body: { enabled: boolean } }>(
+    '/api/rules/:id/path-mode',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const { enabled } = req.body;
+      const rule = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule | undefined;
+      if (!rule) return reply.code(404).send({ error: 'not_found' });
+      if (rule.path_pattern !== null) {
+        return reply.code(400).send({ error: 'path_mode geldt alleen voor een host-only regel (zonder path_pattern)' });
+      }
+      if (enabled) {
+        db.prepare(`UPDATE rules SET path_mode = 1, status = 'deny', updated_at = unixepoch() WHERE id = ?`).run(id);
+      } else {
+        db.prepare(`UPDATE rules SET path_mode = 0, updated_at = unixepoch() WHERE id = ?`).run(id);
+      }
+      const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
+      logAudit({ containerId: rule.container_id, domain: rule.domain, action: `admin:path-mode-${enabled ? 'on' : 'off'}`, ruleId: id });
+      notifyStateChanged();
+      return updated;
+    }
+  );
 
   app.post<{
     Body: { domain: string; container_id?: string | null; status: RuleStatus; expires_at?: number | null; path_pattern?: string | null };
