@@ -12,12 +12,16 @@
   @let sourcesPath = cfg?.Labels?.['com.intellij.devcontainer.sources.path'] ?? '—';
   @let inNetwork = !!net;
   @let huddleConnected = d.huddleInNetwork !== false;
-  @let allow = permanentAllowRules(d.rules);
-  @let tempAllow = tempAllowRules(d.rules);
-  @let deny = denyRules(d.rules);
-  @let requested = requestedRules(d.rules);
-  @let gAllow = permanentAllowRules(d.globalRules);
-  @let gDeny = denyRules(d.globalRules);
+  @let cRules = excludePathMode(d.rules);
+  @let gRules = excludePathMode(d.globalRules);
+  @let cPathDomains = pathDomains(d.rules);
+  @let gPathDomains = pathDomains(d.globalRules);
+  @let allow = permanentAllowRules(cRules);
+  @let tempAllow = tempAllowRules(cRules);
+  @let deny = denyRules(cRules);
+  @let requested = requestedRules(cRules);
+  @let gAllow = permanentAllowRules(gRules);
+  @let gDeny = denyRules(gRules);
 
   <div class="page-header">
     <h1>{{ name }}</h1>
@@ -149,6 +153,13 @@
         }
       </div>
 
+      @if (cPathDomains.length > 0) {
+        <h4>🔎 Pad-allowlist ({{ cPathDomains.length }})</h4>
+        <div class="card-body tight">
+          <app-path-allowlist [domains]="cPathDomains" [now]="nowTs" (changed)="reload()" />
+        </div>
+      }
+
       <div class="card-header"><h3>Globale regels</h3></div>
       <h4>✓ Globaal toegestaan ({{ gAllow.length }})</h4>
       <div class="card-body tight">
@@ -184,6 +195,12 @@
           </table>
         }
       </div>
+      @if (gPathDomains.length > 0) {
+        <h4>🔎 Globale pad-allowlist ({{ gPathDomains.length }})</h4>
+        <div class="card-body tight">
+          <app-path-allowlist [domains]="gPathDomains" [now]="nowTs" (changed)="reload()" />
+        </div>
+      }
     </div>
   }
 

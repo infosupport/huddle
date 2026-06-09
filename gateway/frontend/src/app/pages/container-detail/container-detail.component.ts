@@ -9,6 +9,8 @@ import { Rule } from '../../core/models/rule.model';
 import { GrantMap } from '../../core/models/grant.model';
 import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
+import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
+import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { BehaviorSubject } from 'rxjs';
 
@@ -24,7 +26,7 @@ type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, ContainerTerminalComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent],
   templateUrl: './container-detail.component.html',
   styles: [`:host { display: contents; }`]
 })
@@ -35,6 +37,7 @@ export class ContainerDetailComponent implements OnInit {
   modal = inject(ModalService);
 
   protected Math = Math;
+  get nowTs(): number { return Math.floor(Date.now() / 1000); }
 
   readonly pieConfig: PieMenuConfig = {
     families: [
@@ -66,6 +69,12 @@ export class ContainerDetailComponent implements OnInit {
           { id: 'deny-all', label: 'Voor iedereen', icon: 'deny-all' },
         ],
       },
+      {
+        id: 'pathmode',
+        label: 'Pad-allowlist',
+        tone: 'neutral',
+        icon: 'filter',
+      },
     ],
   };
 
@@ -78,8 +87,19 @@ export class ContainerDetailComponent implements OnInit {
       case 'later':       this.deleteRule(rule); break;
       case 'deny':        this.denyRule(rule); break;
       case 'deny-all':    this.modal.openConfirm(rule.domain, 'deny'); break;
+      case 'pathmode':    this.enablePathMode(rule); break;
     }
   }
+
+  // Pad-allowlist: groepeert marker + padregels, en filtert die uit de gewone
+  // allow/deny/requested-lijsten (gedeeld met de firewall-pagina).
+  pathDomains(rules: Rule[]) { return buildPathDomains(rules); }
+  excludePathMode(rules: Rule[]) { return excludePathModeRules(rules); }
+
+  enablePathMode(rule: Rule): void {
+    this.api.setPathMode(rule.id, true).subscribe(() => { this.state.loadAll(); this.load(); });
+  }
+  reload(): void { this.state.loadAll(); this.load(); }
 
   name = '';
   detail$ = new BehaviorSubject<DetailData | null>(null);
