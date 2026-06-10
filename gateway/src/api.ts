@@ -839,10 +839,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
             reply.raw.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
             proxyRes.pipe(reply.raw);
             proxyRes.on('end', resolve);
-            proxyRes.on('error', reject);
+            proxyRes.on('error', (err) => {
+              if (reply.raw.headersSent) { reply.raw.destroy(); }
+              else { reject(err); }
+            });
           }
         );
-        proxyReq.on('error', reject);
+        proxyReq.on('error', (err) => {
+          if (reply.raw.headersSent) { reply.raw.destroy(); }
+          else { reject(err); }
+        });
         const parsedBody = (req as any).body;
         if (parsedBody !== undefined && parsedBody !== null) {
           const bodyStr = typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody);
@@ -879,6 +885,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
   app.setNotFoundHandler(async (_req, reply) => {
     return reply.sendFile('index.html');
+  });
+
+  app.setErrorHandler((err, _req, reply) => {
+    if ((err as NodeJS.ErrnoException).code === 'ERR_HTTP_HEADERS_SENT') {
+      return;
+    }
+    if (!reply.sent) {
+      reply.code(500).send({ error: err.message });
+    }
   });
 
   const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
