@@ -19,6 +19,7 @@ interface DetailData {
   rules: Rule[];
   globalRules: Rule[];
   huddleInNetwork?: boolean;
+  airlocked?: boolean;
 }
 
 type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
@@ -28,7 +29,11 @@ type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
   standalone: true,
   imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent],
   templateUrl: './container-detail.component.html',
-  styles: [`:host { display: contents; }`]
+  styles: [`
+    :host { display: contents; }
+    .airlock-on { background: #6d28d9; color: #fff; border-color: #6d28d9; }
+    .airlock-on:hover { background: #5b21b6; }
+  `]
 })
 export class ContainerDetailComponent implements OnInit {
   private route = inject(ActivatedRoute);
@@ -190,6 +195,10 @@ export class ContainerDetailComponent implements OnInit {
       },
       error: (err) => { this.ideLinkStatus = err.message; },
     });
+  }
+
+  toggleAirlock(current: boolean): void {
+    this.api.setAirlock(this.name, !current).subscribe(() => { this.state.loadAll(); this.load(); });
   }
 
   reconnectHuddle(): void {

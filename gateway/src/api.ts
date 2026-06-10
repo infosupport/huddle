@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, upsertMcpServer, getMcpServer, listMcpServers, deleteMcpServer, getMcpValue, setMcpValue } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, upsertMcpServer, getMcpServer, listMcpServers, deleteMcpServer, getMcpValue, setMcpValue, getAirlocked, setAirlocked } from './db';
 import { parseManifest } from './mcp/types';
 import { startMcpContainer, stopMcpContainer, getMcpTargetUrl } from './mcp/manager';
 import {
@@ -337,7 +337,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       ),
     ]);
     const countMap = new Map(requestedCounts.map((r) => [r.container_id, r.cnt]));
-    return containers.map((c) => ({ ...c, requestedCount: countMap.get(c.name) ?? 0 }));
+    return containers.map((c) => ({ ...c, requestedCount: countMap.get(c.name) ?? 0, airlocked: getAirlocked(c.name) }));
   });
 
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name', async (req, reply) => {
@@ -357,7 +357,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         getHuddleNetworks(),
       ]);
       const huddleInNetwork = huddleNets.has(`dc-net-${req.params.name}`);
-      return { inspect, rules, globalRules, huddleInNetwork };
+      return { inspect, rules, globalRules, huddleInNetwork, airlocked: getAirlocked(req.params.name) };
     } catch (err: any) {
       return reply.code(404).send({ error: err.message });
     }
@@ -382,6 +382,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
       return reply.code(500).send({ error: err.message });
     }
   });
+
+  app.post<{ Params: { name: string }; Body: { airlocked?: boolean } }>(
+    '/api/docker/containers/:name/airlock',
+    async (req) => {
+      const current = getAirlocked(req.params.name);
+      const next = typeof req.body?.airlocked === 'boolean' ? req.body.airlocked : !current;
+      setAirlocked(req.params.name, next);
+      logAudit({ containerId: req.params.name, domain: 'docker', action: next ? 'airlock:on' : 'airlock:off' });
+      notifyStateChanged();
+      return { airlocked: next };
+    }
+  );
 
   app.post<{ Params: { name: string }; Body: { imageName: string } }>(
     '/api/docker/containers/:name/snapshot',

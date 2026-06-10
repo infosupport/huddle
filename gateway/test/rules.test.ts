@@ -25,6 +25,7 @@ try {
 // Dynamisch geïmporteerd (pas ná de probe) zodat het ontbreken van de binding
 // niet de hele testfile laat crashen.
 let db: typeof import('../src/db').db;
+let setAirlocked: typeof import('../src/db').setAirlocked;
 let checkRule: typeof import('../src/rules').checkRule;
 let matchDomain: typeof import('../src/rules').matchDomain;
 let matchPath: typeof import('../src/rules').matchPath;
@@ -51,6 +52,7 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     const dbMod = await import('../src/db');
     const rulesMod = await import('../src/rules');
     db = dbMod.db;
+    setAirlocked = dbMod.setAirlocked;
     checkRule = rulesMod.checkRule;
     matchDomain = rulesMod.matchDomain;
     matchPath = rulesMod.matchPath;
@@ -58,7 +60,7 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     isPathMode = rulesMod.isPathMode;
     dbMod.initDb();
   });
-  beforeEach(() => { db.exec('DELETE FROM rules'); });
+  beforeEach(() => { db.exec('DELETE FROM rules'); db.exec('DELETE FROM containers'); });
 
   describe('per-container rules', () => {
     it('allow voor een toegestaan domein', () => {
@@ -94,6 +96,36 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     it('globale rules gelden ook zonder containerId', () => {
       setRule('global.test', null, 'deny');
       expect(checkRule('global.test', null).status).toBe('deny');
+    });
+  });
+
+  describe('airlock', () => {
+    it('airlocked container negeert een globale allow-regel', () => {
+      setRule('global.test', null, 'allow');
+      setAirlocked(CID, true);
+      // Geen per-container regel + globale lookup overgeslagen → requested.
+      expect(checkRule('global.test', CID).status).toBe('requested');
+    });
+
+    it('zonder airlock geldt dezelfde globale allow-regel wél', () => {
+      setRule('global.test', null, 'allow');
+      expect(checkRule('global.test', CID).status).toBe('allow');
+    });
+
+    it('airlocked container honoreert nog steeds zijn eigen allow-regel', () => {
+      setRule('own.test', CID, 'allow');
+      setAirlocked(CID, true);
+      expect(checkRule('own.test', CID).status).toBe('allow');
+    });
+
+    it('airlock uitschakelen herstelt de globale fallback', () => {
+      setRule('global.test', null, 'allow');
+      setAirlocked(CID, true);
+      expect(checkRule('global.test', CID).status).toBe('requested');
+      setAirlocked(CID, false);
+      db.exec('DELETE FROM rules');
+      setRule('global.test', null, 'allow');
+      expect(checkRule('global.test', CID).status).toBe('allow');
     });
   });
 

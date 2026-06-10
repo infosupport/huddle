@@ -106,6 +106,10 @@ export class ApiService {
     return this.handle(this.http.post<{ok: boolean}>(`/api/docker/containers/${name}/reconnect-huddle`, {}));
   }
 
+  setAirlock(name: string, airlocked: boolean): Observable<{ airlocked: boolean }> {
+    return this.handle(this.http.post<{ airlocked: boolean }>(`/api/docker/containers/${name}/airlock`, { airlocked }));
+  }
+
   getIdeLink(name: string): Observable<{ link: string }> {
     return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
   }

@@ -34,6 +34,14 @@
         @if (ideLinkStatus) { <span class="muted">{{ ideLinkStatus }}</span> }
       }
       <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
+      <button
+        class="btn btn-sm"
+        [class.btn-ghost]="!d.airlocked"
+        [class.airlock-on]="d.airlocked"
+        (click)="toggleAirlock(!!d.airlocked)"
+        [title]="d.airlocked ? 'Airlock actief — globale regels genegeerd. Klik om te ontgrendelen.' : 'Container vergrendelen: negeer globale regels.'">
+        {{ d.airlocked ? '🔒 Airlock aan' : '🔓 Airlock uit' }}
+      </button>
     </div>
   </div>
 

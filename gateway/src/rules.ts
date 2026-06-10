@@ -1,4 +1,4 @@
-import { db } from './db';
+import { db, getAirlocked } from './db';
 import { notifyStateChanged } from './events';
 
 export type RuleStatus = 'allow' | 'deny' | 'requested';
@@ -137,12 +137,19 @@ export function checkRule(
     }
   };
 
+  // Airlock: een geïsoleerde container krijgt géén globale-regel-fallback. Alleen
+  // zijn eigen allow-regels tellen; al het overige verkeer wordt als requested
+  // opgevoerd (zie de no-match-tak onderaan). De globale lookup wordt overgeslagen.
+  const airlocked = containerId ? getAirlocked(containerId) : false;
+
   if (containerId) {
     addExact(selectPerContainer.all(domain, containerId) as RuleRow[]);
     addWildcard(selectWildcardPerContainer.all(containerId) as RuleRow[]);
   }
-  addExact(selectGlobal.all(domain) as RuleRow[]);
-  addWildcard(selectWildcardGlobal.all() as RuleRow[]);
+  if (!airlocked) {
+    addExact(selectGlobal.all(domain) as RuleRow[]);
+    addWildcard(selectWildcardGlobal.all() as RuleRow[]);
+  }
 
   if (candidates.length > 0) {
     // Kies de meest specifieke. Bij gelijke specificiteit wint deny van allow
