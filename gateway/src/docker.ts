@@ -692,7 +692,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     ]),
   ];
 
-  const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir));
+  const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir), containerName);
 
   // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
   const mounts = [

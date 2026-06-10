@@ -10,9 +10,10 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout;
 }
 
-export async function ensureWorktree(repoRoot: string): Promise<string> {
-  const worktreePath = path.join(repoRoot, '.worktrees', 'devcontainer');
-  const branchName = 'worktree/devcontainer';
+export async function ensureWorktree(repoRoot: string, containerName: string): Promise<string> {
+  const sanitized = containerName.replace(/[^a-zA-Z0-9_-]/g, '-');
+  const worktreePath = path.join(repoRoot, '.worktrees', sanitized);
+  const branchName = `worktree/${sanitized}`;
 
   if (!fs.existsSync(path.join(repoRoot, '.git'))) {
     return repoRoot;
