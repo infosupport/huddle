@@ -887,8 +887,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return reply.sendFile('index.html');
   });
 
-  app.setErrorHandler((err, _req, reply) => {
-    if ((err as NodeJS.ErrnoException).code === 'ERR_HTTP_HEADERS_SENT') {
+  app.setErrorHandler((err: Error & { code?: string }, _req, reply) => {
+    if (err.code === 'ERR_HTTP_HEADERS_SENT') {
       return;
     }
     if (!reply.sent) {
