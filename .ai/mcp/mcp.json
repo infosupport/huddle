@@ -1,3 +1,11 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "aikido": {
+      "command": "node",
+      "args": ["/workspaces/huddle/mcp-aikido/dist/index.js"],
+      "env": {
+        "AIKIDO_ENV_PREFIX": "AIKIDO_WGK"
+      }
+    }
+  }
 }

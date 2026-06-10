@@ -1,0 +1,14 @@
+{
+  "id": "teams",
+  "name": "Microsoft Teams",
+  "version": "1.0.0",
+  "image": "teams-mcp:1.0",
+  "port": 8080,
+  "transport": "sse",
+  "settings": [
+    { "key": "tenantId",     "label": "Tenant ID" },
+    { "key": "clientId",     "label": "Client ID",     "secret": true },
+    { "key": "clientSecret", "label": "Client Secret", "secret": true },
+    { "key": "allowedUpns",  "label": "Toegestane UPN's voor DM (kommagescheiden)" }
+  ]
+}

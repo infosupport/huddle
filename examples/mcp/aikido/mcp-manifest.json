@@ -1,0 +1,13 @@
+{
+  "id": "aikido",
+  "name": "Aikido Security",
+  "version": "1.0.0",
+  "image": "aikido-mcp:1.0",
+  "port": 8080,
+  "transport": "sse",
+  "settings": [
+    { "key": "clientId",     "label": "Client ID",     "secret": true },
+    { "key": "clientSecret", "label": "Client Secret", "secret": true },
+    { "key": "repoName",     "label": "Repository naam (optioneel)" }
+  ]
+}
