@@ -5,6 +5,7 @@ import { createContainerProxy } from './socket-proxy';
 import { saveCredentials } from './db';
 import { getCaCertPem } from './tls-ca';
 import { getRunningMcpConfigs } from './mcp/manager';
+import { ensureWorktree } from './worktree';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -691,6 +692,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     ]),
   ];
 
+  const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir));
+
   // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
   const mounts = [
     ...(isVscode ? [] : [{
@@ -700,7 +703,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     }]),
     ...(empty ? [] : [{
       Type: 'bind',
-      Source: toLinuxPath(workspaceDir),
+      Source: effectiveSource,
       Target: containerWorkspace,
     }]),
     {
