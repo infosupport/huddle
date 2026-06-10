@@ -1,0 +1,12 @@
+{
+  "id": "toggl",
+  "name": "Toggl Track",
+  "version": "1.0.0",
+  "image": "toggl-mcp:1.0",
+  "port": 8080,
+  "transport": "sse",
+  "settings": [
+    { "key": "apiToken",    "label": "API Token",    "secret": true },
+    { "key": "workspaceId", "label": "Workspace ID" }
+  ]
+}
