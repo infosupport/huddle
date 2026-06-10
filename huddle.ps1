@@ -334,7 +334,6 @@ function Start-Devcontainer {
     $leafName           = Split-Path $workspaceDir -Leaf
     $containerWorkspace = "/workspaces/$leafName"
     $presentableName    = $leafName
-    $devcontainerId     = [System.Guid]::NewGuid().ToString("N")
     $workspaceDirFwd    = $workspaceDir.TrimEnd('\', '/') -replace '\\', '/'
 
     $defaultName   = "devcontainer-$presentableName"
@@ -348,204 +347,40 @@ function Start-Devcontainer {
         docker rm -f $containerName | Out-Null
     }
 
-    # ── VS Code-variant ──────────────────────────────────────────────────────
-    # VS Code installeert zijn eigen backend (VS Code Server) bij het attachen, dus
-    # geen JB host-config / RemoteDev-distro / model-backend nodig. Wel exact dezelfde
-    # com.intellij.devcontainer.* tracking-labels zodat snapshots en de listing-flow
-    # ongewijzigd blijven werken. Daarna alleen de firewall-redirect + curlrc zetten.
+    # De gateway doet alle container-aanmaaklogica: per-container socket-proxy,
+    # worktrees, AI-CLI volumes, MCP-config, TLS CA en de firewall-redirect.
+    # Het PS1-script delegeert daarom volledig naar de Huddle API.
+    Write-Host "  Container starten via Huddle API..." -ForegroundColor DarkCyan
+
+    $body = @{
+        imageName     = $picked.Name
+        workspaceDir  = $workspaceDirFwd
+        containerName = $containerName
+        ideName       = $ide.Key
+        empty         = $false
+    } | ConvertTo-Json
+
+    try {
+        $response = Invoke-RestMethod -Method Post `
+            -Uri "http://localhost:3000/api/docker/start" `
+            -ContentType "application/json" `
+            -Body $body
+        Write-Host "  [OK] Container '$containerName' gestart (ID: $($response.id))." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Aanmaken mislukt: $_" -ForegroundColor Red
+        Write-Host "  Zorg dat Huddle draait (optie 4 om te herstarten)." -ForegroundColor Yellow
+        return
+    }
+
     if ($ide.Key -eq 'vscode') {
-        $modelJson    = "{`"customizations`":{`"jetbrains`":{`"backend`":`"$($ide.Backend)`"}}}"
-        $metadataJson = '[{"remoteUser":"vscode"}]'
-
-        $labelFile = Join-Path $TempDir "dc-labels-${devcontainerId}.txt"
-        $lines = @(
-            "com.intellij.devcontainer.id=${devcontainerId}",
-            "com.intellij.devcontainer.presentable.name=${presentableName}",
-            "com.intellij.devcontainer.sources.path=${workspaceDirFwd}",
-            "com.intellij.devcontainer.workspace.path=${containerWorkspace}",
-            "com.intellij.devcontainer.model=${modelJson}",
-            "com.devcontainer.ide=vscode",
-            "devcontainer.metadata=${metadataJson}"
-        )
-        [IO.File]::WriteAllLines($labelFile, $lines, [Text.UTF8Encoding]::new($false))
-
-        $netName = "dc-net-${containerName}"
-        $netExists = docker network ls --filter "name=^${netName}$" --format "{{.Name}}"
-        if (-not $netExists) {
-            Write-Host "  Netwerk '$netName' aanmaken..." -ForegroundColor DarkCyan
-            docker network create $netName | Out-Null
-        }
-        docker network connect $netName $HUDDLE_CONTAINER 2>$null
-
-        Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
-        docker run -d `
-            --name $containerName `
-            --label-file $labelFile `
-            -e "_CONTAINER_USER=vscode" `
-            -e "_CONTAINER_USER_HOME=/home/vscode" `
-            -e "_REMOTE_USER=vscode" `
-            -e "_REMOTE_USER_HOME=/home/vscode" `
-            -e "http_proxy=http://huddle:80" `
-            -e "https_proxy=http://huddle:80" `
-            -e "HTTP_PROXY=http://huddle:80" `
-            -e "HTTPS_PROXY=http://huddle:80" `
-            -v "${workspaceDirFwd}:${containerWorkspace}" `
-            -v "${containerName}-claude-persistence:/home/vscode/.claude" `
-            --network $netName `
-            --cap-add NET_ADMIN `
-            --entrypoint '/bin/sh' `
-            $picked.Name '-c' 'while sleep 1000; do :; done' | Out-Null
-
-        Remove-Item $labelFile -Force -ErrorAction SilentlyContinue
-
-        Write-Host "  Firewall-redirect en CA-cert instellen..." -ForegroundColor DarkCyan
-        $nootPassword  = [System.Guid]::NewGuid().ToString("N").Substring(0, 16)
-        $caCertLines   = docker exec $HUDDLE_CONTAINER cat /data/ca.crt
-        $caCertPem     = ($caCertLines -join "`n") + "`n"
-        $caCertB64     = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($caCertPem))
-        $vscCmd = @'
-#!/bin/sh
-CURL_LINE='--proxy-header "X-Container-ID: CONTAINER_NAME_PLACEHOLDER"'
-grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
-
-HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
-iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \
-  iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
-iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
-iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
-iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
-
-mkdir -p /usr/local/share/ca-certificates
-echo 'CA_B64_PLACEHOLDER' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
-chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
-command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
-printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\n' > /etc/profile.d/99-huddle-ca.sh
-chmod 644 /etc/profile.d/99-huddle-ca.sh
-
-export DEBIAN_FRONTEND=noninteractive
-command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:PASSWORD_PLACEHOLDER" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
-
-mkdir -p CONTAINER_WORKSPACE_PLACEHOLDER 2>/dev/null || true
-chown -R vscode:vscode CONTAINER_WORKSPACE_PLACEHOLDER 2>/dev/null || true
-chmod -R u+rwX CONTAINER_WORKSPACE_PLACEHOLDER 2>/dev/null || true
-
-mkdir -p /etc/sudoers.d
-printf 'Defaults logfile=/tmp/sudo-audit.log\n' > /etc/sudoers.d/99-huddle-audit
-chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
-
-touch /tmp/sudo-audit.log
-( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    curl -sf -X POST "http://huddle:3000/api/audit/sudo" \
-      -H "Content-Type: application/json" \
-      -d "{\"container\":\"CONTAINER_NAME_PLACEHOLDER\",\"entry\":\"$(echo "$line" | sed 's/\"/\\\"/g')\"}" >/dev/null 2>&1 || true
-  done ) &
-'@
-        $vscCmd = ((((($vscCmd `
-            -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) `
-            -replace 'CA_B64_PLACEHOLDER', $caCertB64) `
-            -replace 'PASSWORD_PLACEHOLDER', $nootPassword) `
-            -replace 'CONTAINER_WORKSPACE_PLACEHOLDER', $containerWorkspace) -replace "`r`n", "`n")
-        $vscScriptFile = Join-Path $TempDir "vsc-config-${devcontainerId}.sh"
-        [IO.File]::WriteAllText($vscScriptFile, $vscCmd, [Text.UTF8Encoding]::new($false))
-        docker cp $vscScriptFile "${containerName}:/tmp/vsc-config.sh" | Out-Null
-        docker exec -u root $containerName sh /tmp/vsc-config.sh
-        Remove-Item $vscScriptFile -Force -ErrorAction SilentlyContinue
-
-        Write-Host "  [OK] Container '$containerName' klaar." -ForegroundColor Green
         Write-Host "  Verbind via VS Code: 'Dev Containers: Attach to Running Container' -> '$containerName'," -ForegroundColor Cyan
         Write-Host "  open daarna de map '$containerWorkspace'." -ForegroundColor Cyan
         return
     }
 
-    # Model JSON komt overeen met de IDE-keuze; JB Gateway leest dit label
-    # om te beslissen welk backend-distro het downloadt.
-    $modelJson    = "{`"customizations`":{`"jetbrains`":{`"backend`":`"$($ide.Backend)`"}}}"
-    $metadataJson = '[{"remoteUser":"vscode"}]'
-
-    $labelFile = Join-Path $TempDir "dc-labels-${devcontainerId}.txt"
-    $lines = @(
-        "com.intellij.devcontainer.id=${devcontainerId}",
-        "com.intellij.devcontainer.presentable.name=${presentableName}",
-        "com.intellij.devcontainer.sources.path=${workspaceDirFwd}",
-        "com.intellij.devcontainer.workspace.path=${containerWorkspace}",
-        "com.intellij.devcontainer.model=${modelJson}",
-        "devcontainer.metadata=${metadataJson}"
-    )
-    [IO.File]::WriteAllLines($labelFile, $lines, [Text.UTF8Encoding]::new($false))
-
-    $netName = "dc-net-${containerName}"
-    $netExists = docker network ls --filter "name=^${netName}$" --format "{{.Name}}"
-    if (-not $netExists) {
-        Write-Host "  Netwerk '$netName' aanmaken (intern)..." -ForegroundColor DarkCyan
-        docker network create --internal $netName | Out-Null
-    }
-    docker network connect $netName $HUDDLE_CONTAINER 2>$null
-
-    Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
-    docker run -d `
-        --name $containerName `
-        --label-file $labelFile `
-        -e "DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json" `
-        -e "_CONTAINER_USER=vscode" `
-        -e "_CONTAINER_USER_HOME=/home/vscode" `
-        -e "_REMOTE_USER=vscode" `
-        -e "_REMOTE_USER_HOME=/home/vscode" `
-        -e "XDG_DATA_HOME=/.jbdevcontainer/data" `
-        -e "http_proxy=http://huddle:80" `
-        -e "https_proxy=http://huddle:80" `
-        -e "HTTP_PROXY=http://huddle:80" `
-        -e "HTTPS_PROXY=http://huddle:80" `
-        -e "JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=" `
-        -v "jb_devcontainers_shared_volume:/.jbdevcontainer/JetBrains/RemoteDev/dist:z" `
-        -v "${containerName}-claude-persistence:/home/vscode/.claude" `
-        -v "${workspaceDirFwd}:${containerWorkspace}" `
-        --network $netName `
-        --cap-add NET_ADMIN `
-        --entrypoint '/bin/sh' `
-        $picked.Name '-c' 'while sleep 1000; do :; done' | Out-Null
-
-    Remove-Item $labelFile -Force -ErrorAction SilentlyContinue
-
-    Write-Host "  Host config aanmaken..." -ForegroundColor DarkCyan
-    # Filter het IDE-distro op naam — Rider-distros heten `*JetBrains.Rider-*`,
-    # IntelliJ-distros `*idea-*`. Tail -1 pakt de hoogste versie.
-    $ideFilter = if ($ide.Key -eq 'rider') { 'rider' } else { 'idea' }
-    $configCmd = @'
-#!/bin/sh
-IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ | grep -i IDE_FILTER_PLACEHOLDER | sort -t- -k2 -V | tail -1)
-IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
-BUILD=$(grep -o '"buildNumber":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
-CODE=$(grep -o '"productCode":"[^"]*"' "$IDEA_PATH/product-info.json" | cut -d'"' -f4)
-PROJ="WORKSPACE_PLACEHOLDER"
-mkdir -p /.jbdevcontainer/config/JetBrains
-printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
-
-CURL_LINE='--proxy-header "X-Container-ID: CONTAINER_NAME_PLACEHOLDER"'
-grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
-
-HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
-iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \
-  iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
-iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
-iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
-iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
-'@
-    $configCmd = (($configCmd `
-        -replace 'WORKSPACE_PLACEHOLDER', $containerWorkspace) `
-        -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) `
-        -replace 'IDE_FILTER_PLACEHOLDER', $ideFilter -replace "`r`n", "`n"
-    $configScriptFile = Join-Path $TempDir "jb-config-${devcontainerId}.sh"
-    [IO.File]::WriteAllText($configScriptFile, $configCmd, [Text.UTF8Encoding]::new($false))
-    docker cp $configScriptFile "${containerName}:/tmp/jb-config.sh" | Out-Null
-    docker exec -u root $containerName sh /tmp/jb-config.sh
-    Remove-Item $configScriptFile -Force -ErrorAction SilentlyContinue
-
-    Write-Host "  [OK] Container '$containerName' klaar." -ForegroundColor Green
     Write-Host "  Verbind via Remote Development > Dev Containers met '$containerName'" -ForegroundColor Cyan
+    $link = Invoke-RestMethod -Uri "http://localhost:3000/api/docker/containers/$containerName/ide-link" -ErrorAction SilentlyContinue
+    if ($link.link) { Write-Host "  IDE-link: $($link.link)" -ForegroundColor Cyan }
 }
 
 # ── Build base image ──────────────────────────────────────────────────────────
