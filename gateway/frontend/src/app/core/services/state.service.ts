@@ -18,6 +18,10 @@ export class StateService {
   grants$ = new BehaviorSubject<GrantMap>({});
   loaded$ = new BehaviorSubject<boolean>(false);
 
+  private ws: WebSocket | null = null;
+  // Debounce rapid consecutive triggers (e.g. WS message + timer race, or reconnect overlap)
+  private loadDebounce: ReturnType<typeof setTimeout> | null = null;
+
   constructor() {
     this.loadAll();
     if (isPlatformBrowser(this.platformId)) {
@@ -26,15 +30,25 @@ export class StateService {
     // Fallback poll every 30s in case WS drops
     timer(30_000, 30_000)
       .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe(() => this.loadAll());
+      .subscribe(() => this.triggerLoad());
   }
 
   private connectWs(): void {
+    // Close existing connection before creating a new one to prevent multiple active WS instances
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+      this.ws.onclose = null;
+      this.ws.close();
+    }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.onmessage = () => this.loadAll();
-    ws.onerror = () => ws.close();
-    ws.onclose = () => setTimeout(() => this.connectWs(), 3000);
+    this.ws = new WebSocket(`${proto}//${location.host}/ws`);
+    this.ws.onmessage = () => this.triggerLoad();
+    this.ws.onerror = () => this.ws?.close();
+    this.ws.onclose = () => setTimeout(() => this.connectWs(), 3000);
+  }
+
+  private triggerLoad(): void {
+    if (this.loadDebounce) clearTimeout(this.loadDebounce);
+    this.loadDebounce = setTimeout(() => this.loadAll(), 50);
   }
 
   loadAll(): void {
