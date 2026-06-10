@@ -44,15 +44,19 @@ export function initDb(): void {
       password TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS containers (
+      name TEXT PRIMARY KEY,
+      airlocked INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS ext_kv (
       ext_id TEXT NOT NULL,
       key TEXT NOT NULL,
       value TEXT NOT NULL,
       PRIMARY KEY (ext_id, key)
-    );
-    CREATE TABLE IF NOT EXISTS containers (
-      name TEXT PRIMARY KEY,
-      airlocked INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
@@ -126,6 +130,33 @@ export function initDb(): void {
   ).run(null, 'gateway', null, 'system:start', null, null, null, null, null, null, null, null);
 }
 
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+export function getSetting(key: string): string | null {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, value);
+}
+
+// ── Container airlock ────────────────────────────────────────────────────────
+
+export function getAirlocked(name: string): boolean {
+  const row = db.prepare(`SELECT airlocked FROM containers WHERE name = ?`)
+    .get(name) as { airlocked: number } | undefined;
+  return row?.airlocked === 1;
+}
+
+export function setAirlocked(name: string, value: boolean): void {
+  db.prepare(
+    `INSERT INTO containers (name, airlocked) VALUES (?, ?)
+     ON CONFLICT(name) DO UPDATE SET airlocked = excluded.airlocked`
+  ).run(name, value ? 1 : 0);
+}
+
 // ── Docker access grants ─────────────────────────────────────────────────────
 
 export function setGrant(containerId: string, until: number): void {
@@ -147,23 +178,6 @@ export function getAllGrants(): Record<string, { until: number }> {
   const rows = db.prepare(`SELECT container_id, until FROM docker_grants`).all() as
     { container_id: string; until: number }[];
   return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
-}
-
-// ── Container airlock ────────────────────────────────────────────────────────
-// Airlock-modus per container: als airlocked=1 negeert checkRule de globale
-// firewallregels en tellen alléén container-specifieke allow-regels.
-
-export function getAirlocked(name: string): boolean {
-  const row = db.prepare(`SELECT airlocked FROM containers WHERE name = ?`)
-    .get(name) as { airlocked: number } | undefined;
-  return row?.airlocked === 1;
-}
-
-export function setAirlocked(name: string, value: boolean): void {
-  db.prepare(
-    `INSERT INTO containers (name, airlocked) VALUES (?, ?)
-     ON CONFLICT(name) DO UPDATE SET airlocked = excluded.airlocked`
-  ).run(name, value ? 1 : 0);
 }
 
 // ── Audit logging ────────────────────────────────────────────────────────────

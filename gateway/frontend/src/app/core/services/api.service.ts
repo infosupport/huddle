@@ -9,6 +9,12 @@ import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
 import { McpServer } from '../models/mcp.model';
 
+export interface HuddleSettings {
+  claudeSettingsVolume: string;
+  codexSettingsVolume: string;
+  opencodeSettingsVolume: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private http = inject(HttpClient);
@@ -106,10 +112,6 @@ export class ApiService {
     return this.handle(this.http.post<{ok: boolean}>(`/api/docker/containers/${name}/reconnect-huddle`, {}));
   }
 
-  setAirlock(name: string, airlocked: boolean): Observable<{ airlocked: boolean }> {
-    return this.handle(this.http.post<{ airlocked: boolean }>(`/api/docker/containers/${name}/airlock`, { airlocked }));
-  }
-
   getIdeLink(name: string): Observable<{ link: string }> {
     return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
   }
@@ -172,6 +174,14 @@ export class ApiService {
 
   saveMcpSettings(id: string, values: Record<string, string>): Observable<void> {
     return this.handle(this.http.post<void>(`/api/mcp/${id}/settings`, values));
+  }
+
+  getSettings(): Observable<HuddleSettings> {
+    return this.handle(this.http.get<HuddleSettings>('/api/settings'));
+  }
+
+  saveSettings(settings: Partial<HuddleSettings>): Observable<{ ok: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean }>('/api/settings', settings));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; limit?: number }): Observable<AuditLog[]> {

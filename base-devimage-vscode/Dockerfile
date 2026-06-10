@@ -54,7 +54,14 @@ COPY --chown=vscode:vscode .ai/opencode/AGENTS.md           /home/vscode/.config
 COPY --chown=vscode:vscode .ai/opencode/opencode.json       /home/vscode/.config/opencode/opencode.json
 COPY --chown=vscode:vscode .ai/opencode/agents/             /home/vscode/.config/opencode/agents/
 COPY --chown=vscode:vscode .ai/mcp/mcp.json                 /home/vscode/.ai/mcp/mcp.json
-RUN chmod +x /home/vscode/.claude/statusline-command.sh
+# Read-only seed-kopie van de standaardinhoud. De gedeelde named volumes (zie
+# Huddle feature 13) worden over ~/.claude, ~/.codex en ~/.config/opencode
+# gemount en verbergen de COPY's hierboven; bij een leeg volume seedt het
+# config-script vanuit deze *-defaults mappen.
+COPY --chown=vscode:vscode .ai/claude/    /home/vscode/.claude-defaults/
+COPY --chown=vscode:vscode .ai/codex/     /home/vscode/.codex-defaults/
+COPY --chown=vscode:vscode .ai/opencode/  /home/vscode/.opencode-defaults/
+RUN chmod +x /home/vscode/.claude/statusline-command.sh /home/vscode/.claude-defaults/statusline-command.sh
 
 # vscode user lid maken van docker group (mcr base zet hem er niet automatisch in)
 RUN groupadd -f docker && usermod -aG docker vscode

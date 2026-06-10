@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { saveCredentials } from './db';
+import { saveCredentials, getSetting } from './db';
 import { getCaCertPem } from './tls-ca';
 import { getRunningMcpConfigs } from './mcp/manager';
 import { ensureWorktree } from './worktree';
@@ -419,6 +419,23 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
   try { await deleteNetwork(netName); } catch {}
 }
 
+// Seed de gedeelde AI-CLI-volumes met de image-defaults wanneer het volume nog
+// leeg is. De named volumes verbergen de COPY's uit de Dockerfile, dus zonder
+// deze stap mist een vers volume CLAUDE.md/AGENTS.md/agents enz. `cp -rn`
+// overschrijft nooit bestaande bestanden, dus een al ingelogd/geconfigureerd
+// volume blijft ongemoeid.
+const SETTINGS_VOLUME_SEED = `# Seed gedeelde AI CLI-instellingen vanuit de image-defaults bij leeg volume.
+for pair in ".claude:.claude-defaults" ".codex:.codex-defaults" ".config/opencode:.opencode-defaults"; do
+  dest="/home/vscode/\${pair%%:*}"
+  src="/home/vscode/\${pair##*:}"
+  [ -d "$src" ] || continue
+  if [ -z "$(ls -A "$dest" 2>/dev/null)" ]; then
+    mkdir -p "$dest"
+    cp -rn "$src"/. "$dest"/ 2>/dev/null || true
+    chown -R vscode:vscode "$dest" 2>/dev/null || true
+  fi
+done`;
+
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
 function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, mcpServers: Array<{ id: string; name: string; transport: string; port: number }> = []): string {
@@ -521,6 +538,8 @@ mkdir -p "${containerWorkspace}" 2>/dev/null || true
 chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
+${SETTINGS_VOLUME_SEED}
+
 # Configure sudo audit logging
 mkdir -p /etc/sudoers.d
 printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
@@ -588,6 +607,8 @@ usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
 chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+
+${SETTINGS_VOLUME_SEED}
 
 # Configure sudo audit logging
 mkdir -p /etc/sudoers.d
@@ -694,8 +715,23 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir), containerName);
 
+  // Gedeelde AI CLI-instellingen via named volumes. Lege waarde (= operator
+  // heeft de naam expliciet gewist) betekent: geen gedeeld volume, terugvallen
+  // op de image-default in de container.
+  const claudeVol = getSetting('claudeSettingsVolume') ?? 'huddle-claude-settings';
+  const codexVol = getSetting('codexSettingsVolume') ?? 'huddle-codex-settings';
+  const opencodeVol = getSetting('opencodeSettingsVolume') ?? 'huddle-opencode-settings';
+  const settingsVolumeMounts = [
+    { vol: claudeVol, target: '/home/vscode/.claude' },
+    { vol: codexVol, target: '/home/vscode/.codex' },
+    { vol: opencodeVol, target: '/home/vscode/.config/opencode' },
+  ]
+    .filter((m) => m.vol !== '')
+    .map((m) => ({ Type: 'volume' as const, Source: m.vol, Target: m.target }));
+
   // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
   const mounts = [
+    ...settingsVolumeMounts,
     ...(isVscode ? [] : [{
       Type: 'volume',
       Source: 'jb_devcontainers_shared_volume',

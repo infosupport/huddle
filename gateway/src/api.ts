@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, upsertMcpServer, getMcpServer, listMcpServers, deleteMcpServer, getMcpValue, setMcpValue, getAirlocked, setAirlocked } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, upsertMcpServer, getMcpServer, listMcpServers, deleteMcpServer, getMcpValue, setMcpValue, getAirlocked, setAirlocked, getSetting, setSetting } from './db';
 import { parseManifest } from './mcp/types';
 import { startMcpContainer, stopMcpContainer, getMcpTargetUrl } from './mcp/manager';
 import {
@@ -898,6 +898,26 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.setNotFoundHandler(async (_req, reply) => {
     return reply.sendFile('index.html');
   });
+
+  // ── Settings: gedeelde AI CLI-volume namen ────────────────────────────────
+  app.get('/api/settings', async () => {
+    return {
+      claudeSettingsVolume: getSetting('claudeSettingsVolume') ?? 'huddle-claude-settings',
+      codexSettingsVolume: getSetting('codexSettingsVolume') ?? 'huddle-codex-settings',
+      opencodeSettingsVolume: getSetting('opencodeSettingsVolume') ?? 'huddle-opencode-settings',
+    };
+  });
+
+  app.post<{ Body: { claudeSettingsVolume?: string; codexSettingsVolume?: string; opencodeSettingsVolume?: string } }>(
+    '/api/settings',
+    async (req) => {
+      const { claudeSettingsVolume, codexSettingsVolume, opencodeSettingsVolume } = req.body;
+      if (claudeSettingsVolume !== undefined) setSetting('claudeSettingsVolume', claudeSettingsVolume);
+      if (codexSettingsVolume !== undefined) setSetting('codexSettingsVolume', codexSettingsVolume);
+      if (opencodeSettingsVolume !== undefined) setSetting('opencodeSettingsVolume', opencodeSettingsVolume);
+      return { ok: true };
+    }
+  );
 
   app.setErrorHandler((err: Error & { code?: string }, _req, reply) => {
     if (err.code === 'ERR_HTTP_HEADERS_SENT') {

@@ -9,7 +9,7 @@ export const routes: Routes = [
   { path: 'docker-access', loadComponent: () => import('./pages/docker-access/docker-access.component').then(m => m.DockerAccessComponent) },
   { path: 'policies', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Policies' } },
   { path: 'audit', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },
-  { path: 'settings', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Settings' } },
+  { path: 'settings', loadComponent: () => import('./pages/settings/settings.component').then(m => m.SettingsComponent) },
   { path: 'extensions', loadComponent: () => import('./pages/extensions/extensions.component').then(m => m.ExtensionsPageComponent) },
   { path: 'extensions/:id/settings', loadComponent: () => import('./pages/extensions/settings/extension-settings.component').then(m => m.ExtensionSettingsComponent) },
   { path: 'extensions/view/:id', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
