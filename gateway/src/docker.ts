@@ -727,7 +727,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   // AI CLI-instellingen: eigen host-pad (bind, feature 14) of gedeeld named volume (feature 13).
   const claudeMount = buildProviderMount(
-    getSetting('claudeSettingsVolume') || 'huddle-claude-settings',
+    getSetting('claudeSettingsVolume') ?? `${containerName}-claude-persistence`,
     getSetting('claudeSettingsPath'),
     '/home/vscode/.claude',
   );
@@ -751,11 +751,6 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Source: 'jb_devcontainers_shared_volume',
       Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
     }]),
-    {
-      Type: 'volume',
-      Source: `${containerName}-claude-persistence`,
-      Target: '/home/vscode/.claude',
-    },
     ...(empty ? [] : [{
       Type: 'bind',
       Source: effectiveSource,
