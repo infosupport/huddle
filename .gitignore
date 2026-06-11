@@ -15,3 +15,4 @@ compare-working-devcontainer-empty2.json
 
 # Feature planning docs — local only, not for remote
 features/
+.worktrees/
