@@ -29,6 +29,8 @@ $IDE_DEFS = @(
     [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'base-devimage-vscode';   Folder = 'base-devimage-vscode' }
 )
 
+$TempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR.TrimEnd('/') } else { '/tmp' }
+
 function Write-Banner {
     Clear-Host
 #     Write-Host ""
@@ -71,6 +73,7 @@ function Show-Menu {
 # Host-net container die WSL2 :SPARKY_PORT doorzet naar de Windows-host (vanwaar netsh
 # het naar sparky stuurt). Idempotent: draait hij al -> niets; gestopt -> opnieuw aanmaken.
 function Start-SparkyProxy {
+    if (-not $IsWindows) { return }
     $running = docker ps --filter "name=^${SPARKY_PROXY}$" --format "{{.Names}}"
     if ($running) { return }
 
@@ -118,7 +121,7 @@ function Start-Huddle {
     $imageExists = docker images --filter "reference=${HUDDLE_IMAGE}" --format "{{.Repository}}"
     if (-not $imageExists) {
         Write-Host "  Image '${HUDDLE_IMAGE}' niet gevonden -- bouwen..." -ForegroundColor DarkCyan
-        $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+        $scriptDir = $PSScriptRoot
         docker build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway")
         if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
     }
@@ -127,7 +130,7 @@ function Start-Huddle {
     if ($stopped) { docker rm $HUDDLE_CONTAINER | Out-Null }
 
     Write-Host "  Huddle starten..." -ForegroundColor DarkCyan
-    $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+    $scriptDir = $PSScriptRoot
     $bugtrackerDir = Join-Path $scriptDir "bugtracker"
     New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "bugs") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "solved") | Out-Null
@@ -177,7 +180,7 @@ function Restart-Huddle {
 # ── Build Huddle image ────────────────────────────────────────────────────────
 
 function Build-HuddleImage {
-    $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+    $scriptDir = $PSScriptRoot
     Write-Host "  Image '${HUDDLE_IMAGE}' bouwen..." -ForegroundColor DarkCyan
     docker build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway")
     if ($LASTEXITCODE -eq 0) {
@@ -317,7 +320,7 @@ function Start-Devcontainer {
     # Auto-build de standaard-image als die nog niet bestaat.
     if ($picked.Kind -eq 'standaard' -and $LASTEXITCODE -ne 0) {
         Write-Host "  Image '$($picked.Name)' nog niet aanwezig -- bouwen..." -ForegroundColor DarkCyan
-        $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+        $scriptDir = $PSScriptRoot
         # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
         docker build -t $picked.Name -f (Join-Path $scriptDir "$($ide.Folder)/Dockerfile") $scriptDir
         if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
@@ -354,7 +357,7 @@ function Start-Devcontainer {
         $modelJson    = "{`"customizations`":{`"jetbrains`":{`"backend`":`"$($ide.Backend)`"}}}"
         $metadataJson = '[{"remoteUser":"vscode"}]'
 
-        $labelFile = Join-Path $env:TEMP "dc-labels-${devcontainerId}.txt"
+        $labelFile = Join-Path $TempDir "dc-labels-${devcontainerId}.txt"
         $lines = @(
             "com.intellij.devcontainer.id=${devcontainerId}",
             "com.intellij.devcontainer.presentable.name=${presentableName}",
@@ -366,11 +369,13 @@ function Start-Devcontainer {
         )
         [IO.File]::WriteAllLines($labelFile, $lines, [Text.UTF8Encoding]::new($false))
 
-        $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
+        $netName = "dc-net-${containerName}"
+        $netExists = docker network ls --filter "name=^${netName}$" --format "{{.Name}}"
         if (-not $netExists) {
-            Write-Host "  Netwerk 'devcontainer-net' aanmaken (intern)..." -ForegroundColor DarkCyan
-            docker network create --internal devcontainer-net | Out-Null
+            Write-Host "  Netwerk '$netName' aanmaken..." -ForegroundColor DarkCyan
+            docker network create $netName | Out-Null
         }
+        docker network connect $netName $HUDDLE_CONTAINER 2>$null
 
         Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
         docker run -d `
@@ -385,13 +390,19 @@ function Start-Devcontainer {
             -e "HTTP_PROXY=http://huddle:80" `
             -e "HTTPS_PROXY=http://huddle:80" `
             -v "${workspaceDirFwd}:${containerWorkspace}" `
-            --network devcontainer-net `
+            -v "${containerName}-claude-persistence:/home/vscode/.claude" `
+            --network $netName `
             --cap-add NET_ADMIN `
-            $picked.Name | Out-Null
+            --entrypoint '/bin/sh' `
+            $picked.Name '-c' 'while sleep 1000; do :; done' | Out-Null
 
         Remove-Item $labelFile -Force -ErrorAction SilentlyContinue
 
-        Write-Host "  Firewall-redirect instellen..." -ForegroundColor DarkCyan
+        Write-Host "  Firewall-redirect en CA-cert instellen..." -ForegroundColor DarkCyan
+        $nootPassword  = [System.Guid]::NewGuid().ToString("N").Substring(0, 16)
+        $caCertLines   = docker exec $HUDDLE_CONTAINER cat /data/ca.crt
+        $caCertPem     = ($caCertLines -join "`n") + "`n"
+        $caCertB64     = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($caCertPem))
         $vscCmd = @'
 #!/bin/sh
 CURL_LINE='--proxy-header "X-Container-ID: CONTAINER_NAME_PLACEHOLDER"'
@@ -403,10 +414,42 @@ iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
 iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
+
+mkdir -p /usr/local/share/ca-certificates
+echo 'CA_B64_PLACEHOLDER' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
+chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
+command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
+printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\n' > /etc/profile.d/99-huddle-ca.sh
+chmod 644 /etc/profile.d/99-huddle-ca.sh
+
+export DEBIAN_FRONTEND=noninteractive
+command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
+id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
+echo "noot:PASSWORD_PLACEHOLDER" | chpasswd
+usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+
+mkdir -p CONTAINER_WORKSPACE_PLACEHOLDER 2>/dev/null || true
+chown -R vscode:vscode CONTAINER_WORKSPACE_PLACEHOLDER 2>/dev/null || true
+chmod -R u+rwX CONTAINER_WORKSPACE_PLACEHOLDER 2>/dev/null || true
+
+mkdir -p /etc/sudoers.d
+printf 'Defaults logfile=/tmp/sudo-audit.log\n' > /etc/sudoers.d/99-huddle-audit
+chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+
+touch /tmp/sudo-audit.log
+( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    curl -sf -X POST "http://huddle:3000/api/audit/sudo" \
+      -H "Content-Type: application/json" \
+      -d "{\"container\":\"CONTAINER_NAME_PLACEHOLDER\",\"entry\":\"$(echo "$line" | sed 's/\"/\\\"/g')\"}" >/dev/null 2>&1 || true
+  done ) &
 '@
-        $vscCmd = ($vscCmd `
-            -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) -replace "`r`n", "`n"
-        $vscScriptFile = Join-Path $env:TEMP "vsc-config-${devcontainerId}.sh"
+        $vscCmd = ((((($vscCmd `
+            -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) `
+            -replace 'CA_B64_PLACEHOLDER', $caCertB64) `
+            -replace 'PASSWORD_PLACEHOLDER', $nootPassword) `
+            -replace 'CONTAINER_WORKSPACE_PLACEHOLDER', $containerWorkspace) -replace "`r`n", "`n")
+        $vscScriptFile = Join-Path $TempDir "vsc-config-${devcontainerId}.sh"
         [IO.File]::WriteAllText($vscScriptFile, $vscCmd, [Text.UTF8Encoding]::new($false))
         docker cp $vscScriptFile "${containerName}:/tmp/vsc-config.sh" | Out-Null
         docker exec -u root $containerName sh /tmp/vsc-config.sh
@@ -423,7 +466,7 @@ iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DR
     $modelJson    = "{`"customizations`":{`"jetbrains`":{`"backend`":`"$($ide.Backend)`"}}}"
     $metadataJson = '[{"remoteUser":"vscode"}]'
 
-    $labelFile = Join-Path $env:TEMP "dc-labels-${devcontainerId}.txt"
+    $labelFile = Join-Path $TempDir "dc-labels-${devcontainerId}.txt"
     $lines = @(
         "com.intellij.devcontainer.id=${devcontainerId}",
         "com.intellij.devcontainer.presentable.name=${presentableName}",
@@ -434,11 +477,13 @@ iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DR
     )
     [IO.File]::WriteAllLines($labelFile, $lines, [Text.UTF8Encoding]::new($false))
 
-    $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
+    $netName = "dc-net-${containerName}"
+    $netExists = docker network ls --filter "name=^${netName}$" --format "{{.Name}}"
     if (-not $netExists) {
-        Write-Host "  Netwerk 'devcontainer-net' aanmaken (intern)..." -ForegroundColor DarkCyan
-        docker network create --internal devcontainer-net | Out-Null
+        Write-Host "  Netwerk '$netName' aanmaken (intern)..." -ForegroundColor DarkCyan
+        docker network create --internal $netName | Out-Null
     }
+    docker network connect $netName $HUDDLE_CONTAINER 2>$null
 
     Write-Host "  Container starten als '$containerName'..." -ForegroundColor DarkCyan
     docker run -d `
@@ -456,10 +501,12 @@ iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DR
         -e "HTTPS_PROXY=http://huddle:80" `
         -e "JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=" `
         -v "jb_devcontainers_shared_volume:/.jbdevcontainer/JetBrains/RemoteDev/dist:z" `
+        -v "${containerName}-claude-persistence:/home/vscode/.claude" `
         -v "${workspaceDirFwd}:${containerWorkspace}" `
-        --network devcontainer-net `
+        --network $netName `
         --cap-add NET_ADMIN `
-        $picked.Name | Out-Null
+        --entrypoint '/bin/sh' `
+        $picked.Name '-c' 'while sleep 1000; do :; done' | Out-Null
 
     Remove-Item $labelFile -Force -ErrorAction SilentlyContinue
 
@@ -491,7 +538,7 @@ iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DR
         -replace 'WORKSPACE_PLACEHOLDER', $containerWorkspace) `
         -replace 'CONTAINER_NAME_PLACEHOLDER', $containerName) `
         -replace 'IDE_FILTER_PLACEHOLDER', $ideFilter -replace "`r`n", "`n"
-    $configScriptFile = Join-Path $env:TEMP "jb-config-${devcontainerId}.sh"
+    $configScriptFile = Join-Path $TempDir "jb-config-${devcontainerId}.sh"
     [IO.File]::WriteAllText($configScriptFile, $configCmd, [Text.UTF8Encoding]::new($false))
     docker cp $configScriptFile "${containerName}:/tmp/jb-config.sh" | Out-Null
     docker exec -u root $containerName sh /tmp/jb-config.sh
@@ -517,7 +564,7 @@ function Build-BaseImage {
     if ($sel -lt 0 -or $sel -ge $IDE_DEFS.Count) { Write-Host "  Ongeldige IDE-keuze." -ForegroundColor Red; return }
     $ide = $IDE_DEFS[$sel]
 
-    $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+    $scriptDir = $PSScriptRoot
     $buildPath = Join-Path $scriptDir $ide.Folder
     if (-not (Test-Path (Join-Path $buildPath 'Dockerfile'))) {
         Write-Host "  Dockerfile niet gevonden: $buildPath\Dockerfile" -ForegroundColor Red
@@ -539,7 +586,7 @@ function Build-BaseImage {
 # Output per build gaat naar een eigen logbestand in $env:TEMP (parallelle builds
 # door elkaar op de console is onleesbaar); aan het eind volgt een overzicht.
 function Build-AllBaseImages {
-    $scriptDir = Split-Path $MyInvocation.ScriptName -Parent
+    $scriptDir = $PSScriptRoot
     Write-Host "  Alle base images parallel bouwen..." -ForegroundColor DarkCyan
     Write-Host ""
 
@@ -550,8 +597,8 @@ function Build-AllBaseImages {
             Write-Host "  [SKIP] Dockerfile niet gevonden voor $($ide.Display): $dockerfile" -ForegroundColor Yellow
             continue
         }
-        $logOut = Join-Path $env:TEMP "huddle-build-$($ide.Key).out.log"
-        $logErr = Join-Path $env:TEMP "huddle-build-$($ide.Key).err.log"
+        $logOut = Join-Path $TempDir "huddle-build-$($ide.Key).out.log"
+        $logErr = Join-Path $TempDir "huddle-build-$($ide.Key).err.log"
         # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
         $proc = Start-Process -FilePath 'docker' `
             -ArgumentList @('build', '-t', $ide.Image, '-f', $dockerfile, $scriptDir) `

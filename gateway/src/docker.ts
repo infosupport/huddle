@@ -701,6 +701,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Source: 'jb_devcontainers_shared_volume',
       Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
     }]),
+    {
+      Type: 'volume',
+      Source: `${containerName}-claude-persistence`,
+      Target: '/home/vscode/.claude',
+    },
     ...(empty ? [] : [{
       Type: 'bind',
       Source: effectiveSource,
