@@ -180,8 +180,8 @@ export class ApiService {
     return this.handle(this.http.get<HuddleSettings>('/api/settings'));
   }
 
-  saveSettings(settings: Partial<HuddleSettings>): Observable<{ ok: boolean }> {
-    return this.handle(this.http.post<{ ok: boolean }>('/api/settings', settings));
+  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean }>('/api/settings', values));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; limit?: number }): Observable<AuditLog[]> {

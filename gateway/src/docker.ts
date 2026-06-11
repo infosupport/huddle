@@ -637,6 +637,16 @@ function toLinuxPath(p: string): string {
   return p;
 }
 
+interface ProviderMount { Type: 'bind' | 'volume'; Source: string; Target: string; }
+function buildProviderMount(volName: string, pathSetting: string | null, containerTarget: string): ProviderMount | null {
+  if (pathSetting && pathSetting.trim()) {
+    return { Type: 'bind', Source: pathSetting.trim(), Target: containerTarget };
+  } else if (volName) {
+    return { Type: 'volume', Source: volName, Target: containerTarget };
+  }
+  return null;
+}
+
 export interface StartParams {
   imageName: string;
   workspaceDir: string;     // host path, forward slashes; empty string when empty=true
@@ -715,19 +725,23 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir), containerName);
 
-  // Gedeelde AI CLI-instellingen via named volumes. Lege waarde (= operator
-  // heeft de naam expliciet gewist) betekent: geen gedeeld volume, terugvallen
-  // op de image-default in de container.
-  const claudeVol = getSetting('claudeSettingsVolume') ?? 'huddle-claude-settings';
-  const codexVol = getSetting('codexSettingsVolume') ?? 'huddle-codex-settings';
-  const opencodeVol = getSetting('opencodeSettingsVolume') ?? 'huddle-opencode-settings';
-  const settingsVolumeMounts = [
-    { vol: claudeVol, target: '/home/vscode/.claude' },
-    { vol: codexVol, target: '/home/vscode/.codex' },
-    { vol: opencodeVol, target: '/home/vscode/.config/opencode' },
-  ]
-    .filter((m) => m.vol !== '')
-    .map((m) => ({ Type: 'volume' as const, Source: m.vol, Target: m.target }));
+  // AI CLI-instellingen: eigen host-pad (bind, feature 14) of gedeeld named volume (feature 13).
+  const claudeMount = buildProviderMount(
+    getSetting('claudeSettingsVolume') || 'huddle-claude-settings',
+    getSetting('claudeSettingsPath'),
+    '/home/vscode/.claude',
+  );
+  const codexMount = buildProviderMount(
+    getSetting('codexSettingsVolume') || 'huddle-codex-settings',
+    getSetting('codexSettingsPath'),
+    '/home/vscode/.codex',
+  );
+  const opencodeMount = buildProviderMount(
+    getSetting('opencodeSettingsVolume') || 'huddle-opencode-settings',
+    getSetting('opencodeSettingsPath'),
+    '/home/vscode/.config/opencode',
+  );
+  const settingsVolumeMounts = [claudeMount, codexMount, opencodeMount].filter(Boolean) as ProviderMount[];
 
   // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
   const mounts = [

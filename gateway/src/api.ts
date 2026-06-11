@@ -905,16 +905,22 @@ export async function createApiServer(): Promise<FastifyInstance> {
       claudeSettingsVolume: getSetting('claudeSettingsVolume') ?? 'huddle-claude-settings',
       codexSettingsVolume: getSetting('codexSettingsVolume') ?? 'huddle-codex-settings',
       opencodeSettingsVolume: getSetting('opencodeSettingsVolume') ?? 'huddle-opencode-settings',
+      claudeSettingsPath: getSetting('claudeSettingsPath') ?? '',
+      codexSettingsPath: getSetting('codexSettingsPath') ?? '',
+      opencodeSettingsPath: getSetting('opencodeSettingsPath') ?? '',
     };
   });
 
-  app.post<{ Body: { claudeSettingsVolume?: string; codexSettingsVolume?: string; opencodeSettingsVolume?: string } }>(
+  app.post<{ Body: { claudeSettingsVolume?: string; codexSettingsVolume?: string; opencodeSettingsVolume?: string; claudeSettingsPath?: string; codexSettingsPath?: string; opencodeSettingsPath?: string } }>(
     '/api/settings',
     async (req) => {
-      const { claudeSettingsVolume, codexSettingsVolume, opencodeSettingsVolume } = req.body;
+      const { claudeSettingsVolume, codexSettingsVolume, opencodeSettingsVolume, claudeSettingsPath, codexSettingsPath, opencodeSettingsPath } = req.body;
       if (claudeSettingsVolume !== undefined) setSetting('claudeSettingsVolume', claudeSettingsVolume);
       if (codexSettingsVolume !== undefined) setSetting('codexSettingsVolume', codexSettingsVolume);
       if (opencodeSettingsVolume !== undefined) setSetting('opencodeSettingsVolume', opencodeSettingsVolume);
+      if (claudeSettingsPath !== undefined) setSetting('claudeSettingsPath', claudeSettingsPath);
+      if (codexSettingsPath !== undefined) setSetting('codexSettingsPath', codexSettingsPath);
+      if (opencodeSettingsPath !== undefined) setSetting('opencodeSettingsPath', opencodeSettingsPath);
       return { ok: true };
     }
   );
