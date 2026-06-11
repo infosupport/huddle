@@ -480,8 +480,8 @@ touch /tmp/sudo-audit.log
     $netName = "dc-net-${containerName}"
     $netExists = docker network ls --filter "name=^${netName}$" --format "{{.Name}}"
     if (-not $netExists) {
-        Write-Host "  Netwerk '$netName' aanmaken..." -ForegroundColor DarkCyan
-        docker network create $netName | Out-Null
+        Write-Host "  Netwerk '$netName' aanmaken (intern)..." -ForegroundColor DarkCyan
+        docker network create --internal $netName | Out-Null
     }
     docker network connect $netName $HUDDLE_CONTAINER 2>$null
 
