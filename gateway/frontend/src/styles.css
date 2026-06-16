@@ -732,6 +732,11 @@ a.kpi:hover { border-color: var(--accent); box-shadow: var(--shadow-pop); }
 .modal-body input:disabled {
   opacity: .55; cursor: not-allowed;
 }
+.workspace-input-row {
+  display: flex; gap: .4rem; align-items: stretch;
+}
+.workspace-input-row input { flex: 1; min-width: 0; }
+.workspace-browse-btn { flex-shrink: 0; padding: .45rem .6rem; font-size: 1rem; line-height: 1; }
 .modal-footer {
   display: flex; gap: .5rem; justify-content: flex-end;
   padding: .75rem 1.25rem 1rem;

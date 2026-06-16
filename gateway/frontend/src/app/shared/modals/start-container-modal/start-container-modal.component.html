@@ -34,7 +34,17 @@
         </label>
 
         <label for="start-workspace">Workspace directory</label>
-        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" [disabled]="empty" />
+        <div class="workspace-input-row">
+          <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" [disabled]="empty" list="workspace-suggestions" />
+          @if (!empty) {
+            <button type="button" class="btn btn-ghost btn-sm workspace-browse-btn" (click)="browseWorkspace()" title="Bladeren">📂</button>
+          }
+        </div>
+        <datalist id="workspace-suggestions">
+          @for (ws of workspaceSuggestions; track ws) {
+            <option [value]="ws"></option>
+          }
+        </datalist>
 
         <label for="start-name">Containernaam</label>
         <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-mijn-project" />

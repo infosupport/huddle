@@ -67,6 +67,10 @@ export class ApiService {
     return this.handle(this.http.post<{ imageId: string }>(`/api/docker/containers/${name}/snapshot`, { imageName }));
   }
 
+  getWorkspaces(): Observable<string[]> {
+    return this.handle(this.http.get<string[]>('/api/docker/workspaces'));
+  }
+
   getImages(ide?: string): Observable<DockerImage[]> {
     const params = ide ? { ide } : undefined;
     return this.handle(this.http.get<DockerImage[]>('/api/docker/images', params ? { params } : undefined));

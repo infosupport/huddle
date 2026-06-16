@@ -325,6 +325,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // ── Docker management ──────────────────────────────────────────────────────
 
+  app.get('/api/docker/workspaces', async () => {
+    const containers = await listDevcontainers();
+    return [...new Set(containers.map((c) => c.workspacePath).filter(Boolean))].sort();
+  });
+
   app.get('/api/docker/containers', async () => {
     const [containers, requestedCounts] = await Promise.all([
       listDevcontainers(),

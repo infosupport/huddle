@@ -29,6 +29,7 @@ export class StartContainerModalComponent {
   error = '';
   status = '';
   loading = false;
+  workspaceSuggestions: string[] = [];
 
   get open() { return this.modalService.startOpen(); }
 
@@ -51,6 +52,7 @@ export class StartContainerModalComponent {
     this.status = '';
     this.loading = false;
     this.loadImagesForIde();
+    this.api.getWorkspaces().subscribe({ next: ws => { this.workspaceSuggestions = ws; }, error: () => {} });
   }
 
   // De IDE-keuze stuurt zowel de default base-image als het snapshot-filter.
@@ -73,6 +75,23 @@ export class StartContainerModalComponent {
       const leaf = this.workspace.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? '';
       this.containerName = leaf ? `devcontainer-${leaf}` : '';
     }
+  }
+
+  async browseWorkspace(): Promise<void> {
+    try {
+      const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
+      const folderName: string = handle.name;
+      const parent = localStorage.getItem('huddle.lastWorkspaceParent')
+        ?? this.inferParentFromSuggestions();
+      this.workspace = parent ? `${parent}/${folderName}` : folderName;
+      this.onWorkspaceInput();
+    } catch { /* user cancelled */ }
+  }
+
+  private inferParentFromSuggestions(): string {
+    if (!this.workspaceSuggestions.length) return '';
+    const first = this.workspaceSuggestions[0].replace(/\\/g, '/');
+    return first.substring(0, first.lastIndexOf('/'));
   }
 
   onEmptyToggle(): void {
@@ -98,7 +117,14 @@ export class StartContainerModalComponent {
       containerName: this.containerName,
       empty: this.empty,
     }).subscribe({
-      next: () => { this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
+      next: () => {
+        if (this.workspace) {
+          const norm = this.workspace.replace(/\\/g, '/');
+          const parent = norm.substring(0, norm.lastIndexOf('/'));
+          if (parent) localStorage.setItem('huddle.lastWorkspaceParent', parent);
+        }
+        this.loading = false; this.modalService.closeStart(); this.state.loadAll();
+      },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },
     });
   }
