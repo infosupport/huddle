@@ -680,6 +680,7 @@ a.kpi:hover { border-color: var(--accent); box-shadow: var(--shadow-pop); }
 .form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
 .form-error { color: var(--danger); font-size: 13px; margin-top: 6px; }
 .form-status { color: var(--info); font-size: 13px; margin-top: 6px; }
+.form-hint { color: var(--text-muted, #888); font-size: 12px; margin-top: 4px; }
 
 /* ===== Modals ===== */
 .modal {

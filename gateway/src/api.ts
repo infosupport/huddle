@@ -478,7 +478,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
         const id = await createAndStartContainer(params);
         return { id, containerName };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        const msg = String(err?.message ?? err);
+        // De bind-mount wordt door de Docker-host (niet door deze gateway) opgelost.
+        // Een niet-bestaand pad levert een cryptische 400 op; maak die actionable.
+        if (/bind source path does not exist/i.test(msg)) {
+          return reply.code(400).send({
+            error: `Workspace-map niet gevonden op de Docker-host: ${fwd}. Controleer of het volledige pad bestaat (devcontainers worden t.o.v. de host opgelost, bv. C:/Projects/...).`,
+          });
+        }
+        return reply.code(500).send({ error: msg });
       }
     }
   );

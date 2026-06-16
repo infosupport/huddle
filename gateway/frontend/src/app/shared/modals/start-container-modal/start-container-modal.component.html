@@ -37,9 +37,12 @@
         <div class="workspace-input-row">
           <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" [disabled]="empty" list="workspace-suggestions" />
           @if (!empty) {
-            <button type="button" class="btn btn-ghost btn-sm workspace-browse-btn" (click)="browseWorkspace()" title="Bladeren">📂</button>
+            <button type="button" class="btn btn-ghost btn-sm workspace-browse-btn" (click)="browseWorkspace()" title="Bladeren in Verkenner">📂</button>
           }
         </div>
+        @if (!empty) {
+          <p class="form-hint">Blader naar de map. Kopieer het volledige pad uit de adresbalk van Verkenner, dan wordt het hier automatisch ingevuld; anders kun je het pad zelf plakken of typen.</p>
+        }
         <datalist id="workspace-suggestions">
           @for (ws of workspaceSuggestions; track ws) {
             <option [value]="ws"></option>

@@ -77,21 +77,41 @@ export class StartContainerModalComponent {
     }
   }
 
+  // Opent het Verkenner-venster zodat de gebruiker naar de map kan bladeren.
+  // De browser geeft bewust alleen de mapnaam terug, niet het absolute pad
+  // (security). Daarom lezen we daarnaast het klembord: heeft de gebruiker het
+  // volledige pad uit de adresbalk van Verkenner gekopieerd, dan vullen we dat
+  // automatisch in; anders nemen we de mapnaam als beginpunt. Het veld blijft
+  // bewerkbaar, dus een verkeerde gok is altijd corrigeerbaar.
   async browseWorkspace(): Promise<void> {
+    let folderName = '';
     try {
       const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
-      const folderName: string = handle.name;
-      const parent = localStorage.getItem('huddle.lastWorkspaceParent')
-        ?? this.inferParentFromSuggestions();
-      this.workspace = parent ? `${parent}/${folderName}` : folderName;
+      folderName = handle?.name ?? '';
+    } catch {
+      return; // gebruiker annuleerde
+    }
+    let chosen = folderName;
+    try {
+      const clip = this.normalizePastedPath(await navigator.clipboard.readText());
+      const leaf = clip.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+      // Gebruik het geplakte pad alleen als het bij de gekozen map hoort, zodat
+      // een toevallig oud klembord-pad niet de selectie overschrijft.
+      if (clip && (!folderName || leaf === folderName)) {
+        chosen = clip;
+      }
+    } catch {
+      // Klembord niet beschikbaar (geen toestemming / onveilige context).
+    }
+    if (chosen) {
+      this.workspace = chosen;
       this.onWorkspaceInput();
-    } catch { /* user cancelled */ }
+    }
   }
 
-  private inferParentFromSuggestions(): string {
-    if (!this.workspaceSuggestions.length) return '';
-    const first = this.workspaceSuggestions[0].replace(/\\/g, '/');
-    return first.substring(0, first.lastIndexOf('/'));
+  // Windows' "Als pad kopiëren" zet het pad tussen dubbele quotes; strip die.
+  private normalizePastedPath(text: string): string {
+    return text.trim().replace(/^"+|"+$/g, '').trim();
   }
 
   onEmptyToggle(): void {
@@ -118,11 +138,6 @@ export class StartContainerModalComponent {
       empty: this.empty,
     }).subscribe({
       next: () => {
-        if (this.workspace) {
-          const norm = this.workspace.replace(/\\/g, '/');
-          const parent = norm.substring(0, norm.lastIndexOf('/'));
-          if (parent) localStorage.setItem('huddle.lastWorkspaceParent', parent);
-        }
         this.loading = false; this.modalService.closeStart(); this.state.loadAll();
       },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },
