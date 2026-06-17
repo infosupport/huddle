@@ -144,5 +144,23 @@ export class StartContainerModalComponent {
     });
   }
 
+  // Onthoudt of de muisknop op de backdrop zélf ingedrukt werd (buiten de box).
+  // Een 'click' vuurt op de gemeenschappelijke voorouder van mousedown + mouseup,
+  // dus een selectie die binnen de box start en buiten eindigt zou anders de
+  // popup sluiten. Door alleen te sluiten als de druk op de backdrop begon,
+  // sluit van-binnen-naar-buiten selecteren de popup niet, maar buiten klikken wel.
+  private backdropMouseDown = false;
+
+  onBackdropMouseDown(event: MouseEvent): void {
+    this.backdropMouseDown = event.target === event.currentTarget;
+  }
+
+  onBackdropClick(event: MouseEvent): void {
+    if (this.backdropMouseDown && event.target === event.currentTarget) {
+      this.close();
+    }
+    this.backdropMouseDown = false;
+  }
+
   close(): void { this.modalService.closeStart(); }
 }

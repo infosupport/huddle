@@ -1,6 +1,6 @@
 @if (open) {
-  <div class="modal" (click)="close()">
-    <div class="modal-box" (click)="$event.stopPropagation()">
+  <div class="modal" (mousedown)="onBackdropMouseDown($event)" (click)="onBackdropClick($event)">
+    <div class="modal-box">
       <div class="modal-header">
         <h2>Start devcontainer</h2>
         <button class="modal-close" (click)="close()">✕</button>
