@@ -29,5 +29,7 @@ mkdir -p "$AUDIT_DIR"
 if [ -f "$SESSION_FILE" ]; then
     DEST="${AUDIT_DIR}/${DATE}-${SESSION_ID}.jsonl"
     cp "$SESSION_FILE" "$DEST"
-    git -C "$WORKSPACE" add "$DEST"
+    if git -C "$WORKSPACE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$WORKSPACE" add "$DEST" >/dev/null 2>&1 || true
+    fi
 fi

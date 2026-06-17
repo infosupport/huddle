@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash $HOME/.claude/hooks/audit-session.sh"
+            "command": "bash ~/.claude/hooks/audit-session.sh"
           }
         ]
       }
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash $HOME/.claude/hooks/audit-prompt.sh"
+            "command": "bash ~/.claude/hooks/audit-prompt.sh"
           }
         ]
       }

@@ -24,17 +24,19 @@ TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 python3 -c "
 import json, sys
 
-data = json.loads(sys.argv[1])
+data = json.loads(sys.stdin.read())
 entry = {
-    'ts': sys.argv[2],
-    'user': sys.argv[3],
-    'email': sys.argv[4],
-    'session': sys.argv[5],
+    'ts': sys.argv[1],
+    'user': sys.argv[2],
+    'email': sys.argv[3],
+    'session': sys.argv[4],
     'event': 'prompt',
     'prompt': data.get('prompt', ''),
 }
-with open(sys.argv[6], 'a') as f:
+with open(sys.argv[5], 'a') as f:
     f.write(json.dumps(entry) + '\n')
-" "$INPUT" "$TIMESTAMP" "$GIT_NAME" "$EMAIL" "$SESSION_ID" "$AUDIT_FILE"
+" "$TIMESTAMP" "$GIT_NAME" "$EMAIL" "$SESSION_ID" "$AUDIT_FILE" <<< "$INPUT"
 
-git -C "$WORKSPACE" add "$AUDIT_FILE"
+if git -C "$WORKSPACE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$WORKSPACE" add "$AUDIT_FILE" >/dev/null 2>&1 || true
+fi
