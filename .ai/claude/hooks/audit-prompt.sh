@@ -6,13 +6,15 @@ set -uo pipefail
 INPUT=$(cat)
 
 WORKSPACE="${CLAUDE_PROJECT_DIR:-/workspaces/huddle}"
+CLAUDE_EMAIL=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.claude.json')))['oauthAccount']['emailAddress'])" 2>/dev/null)
 GIT_EMAIL=$(git -C "$WORKSPACE" config user.email 2>/dev/null || echo "unknown@unknown")
+EMAIL="${CLAUDE_EMAIL:-$GIT_EMAIL}"
 GIT_NAME=$(git -C "$WORKSPACE" config user.name 2>/dev/null || echo "unknown")
 DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
 SESSION_ID="${CLAUDE_SESSION_ID:-unknown}"
-AUDIT_DIR="${WORKSPACE}/.audit/${GIT_EMAIL}/${YEAR}/${MONTH}"
+AUDIT_DIR="${WORKSPACE}/.audit/${EMAIL}/${YEAR}/${MONTH}"
 
 mkdir -p "$AUDIT_DIR"
 
@@ -33,6 +35,6 @@ entry = {
 }
 with open(sys.argv[6], 'a') as f:
     f.write(json.dumps(entry) + '\n')
-" "$INPUT" "$TIMESTAMP" "$GIT_NAME" "$GIT_EMAIL" "$SESSION_ID" "$AUDIT_FILE"
+" "$INPUT" "$TIMESTAMP" "$GIT_NAME" "$EMAIL" "$SESSION_ID" "$AUDIT_FILE"
 
 git -C "$WORKSPACE" add "$AUDIT_FILE"

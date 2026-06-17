@@ -12,7 +12,9 @@ fi
 [ -z "$SESSION_ID" ] && exit 0
 
 WORKSPACE="${CLAUDE_PROJECT_DIR:-/workspaces/huddle}"
+CLAUDE_EMAIL=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.claude.json')))['oauthAccount']['emailAddress'])" 2>/dev/null)
 GIT_EMAIL=$(git -C "$WORKSPACE" config user.email 2>/dev/null || echo "unknown@unknown")
+EMAIL="${CLAUDE_EMAIL:-$GIT_EMAIL}"
 DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
@@ -20,7 +22,7 @@ MONTH=$(date +%m)
 # absolute pad is met '/' vervangen door '-' (bv. /workspaces/huddle -> -workspaces-huddle).
 PROJECT_SLUG=$(echo "$WORKSPACE" | sed 's#/#-#g')
 SESSION_FILE="$HOME/.claude/projects/${PROJECT_SLUG}/${SESSION_ID}.jsonl"
-AUDIT_DIR="${WORKSPACE}/.audit/${GIT_EMAIL}/${YEAR}/${MONTH}"
+AUDIT_DIR="${WORKSPACE}/.audit/${EMAIL}/${YEAR}/${MONTH}"
 
 mkdir -p "$AUDIT_DIR"
 
