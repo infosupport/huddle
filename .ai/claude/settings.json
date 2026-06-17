@@ -62,5 +62,27 @@
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/statusline-command.sh"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/audit-session.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/audit-prompt.sh"
+          }
+        ]
+      }
+    ]
   }
 }
