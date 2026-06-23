@@ -286,7 +286,7 @@ export async function networkExists(name: string): Promise<boolean> {
 }
 
 export async function createNetwork(name: string): Promise<void> {
-  await dockerRequest('POST', '/networks/create', { Name: name });
+  await dockerRequest('POST', '/networks/create', { Name: name, Internal: true });
 }
 
 export async function imageExists(name: string): Promise<boolean> {
