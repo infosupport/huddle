@@ -1,0 +1,67 @@
+let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? 'http://localhost:3000');
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export function setBaseUrl(url: string): void {
+  baseUrl = normalizeBaseUrl(url);
+}
+
+export async function apiCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ApiError(`Kan Huddle API niet bereiken op ${baseUrl}: ${detail}`);
+  }
+
+  const raw = await res.text();
+  const payload = parsePayload(raw);
+
+  if (!res.ok) {
+    const msg = errorMessage(payload) ?? res.statusText;
+    throw new ApiError(`${method} ${path} -> ${res.status}: ${msg}`, res.status);
+  }
+
+  return payload as T;
+}
+
+export const get = <T>(path: string) => apiCall<T>('GET', path);
+export const post = <T>(path: string, body: unknown) => apiCall<T>('POST', path, body);
+export const put = <T>(path: string, body: unknown) => apiCall<T>('PUT', path, body);
+export const del = <T>(path: string) => apiCall<T>('DELETE', path);
+
+function normalizeBaseUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) throw new Error('Huddle URL mag niet leeg zijn');
+  return trimmed.replace(/\/+$/, '');
+}
+
+function parsePayload(raw: string): unknown {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+function errorMessage(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return typeof payload === 'string' ? payload : undefined;
+  const obj = payload as { error?: unknown; message?: unknown };
+  if (typeof obj.message === 'string') return obj.message;
+  if (typeof obj.error === 'string') return obj.error;
+  return undefined;
+}

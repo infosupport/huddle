@@ -1,0 +1,24 @@
+{
+  "name": "huddle-cli",
+  "version": "1.0.0",
+  "description": "Huddle CLI \u2014 start devcontainers and manage firewall rules",
+  "bin": {
+    "huddle": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "install-global": "npm run build && npm install -g .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ]
+}

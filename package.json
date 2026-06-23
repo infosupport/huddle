@@ -1,5 +1,8 @@
 {
   "scripts": {
-    "hello": "node -e \"console.log('hello from devcontainer')\""
+    "hello": "node -e \"console.log('hello from devcontainer')\"",
+    "cli:build": "npm --prefix cli run build",
+    "cli:typecheck": "npm --prefix cli run typecheck",
+    "cli:install": "npm --prefix cli run install-global"
   }
 }
