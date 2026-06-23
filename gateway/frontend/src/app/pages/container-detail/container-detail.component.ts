@@ -66,12 +66,12 @@ export class ContainerDetailComponent implements OnInit {
   onPieAction(actionId: string, rule: Rule): void {
     switch (actionId) {
       case 'approve':     this.allowRule(rule); break;
-      case 'approve-all': this.modal.openConfirm(rule.domain, 'allow'); break;
+      case 'approve-all': this.modal.openConfirm(rule, 'allow'); break;
       case 'temp':        this.allowTimed(rule, 5); break;
       case 'temp-10':     this.allowTimed(rule, 10); break;
       case 'later':       this.deleteRule(rule); break;
       case 'deny':        this.denyRule(rule); break;
-      case 'deny-all':    this.modal.openConfirm(rule.domain, 'deny'); break;
+      case 'deny-all':    this.modal.openConfirm(rule, 'deny'); break;
       case 'pathmode':    this.enablePathMode(rule); break;
     }
   }
@@ -124,17 +124,17 @@ export class ContainerDetailComponent implements OnInit {
   permanentAllowRules(rules: Rule[]) { return rules.filter(r => r.status === 'allow' && !r.expires_at); }
 
   allowRule(rule: Rule): void {
-    this.api.updateRule(rule.id, 'allow').subscribe(() => { this.state.loadAll(); this.load(); });
+    this.api.resolveRule(rule.id, 'allow').subscribe(() => { this.state.loadAll(); this.load(); });
   }
   denyRule(rule: Rule): void {
-    this.api.updateRule(rule.id, 'deny').subscribe(() => { this.state.loadAll(); this.load(); });
+    this.api.resolveRule(rule.id, 'deny').subscribe(() => { this.state.loadAll(); this.load(); });
   }
   deleteRule(rule: Rule): void {
     this.api.deleteRule(rule.id).subscribe(() => { this.state.loadAll(); this.load(); });
   }
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
-    this.api.updateRule(rule.id, 'allow', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
+    this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
   }
 
   copyPassword(): void {

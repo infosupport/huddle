@@ -1,7 +1,8 @@
 import { Injectable, signal } from '@angular/core';
+import { Rule } from '../models/rule.model';
 
 export interface SnapshotModalData { containerName: string; }
-export interface ConfirmModalData { domain: string; status: 'allow' | 'deny'; }
+export interface ConfirmModalData { rule: Rule; status: 'allow' | 'deny'; }
 
 @Injectable({ providedIn: 'root' })
 export class ModalService {
@@ -18,8 +19,8 @@ export class ModalService {
   closeSnapshot(): void { this.snapshotOpen.set(false); }
   openStart(): void { this.startOpen.set(true); }
   closeStart(): void { this.startOpen.set(false); }
-  openConfirm(domain: string, status: 'allow' | 'deny'): void {
-    this.confirmData.set({ domain, status });
+  openConfirm(rule: Rule, status: 'allow' | 'deny'): void {
+    this.confirmData.set({ rule, status });
     this.confirmOpen.set(true);
   }
   closeConfirm(): void { this.confirmOpen.set(false); }

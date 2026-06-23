@@ -47,6 +47,19 @@ export class ApiService {
     return this.handle(this.http.put<Rule>(`/api/rules/${id}`, body));
   }
 
+  resolveRule(
+    id: number,
+    status: Exclude<RuleStatus, 'requested'>,
+    scope: 'rule' | 'global' = 'rule',
+    expiresAt?: number,
+    pathPattern?: string | null,
+  ): Observable<Rule> {
+    const body: any = { status, scope };
+    if (expiresAt !== undefined) body.expires_at = expiresAt;
+    if (pathPattern !== undefined) body.path_pattern = pathPattern;
+    return this.handle(this.http.post<Rule>(`/api/rules/${id}/resolve`, body));
+  }
+
   setPathMode(id: number, enabled: boolean): Observable<Rule> {
     return this.handle(this.http.post<Rule>(`/api/rules/${id}/path-mode`, { enabled }));
   }

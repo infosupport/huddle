@@ -260,6 +260,89 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  app.post<{
+    Params: { id: string };
+    Body: {
+      status: RuleStatus;
+      scope?: 'rule' | 'global';
+      expires_at?: number | null;
+      path_pattern?: string | null;
+    };
+  }>('/api/rules/:id/resolve', async (req, reply) => {
+    const id = Number(req.params.id);
+    const { status, scope = 'rule', expires_at = null } = req.body;
+    const hasPathPattern = Object.prototype.hasOwnProperty.call(req.body, 'path_pattern');
+    const nextPathPattern = hasPathPattern ? (req.body.path_pattern ?? null) : undefined;
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return reply.code(400).send({ error: 'invalid rule id' });
+    }
+    if (status !== 'allow' && status !== 'deny') {
+      return reply.code(400).send({ error: 'status must be "allow" or "deny"' });
+    }
+    if (scope !== 'rule' && scope !== 'global') {
+      return reply.code(400).send({ error: 'scope must be "rule" or "global"' });
+    }
+
+    const rule = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule | undefined;
+    if (!rule) return reply.code(404).send({ error: 'not_found' });
+
+    if (scope === 'rule') {
+      try {
+        if (hasPathPattern) {
+          db.prepare(
+            `UPDATE rules SET status = ?, expires_at = ?, path_pattern = ?, updated_at = unixepoch() WHERE id = ?`
+          ).run(status, expires_at, nextPathPattern, id);
+        } else {
+          db.prepare(
+            `UPDATE rules SET status = ?, expires_at = ?, updated_at = unixepoch() WHERE id = ?`
+          ).run(status, expires_at, id);
+        }
+      } catch (err: any) {
+        return reply.code(409).send({ error: 'duplicate', message: err.message });
+      }
+
+      const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
+      if (updated.container_id === null && updated.path_pattern === null) {
+        db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(updated.domain);
+      }
+      logAudit({ containerId: updated.container_id, domain: updated.domain, action: `admin:rule-${status}`, ruleId: id });
+      notifyStateChanged();
+      return updated;
+    }
+
+    const globalPathPattern = hasPathPattern ? nextPathPattern! : rule.path_pattern;
+    let globalRule = db.prepare(
+      `SELECT * FROM rules
+       WHERE domain = ? AND container_id IS NULL AND COALESCE(path_pattern, '') = COALESCE(?, '')`
+    ).get(rule.domain, globalPathPattern) as Rule | undefined;
+
+    try {
+      if (globalRule) {
+        db.prepare(`UPDATE rules SET status = ?, expires_at = ?, updated_at = unixepoch() WHERE id = ?`)
+          .run(status, expires_at, globalRule.id);
+      } else {
+        const info = db.prepare(
+          `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern) VALUES (?, NULL, ?, ?, ?)`
+        ).run(rule.domain, status, expires_at, globalPathPattern);
+        globalRule = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(info.lastInsertRowid) as Rule;
+      }
+    } catch (err: any) {
+      return reply.code(409).send({ error: 'duplicate', message: err.message });
+    }
+
+    const updatedGlobal = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(globalRule.id) as Rule;
+    if (globalPathPattern === null) {
+      db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(rule.domain);
+    } else if (rule.container_id !== null) {
+      db.prepare(`DELETE FROM rules WHERE id = ?`).run(rule.id);
+    }
+
+    logAudit({ containerId: null, domain: rule.domain, action: `admin:rule-${status}-global`, ruleId: updatedGlobal.id });
+    notifyStateChanged();
+    return updatedGlobal;
+  });
+
   // Zet een domein in/uit pad-allowlist modus. Werkt op de host-only regel
   // (path_pattern IS NULL): bij aanzetten wordt het kale domein op 'deny' gezet
   // met path_mode=1, zodat onbekende subpaden voortaan als 'requested' worden

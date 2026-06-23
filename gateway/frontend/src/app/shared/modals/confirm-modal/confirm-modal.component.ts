@@ -21,25 +21,15 @@ export class ConfirmModalComponent {
   get message(): string {
     if (!this.data) return '';
     const verb = this.data.status === 'allow' ? 'toestaan' : 'blokkeren';
-    return `"${this.data.domain}" globaal ${verb} voor alle containers?`;
+    return `"${this.data.rule.domain}" globaal ${verb} voor alle containers?`;
   }
 
   confirm(): void {
     if (!this.data) return;
-    const { domain, status } = this.data;
-    this.api.createRule(domain, null, status).subscribe({
-      next: () => { this.modalService.closeConfirm(); this.state.loadAll(); },
-      error: () => {
-        this.api.getRules({ container: '__global__' }).subscribe(rules => {
-          const existing = rules.find(r => r.domain === domain);
-          if (existing) {
-            this.api.updateRule(existing.id, status).subscribe(() => {
-              this.modalService.closeConfirm();
-              this.state.loadAll();
-            });
-          }
-        });
-      },
+    const { rule, status } = this.data;
+    this.api.resolveRule(rule.id, status, 'global').subscribe(() => {
+      this.modalService.closeConfirm();
+      this.state.loadAll();
     });
   }
 

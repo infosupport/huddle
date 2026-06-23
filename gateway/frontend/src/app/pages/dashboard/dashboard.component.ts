@@ -59,12 +59,12 @@ export class DashboardComponent {
   onPieAction(actionId: string, rule: Rule): void {
     switch (actionId) {
       case 'approve':     this.allowRule(rule); break;
-      case 'approve-all': this.modal.openConfirm(rule.domain, 'allow'); break;
+      case 'approve-all': this.modal.openConfirm(rule, 'allow'); break;
       case 'temp':        this.allowTimed(rule, 5); break;
       case 'temp-10':     this.allowTimed(rule, 10); break;
       case 'later':       this.deleteRule(rule); break;
       case 'deny':        this.denyRule(rule); break;
-      case 'deny-all':    this.modal.openConfirm(rule.domain, 'deny'); break;
+      case 'deny-all':    this.modal.openConfirm(rule, 'deny'); break;
     }
   }
 
@@ -103,25 +103,19 @@ export class DashboardComponent {
     return 'Stopped';
   }
   allowRule(rule: Rule): void {
-    this.api.updateRule(rule.id, 'allow').subscribe(() => this.state.loadAll());
+    this.api.resolveRule(rule.id, 'allow').subscribe(() => this.state.loadAll());
   }
   denyRule(rule: Rule): void {
-    this.api.updateRule(rule.id, 'deny').subscribe(() => this.state.loadAll());
+    this.api.resolveRule(rule.id, 'deny').subscribe(() => this.state.loadAll());
   }
   deleteRule(rule: Rule): void {
     this.api.deleteRule(rule.id).subscribe(() => this.state.loadAll());
-  }
-  allowGlobal(domain: string): void {
-    this.api.createRule(domain, null, 'allow').subscribe(() => this.state.loadAll());
-  }
-  denyGlobal(domain: string): void {
-    this.api.createRule(domain, null, 'deny').subscribe(() => this.state.loadAll());
   }
   revokeGrant(container: string): void {
     this.api.deleteGrant(container).subscribe(() => this.state.loadAll());
   }
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
-    this.api.updateRule(rule.id, 'allow', expires_at).subscribe(() => this.state.loadAll());
+    this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => this.state.loadAll());
   }
 }

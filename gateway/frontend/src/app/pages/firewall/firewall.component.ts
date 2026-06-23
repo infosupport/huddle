@@ -98,7 +98,7 @@ export class FirewallComponent {
         this.resolve(rule, () => this.allowRule(rule));
         this.pushToast(rule.domain, 'Allowed for this container', 'allow'); break;
       case 'approve-all':
-        this.modal.openConfirm(rule.domain, 'allow'); break;
+        this.modal.openConfirm(rule, 'allow'); break;
       case 'temp':
         this.resolve(rule, () => this.allowTimed(rule, 5));
         this.pushToast(rule.domain, 'Allowed for 5 minutes', 'temp'); break;
@@ -112,7 +112,7 @@ export class FirewallComponent {
         this.resolve(rule, () => this.denyRule(rule));
         this.pushToast(rule.domain, 'Denied for this container', 'deny'); break;
       case 'deny-all':
-        this.modal.openConfirm(rule.domain, 'deny'); break;
+        this.modal.openConfirm(rule, 'deny'); break;
       case 'pathmode':
         this.resolve(rule, () => this.enablePathMode(rule));
         this.pushToast(rule.domain, 'Now reviewed by path', 'allow'); break;
@@ -124,19 +124,19 @@ export class FirewallComponent {
     switch (actionId) {
       case 'path-allow':
         this.resolve(rule, () =>
-          this.api.updateRule(rule.id, 'allow', undefined, row.path_pattern).subscribe(() => this.state.loadAll())
+          this.api.resolveRule(rule.id, 'allow', 'rule', undefined, row.path_pattern).subscribe(() => this.state.loadAll())
         );
         this.pushToast(row.path_pattern, 'Path allowed', 'allow'); break;
       case 'path-prefix': {
         const prefix = this.toPrefix(row.path_pattern);
         this.resolve(rule, () =>
-          this.api.updateRule(rule.id, 'allow', undefined, prefix).subscribe(() => this.state.loadAll())
+          this.api.resolveRule(rule.id, 'allow', 'rule', undefined, prefix).subscribe(() => this.state.loadAll())
         );
         this.pushToast(row.domain, `Prefix ${prefix} allowed`, 'allow'); break;
       }
       case 'path-deny':
         this.resolve(rule, () =>
-          this.api.updateRule(rule.id, 'deny', undefined, row.path_pattern).subscribe(() => this.state.loadAll())
+          this.api.resolveRule(rule.id, 'deny', 'rule', undefined, row.path_pattern).subscribe(() => this.state.loadAll())
         );
         this.pushToast(row.path_pattern, 'Path denied', 'deny'); break;
       case 'path-later':
@@ -178,11 +178,11 @@ export class FirewallComponent {
   reload(): void { this.state.loadAll(); }
 
   enablePathMode(rule: Rule): void { this.api.setPathMode(rule.id, true).subscribe(() => this.state.loadAll()); }
-  allowRule(rule: Rule): void      { this.api.updateRule(rule.id, 'allow').subscribe(() => this.state.loadAll()); }
-  denyRule(rule: Rule): void       { this.api.updateRule(rule.id, 'deny').subscribe(() => this.state.loadAll()); }
+  allowRule(rule: Rule): void      { this.api.resolveRule(rule.id, 'allow').subscribe(() => this.state.loadAll()); }
+  denyRule(rule: Rule): void       { this.api.resolveRule(rule.id, 'deny').subscribe(() => this.state.loadAll()); }
   deleteRule(rule: Rule): void     { this.api.deleteRule(rule.id).subscribe(() => this.state.loadAll()); }
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
-    this.api.updateRule(rule.id, 'allow', expires_at).subscribe(() => this.state.loadAll());
+    this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => this.state.loadAll());
   }
 }

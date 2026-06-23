@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "toggl": {
+      "type": "sse",
+      "url": "http://localhost:3000/mcp/toggl/sse"
+    }
+  }
+}

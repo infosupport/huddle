@@ -22,6 +22,31 @@ Het interactieve menu biedt:
 
 Na een Huddle-start is de Web UI bereikbaar op `http://localhost:3000`.
 
+## Command CLI
+
+De nieuwe cross-platform command-variant staat in `cli/` en gebruikt uitsluitend de Huddle REST API voor container-starts en firewall-beslissingen. Na build/install kun je in een projectmap simpelweg draaien:
+
+```bash
+huddle
+```
+
+Dat start standaard een IntelliJ-devcontainer voor de huidige map. Voorbeelden:
+
+```bash
+huddle --ide rider
+huddle ./mijn-project --ide vscode
+huddle fw list
+huddle firewall list -i
+```
+
+Build/install tijdens ontwikkeling:
+
+```bash
+npm --prefix cli install
+npm --prefix cli run build
+npm --prefix cli run install-global
+```
+
 `Start-Snapshot.ps1` wordt door `huddle.ps1` gebruikt en hoeft niet zelfstandig aangeroepen te worden.
 
 ## Documentatie

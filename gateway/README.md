@@ -142,6 +142,7 @@ docker run -p 3000:3000 -p 80:80 \
 | GET | `/api/rules` | List rules (filter: `?status=`, `?container=`) |
 | POST | `/api/rules` | Create rule |
 | PUT | `/api/rules/:id` | Update rule status / expiry |
+| POST | `/api/rules/:id/resolve` | Resolve a requested rule as allow/deny, scoped to the rule or global policy |
 | DELETE | `/api/rules/:id` | Delete rule |
 | GET | `/api/docker/containers` | List devcontainers with requested-rule counts |
 | GET | `/api/docker/containers/:name` | Container detail + rules |
