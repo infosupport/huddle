@@ -2,6 +2,7 @@ export interface McpSetting {
   key: string;
   label: string;
   secret?: boolean;
+  description?: string;
 }
 
 export interface McpServer {

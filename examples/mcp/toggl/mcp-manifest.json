@@ -6,7 +6,16 @@
   "port": 8080,
   "transport": "sse",
   "settings": [
-    { "key": "apiToken",    "label": "API Token",    "secret": true },
-    { "key": "workspaceId", "label": "Workspace ID" }
+    {
+      "key": "apiToken",
+      "label": "API Token",
+      "secret": true,
+      "description": "Te vinden op toggl.com → Profiel → Profielinstellingen → scroll naar beneden naar 'API Token'."
+    },
+    {
+      "key": "workspaceId",
+      "label": "Workspace ID",
+      "description": "Te vinden in de URL van je Toggl-werkruimte: toggl.com/app/workspaces/{workspace_id}/..."
+    }
   ]
 }

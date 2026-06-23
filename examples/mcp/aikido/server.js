@@ -1,5 +1,5 @@
 // Aikido Security MCP-server — Node.js ESM, geen externe dependencies buiten de SDK.
-// Huddle injecteert AIKIDO_CLIENT_ID en AIKIDO_CLIENT_SECRET als omgevingsvariabelen.
+// Huddle injecteert CLIENTID, CLIENTSECRET en REPONAME als omgevingsvariabelen.
 // Transport: SSE op GET /sse  +  POST /messages?sessionId=<id>
 
 import { McpServer }         from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -7,9 +7,9 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z }                 from 'zod';
 import http                  from 'node:http';
 
-const CLIENT_ID     = process.env.AIKIDO_CLIENT_ID     || '';
-const CLIENT_SECRET = process.env.AIKIDO_CLIENT_SECRET || '';
-const REPO_NAME     = process.env.AIKIDO_REPO_NAME     || '';
+const CLIENT_ID     = process.env.CLIENTID     || '';
+const CLIENT_SECRET = process.env.CLIENTSECRET || '';
+const REPO_NAME     = process.env.REPONAME     || '';
 const PORT          = parseInt(process.env.PORT || '8080', 10);
 const MCP_BASE      = (process.env.HUDDLE_MCP_BASE || '').replace(/\/$/, '');
 
@@ -21,7 +21,7 @@ let tokenCache = null;
 
 async function getToken() {
   if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) return tokenCache.token;
-  if (!CLIENT_ID || !CLIENT_SECRET) throw new Error('AIKIDO_CLIENT_ID en AIKIDO_CLIENT_SECRET zijn niet geconfigureerd.');
+  if (!CLIENT_ID || !CLIENT_SECRET) throw new Error('CLIENTID en CLIENTSECRET zijn niet geconfigureerd.');
 
   const creds = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
   const res = await fetch(`${BASE_URL}/api/oauth/token`, {

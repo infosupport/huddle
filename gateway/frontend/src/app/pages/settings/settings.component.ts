@@ -51,7 +51,7 @@ import { ApiService, HuddleSettings } from '../../core/services/api.service';
     .hint { color: var(--muted, #888); font-size: 0.9em; margin: 0 0 16px; }
     .field { margin-bottom: 16px; }
     label { display: block; margin-bottom: 4px; font-size: 0.9em; color: var(--muted, #888); }
-    input { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border, #2a2a2a); background: var(--bg2, #1a1a2e); color: inherit; font-size: 0.95em; box-sizing: border-box; }
+    input { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 0.95em; box-sizing: border-box; }
     .actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
     .saved-note { color: #4caf50; font-size: 0.9em; }
   `]

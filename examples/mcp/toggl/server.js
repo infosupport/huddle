@@ -1,5 +1,5 @@
 // Toggl Track MCP-server — Node.js ESM, geen externe dependencies buiten de SDK.
-// Huddle injecteert TOGGL_API_TOKEN en TOGGL_WORKSPACE_ID als omgevingsvariabelen.
+// Huddle injecteert APITOKEN en WORKSPACEID als omgevingsvariabelen.
 // Transport: SSE op GET /sse  +  POST /messages?sessionId=<id>
 
 import { McpServer }         from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -7,15 +7,15 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z }                 from 'zod';
 import http                  from 'node:http';
 
-const API_TOKEN    = process.env.TOGGL_API_TOKEN    || '';
-const WORKSPACE_ID = process.env.TOGGL_WORKSPACE_ID || '';
+const API_TOKEN    = process.env.APITOKEN    || '';
+const WORKSPACE_ID = process.env.WORKSPACEID || '';
 const PORT         = parseInt(process.env.PORT || '8080', 10);
 const MCP_BASE     = (process.env.HUDDLE_MCP_BASE || '').replace(/\/$/, '');
 
 const BASE_URL = 'https://api.track.toggl.com/api/v9';
 
 function auth() {
-  if (!API_TOKEN) throw new Error('TOGGL_API_TOKEN is niet geconfigureerd.');
+  if (!API_TOKEN) throw new Error('APITOKEN is niet geconfigureerd.');
   return 'Basic ' + Buffer.from(`${API_TOKEN}:api_token`).toString('base64');
 }
 
@@ -59,7 +59,7 @@ function createServer() {
     },
     async ({ description, project_id }) => {
       try {
-        if (!WORKSPACE_ID) throw new Error('TOGGL_WORKSPACE_ID is niet geconfigureerd.');
+        if (!WORKSPACE_ID) throw new Error('WORKSPACEID is niet geconfigureerd.');
         const body = {
           description,
           workspace_id: parseInt(WORKSPACE_ID, 10),
@@ -82,7 +82,7 @@ function createServer() {
     {},
     async () => {
       try {
-        if (!WORKSPACE_ID) throw new Error('TOGGL_WORKSPACE_ID is niet geconfigureerd.');
+        if (!WORKSPACE_ID) throw new Error('WORKSPACEID is niet geconfigureerd.');
         const current = await toggl('GET', '/me/time_entries/current');
         if (!current) return { content: [{ type: 'text', text: 'Geen lopende timer om te stoppen.' }] };
         const stopped = await toggl('PATCH', `/workspaces/${WORKSPACE_ID}/time_entries/${current.id}/stop`, {});
@@ -105,7 +105,7 @@ function createServer() {
     },
     async ({ description, start, stop, project_id }) => {
       try {
-        if (!WORKSPACE_ID) throw new Error('TOGGL_WORKSPACE_ID is niet geconfigureerd.');
+        if (!WORKSPACE_ID) throw new Error('WORKSPACEID is niet geconfigureerd.');
         const startMs = new Date(start).getTime();
         const stopMs  = new Date(stop).getTime();
         const duration = Math.round((stopMs - startMs) / 1000);
