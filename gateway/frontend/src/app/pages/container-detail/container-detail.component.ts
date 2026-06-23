@@ -12,6 +12,7 @@ import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
 import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
+import { IconComponent } from '../../shared/components/icon/icon.component';
 import { BehaviorSubject } from 'rxjs';
 
 interface DetailData {
@@ -23,17 +24,14 @@ interface DetailData {
 }
 
 type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
+type RulesTab  = 'allow' | 'deny' | 'path';
 
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent],
   templateUrl: './container-detail.component.html',
-  styles: [`
-    :host { display: contents; }
-    .airlock-on { background: #6d28d9; color: #fff; border-color: #6d28d9; }
-    .airlock-on:hover { background: #5b21b6; }
-  `]
+  styleUrl: './container-detail.component.css',
 })
 export class ContainerDetailComponent implements OnInit {
   private route = inject(ActivatedRoute);
@@ -47,39 +45,21 @@ export class ContainerDetailComponent implements OnInit {
   readonly pieConfig: PieMenuConfig = {
     families: [
       {
-        id: 'approve',
-        label: 'Goedkeuren',
-        tone: 'green',
-        icon: 'approve',
-        variants: [
-          { id: 'approve-all', label: 'Voor iedereen', icon: 'approve-all' },
-        ],
+        id: 'approve', label: 'Toestaan', tone: 'green', icon: 'approve',
+        variants: [{ id: 'approve-all', label: 'Voor iedereen', icon: 'approve-all' }],
       },
       {
-        id: 'temp',
-        label: 'Tijdelijk 5 min',
-        tone: 'blue',
-        icon: 'timer',
+        id: 'temp', label: 'Tijdelijk 5 min', tone: 'blue', icon: 'timer',
         variants: [
           { id: 'temp-10', label: 'Tijdelijk 10 min', icon: 'timer-long' },
-          { id: 'later',   label: 'Vraag later',      icon: 'later'      },
+          { id: 'later',   label: 'Verberg',           icon: 'later'      },
         ],
       },
       {
-        id: 'deny',
-        label: 'Afkeuren',
-        tone: 'red',
-        icon: 'deny',
-        variants: [
-          { id: 'deny-all', label: 'Voor iedereen', icon: 'deny-all' },
-        ],
+        id: 'deny', label: 'Blokkeren', tone: 'red', icon: 'deny',
+        variants: [{ id: 'deny-all', label: 'Voor iedereen', icon: 'deny-all' }],
       },
-      {
-        id: 'pathmode',
-        label: 'Pad-allowlist',
-        tone: 'neutral',
-        icon: 'filter',
-      },
+      { id: 'pathmode', label: 'Pad-allowlist', tone: 'neutral', icon: 'filter' },
     ],
   };
 
@@ -96,8 +76,6 @@ export class ContainerDetailComponent implements OnInit {
     }
   }
 
-  // Pad-allowlist: groepeert marker + padregels, en filtert die uit de gewone
-  // allow/deny/requested-lijsten (gedeeld met de firewall-pagina).
   pathDomains(rules: Rule[]) { return buildPathDomains(rules); }
   excludePathMode(rules: Rule[]) { return excludePathModeRules(rules); }
 
@@ -107,6 +85,8 @@ export class ContainerDetailComponent implements OnInit {
   reload(): void { this.state.loadAll(); this.load(); }
 
   name = '';
+  get shortName(): string { return this.name.replace(/^devcontainer-/, ''); }
+
   detail$ = new BehaviorSubject<DetailData | null>(null);
   error$ = new BehaviorSubject<string | null>(null);
   grants$ = this.state.grants$;
@@ -114,6 +94,7 @@ export class ContainerDetailComponent implements OnInit {
   passwordVisible = false;
   copied = false;
   activeTab: DetailTab = 'firewall';
+  rulesTab: RulesTab = 'allow';
   reconnectStatus = '';
   ideLinkStatus = '';
 
@@ -151,9 +132,6 @@ export class ContainerDetailComponent implements OnInit {
   deleteRule(rule: Rule): void {
     this.api.deleteRule(rule.id).subscribe(() => { this.state.loadAll(); this.load(); });
   }
-  openGlobalConfirm(domain: string, status: 'allow' | 'deny'): void {
-    this.modal.openConfirm(domain, status);
-  }
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
     this.api.updateRule(rule.id, 'allow', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
@@ -189,10 +167,7 @@ export class ContainerDetailComponent implements OnInit {
   openIde(): void {
     this.ideLinkStatus = 'Ophalen...';
     this.api.getIdeLink(this.name).subscribe({
-      next: ({ link }) => {
-        this.ideLinkStatus = '';
-        window.open(link, '_self');
-      },
+      next: ({ link }) => { this.ideLinkStatus = ''; window.open(link, '_self'); },
       error: (err) => { this.ideLinkStatus = err.message; },
     });
   }

@@ -1,101 +1,195 @@
 @if (vm$ | async; as vm) {
-  <div class="page-header"><h1>Firewall Rules</h1></div>
-  <div class="grid-2">
-    <div>
-      <div class="card">
-        <div class="card-header"><h3>Openstaande verzoeken ({{ vm.requested.length }})</h3></div>
-        @if (vm.groupNames.length === 0) {
-          <p class="empty-note">Geen openstaande verzoeken</p>
-        } @else {
-          @for (name of vm.groupNames; track name) {
-            <h4>{{ name }}</h4>
-            <table class="data-table">
-              <thead><tr><th>Domein</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
-              <tbody>
-                @for (r of vm.groups[name]; track r.id) {
-                  <tr>
-                    <td class="domain-cell">{{ r.domain }}</td>
-                    <td>{{ r.request_count }}</td>
-                    <td>{{ r.last_seen | relTime }}</td>
-                    <td class="col-actions">
-                      <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)"/>
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          }
-        }
+
+  <!-- ── Header — banner style like dashboard footer ── -->
+  <section class="fw-head">
+    <div class="fw-head__bg"></div>
+    <div class="fw-head__hex"></div>
+    <div class="fw-head__text">
+      <h1>Firewall</h1>
+      @if ((vm.requested.length + vm.pathRequested.length) > 0) {
+        <p><b>{{ vm.requested.length + vm.pathRequested.length }} request{{ (vm.requested.length + vm.pathRequested.length) !== 1 ? 's' : '' }}</b> waiting out in the cold. Your call. ♥</p>
+      } @else {
+        <p>All clear — nothing waiting out in the cold. ♥</p>
+      }
+    </div>
+    <div class="fw-stats">
+      <div class="fw-stat fw-stat--pending">
+        <span class="fw-stat__n"><span class="dot"></span>{{ vm.requested.length + vm.pathRequested.length }}</span>
+        <span class="fw-stat__l">Pending</span>
+      </div>
+      <div class="fw-stat fw-stat--allow">
+        <span class="fw-stat__n"><span class="dot"></span>{{ vm.allow.length }}</span>
+        <span class="fw-stat__l">Allowed</span>
+      </div>
+      <div class="fw-stat fw-stat--deny">
+        <span class="fw-stat__n"><span class="dot"></span>{{ vm.deny.length }}</span>
+        <span class="fw-stat__l">Denied</span>
+      </div>
+      <div class="fw-stat fw-stat--path">
+        <span class="fw-stat__n"><span class="dot"></span>{{ vm.pathDomains.length }}</span>
+        <span class="fw-stat__l">Path mode</span>
       </div>
     </div>
-    <div>
-      @if (vm.tempGroupNames.length > 0) {
-        <div class="card">
-          <div class="card-header"><h3>Tijdelijk toegestaan per container</h3></div>
-          @for (name of vm.tempGroupNames; track name) {
-            <h4>{{ name }}</h4>
-            <table class="data-table">
-              <thead><tr><th>Domein</th><th>Verloopt</th><th class="col-actions">Actie</th></tr></thead>
-              <tbody>
-                @for (r of vm.tempGroups[name]; track r.id) {
-                  <tr>
-                    <td class="domain-cell">{{ r.domain }}</td>
-                    <td>{{ r.expires_at! | relTime }}</td>
-                    <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
-                  </tr>
-                }
-              </tbody>
-            </table>
+  </section>
+
+  <!-- ── Pending requests (flat list) ── -->
+  <section class="fw-sec">
+    <div class="fw-sec__head">
+      <h2 class="fw-sec__title">Pending <span class="em">requests</span></h2>
+      <p class="fw-sec__sub">— domains to triage</p>
+    </div>
+    <div class="card req-card">
+      @if (vm.requested.length === 0 && vm.pathRequested.length === 0) {
+        <div class="fw-empty">
+          <app-icon name="circle-check" [size]="26" />
+          <b>Inbox zero</b>
+          <span>No requests waiting for review.</span>
+        </div>
+      } @else {
+        <!-- Domain requests -->
+        @for (r of vm.requested; track r.id) {
+          <div class="req-row" [class.is-resolving]="resolving.has(r.id)">
+            <div class="req-row__icon">
+              <app-icon name="globe" [size]="18" />
+            </div>
+            <div class="req-row__info">
+              <div class="req-row__domain">{{ r.domain }}</div>
+              <div class="req-row__meta">
+                <span class="req-row__tag">{{ shortContainer(r.container_id) }}</span>
+                <span><b>{{ r.request_count }}</b> request{{ r.request_count !== 1 ? 's' : '' }}</span>
+                <span class="sep">·</span>
+                <span>last {{ r.last_seen | relTime }}</span>
+              </div>
+            </div>
+            <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
+          </div>
+        }
+        <!-- Path sub-requests -->
+        @for (row of vm.pathRequested; track row.rule.id) {
+          <div class="req-row" [class.is-resolving]="resolving.has(row.rule.id)">
+            <div class="req-row__icon req-row__icon--path">
+              <app-icon name="file-text" [size]="18" />
+            </div>
+            <div class="req-row__info">
+              <div class="req-row__domain">
+                <span class="req-row__host">{{ row.domain }}</span>{{ row.path_pattern }}
+              </div>
+              <div class="req-row__meta">
+                <span class="req-row__tag req-row__tag--path">path</span>
+                <span class="req-row__tag">{{ shortContainer(row.rule.container_id) }}</span>
+                <span><b>{{ row.rule.request_count }}</b> request{{ row.rule.request_count !== 1 ? 's' : '' }}</span>
+                <span class="sep">·</span>
+                <span>last {{ row.rule.last_seen | relTime }}</span>
+              </div>
+              @if (row.last_path) {
+                <div class="req-row__sample">{{ row.last_path }}</div>
+              }
+            </div>
+            <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+          </div>
+        }
+      }
+    </div>
+  </section>
+
+  <!-- ── Rules ── -->
+  <section class="fw-sec">
+    <div class="card">
+      <div class="card__head">
+        <h2 class="card__title">Rules</h2>
+        <div class="seg">
+          <button [class.on]="activeTab === 'allow'" (click)="activeTab = 'allow'">
+            Allowed <i>{{ vm.allow.length }}</i>
+          </button>
+          <button [class.on]="activeTab === 'deny'" (click)="activeTab = 'deny'">
+            Denied <i>{{ vm.deny.length }}</i>
+          </button>
+          <button [class.on]="activeTab === 'path'" (click)="activeTab = 'path'">
+            Path mode <i>{{ vm.pathDomains.length }}</i>
+          </button>
+        </div>
+      </div>
+
+      @if (activeTab !== 'path') {
+        <div class="fw-search">
+          <app-icon name="search" [size]="16" />
+          <input type="text" placeholder="Filter domains…"
+                 [(ngModel)]="searchQuery" />
+        </div>
+      }
+
+      @if (activeTab === 'allow') {
+        <div class="rule-list">
+          @for (r of filterRules(vm.allow, searchQuery); track r.id) {
+            <div class="rule-row">
+              <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="15" /></span>
+              <span class="rule-row__domain">{{ r.domain }}</span>
+              @if (r.expires_at && r.expires_at > vm.now) {
+                <span class="chip--temp"><app-icon name="timer" [size]="12" />{{ r.expires_at | relTime }}</span>
+              }
+              <span class="scope-chip" [class.scope-chip--global]="!r.container_id">
+                {{ r.container_id ? shortContainer(r.container_id) : 'Global' }}
+              </span>
+              <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
+              <button class="rule-row__del" title="Remove rule" (click)="deleteRule(r)">
+                <app-icon name="x" [size]="16" />
+              </button>
+            </div>
+          }
+          @if (filterRules(vm.allow, searchQuery).length === 0) {
+            <div class="fw-empty"><span>No allowed domains{{ searchQuery ? ' match' : '' }}.</span></div>
           }
         </div>
       }
-      <div class="card">
-        <div class="card-header"><h3>Globale regels</h3></div>
-        <h4>Toegestaan ({{ vm.allow.length }})</h4>
-        @if (vm.allow.length === 0) {
-          <p class="empty-note">Geen</p>
-        } @else {
-          <table class="data-table">
-            <thead><tr><th>Domein</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
-            <tbody>
-              @for (r of vm.allow; track r.id) {
-                <tr>
-                  <td class="domain-cell">{{ r.domain }}</td>
-                  <td><span class="badge badge-allow">allow</span></td>
-                  <td>{{ r.last_seen | relTime }}</td>
-                  <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        }
-        <h4>Geblokkeerd ({{ vm.deny.length }})</h4>
-        @if (vm.deny.length === 0) {
-          <p class="empty-note">Geen</p>
-        } @else {
-          <table class="data-table">
-            <thead><tr><th>Domein</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
-            <tbody>
-              @for (r of vm.deny; track r.id) {
-                <tr>
-                  <td class="domain-cell">{{ r.domain }}</td>
-                  <td><span class="badge badge-deny">deny</span></td>
-                  <td>{{ r.last_seen | relTime }}</td>
-                  <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deleteRule(r)">✕</button></td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        }
-      </div>
-    </div>
-  </div>
 
-  @if (vm.pathDomains.length > 0) {
-    <div class="card">
-      <div class="card-header"><h3>Pad-allowlist domeinen ({{ vm.pathDomains.length }})</h3></div>
-      <p class="empty-note">Het kale domein is geblokkeerd; alleen expliciet toegestane paden gaan door. Onbekende subpaden verschijnen hieronder ter beoordeling.</p>
-      <app-path-allowlist [domains]="vm.pathDomains" [now]="vm.now" (changed)="reload()" />
+      @if (activeTab === 'deny') {
+        <div class="rule-list">
+          @for (r of filterRules(vm.deny, searchQuery); track r.id) {
+            <div class="rule-row">
+              <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="15" /></span>
+              <span class="rule-row__domain">{{ r.domain }}</span>
+              <span class="scope-chip" [class.scope-chip--global]="!r.container_id">
+                {{ r.container_id ? shortContainer(r.container_id) : 'Global' }}
+              </span>
+              <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
+              <button class="rule-row__del" title="Remove rule" (click)="deleteRule(r)">
+                <app-icon name="x" [size]="16" />
+              </button>
+            </div>
+          }
+          @if (filterRules(vm.deny, searchQuery).length === 0) {
+            <div class="fw-empty"><span>No denied domains{{ searchQuery ? ' match' : '' }}.</span></div>
+          }
+        </div>
+      }
+
+      @if (activeTab === 'path') {
+        <div class="path-list">
+          @if (vm.pathDomains.length === 0) {
+            <div class="fw-empty"><span>No path-mode domains.</span></div>
+          } @else {
+            <p class="fw-note">
+              Path-mode domains are <b>blocked at the root</b> — only allowed paths pass.
+              New subpaths appear in the queue above.
+            </p>
+            <app-path-allowlist [domains]="vm.pathDomains" [now]="vm.now" (changed)="reload()" />
+          }
+        </div>
+      }
     </div>
-  }
+  </section>
+
+  <!-- ── Toasts ── -->
+  <div class="fw-toasts">
+    @for (t of toasts; track t.id) {
+      <div class="fw-toast fw-toast--{{ t.tone }}">
+        <span class="fw-toast__icon">
+          @if (t.tone === 'deny') { <app-icon name="deny" [size]="15" /> }
+          @else if (t.tone === 'temp') { <app-icon name="timer" [size]="15" /> }
+          @else { <app-icon name="check" [size]="15" /> }
+        </span>
+        <span><b>{{ t.caption }}</b> {{ t.text }}</span>
+      </div>
+    }
+  </div>
 }

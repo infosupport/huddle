@@ -96,8 +96,8 @@ export class PieMenuComponent implements OnDestroy {
       this.cdr.markForCheck();
     }
     const rect = this.triggerEl.nativeElement.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
+    const cx = rect.left + rect.width  / 2;
+    const cy = rect.top  + rect.height / 2;
 
     if (this.overlayEl) {
       this.overlayEl.style.left = `${cx}px`;
