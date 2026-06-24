@@ -1,11 +1,10 @@
 'use strict';
 
-const crypto  = require('crypto');
-const fs      = require('fs');
-const path    = require('path');
-const https   = require('https');
-const net     = require('net');
-const tunnel  = require('tunnel-agent');
+const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
+const https  = require('https');
+const net    = require('net');
 
 const KEY_PATH      = process.env.AIKIDO_KEY_PATH || '/data/.aikido-key';
 const API_BASE      = 'https://app.aikido.dev/api/public/v1';
@@ -49,13 +48,11 @@ function decrypt(encoded) {
 
 // ── HTTP / Aikido API ────────────────────────────────────────────────────────
 
-const _tunnelAgent = tunnel.httpsOverHttp({ proxy: { host: 'huddle', port: 80 }, rejectUnauthorized: false });
-
 function httpsReq(method, url, headers, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const req = https.request({ hostname: u.hostname, port: u.port || 443,
-      path: u.pathname + u.search, method, headers, agent: _tunnelAgent }, (res) => {
+      path: u.pathname + u.search, method, headers }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
@@ -194,7 +191,7 @@ Fix de volgende ${issues.length === 1 ? 'kwetsbaarheid' : `${issues.length} kwet
 1. **Analyseer** — Zoek de root cause in de code.
 2. **Fix** — Pas de code aan om de kwetsbaarheid op te lossen.
 3. **Verificeer** — Gebruik \`aikido_list_repos\` → \`aikido_scan_repo\` → \`aikido_issues_list\` om te controleren.
-4. **Documenteer** — \`aikido_add_note\` + schrijf \`aikido/SECURITY_FIX.md\`.
+4. **Documenteer** — \`aikido_add_note\` + schrijf SECURITY_FIX.md.
 
 ${issueSection}
 
@@ -230,10 +227,8 @@ function initDb(db) {
     env_prefix TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
     client_secret_enc TEXT NOT NULL,
-    api_key_enc TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`).run();
-  try { db.prepare(`ALTER TABLE aikido_credentials ADD COLUMN api_key_enc TEXT`).run(); } catch {}
 }
 
 function loadWorkspaces(db) {
@@ -262,7 +257,7 @@ function hasCredentials(db, envPrefix) {
 // ── Extension register ────────────────────────────────────────────────────────
 
 module.exports.register = async function register(ctx) {
-  const { app, db, log, getSetting, setSetting } = ctx;
+  const { app, db, log } = ctx;
 
   initDb(db);
   log('Aikido extensie geladen');
@@ -393,23 +388,21 @@ module.exports.register = async function register(ctx) {
 
   // Credentials - get
   app.get('/api/ext/aikido/credentials/:envPrefix', async (req) => {
-    const row = db.prepare('SELECT client_id, api_key_enc, updated_at FROM aikido_credentials WHERE env_prefix = ?').get(req.params.envPrefix);
-    if (!row) return { env_prefix: req.params.envPrefix, client_id: null, has_secret: false, has_api_key: false };
-    return { env_prefix: req.params.envPrefix, client_id: row.client_id, has_secret: true, has_api_key: !!row.api_key_enc, updated_at: row.updated_at };
+    const row = db.prepare('SELECT client_id, updated_at FROM aikido_credentials WHERE env_prefix = ?').get(req.params.envPrefix);
+    if (!row) return { env_prefix: req.params.envPrefix, client_id: null, has_secret: false };
+    return { env_prefix: req.params.envPrefix, client_id: row.client_id, has_secret: true, updated_at: row.updated_at };
   });
 
   // Credentials - upsert
   app.post('/api/ext/aikido/credentials/:envPrefix', async (req, reply) => {
-    const { client_id, client_secret, api_key } = req.body || {};
+    const { client_id, client_secret } = req.body || {};
     if (!client_id || !client_secret) return reply.code(400).send({ error: 'client_id en client_secret zijn verplicht' });
-    const enc    = encrypt(client_secret);
-    const apiEnc = api_key ? encrypt(api_key) : null;
-    db.prepare(`INSERT INTO aikido_credentials (env_prefix, client_id, client_secret_enc, api_key_enc, updated_at)
-      VALUES (?, ?, ?, ?, unixepoch())
+    const enc = encrypt(client_secret);
+    db.prepare(`INSERT INTO aikido_credentials (env_prefix, client_id, client_secret_enc, updated_at)
+      VALUES (?, ?, ?, unixepoch())
       ON CONFLICT(env_prefix) DO UPDATE SET client_id = excluded.client_id,
-        client_secret_enc = excluded.client_secret_enc,
-        api_key_enc = COALESCE(excluded.api_key_enc, api_key_enc),
-        updated_at = unixepoch()`).run(req.params.envPrefix, client_id, enc, apiEnc);
+        client_secret_enc = excluded.client_secret_enc, updated_at = unixepoch()`).run(req.params.envPrefix, client_id, enc);
+    // Validate
     let validated = false, validationError = null;
     try { await getAccessToken(client_id, client_secret); validated = true; } catch (err) { validationError = err.message; }
     return { ok: true, validated, validation_error: validationError };
@@ -418,23 +411,6 @@ module.exports.register = async function register(ctx) {
   // Credentials - delete
   app.delete('/api/ext/aikido/credentials/:envPrefix', async (req) => {
     db.prepare('DELETE FROM aikido_credentials WHERE env_prefix = ?').run(req.params.envPrefix);
-    return { ok: true };
-  });
-
-  // Globale MCP API key
-  app.get('/api/ext/aikido/settings/mcp-api-key', async () => {
-    return { has_key: !!getSetting('mcp_api_key') };
-  });
-
-  app.post('/api/ext/aikido/settings/mcp-api-key', async (req, reply) => {
-    const { api_key } = req.body || {};
-    if (!api_key) return reply.code(400).send({ error: 'api_key is verplicht' });
-    setSetting('mcp_api_key', encrypt(api_key));
-    return { ok: true };
-  });
-
-  app.delete('/api/ext/aikido/settings/mcp-api-key', async () => {
-    setSetting('mcp_api_key', '');
     return { ok: true };
   });
 
@@ -474,18 +450,16 @@ module.exports.register = async function register(ctx) {
           'aikido-verify': {
             type: 'stdio', command: 'node',
             args: ['/usr/local/lib/aikido-mcp-server.js'],
-            env: { AIKIDO_CLIENT_ID: creds?.clientId ?? '', AIKIDO_CLIENT_SECRET: creds?.clientSecret ?? '', AIKIDO_API_KEY: (() => { try { const v = getSetting('mcp_api_key'); return v ? decrypt(v) : ''; } catch { return ''; } })() },
+            env: { AIKIDO_CLIENT_ID: creds?.clientId ?? '', AIKIDO_CLIENT_SECRET: creds?.clientSecret ?? '' },
           },
         },
       }, null, 2);
 
-      const aikidoDir = `${workspace}/aikido`;
-
       const files = {
-        [`${aikidoDir}/AIKIDO_CLAUDE.md`]:   generateClaudePrompt(issues, ws),
-        [`${aikidoDir}/AIKIDO_CONTEXT.md`]:  generateIssueContext(issues, ws),
-        [`${aikidoDir}/AIKIDO_ISSUES.json`]: JSON.stringify(issues, null, 2),
-        ['/usr/local/bin/aikido-fix']:       `#!/bin/bash\ncd ${workspace}\nclaude "lees aikido/AIKIDO_CLAUDE.md en voer alle instructies uit"\n`,
+        [`${workspace}/AIKIDO_CLAUDE.md`]:   generateClaudePrompt(issues, ws),
+        [`${workspace}/AIKIDO_CONTEXT.md`]:  generateIssueContext(issues, ws),
+        [`${workspace}/AIKIDO_ISSUES.json`]: JSON.stringify(issues, null, 2),
+        ['/usr/local/bin/aikido-fix']:       `#!/bin/bash\ncd ${workspace}\nclaude "lees AIKIDO_CLAUDE.md en voer alle instructies uit"\n`,
         ['/usr/local/lib/aikido-mcp-server.js']: mcpJs,
       };
 
@@ -496,20 +470,12 @@ module.exports.register = async function register(ctx) {
 
       const claudeB64    = Buffer.from(claudeJson).toString('base64');
       const mergeScript  = `node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}const n=JSON.parse(Buffer.from('${claudeB64}','base64').toString());s.mcpServers=Object.assign(s.mcpServers||{},n.mcpServers);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}"`;
-      const writeScript  = `mkdir -p ${aikidoDir} /usr/local/lib && ${parts.join(' && ')} && chmod +x /usr/local/bin/aikido-fix && chown -R vscode:vscode ${workspace} && ${mergeScript}`;
+      const writeScript  = `mkdir -p ${workspace} /usr/local/lib && ${parts.join(' && ')} && chmod +x /usr/local/bin/aikido-fix && chown -R vscode:vscode ${workspace} && ${mergeScript}`;
 
       const exec = await dockerRequest('POST', `/containers/${info.Id}/exec`, {
         User: 'root', Cmd: ['sh', '-c', writeScript], AttachStdout: false, AttachStderr: false,
       });
       await dockerRequest('POST', `/exec/${exec.Id}/start`, { Detach: true });
-
-      // Gitignore update als aparte exec zodat een falende hoofdscript het niet blokkeert
-      const gitignoreScript = `grep -qxF /aikido ${workspace}/.gitignore 2>/dev/null || printf '\\n/aikido\\n' >> ${workspace}/.gitignore`;
-      const giExec = await dockerRequest('POST', `/containers/${info.Id}/exec`, {
-        User: 'root', Cmd: ['sh', '-c', gitignoreScript], AttachStdout: false, AttachStderr: false,
-      });
-      await dockerRequest('POST', `/exec/${giExec.Id}/start`, { Detach: true });
-
       return { ok: true };
     } catch (err) {
       return reply.code(500).send({ error: err.message });

@@ -6,30 +6,18 @@
 <title>Aikido Security</title>
 <style>
   :root {
-    --ground:       #f3f4f8;
-    --surface:      #ffffff;
-    --surface2:     #fafbfd;
-    --hover-bg:     #eef0f5;
-    --hover-border: #d8dbe4;
-    --border:       #e7e9ef;
-    --text:         #1d212e;
-    --muted:        #6c7385;
+    --ground:   #0E1117;
+    --surface:  #161B22;
+    --surface2: #1C2330;
+    --border:   #30363D;
+    --text:     #CDD5E0;
+    --muted:    #6E7B8B;
     --accent:   #E05252;   /* critical */
     --high:     #D4900A;
     --medium:   #3BA55C;
     --low:      #4493F8;
     --mono: 'SF Mono','Cascadia Code','Fira Code',Consolas,monospace;
     --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  }
-  :root[data-theme="dark"] {
-    --ground:       #0c0f17;
-    --surface:      #131826;
-    --surface2:     #0f1421;
-    --hover-bg:     #182033;
-    --hover-border: #2a3447;
-    --border:       #1f2839;
-    --text:         #f0f2f7;
-    --muted:        #8a93a8;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -76,7 +64,7 @@
     transition: background .15s, border-color .15s;
     white-space: nowrap;
   }
-  .btn:hover { background: var(--hover-bg); border-color: var(--hover-border); }
+  .btn:hover { background: #222B38; border-color: #4A5568; }
   .btn--danger { background: rgba(224,82,82,.12); border-color: var(--accent); color: var(--accent); }
   .btn--danger:hover { background: rgba(224,82,82,.22); }
   .btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -110,7 +98,7 @@
   .ws-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 200px;
+    gap: 10px;
   }
 
   .ws-card {
@@ -130,7 +118,7 @@
     background: var(--border);
     transition: background .15s;
   }
-  .ws-card:hover { border-color: var(--hover-border); background: var(--surface2); }
+  .ws-card:hover { border-color: #4A5568; background: var(--surface2); }
   .ws-card.has-critical::before { background: var(--accent); }
   .ws-card.has-high::before { background: var(--high); }
 
@@ -1021,10 +1009,6 @@ function esc(s) {
 // Close modals on backdrop click
 document.getElementById('ws-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeWsModal(); });
 document.getElementById('cred-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeCredModal(); });
-
-// ── Theme ──────────────────────────────────────────────────────────────────
-const savedTheme = localStorage.getItem('huddle-theme') || 'light';
-document.documentElement.setAttribute('data-theme', savedTheme);
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 loadWorkspaces();
