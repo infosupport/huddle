@@ -540,10 +540,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
       .send(getCaCertPem());
   });
 
-  app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean } }>(
+  app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean; presentableName?: string } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, containerName, ideName, empty } = req.body;
+      const { imageName, workspaceDir, containerName, ideName, empty, presentableName: presentableNameOverride } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -560,7 +560,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         workspaceDir: empty ? '' : fwd,
         containerName,
         containerWorkspace: `/workspaces/${leaf}`,
-        presentableName: leaf,
+        presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
       };
