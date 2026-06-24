@@ -17,43 +17,33 @@
  */
 "use strict";
 
-const fs = require("fs");
-const tls = require("tls");
-const net = require("net");
-const { execFile } = require("child_process");
+const https = require("https");
 
 const API_BASE = "https://app.aikido.dev/api/public/v1";
 const TOKEN_URL = "https://app.aikido.dev/api/oauth/token";
-
-// Credentials worden gelezen uit een bestand met mode 600 zodat ze niet
-// zichtbaar zijn als process-env vars of in .claude.json.
-const CREDS_PATH = `${process.env.HOME || "/home/vscode"}/.aikido-creds.json`;
-let _fileCreds = {};
-try { _fileCreds = JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")); } catch {}
-
-const API_KEY       = _fileCreds.apiKey       || process.env.AIKIDO_API_KEY       || "";
-const CLIENT_ID     = _fileCreds.clientId     || process.env.AIKIDO_CLIENT_ID     || "";
-const CLIENT_SECRET = _fileCreds.clientSecret || process.env.AIKIDO_CLIENT_SECRET || "";
+const CLIENT_ID = process.env.AIKIDO_CLIENT_ID || "";
+const CLIENT_SECRET = process.env.AIKIDO_CLIENT_SECRET || "";
 
 function log(msg) { process.stderr.write(`[aikido-mcp] ${msg}\n`); }
 
-// Gebruik curl zodat https_proxy automatisch gerespecteerd wordt.
 function httpRequest(method, url, headers, body) {
   return new Promise((resolve, reject) => {
-    const args = ["-s", "-X", method, "--max-time", "30", "-w", "\n__HTTP_STATUS__%{http_code}"];
-    for (const [k, v] of Object.entries(headers || {})) {
-      if (k.toLowerCase() !== "content-length") args.push("-H", `${k}: ${v}`);
-    }
-    if (body) args.push("--data-binary", body);
-    args.push(url);
-    execFile("curl", args, { env: process.env, maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new Error(`curl: ${err.message}`));
-      const split = stdout.lastIndexOf("\n__HTTP_STATUS__");
-      const responseBody = split >= 0 ? stdout.slice(0, split) : stdout;
-      const status = split >= 0 ? parseInt(stdout.slice(split + 16)) : 0;
-      if (status >= 400) reject(new Error(`HTTP ${status}: ${responseBody.slice(0, 500)}`));
-      else resolve(responseBody);
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, port: u.port || 443,
+      path: u.pathname + u.search, method, headers,
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode >= 400) reject(new Error(`HTTP ${res.statusCode}: ${data.slice(0, 500)}`));
+        else resolve(data);
+      });
     });
+    req.on("error", reject);
+    req.setTimeout(30000, () => req.destroy(new Error("Request timeout (30s)")));
+    if (body) req.write(body);
+    req.end();
   });
 }
 
@@ -61,13 +51,13 @@ let cachedToken = null;
 let tokenExpiry = 0;
 
 async function getToken() {
-  if (API_KEY) return API_KEY;
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
   const auth = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
   const body = "grant_type=client_credentials";
   const resp = await httpRequest("POST", TOKEN_URL, {
     Authorization: `Basic ${auth}`,
     "Content-Type": "application/x-www-form-urlencoded",
+    "Content-Length": Buffer.byteLength(body),
   }, body);
   const data = JSON.parse(resp);
   cachedToken = data.access_token;
