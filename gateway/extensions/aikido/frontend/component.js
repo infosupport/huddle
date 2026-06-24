@@ -59,14 +59,6 @@
     /* ── Body ─────────────────────────────────────────────────────────── */
     .body { flex: 1; display: flex; overflow: hidden; }
     .main { flex: 1; overflow-y: auto; }
-    .detail-panel {
-      width: 380px; flex-shrink: 0;
-      border-left: 1px solid var(--border);
-      background: var(--surface);
-      overflow-y: auto; display: none; flex-direction: column;
-    }
-    .detail-panel.open { display: flex; }
-
     /* ── Workspace view ───────────────────────────────────────────────── */
     .ws-view { padding: 20px; display: flex; flex-direction: column; gap: 24px; }
 
@@ -342,6 +334,7 @@
       border-radius: 14px; width: 460px; max-width: 95%; max-height: 90%;
       overflow-y: auto; box-shadow: var(--shadow-pop);
     }
+    .modal--wide { width: 560px; }
     .modal__head {
       display: flex; align-items: center; justify-content: space-between;
       padding: 16px 20px; border-bottom: 1px solid var(--border);
@@ -350,7 +343,11 @@
     .modal__close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 20px; padding: 0 3px; border-radius: 6px; }
     .modal__close:hover { color: var(--text); background: var(--surface-hover); }
     .modal__body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-    .modal__foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+    .modal__foot { display: flex; align-items: center; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+    .modal-section-title {
+      font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+      color: var(--text-muted); padding-top: 4px; border-top: 1px solid var(--border);
+    }
 
     .field { display: flex; flex-direction: column; gap: 5px; }
     .field label { font-size: 11px; font-weight: 700; color: var(--text-muted); }
@@ -392,7 +389,12 @@
       </div>
       <div class="body">
         <div class="main" id="main"></div>
-        <div class="detail-panel" id="detail"></div>
+      </div>
+    </div>
+
+    <!-- Fix modal -->
+    <div class="modal-backdrop" id="fix-modal">
+      <div class="modal modal--wide" id="fix-modal-box">
       </div>
     </div>
 
@@ -467,7 +469,7 @@
         selected: new Set(),
         sortCol: 'severity', sortDir: 'asc',
         openIssue: null,
-        containers: [], selContainer: '',
+        containers: [],
         editingWs: null,
         credPrefix: null,
       };
@@ -517,6 +519,9 @@
         sr.getElementById(id).addEventListener('click', e => {
           if (e.target === e.currentTarget) this._closeModal(id);
         });
+      });
+      sr.getElementById('fix-modal').addEventListener('click', e => {
+        if (e.target === e.currentTarget) { this._closeModal('fix-modal'); this._s.openIssue = null; }
       });
     }
 
@@ -671,10 +676,6 @@
 
     _renderIssues () {
       const s = this._s;
-      const detail = this.$('#detail');
-      detail.classList.remove('open');
-      detail.innerHTML = '';
-
       const { filteredIssues, filteredTotal, page, perPage, sevFilter, search, selected, sortCol, sortDir } = s;
 
       // Repo meta
@@ -764,7 +765,6 @@
       this.$('#fix-sel')?.addEventListener('click', () => {
         const first = s.issues.find(i => s.selected.has(String(i.id)));
         if (first) this._openDetail(first);
-        this._loadContainers();
       });
       this._renderTableBody();
     }
@@ -801,6 +801,12 @@
 
       const tbody = this.$('tbody');
       if (tbody) tbody.innerHTML = rows;
+
+      const chkAll = this.$('#chk-all');
+      if (chkAll && visible.length > 0) {
+        chkAll.checked = visible.every(i => selected.has(String(i.id)));
+        chkAll.indeterminate = !chkAll.checked && visible.some(i => selected.has(String(i.id)));
+      }
 
       // Update/create pager
       const tableWrap = this.$('.table-wrap');
@@ -840,7 +846,7 @@
           if (e.target.checked) s.selected.add(String(i.id));
           else s.selected.delete(String(i.id));
         });
-        this._renderTableBody();
+        this._renderView();
       });
       this.$$('tbody tr[data-id]').forEach(tr => {
         tr.addEventListener('click', e => {
@@ -854,7 +860,6 @@
           e.stopPropagation();
           const issue = s.issues.find(i => String(i.id) === btn.dataset.fix);
           this._openDetail(issue);
-          this._loadContainers();
         });
       });
     }
@@ -890,7 +895,6 @@
     _openDetail (issue) {
       const s = this._s;
       s.openIssue = issue;
-      if (!s.containerTab) s.containerTab = 'existing';
       this._renderDetail();
     }
 
@@ -898,220 +902,142 @@
       const s     = this._s;
       const issue = s.openIssue;
       if (!issue) return;
-      const panel = this.$('#detail');
+      const box = this.$('#fix-modal-box');
 
-      const cve  = (issue.related_cve_ids || issue.cve_ids || []).join(', ') || '–';
-      const locs = (issue.locations || []).map(l => l.code_repo_name || l.name || '').filter(Boolean).join(', ') || '–';
-
-      const existingOpts = s.containers.map(c => {
-        const name = c.Names?.[0]?.replace(/^\//,'') || c.Id?.slice(0,12);
-        return `<option value="${this.esc(name)}" ${s.selContainer === name ? 'selected' : ''}>${this.esc(name)}</option>`;
-      }).join('');
-
-      const imageOpts = (s.images || []).map(img =>
-        `<option value="${this.esc(img.RepoTags?.[0] || img.Id)}" ${s.newImage === (img.RepoTags?.[0] || img.Id) ? 'selected' : ''}>${this.esc(img.RepoTags?.[0] || img.Id.slice(0,12))}</option>`
-      ).join('');
-
-      const ws = s.workspaces.find(w => w.name === s.selectedWs);
-      const existingTab = s.containerTab === 'existing';
-
-      const pkg = issue.affected_package
+      const cve        = (issue.related_cve_ids || issue.cve_ids || []).join(', ') || null;
+      const locs       = (issue.locations || []).map(l => l.code_repo_name || l.name || '').filter(Boolean).join(', ') || null;
+      const pkg        = issue.affected_package
         ? (issue.affected_package_version ? `${issue.affected_package} @ ${issue.affected_package_version}` : issue.affected_package)
         : null;
       const fixVersion = issue.fixed_in || issue.fix_version || null;
 
-      panel.innerHTML = `
-        <div class="detail-header">
+      const toFixCount = s.selected.size > 1 ? s.selected.size : 1;
+      const btnLabel   = toFixCount > 1 ? `▶ Fix ${toFixCount} issues` : '▶ Fix issue';
+
+      box.innerHTML = `
+        <div class="modal__head">
           <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
               <span class="pill ${issue.severity}">${issue.severity}</span>
               ${issue.severity_score != null ? `<span class="detail-score ${issue.severity}">${issue.severity_score}</span>` : ''}
+              ${toFixCount > 1 ? `<span style="font-size:11.5px;color:var(--text-muted)">${toFixCount} issues geselecteerd</span>` : ''}
             </div>
-            <h3>${this.esc(issue.title)}</h3>
+            <h2 style="font-size:14px;font-weight:700;line-height:1.35;letter-spacing:-.01em">${this.esc(issue.title)}</h2>
           </div>
-          <button class="detail-close">×</button>
+          <button class="modal__close" id="fix-close">✕</button>
         </div>
-        <div class="detail-body">
-          ${issue.description ? `<div class="detail-desc">${this.esc(issue.description)}</div>` : ''}
+        <div class="modal__body">
+          ${(cve || pkg || fixVersion || locs || issue.type) ? `
           <div class="detail-grid">
-            ${cve !== '–' ? `<div class="detail-kv"><span class="detail-label">CVE</span><span class="detail-val mono detail-cve">${this.esc(cve)}</span></div>` : ''}
+            ${cve        ? `<div class="detail-kv"><span class="detail-label">CVE</span><span class="detail-val mono detail-cve">${this.esc(cve)}</span></div>` : ''}
             ${issue.type ? `<div class="detail-kv"><span class="detail-label">Type</span><span class="detail-val">${this.esc(issue.type)}</span></div>` : ''}
-            ${pkg ? `<div class="detail-kv"><span class="detail-label">Package</span><span class="detail-val mono">${this.esc(pkg)}</span></div>` : ''}
-            ${fixVersion ? `<div class="detail-kv"><span class="detail-label">Fix in</span><span class="detail-val mono ok">${this.esc(fixVersion)}</span></div>` : ''}
-            ${locs !== '–' ? `<div class="detail-kv"><span class="detail-label">Locaties</span><span class="detail-val">${this.esc(locs)}</span></div>` : ''}
-          </div>
+            ${pkg        ? `<div class="detail-kv"><span class="detail-label">Package</span><span class="detail-val mono">${this.esc(pkg)}</span></div>` : ''}
+            ${fixVersion ? `<div class="detail-kv"><span class="detail-label">Fix in versie</span><span class="detail-val mono" style="color:var(--success)">${this.esc(fixVersion)}</span></div>` : ''}
+            ${locs       ? `<div class="detail-kv"><span class="detail-label">Locaties</span><span class="detail-val">${this.esc(locs)}</span></div>` : ''}
+          </div>` : ''}
           ${issue.how_to_fix ? `
-            <div class="detail-fix-box">
-              <span class="detail-label">Hoe te fixen</span>
-              <p>${this.esc(issue.how_to_fix)}</p>
-            </div>` : ''}
+          <div class="detail-fix-box">
+            <span class="detail-label">Hoe te fixen</span>
+            <p>${this.esc(issue.how_to_fix)}</p>
+          </div>` : ''}
         </div>
-        <div class="detail-actions">
-          <div class="tab-row">
-            <button class="tab-btn ${existingTab ? 'active' : ''}" data-tab="existing">Bestaande container</button>
-            <button class="tab-btn ${!existingTab ? 'active' : ''}" data-tab="new">Nieuwe container</button>
-          </div>
-
-          ${existingTab ? `
-            <div class="csel-row">
-              <select id="c-sel">
-                <option value="">Selecteer container…</option>
-                ${existingOpts}
-              </select>
-              <button class="btn btn--sm" id="c-reload">↻</button>
-            </div>
-            <button class="btn btn--primary" id="do-inject" ${!s.selContainer ? 'disabled' : ''}>▶ Fix in container</button>
-          ` : `
-            <div class="ncf">
-              <div>
-                <label>Base image</label>
-                <div style="display:flex;gap:6px">
-                  <select id="new-image" style="flex:1">
-                    <option value="">Laden…</option>
-                    ${imageOpts}
-                  </select>
-                  <button class="btn btn--sm" id="img-reload">↻</button>
-                </div>
-              </div>
-              <div>
-                <label>Workspace pad</label>
-                <input id="new-ws-path" value="${this.esc(ws?.repo_path || '')}" placeholder="/workspaces/project" />
-              </div>
-              <div>
-                <label>Container naam</label>
-                <input id="new-cname" value="${this.esc(s.newContainerName || '')}" placeholder="devcontainer-project" />
-              </div>
-            </div>
-            <button class="btn btn--primary" id="do-start-inject">▶ Start container &amp; fix</button>
-          `}
-
-          <div id="inject-msg"></div>
+        <div class="modal__foot">
+          <div id="inject-msg" style="flex:1;font-size:12.5px"></div>
+          <button class="btn btn--ghost" id="fix-cancel">Annuleren</button>
+          <button class="btn btn--primary" id="do-fix">${btnLabel}</button>
         </div>`;
 
-      panel.querySelector('.detail-close').onclick = () => {
-        panel.classList.remove('open'); panel.innerHTML = ''; s.openIssue = null;
-      };
-      panel.querySelectorAll('[data-tab]').forEach(btn => {
-        btn.onclick = () => { s.containerTab = btn.dataset.tab; this._renderDetail(); };
-      });
+      const closeModal = () => { this._closeModal('fix-modal'); s.openIssue = null; };
+      box.querySelector('#fix-close').onclick  = closeModal;
+      box.querySelector('#fix-cancel').onclick = closeModal;
+      box.querySelector('#do-fix').onclick     = () => this._fixIssues([issue]);
 
-      if (existingTab) {
-        panel.querySelector('#c-sel').onchange = e => { s.selContainer = e.target.value; this._renderDetail(); };
-        panel.querySelector('#c-reload').onclick = () => this._loadContainers();
-        panel.querySelector('#do-inject').onclick = () => this._inject([issue]);
-      } else {
-        panel.querySelector('#new-image').onchange = e => { s.newImage = e.target.value; };
-        panel.querySelector('#new-ws-path').oninput = e => {
-          const leaf = e.target.value.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
-          const nameEl = panel.querySelector('#new-cname');
-          if (!s.newContainerNameTouched) nameEl.value = leaf ? `devcontainer-${leaf}` : '';
-        };
-        panel.querySelector('#new-cname').oninput = e => {
-          s.newContainerName = e.target.value; s.newContainerNameTouched = true;
-        };
-        panel.querySelector('#img-reload').onclick = () => this._loadImages();
-        panel.querySelector('#do-start-inject').onclick = () => this._startAndInject([issue]);
-
-        if (!s.newContainerName && ws?.repo_path) {
-          const leaf = ws.repo_path.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
-          panel.querySelector('#new-cname').value = leaf ? `devcontainer-${leaf}` : '';
-        }
-        if (!(s.images || []).length) this._loadImages();
-      }
-
-      panel.classList.add('open');
+      this._openModal('fix-modal');
     }
 
     async _loadContainers () {
       try {
-        const res = await fetch('/api/containers');
+        const res = await fetch('/api/docker/containers');
         if (!res.ok) return;
-        const all = await res.json();
-        this._s.containers = (all || []).filter(c => c.State === 'running');
-        if (this._s.openIssue) this._renderDetail();
+        this._s.containers = (await res.json()) || [];
       } catch {}
     }
 
-    async _loadImages () {
-      try {
-        const res = await fetch('/api/docker/images');
-        if (!res.ok) return;
-        const imgs = await res.json();
-        this._s.images = imgs || [];
-        if (!this._s.newImage) {
-          const baseRes = await fetch('/api/docker/base-image');
-          if (baseRes.ok) {
-            const b = await baseRes.json();
-            this._s.newImage = b.imageName;
-          } else if (this._s.images.length) {
-            this._s.newImage = this._s.images[0].RepoTags?.[0] || this._s.images[0].Id;
-          }
-        }
-        if (this._s.openIssue) this._renderDetail();
-      } catch {}
-    }
+    async _fixIssues (issues) {
+      const CONTAINER = 'Aikido_Staalname';
+      const s   = this._s;
+      const box = this.$('#fix-modal-box');
+      const msgEl = box?.querySelector('#inject-msg');
+      const fixBtn = box?.querySelector('#do-fix');
+      if (fixBtn) fixBtn.disabled = true;
 
-    async _inject (issues) {
-      const s = this._s;
-      if (!s.selContainer) return;
-      const msgEl = this.$('#inject-msg');
-      if (msgEl) msgEl.innerHTML = `<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>Injecteren…</div></div>`;
-
-      const toInject = s.selected.size > 1
-        ? s.issues.filter(i => s.selected.has(String(i.id)))
-        : issues;
-
-      try {
-        await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
-          container_name: s.selContainer, issues: toInject,
-        });
-        if (msgEl) msgEl.innerHTML = `<div class="alert ok">✓ Geïnjecteerd in <b>${this.esc(s.selContainer)}</b>. Voer <code>aikido-fix</code> uit.</div>`;
-      } catch (e) {
-        if (msgEl) msgEl.innerHTML = `<div class="alert err">Fout: ${this.esc(e.message)}</div>`;
-      }
-    }
-
-    async _startAndInject (issues) {
-      const s      = this._s;
-      const panel  = this.$('#detail');
-      const msgEl  = panel?.querySelector('#inject-msg');
-      const wsPath = panel?.querySelector('#new-ws-path')?.value?.trim();
-      const cname  = panel?.querySelector('#new-cname')?.value?.trim();
-      const image  = panel?.querySelector('#new-image')?.value || s.newImage;
-
-      if (!image)  { if (msgEl) msgEl.innerHTML = `<div class="alert err">Selecteer een base image.</div>`; return; }
-      if (!wsPath) { if (msgEl) msgEl.innerHTML = `<div class="alert err">Vul het workspace pad in.</div>`; return; }
-      if (!cname)  { if (msgEl) msgEl.innerHTML = `<div class="alert err">Vul een container naam in.</div>`; return; }
-
-      const toInject = s.selected.size > 1
+      const toFix = s.selected.size > 1
         ? s.issues.filter(i => s.selected.has(String(i.id)))
         : issues;
 
       const setMsg = html => { if (msgEl) msgEl.innerHTML = html; };
+      const spinner = text => `<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>${text}</div></div>`;
 
       try {
-        setMsg(`<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>Container starten…</div></div>`);
-        await fetch('/api/docker/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageName: image, workspaceDir: wsPath, containerName: cname }),
-        }).then(async r => {
-          if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); }
-          return r.json();
-        });
-
-        setMsg(`<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>Container gestart, context injecteren…</div></div>`);
-        await new Promise(r => setTimeout(r, 2000));
-
-        await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
-          container_name: cname, issues: toInject,
-        });
-
-        s.selContainer = cname; s.containerTab = 'existing';
+        // Refresh container list to get current state
         await this._loadContainers();
-        setMsg(`<div class="alert ok">✓ Container <b>${this.esc(cname)}</b> gestart en geïnjecteerd. Voer <code>aikido-fix</code> uit.</div>`);
+        const existing = s.containers.find(c => c.name === CONTAINER);
+        const isRunning = existing?.status?.startsWith('Up');
+
+        if (existing && isRunning) {
+          // Container is al actief → direct injecteren
+          setMsg(spinner(`Injecteren in bestaande container <b>${CONTAINER}</b>…`));
+          await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
+            container_name: CONTAINER, issues: toFix,
+          });
+          setMsg(`<div class="alert ok">✓ Geïnjecteerd in bestaande container <b>${CONTAINER}</b>. Voer <code>aikido-fix</code> uit in de container.</div>`);
+
+        } else if (existing && !isRunning) {
+          // Container bestaat maar is gestopt → hervatten
+          setMsg(spinner(`Container <b>${CONTAINER}</b> hervatten…`));
+          await fetch(`/api/docker/containers/${encodeURIComponent(CONTAINER)}/start`, { method: 'POST' })
+            .then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
+
+          setMsg(spinner(`Container geherstart, injecteren…`));
+          await new Promise(r => setTimeout(r, 1500));
+
+          await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
+            container_name: CONTAINER, issues: toFix,
+          });
+          setMsg(`<div class="alert ok">✓ Container <b>${CONTAINER}</b> hervat en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
+
+        } else {
+          // Container bestaat niet → aanmaken
+          setMsg(spinner(`Container <b>${CONTAINER}</b> bestaat niet — image ophalen…`));
+          const imagesRes = await fetch('/api/docker/images');
+          const images    = imagesRes.ok ? (await imagesRes.json()) : [];
+          const aikidoImg = images.find(i => (i.name || '').startsWith('aikido'));
+          let image = aikidoImg?.name || null;
+          if (!image) {
+            const baseRes = await fetch('/api/docker/base-image?ide=vscode');
+            image = baseRes.ok ? (await baseRes.json()).imageName : null;
+          }
+          if (!image) throw new Error('Geen Docker-image beschikbaar. Zorg dat de Aikido-image gebouwd is.');
+
+          setMsg(spinner(`Container <b>${CONTAINER}</b> aanmaken…`));
+          await fetch('/api/docker/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageName: image, containerName: CONTAINER, presentableName: 'Aikido Staalname', empty: true }),
+          }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
+
+          setMsg(spinner(`Container gestart, injecteren…`));
+          await new Promise(r => setTimeout(r, 2000));
+
+          await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
+            container_name: CONTAINER, issues: toFix,
+          });
+          await this._loadContainers();
+          setMsg(`<div class="alert ok">✓ Container <b>${CONTAINER}</b> aangemaakt en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
+        }
       } catch (e) {
         setMsg(`<div class="alert err">Fout: ${this.esc(e.message)}</div>`);
+        if (fixBtn) fixBtn.disabled = false;
       }
     }
 
