@@ -13,6 +13,7 @@ export const routes: Routes = [
   { path: 'extensions/:id/settings', loadComponent: () => import('./pages/extensions/settings/extension-settings.component').then(m => m.ExtensionSettingsComponent) },
   { path: 'extensions/view/:id', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
   { path: 'extensions/view/:id/:repo', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
-
+  { path: 'mcp', loadComponent: () => import('./pages/mcp/mcp.component').then(m => m.McpPageComponent) },
+  { path: 'mcp/:id/settings', loadComponent: () => import('./pages/mcp/mcp-settings.component').then(m => m.McpSettingsComponent) },
 { path: '**', redirectTo: 'dashboard' },
 ];
