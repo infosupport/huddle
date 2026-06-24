@@ -964,8 +964,8 @@
     }
 
     async _fixIssues (issues) {
-      const CONTAINER = `aikido_${s.selectedWs}`;
       const s   = this._s;
+      const CONTAINER = `aikido_${s.selectedWs}`;
       const box = this.$('#fix-modal-box');
       const msgEl = box?.querySelector('#inject-msg');
       const fixBtn = box?.querySelector('#do-fix');
