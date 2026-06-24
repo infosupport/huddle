@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, ElementRef, ViewChild, inject } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 
 @Component({
@@ -25,6 +25,7 @@ import { ApiService } from '../../../core/services/api.service';
 export class ExtensionViewComponent implements OnInit, OnDestroy {
   @ViewChild('host', { static: true }) hostRef!: ElementRef<HTMLDivElement>;
   private route = inject(ActivatedRoute);
+  private router = inject(Router);
   private api = inject(ApiService);
 
   ready = false;
@@ -33,52 +34,58 @@ export class ExtensionViewComponent implements OnInit, OnDestroy {
   private scriptEl: HTMLScriptElement | null = null;
 
   ngOnInit(): void {
-    const id = this.route.snapshot.paramMap.get('id')!;
-    this.loadExtension(id);
+    const id   = this.route.snapshot.paramMap.get('id')!;
+    const repo = this.route.snapshot.paramMap.get('repo') ?? undefined;
+    this.loadExtension(id, repo);
   }
 
-  private async loadExtension(id: string): Promise<void> {
-    // Controleer of de extensie bestaat
+  private async loadExtension(id: string, repo?: string): Promise<void> {
     this.api.getExtensions().subscribe({
       next: (exts) => {
         const ext = exts.find(e => e.id === id);
         if (!ext) { this.error = `Extensie "${id}" niet gevonden.`; return; }
-        this.mountWebComponent(id, ext.name);
+        this.mountWebComponent(id, ext.name, repo);
       },
       error: () => { this.error = 'Kon extensielijst niet ophalen.'; }
     });
   }
 
-  private mountWebComponent(id: string, name: string): void {
+  private mountWebComponent(id: string, name: string, initialRepo?: string): void {
     const tagName = `ext-${id}`;
     const scriptSrc = `/ext/${id}/component.js`;
 
     const mount = () => {
       const el = document.createElement(tagName);
+      if (initialRepo) el.setAttribute('initial-repo', initialRepo);
+
+      // Listen for navigation events dispatched by the web component
+      el.addEventListener('ext-navigate', (e: Event) => {
+        const repo = (e as CustomEvent).detail?.repo as string | undefined;
+        if (repo) {
+          this.router.navigate(['/extensions/view', id, repo]);
+        } else {
+          this.router.navigate(['/extensions/view', id]);
+        }
+      });
+
       this.hostRef.nativeElement.appendChild(el);
       this.ready = true;
     };
 
-    // Als het custom element al geregistreerd is (bijv. na navigatie terug), direct mounten
     if (customElements.get(tagName)) { mount(); return; }
 
-    // Script laden en daarna mounten
     this.scriptEl = document.createElement('script');
     this.scriptEl.src = scriptSrc;
     this.scriptEl.onload = () => {
-      // Geef het custom element even tijd om te registreren
       customElements.whenDefined(tagName).then(mount);
     };
     this.scriptEl.onerror = () => {
-      // Geen component.js → fallback: toon foutmelding
       this.error = `"${name}" heeft geen in-app UI (component.js ontbreekt). Open de extensie via de Openen-knop.`;
     };
     document.head.appendChild(this.scriptEl);
   }
 
   ngOnDestroy(): void {
-    // Verwijder het custom element uit de host maar laat het script staan
-    // zodat het element geregistreerd blijft bij navigatie terug.
     this.hostRef.nativeElement.innerHTML = '';
   }
 }
