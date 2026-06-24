@@ -964,7 +964,7 @@
     }
 
     async _fixIssues (issues) {
-      const CONTAINER = 'Aikido_Staalname';
+      const CONTAINER = `aikido_${s.selectedWs}`;
       const s   = this._s;
       const box = this.$('#fix-modal-box');
       const msgEl = box?.querySelector('#inject-msg');
@@ -1019,11 +1019,15 @@
           }
           if (!image) throw new Error('Geen Docker-image beschikbaar. Zorg dat de Aikido-image gebouwd is.');
 
+          const ws     = s.workspaces.find(w => w.name === s.selectedWs);
+          const wsPath = ws?.repo_path;
+          if (!wsPath) throw new Error('Geen repo-pad bekend voor deze workspace. Stel het in via de workspace-instellingen.');
+
           setMsg(spinner(`Container <b>${CONTAINER}</b> aanmaken…`));
           await fetch('/api/docker/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageName: image, containerName: CONTAINER, presentableName: 'Aikido Staalname', empty: true }),
+            body: JSON.stringify({ imageName: image, containerName: CONTAINER, presentableName: `Aikido ${s.selectedWs}`, workspaceDir: wsPath }),
           }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
 
           setMsg(spinner(`Container gestart, injecteren…`));
