@@ -25,6 +25,8 @@ COPY package.json ./
 RUN npm install --omit=dev \
     && apk del python3 make g++
 COPY --from=builder /app/dist ./dist
+COPY extensions ./extensions
 ENV DB_PATH=/data/huddle.db
+ENV EXT_DIR=/app/extensions
 EXPOSE 80 3000
 CMD ["node", "dist/index.js"]

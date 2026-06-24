@@ -761,7 +761,30 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const extId: string = req.params.extId;
       const sub: string = req.params['*'] ?? '';
       const fullPath = `/api/ext/${extId}/${sub}`;
-      const handler = extDispatch.get(`${req.method}:${fullPath}`);
+      let handler = extDispatch.get(`${req.method}:${fullPath}`);
+      if (!handler) {
+        // Patroon-matching voor routes met :param segmenten
+        for (const [key, h] of extDispatch) {
+          const firstColon = key.indexOf(':');
+          const km = key.slice(0, firstColon);
+          const kp = key.slice(firstColon + 1);
+          if (km !== req.method) continue;
+          const patParts = kp.split('/');
+          const actParts = fullPath.split('/');
+          if (patParts.length !== actParts.length) continue;
+          const params: Record<string, string> = {};
+          let match = true;
+          for (let i = 0; i < patParts.length; i++) {
+            if (patParts[i].startsWith(':')) {
+              params[patParts[i].slice(1)] = decodeURIComponent(actParts[i]);
+            } else if (patParts[i] !== actParts[i]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) { req.params = { ...req.params, ...params }; handler = h; break; }
+        }
+      }
       if (!handler) return reply.code(404).send({ error: `Geen handler voor ${req.method} ${fullPath}` });
       return handler(req, reply);
     },
