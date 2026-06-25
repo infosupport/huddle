@@ -431,6 +431,25 @@
       </div>
     </div>
 
+    <!-- MCP API Key modal (globaal) -->
+    <div class="modal-backdrop" id="apikey-modal">
+      <div class="modal">
+        <div class="modal__head">
+          <h2>MCP API Key</h2>
+          <button class="modal__close" data-close="apikey-modal">×</button>
+        </div>
+        <div class="modal__body">
+          <div class="alert info">Persoonlijke toegangstoken uit Aikido via <b>Instellingen → Integraties → IDE → MCP</b>. Geldt voor alle workspaces.</div>
+          <div class="field"><label>API Key</label><input id="ak-key" type="password" placeholder="Laat leeg om ongewijzigd te laten" /></div>
+          <div id="apikey-msg"></div>
+        </div>
+        <div class="modal__foot">
+          <button class="btn btn--ghost" data-close="apikey-modal">Annuleer</button>
+          <button class="btn btn--primary" id="apikey-save">Opslaan</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Credentials modal -->
     <div class="modal-backdrop" id="cred-modal">
       <div class="modal">
@@ -515,7 +534,8 @@
       sr.getElementById('ws-save').addEventListener('click', () => this._saveWs());
       sr.getElementById('cred-save').addEventListener('click', () => this._saveCreds());
       sr.getElementById('cred-del').addEventListener('click', () => this._deleteCreds());
-      ['ws-modal','cred-modal'].forEach(id => {
+      sr.getElementById('apikey-save').addEventListener('click', () => this._saveApiKey());
+      ['ws-modal','cred-modal','apikey-modal'].forEach(id => {
         sr.getElementById(id).addEventListener('click', e => {
           if (e.target === e.currentTarget) this._closeModal(id);
         });
@@ -575,8 +595,11 @@
 
       if (s.view === 'workspaces') {
         tbWs.textContent = ''; tbSep.style.display = 'none';
-        tbR.innerHTML = `<button class="btn btn--sm btn--primary">+ Repository</button>`;
-        tbR.querySelector('button').onclick = () => this._openAddWs();
+        tbR.innerHTML = `
+          <button class="btn btn--sm btn--ghost" id="tb-apikey">MCP API Key</button>
+          <button class="btn btn--sm btn--primary">+ Repository</button>`;
+        tbR.querySelector('#tb-apikey').onclick = () => this._openApiKey();
+        tbR.querySelector('.btn--primary').onclick = () => this._openAddWs();
         this._renderWorkspaces();
       } else {
         tbWs.textContent = s.selectedWs; tbSep.style.display = '';
@@ -1140,6 +1163,33 @@
       }
     }
 
+    // ── MCP API Key modal (globaal) ────────────────────────────────────────
+
+    _openApiKey () {
+      const sr = this.shadowRoot;
+      sr.getElementById('ak-key').value = '';
+      sr.getElementById('apikey-msg').innerHTML = '';
+      this.api('GET', '/settings/mcp-api-key').then(d => {
+        if (d.has_key) sr.getElementById('ak-key').placeholder = '(ingesteld — laat leeg om te bewaren)';
+        else sr.getElementById('ak-key').placeholder = 'Plak hier je PAT';
+      }).catch(() => {});
+      this._openModal('apikey-modal');
+    }
+
+    async _saveApiKey () {
+      const sr  = this.shadowRoot;
+      const key = sr.getElementById('ak-key').value;
+      const msg = sr.getElementById('apikey-msg');
+      if (!key) { this._closeModal('apikey-modal'); return; }
+      try {
+        await this.api('POST', '/settings/mcp-api-key', { api_key: key });
+        msg.innerHTML = `<div class="alert ok">✓ MCP API Key opgeslagen.</div>`;
+        setTimeout(() => this._closeModal('apikey-modal'), 1200);
+      } catch (e) {
+        msg.innerHTML = `<div class="alert err">${this.esc(e.message)}</div>`;
+      }
+    }
+
     // ── Credentials modal ─────────────────────────────────────────────────
 
     _openCreds () {
@@ -1160,7 +1210,7 @@
     }
 
     async _saveCreds () {
-      const sr  = this.shadowRoot;
+      const sr     = this.shadowRoot;
       const id  = sr.getElementById('c-id').value.trim();
       const sec = sr.getElementById('c-secret').value;
       const msg = sr.getElementById('cred-msg');
