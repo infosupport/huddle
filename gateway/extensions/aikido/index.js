@@ -455,11 +455,13 @@ module.exports.register = async function register(ctx) {
         },
       }, null, 2);
 
+      const aikidoDir = `${workspace}/aikido`;
+
       const files = {
-        [`${workspace}/AIKIDO_CLAUDE.md`]:   generateClaudePrompt(issues, ws),
-        [`${workspace}/AIKIDO_CONTEXT.md`]:  generateIssueContext(issues, ws),
-        [`${workspace}/AIKIDO_ISSUES.json`]: JSON.stringify(issues, null, 2),
-        ['/usr/local/bin/aikido-fix']:       `#!/bin/bash\ncd ${workspace}\nclaude "lees AIKIDO_CLAUDE.md en voer alle instructies uit"\n`,
+        [`${aikidoDir}/AIKIDO_CLAUDE.md`]:   generateClaudePrompt(issues, ws),
+        [`${aikidoDir}/AIKIDO_CONTEXT.md`]:  generateIssueContext(issues, ws),
+        [`${aikidoDir}/AIKIDO_ISSUES.json`]: JSON.stringify(issues, null, 2),
+        ['/usr/local/bin/aikido-fix']:       `#!/bin/bash\ncd ${workspace}\nclaude "lees aikido/AIKIDO_CLAUDE.md en voer alle instructies uit"\n`,
         ['/usr/local/lib/aikido-mcp-server.js']: mcpJs,
       };
 
@@ -470,12 +472,20 @@ module.exports.register = async function register(ctx) {
 
       const claudeB64    = Buffer.from(claudeJson).toString('base64');
       const mergeScript  = `node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}const n=JSON.parse(Buffer.from('${claudeB64}','base64').toString());s.mcpServers=Object.assign(s.mcpServers||{},n.mcpServers);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}"`;
-      const writeScript  = `mkdir -p ${workspace} /usr/local/lib && ${parts.join(' && ')} && chmod +x /usr/local/bin/aikido-fix && chown -R vscode:vscode ${workspace} && ${mergeScript}`;
+      const writeScript  = `mkdir -p ${aikidoDir} /usr/local/lib && ${parts.join(' && ')} && chmod +x /usr/local/bin/aikido-fix && chown -R vscode:vscode ${workspace} && ${mergeScript}`;
 
       const exec = await dockerRequest('POST', `/containers/${info.Id}/exec`, {
         User: 'root', Cmd: ['sh', '-c', writeScript], AttachStdout: false, AttachStderr: false,
       });
       await dockerRequest('POST', `/exec/${exec.Id}/start`, { Detach: true });
+
+      // Gitignore update als aparte exec zodat een falende hoofdscript het niet blokkeert
+      const gitignoreScript = `grep -qxF /aikido ${workspace}/.gitignore 2>/dev/null || printf '\\n/aikido\\n' >> ${workspace}/.gitignore`;
+      const giExec = await dockerRequest('POST', `/containers/${info.Id}/exec`, {
+        User: 'root', Cmd: ['sh', '-c', gitignoreScript], AttachStdout: false, AttachStderr: false,
+      });
+      await dockerRequest('POST', `/exec/${giExec.Id}/start`, { Detach: true });
+
       return { ok: true };
     } catch (err) {
       return reply.code(500).send({ error: err.message });
