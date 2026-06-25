@@ -10,6 +10,7 @@
         }
       </select>
       <input type="text" [formControl]="domainFilter" placeholder="Domein zoeken..." />
+      <input type="text" [formControl]="pathFilter" placeholder="Pad zoeken..." />
       <select [formControl]="actionFilter">
         <option value="">Alle acties</option>
         <option value="allow">Allow</option>
@@ -18,6 +19,7 @@
         <option value="admin">Admin</option>
         <option value="system:start">Systeem start</option>
       </select>
+      <button class="btn-filter-preset" (click)="setTokenFilter()" title="Filter op login token verzoeken">Token verzoeken</button>
     </div>
     @if (logs$ | async; as logs) {
       <span class="record-count">{{ logs.length }} vermeldingen</span>
@@ -71,7 +73,7 @@
                     }
                     @if (log.req_body) {
                       <div>
-                        <h5>Request body</h5>
+                        <h5>Request body <button class="btn-raw" (click)="$event.stopPropagation(); openRawBody(log.req_body!)">raw</button></h5>
                         <pre>{{ log.req_body }}</pre>
                       </div>
                     }
@@ -83,7 +85,7 @@
                     }
                     @if (log.res_body) {
                       <div>
-                        <h5>Response body</h5>
+                        <h5>Response body <button class="btn-raw" (click)="$event.stopPropagation(); openRawBody(log.res_body!)">raw</button></h5>
                         <pre>{{ log.res_body }}</pre>
                       </div>
                     }

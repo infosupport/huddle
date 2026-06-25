@@ -6,9 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, upsertMcpServer, getMcpServer, listMcpServers, deleteMcpServer, getMcpValue, setMcpValue, getAirlocked, setAirlocked, getSetting, setSetting } from './db';
-import { parseManifest } from './mcp/types';
-import { startMcpContainer, stopMcpContainer, getMcpTargetUrl } from './mcp/manager';
+import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting } from './db';
 import {
   listDevcontainers,
   inspectContainer,
@@ -108,8 +106,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   ];
   app.addHook('onRequest', async (req, reply) => {
     if (!isFromDevcontainer(req.socket.remoteAddress)) return;
-    const isMcp = (req.url ?? '').startsWith('/mcp/');
-    const ok = isMcp || devcontainerWhitelist.some(
+    const ok = devcontainerWhitelist.some(
       w => w.method === req.method && w.path === req.url,
     );
     if (!ok) {
@@ -606,15 +603,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // ── Audit log ─────────────────────────────────────────────────────────────
 
-  app.get<{ Querystring: { container?: string; domain?: string; action?: string; limit?: string; offset?: string } }>(
+  app.get<{ Querystring: { container?: string; domain?: string; action?: string; path?: string; limit?: string; offset?: string } }>(
     '/api/audit',
     async (req) => {
-      const { container, domain, action, limit = '200', offset = '0' } = req.query;
+      const { container, domain, action, path, limit = '200', offset = '0' } = req.query;
       const where: string[] = [];
       const params: (string | number)[] = [];
       if (container) { where.push('container_id = ?'); params.push(container); }
       if (domain) { where.push('domain LIKE ?'); params.push(`%${domain}%`); }
       if (action) { where.push('action LIKE ?'); params.push(`${action}%`); }
+      if (path) { where.push('path LIKE ?'); params.push(`%${path}%`); }
       const sql =
         `SELECT * FROM audit_log` +
         (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
@@ -814,170 +812,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { ok: true };
   });
 
-  // ── MCP Servers ───────────────────────────────────────────────────────────
-
-  function rowToMcpServer(row: any): any {
-    const manifest = JSON.parse(row.manifest_json);
-    return {
-      id: row.id,
-      name: row.name,
-      version: row.version,
-      image: row.image,
-      port: row.port,
-      transport: row.transport,
-      settings: manifest.settings ?? [],
-      containerId: row.container_id,
-      status: row.status,
-      createdAt: row.created_at,
-    };
-  }
-
-  app.get('/api/mcp', async () => listMcpServers().map(rowToMcpServer));
-
-  app.post('/api/mcp/upload', async (req, reply) => {
-    let body: unknown;
-    try {
-      body = typeof (req as any).body === 'string' ? JSON.parse((req as any).body) : (req as any).body;
-    } catch {
-      return reply.code(400).send({ error: 'Ongeldige JSON' });
-    }
-    let manifest: ReturnType<typeof parseManifest>;
-    try {
-      manifest = parseManifest(body);
-    } catch (err: any) {
-      return reply.code(400).send({ error: err.message });
-    }
-    upsertMcpServer({
-      id: manifest.id,
-      name: manifest.name,
-      version: manifest.version,
-      image: manifest.image,
-      port: manifest.port,
-      transport: manifest.transport,
-      manifest_json: JSON.stringify(manifest),
-      container_id: null,
-      status: 'stopped',
-      created_at: Math.floor(Date.now() / 1000),
-      updated_at: Math.floor(Date.now() / 1000),
-    });
-    notifyStateChanged();
-    return { id: manifest.id, name: manifest.name };
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/mcp/:id', async (req, reply) => {
-    const { id } = req.params;
-    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send({ error: 'Ongeldige id' });
-    const row = getMcpServer(id);
-    if (!row) return reply.code(404).send({ error: 'Niet gevonden' });
-    if (row.status === 'running') {
-      try { await stopMcpContainer(id); } catch {}
-    }
-    deleteMcpServer(id);
-    notifyStateChanged();
-    return { ok: true };
-  });
-
-  app.post<{ Params: { id: string } }>('/api/mcp/:id/start', async (req, reply) => {
-    const { id } = req.params;
-    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send({ error: 'Ongeldige id' });
-    try {
-      await startMcpContainer(id);
-      notifyStateChanged();
-      return { ok: true };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
-    }
-  });
-
-  app.post<{ Params: { id: string } }>('/api/mcp/:id/stop', async (req, reply) => {
-    const { id } = req.params;
-    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send({ error: 'Ongeldige id' });
-    try {
-      await stopMcpContainer(id);
-      notifyStateChanged();
-      return { ok: true };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
-    }
-  });
-
-  app.get<{ Params: { id: string } }>('/api/mcp/:id/settings', async (req, reply) => {
-    const { id } = req.params;
-    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send({ error: 'Ongeldige id' });
-    const row = getMcpServer(id);
-    if (!row) return reply.code(404).send({ error: 'Niet gevonden' });
-    const manifest = JSON.parse(row.manifest_json);
-    const settings: Array<{ key: string; secret?: boolean }> = manifest.settings ?? [];
-    const result: Record<string, string> = {};
-    for (const s of settings) {
-      result[s.key] = s.secret ? '' : (getMcpValue(id, s.key) ?? '');
-    }
-    return result;
-  });
-
-  app.post<{ Params: { id: string }; Body: Record<string, string> }>('/api/mcp/:id/settings', async (req, reply) => {
-    const { id } = req.params;
-    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send({ error: 'Ongeldige id' });
-    const row = getMcpServer(id);
-    if (!row) return reply.code(404).send({ error: 'Niet gevonden' });
-    const body = (req as any).body as Record<string, string>;
-    for (const [k, v] of Object.entries(body)) {
-      if (typeof v === 'string') setMcpValue(id, k, v);
-    }
-    return { ok: true };
-  });
-
-  // MCP proxy — stuurt verkeer door naar de draaiende MCP-container
-  // Route: /mcp/:id/* (niet onder /api/ zodat SSE-streaming werkt via raw reply)
-  app.route({
-    method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    url: '/mcp/:id/*',
-    handler: async (req: any, reply) => {
-      const id: string = req.params.id;
-      if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send({ error: 'Ongeldige id' });
-      let targetBase: string;
-      try {
-        targetBase = await getMcpTargetUrl(id);
-      } catch (err: any) {
-        return reply.code(503).send({ error: err.message });
-      }
-      const subPath = '/' + (req.params['*'] ?? '');
-      const targetUrl = new URL(subPath + (req.url.includes('?') ? '?' + req.url.split('?')[1] : ''), targetBase);
-
-      return new Promise<void>((resolve, reject) => {
-        const proxyReq = http.request(
-          {
-            host: targetUrl.hostname,
-            port: Number(targetUrl.port) || 80,
-            path: targetUrl.pathname + targetUrl.search,
-            method: req.method,
-            headers: { ...req.headers, host: targetUrl.host },
-          },
-          (proxyRes) => {
-            reply.raw.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
-            proxyRes.pipe(reply.raw);
-            proxyRes.on('end', resolve);
-            proxyRes.on('error', (err) => {
-              if (reply.raw.headersSent) { reply.raw.destroy(); }
-              else { reject(err); }
-            });
-          }
-        );
-        proxyReq.on('error', (err) => {
-          if (reply.raw.headersSent) { reply.raw.destroy(); }
-          else { reject(err); }
-        });
-        const parsedBody = (req as any).body;
-        if (parsedBody !== undefined && parsedBody !== null) {
-          const bodyStr = typeof parsedBody === 'string' ? parsedBody : JSON.stringify(parsedBody);
-          proxyReq.setHeader('content-length', String(Buffer.byteLength(bodyStr)));
-          proxyReq.end(bodyStr);
-        } else {
-          proxyReq.end();
-        }
-      });
-    },
-  });
 
   initLoader(app, db);
   await loadAllExtensions();

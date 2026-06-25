@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
 import { saveCredentials, getSetting } from './db';
 import { getCaCertPem } from './tls-ca';
-import { getRunningMcpConfigs } from './mcp/manager';
 import { ensureWorktree } from './worktree';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
@@ -438,15 +437,9 @@ done`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, mcpServers: Array<{ id: string; name: string; transport: string; port: number }> = []): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
-  const mcpJson = JSON.stringify(Object.fromEntries(
-    mcpServers.map(s => [s.id, {
-      type: s.transport === 'sse' ? 'sse' : 'http',
-      url: `http://huddle:80/mcp/${s.id}${s.transport === 'sse' ? '/sse' : ''}`,
-    }])
-  ));
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
@@ -559,8 +552,6 @@ if [ -n "$IDEA_DIR" ]; then
 nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
 fi
 
-${mcpServers.length > 0 ? `# Injecteer MCP server configuratie in Claude Code settings
-MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
 `;
 }
 
@@ -568,14 +559,8 @@ MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude
 // Zelfde firewall/sudo/audit-setup als de JB-flow, maar zónder JB host-config en
 // zónder remote-dev-server: VS Code installeert zijn eigen backend (VS Code Server)
 // bij het attachen. Houd dit in sync met de vscode-branch in huddle.ps1.
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, mcpServers: Array<{ id: string; name: string; transport: string; port: number }> = []): string {
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
-  const mcpJson = JSON.stringify(Object.fromEntries(
-    mcpServers.map(s => [s.id, {
-      type: s.transport === 'sse' ? 'sse' : 'http',
-      url: `http://huddle:80/mcp/${s.id}${s.transport === 'sse' ? '/sse' : ''}`,
-    }])
-  ));
   return `#!/bin/sh
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
@@ -624,8 +609,6 @@ touch /tmp/sudo-audit.log
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
 
-${mcpServers.length > 0 ? `# Injecteer MCP server configuratie in Claude Code settings
-MCP_SERVERS='${mcpJson}' node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}s.mcpServers=JSON.parse(process.env.MCP_SERVERS);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}" 2>/dev/null || true` : ''}
 `;
 }
 
@@ -789,10 +772,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
   // Run config script via exec — VS Code-variant zonder JB host-config/backend.
-  const mcpServers = getRunningMcpConfigs();
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), mcpServers)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), mcpServers);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem())
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem());
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],

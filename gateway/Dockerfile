@@ -16,15 +16,16 @@ COPY frontend/src ./frontend/src
 COPY frontend/angular.json frontend/tsconfig*.json ./frontend/
 RUN npm run build
 
+# Remove devDependencies so only production node_modules remain
+RUN npm prune --omit=dev
+
 
 FROM node:20-alpine AS runtime
 WORKDIR /app
-RUN apk add --no-cache python3 make g++ \
-    && mkdir -p /data /tmp/dc-sockets /app
-COPY package.json ./
-RUN npm install --omit=dev \
-    && apk del python3 make g++
+RUN mkdir -p /data /tmp/dc-sockets
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY package.json ./
 COPY extensions ./extensions
 ENV DB_PATH=/data/huddle.db
 ENV EXT_DIR=/app/extensions

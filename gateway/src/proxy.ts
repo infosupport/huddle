@@ -3,6 +3,7 @@ import https from 'https';
 import net from 'net';
 import tls from 'tls';
 import stream from 'stream';
+import zlib from 'zlib';
 import { URL } from 'url';
 import { checkRule, isPathMode } from './rules';
 import { resolveContainerByIp } from './docker';
@@ -23,6 +24,22 @@ const NO_INTERCEPT_DOMAINS: Set<string> = new Set(
 const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
 function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
+
+function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string | null {
+  if (chunks.length === 0) return null;
+  const buf = Buffer.concat(chunks);
+  const enc = ((headers['content-encoding'] as string) ?? '').toLowerCase();
+  try {
+    let decoded: Buffer;
+    if (enc === 'gzip' || enc === 'x-gzip') decoded = zlib.gunzipSync(buf);
+    else if (enc === 'deflate') decoded = zlib.inflateSync(buf);
+    else if (enc === 'br') decoded = zlib.brotliDecompressSync(buf);
+    else decoded = buf;
+    return cap(decoded.toString('utf8'));
+  } catch {
+    return '[binary / niet decodeerbaar]';
+  }
+}
 
 function send403(res: http.ServerResponse, domain: string, reason: string): void {
   const body = JSON.stringify({ error: 'forbidden', domain, reason });
@@ -76,12 +93,8 @@ export function createProxyServer(): http.Server {
     let ruleId: number | null;
     if (target.hostname === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
-      const isMcpPath = target.pathname.startsWith('/mcp/');
       const allowed =
-        (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo') ||
-        (target.port === '3000' && isMcpPath) ||
-        (target.port === '80'  && isMcpPath) ||
-        (target.port === ''    && isMcpPath);
+        (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo');
       if (!allowed) {
         logAudit({
           containerId,
@@ -139,18 +152,15 @@ export function createProxyServer(): http.Server {
       completed = true;
       if (auditId == null) return;
       updateAuditResponse(auditId, {
-        reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).slice(0, CAP).toString('utf8')) : null,
+        reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
         resStatus,
         resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-        resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).slice(0, CAP).toString('utf8')) : null,
+        resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
       });
     };
 
     // MCP-verkeer naar huddle altijd via de API-poort (3000), niet de proxypoort (80).
-    const upstreamPort =
-      target.hostname === 'huddle' && target.pathname.startsWith('/mcp/')
-        ? 3000
-        : (target.port || 80);
+    const upstreamPort = target.port || 80;
 
     const upstream = http.request(
       {
@@ -367,7 +377,7 @@ export function createProxyServer(): http.Server {
           reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
           resStatus,
           resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-          resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).toString('utf8')) : null,
+          resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
         });
       };
 
