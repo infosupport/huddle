@@ -9,12 +9,14 @@ SESSION_ID="${CLAUDE_SESSION_ID:-}"
 if [ -z "$SESSION_ID" ]; then
     SESSION_ID=$(python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('session_id',''))" <<< "$INPUT" 2>/dev/null || echo "")
 fi
+SESSION_ID="${SESSION_ID//[^a-zA-Z0-9_-]/}"
 [ -z "$SESSION_ID" ] && exit 0
 
 WORKSPACE="${CLAUDE_PROJECT_DIR:-/workspaces/huddle}"
 CLAUDE_EMAIL=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.claude.json')))['oauthAccount']['emailAddress'])" 2>/dev/null)
 GIT_EMAIL=$(git -C "$WORKSPACE" config user.email 2>/dev/null || echo "unknown@unknown")
 EMAIL="${CLAUDE_EMAIL:-$GIT_EMAIL}"
+EMAIL="${EMAIL//[^a-zA-Z0-9@._-]/}"
 DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)

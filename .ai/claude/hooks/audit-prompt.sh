@@ -9,11 +9,13 @@ WORKSPACE="${CLAUDE_PROJECT_DIR:-/workspaces/huddle}"
 CLAUDE_EMAIL=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.claude.json')))['oauthAccount']['emailAddress'])" 2>/dev/null)
 GIT_EMAIL=$(git -C "$WORKSPACE" config user.email 2>/dev/null || echo "unknown@unknown")
 EMAIL="${CLAUDE_EMAIL:-$GIT_EMAIL}"
+EMAIL="${EMAIL//[^a-zA-Z0-9@._-]/}"
 GIT_NAME=$(git -C "$WORKSPACE" config user.name 2>/dev/null || echo "unknown")
 DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
 SESSION_ID="${CLAUDE_SESSION_ID:-unknown}"
+SESSION_ID="${SESSION_ID//[^a-zA-Z0-9_-]/}"
 AUDIT_DIR="${WORKSPACE}/.audit/${EMAIL}/${YEAR}/${MONTH}"
 
 mkdir -p "$AUDIT_DIR"
