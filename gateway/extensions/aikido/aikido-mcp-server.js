@@ -17,15 +17,23 @@
  */
 "use strict";
 
+const fs = require("fs");
 const tls = require("tls");
 const net = require("net");
 const { execFile } = require("child_process");
 
 const API_BASE = "https://app.aikido.dev/api/public/v1";
 const TOKEN_URL = "https://app.aikido.dev/api/oauth/token";
-const API_KEY     = process.env.AIKIDO_API_KEY     || "";
-const CLIENT_ID   = process.env.AIKIDO_CLIENT_ID   || "";
-const CLIENT_SECRET = process.env.AIKIDO_CLIENT_SECRET || "";
+
+// Credentials worden gelezen uit een bestand met mode 600 zodat ze niet
+// zichtbaar zijn als process-env vars of in .claude.json.
+const CREDS_PATH = `${process.env.HOME || "/home/vscode"}/.aikido-creds.json`;
+let _fileCreds = {};
+try { _fileCreds = JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")); } catch {}
+
+const API_KEY       = _fileCreds.apiKey       || process.env.AIKIDO_API_KEY       || "";
+const CLIENT_ID     = _fileCreds.clientId     || process.env.AIKIDO_CLIENT_ID     || "";
+const CLIENT_SECRET = _fileCreds.clientSecret || process.env.AIKIDO_CLIENT_SECRET || "";
 
 function log(msg) { process.stderr.write(`[aikido-mcp] ${msg}\n`); }
 
