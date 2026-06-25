@@ -20,6 +20,11 @@
         <option value="system:start">Systeem start</option>
       </select>
       <button class="btn-filter-preset" (click)="setTokenFilter()" title="Filter op login token verzoeken">Token verzoeken</button>
+      <select [formControl]="limitControl">
+        <option [value]="100">100</option>
+        <option [value]="500">500</option>
+        <option [value]="1000">1000</option>
+      </select>
     </div>
     @if (logs$ | async; as logs) {
       <span class="record-count">{{ logs.length }} vermeldingen</span>
