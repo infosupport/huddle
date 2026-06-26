@@ -385,6 +385,21 @@ function Start-Devcontainer {
 
 # ── Build base image ──────────────────────────────────────────────────────────
 
+# Bouwt de gedeelde base-devimage (sequentieel, want IDE-images hangen ervan af).
+function Build-SharedBase {
+    param([string]$ScriptDir)
+    $dockerfile = Join-Path $ScriptDir 'base-devimage\Dockerfile'
+    Write-Host "  Gedeelde base image 'base-devimage' bouwen..." -ForegroundColor DarkCyan
+    # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
+    docker build -t base-devimage -f $dockerfile $ScriptDir --no-cache
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [FAIL] Build van base-devimage mislukt." -ForegroundColor Red
+        return $false
+    }
+    Write-Host "  [OK] base-devimage klaar." -ForegroundColor Green
+    return $true
+}
+
 function Build-BaseImage {
     # Eigen picker (niet de gedeelde Select-Ide): naast de losse IDE's ook een
     # 'Alle (parallel)'-keuze die alle base images tegelijk bouwt.
@@ -400,6 +415,8 @@ function Build-BaseImage {
     $ide = $IDE_DEFS[$sel]
 
     $scriptDir = $PSScriptRoot
+    if (-not (Build-SharedBase -ScriptDir $scriptDir)) { return }
+
     $buildPath = Join-Path $scriptDir $ide.Folder
     if (-not (Test-Path (Join-Path $buildPath 'Dockerfile'))) {
         Write-Host "  Dockerfile niet gevonden: $buildPath\Dockerfile" -ForegroundColor Red
@@ -417,12 +434,16 @@ function Build-BaseImage {
 
 # ── Build alle base images parallel ─────────────────────────────────────────────
 
-# Bouwt elke IDE-base-image tegelijk via losse `docker build`-achtergrondprocessen.
+# Bouwt eerst de gedeelde base-devimage (sequentieel), daarna de IDE-images parallel.
 # Output per build gaat naar een eigen logbestand in $env:TEMP (parallelle builds
 # door elkaar op de console is onleesbaar); aan het eind volgt een overzicht.
 function Build-AllBaseImages {
     $scriptDir = $PSScriptRoot
-    Write-Host "  Alle base images parallel bouwen..." -ForegroundColor DarkCyan
+
+    if (-not (Build-SharedBase -ScriptDir $scriptDir)) { return }
+
+    Write-Host ""
+    Write-Host "  IDE-images parallel bouwen..." -ForegroundColor DarkCyan
     Write-Host ""
 
     $builds = @()

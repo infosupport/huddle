@@ -26,6 +26,15 @@ const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
 function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
 
+// RFC 7230 §3.3.2: Content-Length and Transfer-Encoding must not coexist.
+// Some OAuth/API servers send both; strip Content-Length when TE is present.
+function sanitizeResHeaders(h: http.IncomingHttpHeaders): http.IncomingHttpHeaders {
+  if (!h['transfer-encoding'] || !h['content-length']) return h;
+  const out = { ...h };
+  delete out['content-length'];
+  return out;
+}
+
 function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string | null {
   if (chunks.length === 0) return null;
   const buf = Buffer.concat(chunks);
@@ -172,7 +181,7 @@ export function createProxyServer(): http.Server {
         headers: outgoingHeaders,
       },
       (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+        res.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
         upstreamRes.on('data', (chunk: Buffer) => {
           if (!res.writableEnded) res.write(chunk);
           if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
@@ -431,6 +440,7 @@ export function createProxyServer(): http.Server {
                   console.log(`[token-exchange] placeholder issued voor container ${containerId}`);
                   outBuf = Buffer.from(JSON.stringify(json));
                   delete outHeaders['content-encoding'];
+                  delete outHeaders['transfer-encoding'];
                   outHeaders['content-length'] = String(outBuf.length);
                 } else {
                   outBuf = Buffer.concat(tokenResChunks);
@@ -449,7 +459,7 @@ export function createProxyServer(): http.Server {
               complete(0, upstreamRes.headers);
             });
           } else {
-            innerRes.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+            innerRes.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
             upstreamRes.on('data', (chunk: Buffer) => {
               if (!innerRes.writableEnded) innerRes.write(chunk);
               if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }

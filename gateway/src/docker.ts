@@ -53,8 +53,11 @@ async function fetchContainerMap(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   for (const c of containers) {
     const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
+    // Child containers inherit their parent's allowlist: map their IP to the
+    // parent container name so proxy rule lookups use the parent's rules.
+    const parentName = (c.Labels?.['huddle.parent'] as string | undefined) ?? name;
     for (const net of Object.values<any>(c.NetworkSettings?.Networks ?? {})) {
-      if (net.IPAddress) map.set(net.IPAddress, name);
+      if (net.IPAddress) map.set(net.IPAddress, parentName);
     }
   }
   return map;

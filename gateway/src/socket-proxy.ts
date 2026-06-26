@@ -57,7 +57,9 @@ function withLabelFilter(rawUrl: string, label: string): string {
   const params = new URLSearchParams(qi === -1 ? '' : rawUrl.slice(qi + 1));
   let filters: Record<string, string[]> = {};
   try { filters = JSON.parse(params.get('filters') ?? '{}'); } catch {}
-  filters.label = [...(filters.label ?? []), label];
+  const existingLabel = filters.label;
+  const existingArr = Array.isArray(existingLabel) ? existingLabel : existingLabel != null ? Object.keys(existingLabel) : [];
+  filters.label = [...existingArr, label];
   params.set('filters', JSON.stringify(filters));
   return `${base}?${params.toString()}`;
 }
@@ -156,10 +158,11 @@ export async function createContainerProxy(containerName: string, socketDir: str
       let phase: 'headers' | 'body' | 'tunnel' = 'headers';
       let headerBuf = Buffer.alloc(0);
 
-      // Body-accumulation state (for POST /containers/create)
+      // Body-accumulation state (for POST /containers/create and /networks/create)
       let bodyBuf = Buffer.alloc(0);
       let bodyContentLength = 0;
       let savedHeaderPart = '';
+      let bodyHandler: (() => void) | null = null;
 
       client.on('error', () => upstream?.destroy());
       client.on('end', () => upstream?.end());
@@ -213,7 +216,40 @@ export async function createContainerProxy(containerName: string, socketDir: str
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         // Force spawned containers onto the parent devcontainer's network only.
         body.HostConfig = { ...(body.HostConfig ?? {}), NetworkMode: `dc-net-${containerName}` };
-        delete body.NetworkingConfig;
+        // Inject Huddle proxy env vars so child containers can reach the internet
+        // through the proxy without requiring manual configuration.
+        const proxyEnv = [
+          'http_proxy=http://huddle:80',
+          'https_proxy=http://huddle:80',
+          'HTTP_PROXY=http://huddle:80',
+          'HTTPS_PROXY=http://huddle:80',
+          'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
+          'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
+          'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
+        ];
+        const existingEnv: string[] = body.Env ?? [];
+        const existingKeys = new Set(existingEnv.map((e: string) => e.split('=')[0]));
+        body.Env = [...existingEnv, ...proxyEnv.filter(e => !existingKeys.has(e.split('=')[0]))];
+        const newBodyBuf = Buffer.from(JSON.stringify(body));
+        const newHeader = savedHeaderPart.replace(
+          /content-length:\s*\d+/i,
+          `Content-Length: ${newBodyBuf.length}`
+        ) + '\r\n\r\n';
+        openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+      }
+
+      function processNetworkCreate(): void {
+        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+        const rest = bodyBuf.slice(bodyContentLength);
+        let body: any;
+        try {
+          body = JSON.parse(bodyBytes.toString());
+        } catch {
+          deny403(client, 'invalid network create body');
+          return;
+        }
+        body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
+        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         const newBodyBuf = Buffer.from(JSON.stringify(body));
         const newHeader = savedHeaderPart.replace(
           /content-length:\s*\d+/i,
@@ -227,7 +263,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
         if (phase === 'body') {
           bodyBuf = Buffer.concat([bodyBuf, chunk]);
-          if (bodyBuf.length >= bodyContentLength) processInjectedBody();
+          if (bodyBuf.length >= bodyContentLength) bodyHandler?.();
           return;
         }
 
@@ -257,6 +293,20 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const imgId = p.match(/^\/images\/([^/]+)$/)?.[1];
           const targetId = ctId ?? imgId;
           const type = ctId ? 'container' : 'image';
+
+          // Network delete
+          const netId = p.match(/^\/networks\/([^/]+)$/)?.[1];
+          if (netId) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Volume delete — needed for docker compose down -v
+          const volId = p.match(/^\/volumes\/([^/]+)$/)?.[1];
+          if (volId) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
 
           if (!targetId) { deny403(client, 'delete not permitted'); return; }
 
@@ -290,6 +340,28 @@ export async function createContainerProxy(containerName: string, socketDir: str
             forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
             return;
           }
+          // Network listing — filter to own networks; inspect — allow for networking
+          if (p === '/networks' || p === '/networks/json') {
+            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+            return;
+          }
+          if (/^\/networks\/[^/]+$/.test(p)) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Volume listing and inspect — needed for docker compose named volumes
+          if (p === '/volumes' || /^\/volumes\/[^/]+$/.test(p)) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Events stream — needed for docker compose up log following
+          if (p === '/events') {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
           // Inspect / logs / top — only on containers labeled by this devcontainer
           const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top)$/)?.[1];
           if (inspectCt) {
@@ -308,6 +380,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
             });
             return;
           }
+          console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
           deny403(client, 'path not allowed');
           return;
         }
@@ -325,9 +398,10 @@ export async function createContainerProxy(containerName: string, socketDir: str
             const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
             bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
             savedHeaderPart = headerPart;
+            bodyHandler = processInjectedBody;
             phase = 'body';
             bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) processInjectedBody();
+            if (bodyBuf.length >= bodyContentLength) bodyHandler();
             return;
           }
 
@@ -361,6 +435,28 @@ export async function createContainerProxy(containerName: string, socketDir: str
               }
               client.resume();
             });
+            return;
+          }
+
+          // Volume create — needed for docker compose named volumes
+          if (p === '/volumes/create') {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Network management — create, connect, disconnect
+          if (p === '/networks/create') {
+            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            savedHeaderPart = headerPart;
+            bodyHandler = processNetworkCreate;
+            phase = 'body';
+            bodyBuf = remainder;
+            if (bodyBuf.length >= bodyContentLength) bodyHandler();
+            return;
+          }
+          if (/^\/networks\/[^/]+\/(connect|disconnect)$/.test(p)) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             return;
           }
 
