@@ -18,7 +18,7 @@ hoe hij zich daar hoort te gedragen.
 ├── codex/AGENTS.md            → /home/vscode/.codex/AGENTS.md             (Codex CLI, @openai/codex)
 ├── opencode/                                                   (OpenCode, opencode-ai)
 │   ├── AGENTS.md              → /home/vscode/.config/opencode/AGENTS.md
-│   ├── opencode.json          → /home/vscode/.config/opencode/opencode.json (Sparky vLLM provider, default model)
+│   ├── opencode.json          → /home/vscode/.config/opencode/opencode.json
 │   └── agents/                → /home/vscode/.config/opencode/agents/
 └── mcp/mcp.json               → /home/vscode/.ai/mcp/mcp.json             (gedeelde MCP-serverconfig)
 ```
@@ -30,22 +30,6 @@ hoe hij zich daar hoort te gedragen.
 in `claude/settings.json`). De `agents/` en `skills/` worden globaal geladen. De
 **markitdown**-skill vereist de `markitdown`-CLI; die wordt in elke base-image
 geïnstalleerd (`pip install 'markitdown[all]'`, zie de Dockerfiles).
-
-## opencode-model (Sparky)
-
-`opencode/opencode.json` registreert de Sparky vLLM-server (model
-`Intel/Qwen3-Coder-Next-int4-AutoRound`, geen API-key) als OpenAI-compatible provider
-en zet hem als default.
-
-Sparky (`192.168.100.2`) zit op een apart netwerk dat de Docker/WSL-containers niet
-direct kunnen routeren — alleen de Windows-host bereikt het. Daarom:
-- draait sparky via een **Windows port-proxy**:
-  `netsh interface portproxy add v4tov4 listenport=11434 connectaddress=192.168.100.2 connectport=11434`;
-- wijst opencode naar `http://host.docker.internal:11434/v1` en loopt het verkeer via
-  de Huddle-proxy (geaudit; Bun's `fetch` respecteert `HTTP(S)_PROXY`);
-- start de huddle-container met `--add-host=host.docker.internal:host-gateway` (zie `huddle.ps1`);
-- moet de operator **`host.docker.internal`** op de allowlist zetten, en op de eerste
-  run **`registry.npmjs.org`** (opencode haalt dan het `@ai-sdk/openai-compatible`-pakket op).
 
 Elke map hoort bij één geïnstalleerde CLI (zie `base-devimage-*/Dockerfile`,
 regel `npm install -g …`). Het config-bestand staat op de plek waar die tool zijn

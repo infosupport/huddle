@@ -37,19 +37,6 @@ Docker-acties uitvoert.
 Sudo (via gebruiker `noot`) en netwerk/Docker-acties worden gelogd en zijn zichtbaar
 voor operators in de Huddle-UI. Werk transparant.
 
-## Model
-
-opencode is preconfigured (see opencode.json) to use the Sparky vLLM model
-`Intel/Qwen3-Coder-Next-int4-AutoRound`. Sparky (192.168.100.2) zit op een apart
-netwerk dat de Docker/WSL-containers niet direct kunnen routeren; alleen de Windows-host
-bereikt het. Daarom loopt het modelverkeer via de Huddle-proxy naar
-`http://host.docker.internal:11434/v1`, waar een **Windows port-proxy**
-(`netsh interface portproxy ... connectaddress=192.168.100.2 connectport=11434`)
-het doorzet naar sparky. Vereist:
-- de huddle-container start met `--add-host=host.docker.internal:host-gateway` (zie huddle.ps1);
-- de operator allowlist `host.docker.internal` in Huddle;
-- op de eerste run `registry.npmjs.org` zodat opencode het `@ai-sdk/openai-compatible`-pakket kan ophalen.
-
 ## Available Agents
 
 - **bugfix-agent** – Autonomously fixes bugs from reports, logs, and failing tests.
