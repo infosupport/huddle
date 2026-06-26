@@ -641,6 +641,27 @@ export interface StartParams {
   presentableName: string;
   ideName?: IdeName;
   empty?: boolean;
+  memory?: string;
+  cpus?: string;
+}
+
+function parseMemoryBytes(s: string): number {
+  if (!s) return 0;
+  const m = s.trim().match(/^(\d+(?:\.\d+)?)\s*([gmkGMK]?)b?$/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  const unit = (m[2] || '').toLowerCase();
+  if (unit === 'g') return Math.floor(n * 1024 * 1024 * 1024);
+  if (unit === 'm') return Math.floor(n * 1024 * 1024);
+  if (unit === 'k') return Math.floor(n * 1024);
+  return Math.floor(n);
+}
+
+function parseCpuQuota(s: string): number {
+  if (!s) return 0;
+  const n = parseFloat(s.trim());
+  if (isNaN(n) || n <= 0) return 0;
+  return Math.floor(n * 100000);
 }
 
 export async function createAndStartContainer(params: StartParams): Promise<string> {
@@ -767,6 +788,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Mounts: mounts,
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
+      ...(params.memory || getSetting('defaultMemory') ? {
+        Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || ''),
+      } : {}),
+      ...(params.cpus || getSetting('defaultCpus') ? {
+        CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || ''),
+        CpuPeriod: 100000,
+      } : {}),
     },
   };
 

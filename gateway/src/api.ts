@@ -537,10 +537,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
       .send(getCaCertPem());
   });
 
-  app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean; presentableName?: string } }>(
+  app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean; presentableName?: string; memory?: string; cpus?: string } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, containerName, ideName, empty, presentableName: presentableNameOverride } = req.body;
+      const { imageName, workspaceDir, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -560,6 +560,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
+        memory,
+        cpus,
       };
       try {
         const id = await createAndStartContainer(params);
@@ -839,28 +841,21 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return reply.sendFile('index.html');
   });
 
-  // ── Settings: gedeelde AI CLI-volume namen ────────────────────────────────
+  // ── Settings ──────────────────────────────────────────────────────────────
   app.get('/api/settings', async () => {
     return {
-      claudeSettingsVolume: getSetting('claudeSettingsVolume') ?? 'huddle-claude-settings',
-      codexSettingsVolume: getSetting('codexSettingsVolume') ?? 'huddle-codex-settings',
-      opencodeSettingsVolume: getSetting('opencodeSettingsVolume') ?? 'huddle-opencode-settings',
-      claudeSettingsPath: getSetting('claudeSettingsPath') ?? '',
-      codexSettingsPath: getSetting('codexSettingsPath') ?? '',
-      opencodeSettingsPath: getSetting('opencodeSettingsPath') ?? '',
+      defaultMemory: getSetting('defaultMemory') ?? '',
+      defaultCpus: getSetting('defaultCpus') ?? '',
     };
   });
 
-  app.post<{ Body: { claudeSettingsVolume?: string; codexSettingsVolume?: string; opencodeSettingsVolume?: string; claudeSettingsPath?: string; codexSettingsPath?: string; opencodeSettingsPath?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string } }>(
     '/api/settings',
     async (req) => {
-      const { claudeSettingsVolume, codexSettingsVolume, opencodeSettingsVolume, claudeSettingsPath, codexSettingsPath, opencodeSettingsPath } = req.body;
-      if (claudeSettingsVolume !== undefined) setSetting('claudeSettingsVolume', claudeSettingsVolume);
-      if (codexSettingsVolume !== undefined) setSetting('codexSettingsVolume', codexSettingsVolume);
-      if (opencodeSettingsVolume !== undefined) setSetting('opencodeSettingsVolume', opencodeSettingsVolume);
-      if (claudeSettingsPath !== undefined) setSetting('claudeSettingsPath', claudeSettingsPath);
-      if (codexSettingsPath !== undefined) setSetting('codexSettingsPath', codexSettingsPath);
-      if (opencodeSettingsPath !== undefined) setSetting('opencodeSettingsPath', opencodeSettingsPath);
+      const { defaultMemory, defaultCpus } = req.body;
+      if (defaultMemory !== undefined) setSetting('defaultMemory', defaultMemory);
+      if (defaultCpus !== undefined) setSetting('defaultCpus', defaultCpus);
+      notifyStateChanged();
       return { ok: true };
     }
   );

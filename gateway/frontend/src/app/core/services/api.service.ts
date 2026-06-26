@@ -9,9 +9,8 @@ import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
 
 export interface HuddleSettings {
-  claudeSettingsVolume: string;
-  codexSettingsVolume: string;
-  opencodeSettingsVolume: string;
+  defaultMemory: string;
+  defaultCpus: string;
 }
 
 @Injectable({ providedIn: 'root' })

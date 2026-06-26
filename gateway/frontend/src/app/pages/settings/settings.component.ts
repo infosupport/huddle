@@ -12,27 +12,22 @@ import { ApiService, HuddleSettings } from '../../core/services/api.service';
     </div>
     @if (error()) { <p class="error-note">{{ error() }}</p> }
     <div class="card">
-      <h2>Gedeelde AI CLI-instellingen</h2>
+      <h2>Resource limieten</h2>
       <p class="hint">
-        Elke devcontainer mount deze named Docker-volumes zodat sessies en tokens
-        gedeeld blijven en een recreate overleven. Laat een veld leeg om voor die
-        provider geen gedeeld volume te gebruiken (terugvallen op de image-default).
+        Standaard CPU- en geheugenlimieten voor nieuwe devcontainers. Laat leeg voor geen limiet.
       </p>
       <form (ngSubmit)="save()">
-        <div class="field">
-          <label>Claude settings volume</label>
-          <input [(ngModel)]="values.claudeSettingsVolume" name="claudeSettingsVolume"
-                 placeholder="huddle-claude-settings" autocomplete="off">
-        </div>
-        <div class="field">
-          <label>Codex settings volume</label>
-          <input [(ngModel)]="values.codexSettingsVolume" name="codexSettingsVolume"
-                 placeholder="huddle-codex-settings" autocomplete="off">
-        </div>
-        <div class="field">
-          <label>OpenCode settings volume</label>
-          <input [(ngModel)]="values.opencodeSettingsVolume" name="opencodeSettingsVolume"
-                 placeholder="huddle-opencode-settings" autocomplete="off">
+        <div class="field-row">
+          <div class="field">
+            <label>Standaard geheugen (bijv. 4g, 2048m)</label>
+            <input [(ngModel)]="values.defaultMemory" name="defaultMemory"
+                   placeholder="bijv. 4g" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>Standaard CPU (bijv. 2, 0.5)</label>
+            <input [(ngModel)]="values.defaultCpus" name="defaultCpus"
+                   placeholder="bijv. 2" autocomplete="off">
+          </div>
         </div>
         <div class="actions">
           <button type="submit" class="btn btn--accent" [disabled]="saving()">
@@ -49,7 +44,8 @@ import { ApiService, HuddleSettings } from '../../core/services/api.service';
     .error-note { color: var(--danger, #e06c75); }
     h2 { margin: 0 0 8px; font-size: 1.1em; }
     .hint { color: var(--muted, #888); font-size: 0.9em; margin: 0 0 16px; }
-    .field { margin-bottom: 16px; }
+    .field { margin-bottom: 16px; flex: 1; }
+    .field-row { display: flex; gap: 16px; flex-wrap: wrap; }
     label { display: block; margin-bottom: 4px; font-size: 0.9em; color: var(--muted, #888); }
     input { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 0.95em; box-sizing: border-box; }
     .actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
@@ -59,7 +55,7 @@ import { ApiService, HuddleSettings } from '../../core/services/api.service';
 export class SettingsComponent implements OnInit {
   private api = inject(ApiService);
 
-  values: HuddleSettings = { claudeSettingsVolume: '', codexSettingsVolume: '', opencodeSettingsVolume: '' };
+  values: HuddleSettings = { defaultMemory: '', defaultCpus: '' };
   error = signal<string | null>(null);
   saving = signal(false);
   saved = signal(false);
