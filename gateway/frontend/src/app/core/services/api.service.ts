@@ -13,6 +13,17 @@ export interface HuddleSettings {
   defaultCpus: string;
 }
 
+export interface FolderMapping {
+  id: number;
+  name: string;
+  host_path: string;
+  volume_name: string;
+  container_path: string;
+  read_only: number;
+  enabled: number;
+  sort_order: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private http = inject(HttpClient);
@@ -179,5 +190,22 @@ export class ApiService {
       }
     }
     return this.handle(this.http.get<AuditLog[]>('/api/audit', { params: clean }));
+  }
+
+  // ── Folder Mappings ─────────────────────────────────────────────────────────
+  getFolderMappings(): Observable<FolderMapping[]> {
+    return this.handle(this.http.get<FolderMapping[]>('/api/folder-mappings'));
+  }
+
+  createFolderMapping(m: Omit<FolderMapping, 'id'>): Observable<{ id: number }> {
+    return this.handle(this.http.post<{ id: number }>('/api/folder-mappings', m));
+  }
+
+  updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): Observable<{ ok: boolean }> {
+    return this.handle(this.http.put<{ ok: boolean }>(`/api/folder-mappings/${id}`, m));
+  }
+
+  deleteFolderMapping(id: number): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
   }
 }

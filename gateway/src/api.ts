@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping } from './db';
 import {
   listDevcontainers,
   inspectContainer,
@@ -855,6 +855,40 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const { defaultMemory, defaultCpus } = req.body;
       if (defaultMemory !== undefined) setSetting('defaultMemory', defaultMemory);
       if (defaultCpus !== undefined) setSetting('defaultCpus', defaultCpus);
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  // ── Folder Mappings CRUD ──────────────────────────────────────────────────
+  app.get('/api/folder-mappings', async () => listFolderMappings());
+
+  app.post<{ Body: { name: string; host_path?: string; volume_name?: string; container_path: string; read_only?: number; enabled?: number; sort_order?: number } }>(
+    '/api/folder-mappings',
+    async (req) => {
+      const { name, host_path = '', volume_name = '', container_path, read_only = 0, enabled = 1, sort_order = 0 } = req.body;
+      if (!name || !container_path) throw new Error('name and container_path are required');
+      const id = createFolderMapping({ name, host_path, volume_name, container_path, read_only, enabled, sort_order });
+      notifyStateChanged();
+      return { id };
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: Partial<Omit<FolderMapping, 'id'>> }>(
+    '/api/folder-mappings/:id',
+    async (req) => {
+      const id = Number(req.params.id);
+      if (!getFolderMapping(id)) throw new Error('not found');
+      updateFolderMapping(id, req.body);
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/folder-mappings/:id',
+    async (req) => {
+      deleteFolderMapping(Number(req.params.id));
       notifyStateChanged();
       return { ok: true };
     }

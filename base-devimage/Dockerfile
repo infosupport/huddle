@@ -32,30 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
     && pip install --break-system-packages 'markitdown[all]' \
     && rm -rf /var/lib/apt/lists/*
 
-# Standaard AI-config per provider (zie ../.ai). Legt elke agent uit dat hij in
-# een Huddle DMZ-devcontainer draait. Build-context is de repo-root (zie huddle.ps1
-# + .dockerignore) zodat deze COPY bij .ai/ kan. Dirs eerst vscode-owned maken
-# zodat de tools hun eigen state ernaast kunnen schrijven.
-RUN mkdir -p /home/vscode/.claude/agents /home/vscode/.claude/skills /home/vscode/.codex /home/vscode/.config/opencode/agents /home/vscode/.ai/mcp \
-    && chown -R vscode:vscode /home/vscode/.claude /home/vscode/.codex /home/vscode/.config /home/vscode/.ai
-COPY --chown=vscode:vscode .ai/claude/CLAUDE.md             /home/vscode/.claude/CLAUDE.md
-COPY --chown=vscode:vscode .ai/claude/settings.json         /home/vscode/.claude/settings.json
-COPY --chown=vscode:vscode .ai/claude/statusline-command.sh /home/vscode/.claude/statusline-command.sh
-COPY --chown=vscode:vscode .ai/claude/agents/               /home/vscode/.claude/agents/
-COPY --chown=vscode:vscode .ai/claude/skills/               /home/vscode/.claude/skills/
-COPY --chown=vscode:vscode .ai/codex/AGENTS.md              /home/vscode/.codex/AGENTS.md
-COPY --chown=vscode:vscode .ai/opencode/AGENTS.md           /home/vscode/.config/opencode/AGENTS.md
-COPY --chown=vscode:vscode .ai/opencode/opencode.json       /home/vscode/.config/opencode/opencode.json
-COPY --chown=vscode:vscode .ai/opencode/agents/             /home/vscode/.config/opencode/agents/
-COPY --chown=vscode:vscode .ai/mcp/mcp.json                 /home/vscode/.ai/mcp/mcp.json
-# Read-only seed-kopie van de standaardinhoud. De gedeelde named volumes (zie
-# Huddle feature 13) worden over ~/.claude, ~/.codex en ~/.config/opencode
-# gemount en verbergen de COPY's hierboven; bij een leeg volume seedt het
-# config-script vanuit deze *-defaults mappen.
-COPY --chown=vscode:vscode .ai/claude/    /home/vscode/.claude-defaults/
-COPY --chown=vscode:vscode .ai/codex/     /home/vscode/.codex-defaults/
-COPY --chown=vscode:vscode .ai/opencode/  /home/vscode/.opencode-defaults/
-RUN chmod +x /home/vscode/.claude/statusline-command.sh /home/vscode/.claude-defaults/statusline-command.sh
+# Mappen aanmaken voor AI CLI-tools. Inhoud wordt bij container-start
+# via de instelbare folder mappings (Huddle Instellingen) gemount.
+RUN mkdir -p /home/vscode/.claude/agents /home/vscode/.claude/skills \
+             /home/vscode/.codex /home/vscode/.config/opencode/agents \
+             /home/vscode/.ai/mcp \
+    && chown -R vscode:vscode /home/vscode/.claude /home/vscode/.codex \
+                              /home/vscode/.config /home/vscode/.ai
 
 # Verwijder sudo-rechten van vscode (mcr base geeft ze standaard, wij willen dit niet)
 RUN gpasswd -d vscode sudo 2>/dev/null || true \
