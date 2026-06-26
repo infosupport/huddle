@@ -51,10 +51,21 @@ function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string
   }
 }
 
-function send403(res: http.ServerResponse, domain: string, reason: string): void {
-  const body = JSON.stringify({ error: 'forbidden', domain, reason });
+function send403(res: http.ServerResponse, domain: string, status: string, containerId?: string | null): void {
+  const body = JSON.stringify({
+    error: 'REQUEST_BLOCKED_BY_HUDDLE',
+    message: 'This request is blocked by Huddle security policy.',
+    blockedEndpoint: domain,
+    reason: status === 'requested'
+      ? 'This endpoint has not yet been approved for this devcontainer.'
+      : 'This endpoint is denied by a firewall rule.',
+    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
+    devcontainerId: containerId ?? undefined,
+    huddlePortal: 'http://localhost:3000',
+  });
   res.writeHead(403, {
     'content-type': 'application/json',
+    'x-huddle-blocked': '1',
     'content-length': Buffer.byteLength(body),
   });
   res.end(body);
@@ -69,11 +80,22 @@ function send502(res: http.ServerResponse, message: string): void {
   res.end(body);
 }
 
-function rejectSocket(socket: stream.Duplex, status: number, reason: string): void {
-  const body = JSON.stringify({ error: 'forbidden', reason });
+function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string, domain: string, containerId?: string | null): void {
+  const body = JSON.stringify({
+    error: 'REQUEST_BLOCKED_BY_HUDDLE',
+    message: 'This CONNECT request is blocked by Huddle security policy.',
+    blockedEndpoint: domain,
+    reason: blockStatus === 'requested'
+      ? 'This endpoint has not yet been approved for this devcontainer.'
+      : 'This endpoint is denied by a firewall rule.',
+    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
+    devcontainerId: containerId ?? undefined,
+    huddlePortal: 'http://localhost:3000',
+  });
   socket.write(
     `HTTP/1.1 ${status} Forbidden\r\n` +
       `content-type: application/json\r\n` +
+      `x-huddle-blocked: 1\r\n` +
       `content-length: ${Buffer.byteLength(body)}\r\n` +
       `connection: close\r\n\r\n` +
       body
@@ -115,7 +137,7 @@ export function createProxyServer(): http.Server {
           path: `${target.pathname}${target.search}`,
           resStatus: 403,
         });
-        send403(res, 'huddle', 'huddle-internal endpoint not allowed');
+        send403(res, 'huddle', 'deny', containerId);
         return;
       }
       ruleId = null;
@@ -131,7 +153,7 @@ export function createProxyServer(): http.Server {
           path: `${target.pathname}${target.search}`,
           resStatus: 403,
         });
-        send403(res, target.hostname, result.status);
+        send403(res, target.hostname, result.status, containerId);
         return;
       }
       ruleId = result.ruleId;
@@ -218,7 +240,7 @@ export function createProxyServer(): http.Server {
     const port = Number(portStr) || 443;
 
     if (!hostname) {
-      rejectSocket(clientSocket, 400, 'missing host');
+      rejectSocket(clientSocket, 400, 'deny', '', null);
       return;
     }
 
@@ -233,7 +255,7 @@ export function createProxyServer(): http.Server {
         method: 'CONNECT',
         resStatus: 403,
       });
-      rejectSocket(clientSocket, 403, 'huddle-internal endpoint not allowed');
+      rejectSocket(clientSocket, 403, 'deny', 'huddle', containerId);
       return;
     }
     const { status, ruleId } = checkRule(hostname, containerId, null);
@@ -256,7 +278,7 @@ export function createProxyServer(): http.Server {
         method: 'CONNECT',
         resStatus: 403,
       });
-      rejectSocket(clientSocket, 403, status);
+      rejectSocket(clientSocket, 403, status, hostname, containerId);
       return;
     }
 
@@ -346,12 +368,23 @@ export function createProxyServer(): http.Server {
           reqHeaders: headersToJson(innerReq.headers),
           resStatus: 403,
         });
-        innerRes.writeHead(403, { 'content-type': 'text/plain' });
-        innerRes.end(
-          pathResult.status === 'requested'
-            ? 'Huddle: pad wacht op goedkeuring door een operator'
-            : 'Huddle: pad geblokkeerd door firewallregel',
-        );
+        const blockedBody = JSON.stringify({
+          error: 'REQUEST_BLOCKED_BY_HUDDLE',
+          message: 'This request path is blocked by Huddle security policy.',
+          blockedEndpoint: `${hostname}${innerReq.url ?? ''}`,
+          reason: pathResult.status === 'requested'
+            ? 'This path has not yet been approved for this devcontainer.'
+            : 'This path is denied by a firewall rule.',
+          actionRequired: 'The user must approve this path in the Huddle portal (http://huddle:3000) before this request can continue.',
+          devcontainerId: containerId ?? undefined,
+          huddlePortal: 'http://localhost:3000',
+        });
+        innerRes.writeHead(403, {
+          'content-type': 'application/json',
+          'x-huddle-blocked': '1',
+          'content-length': Buffer.byteLength(blockedBody),
+        });
+        innerRes.end(blockedBody);
         return;
       }
 
