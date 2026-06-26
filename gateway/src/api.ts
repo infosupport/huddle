@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
 import {
   listDevcontainers,
   inspectContainer,
@@ -889,6 +889,32 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/folder-mappings/:id',
     async (req) => {
       deleteFolderMapping(Number(req.params.id));
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  // ── Approved Host Ports (per container) ──────────────────────────────────────
+  app.get<{ Params: { name: string } }>(
+    '/api/containers/:name/ports',
+    async (req) => listApprovedHostPorts(req.params.name)
+  );
+
+  app.post<{ Params: { name: string }; Body: { host_port: number; container_port?: number; protocol?: string; description?: string } }>(
+    '/api/containers/:name/ports',
+    async (req) => {
+      const { host_port, container_port = 0, protocol = 'tcp', description = '' } = req.body;
+      if (!host_port) throw new Error('host_port is required');
+      const id = addApprovedHostPort({ container_id: req.params.name, host_port, container_port, protocol, description });
+      notifyStateChanged();
+      return { id };
+    }
+  );
+
+  app.delete<{ Params: { name: string; id: string } }>(
+    '/api/containers/:name/ports/:id',
+    async (req) => {
+      removeApprovedHostPort(Number(req.params.id));
       notifyStateChanged();
       return { ok: true };
     }

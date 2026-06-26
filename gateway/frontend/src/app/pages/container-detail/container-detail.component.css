@@ -629,3 +629,16 @@
 .noot-cmd-note a:hover {
   color: var(--accent-strong);
 }
+
+/* ===== Goedgekeurde poorten ===== */
+.ports-empty { font-size: 13px; color: var(--text-muted); padding: 0 0 12px; margin: 0; }
+.ports-error { font-size: 13px; color: var(--danger); padding: 0 0 8px; margin: 0; }
+.ports-table { margin-bottom: 16px; }
+.ports-table code { font-size: 12px; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; }
+.ports-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ports-form input, .ports-form select {
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-2); color: var(--text); font-size: 13px;
+}
+.ports-form input[type=number] { width: 130px; }
+.ports-form input[type=text] { flex: 1; min-width: 140px; }

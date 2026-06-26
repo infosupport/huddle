@@ -2,7 +2,7 @@ import net from 'net';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { getGrant } from './db';
+import { getGrant, isHostPortApproved } from './db';
 
 const DOCKER_SOCKET = '/var/run/docker.sock';
 const proxyServers = new Map<string, net.Server>();
@@ -131,6 +131,20 @@ function validateHostConfig(hostConfig: any): string | null {
     }
   }
 
+  if (hostConfig.PortBindings && typeof hostConfig.PortBindings === 'object') {
+    for (const [containerPortProto, bindings] of Object.entries(hostConfig.PortBindings)) {
+      if (!Array.isArray(bindings)) continue;
+      const proto = containerPortProto.includes('/') ? containerPortProto.split('/')[1] : 'tcp';
+      for (const binding of bindings) {
+        const hostPort = parseInt(String((binding as any).HostPort ?? '0'), 10);
+        if (hostPort > 0) {
+          // Return a special marker that includes the port info for the caller to check per-container
+          return `__PORT_CHECK__:${hostPort}:${proto}`;
+        }
+      }
+    }
+  }
+
   return null;
 }
 
@@ -212,7 +226,19 @@ export async function createContainerProxy(containerName: string, socketDir: str
           return;
         }
         const denial = validateHostConfig(body.HostConfig);
-        if (denial) { deny403(client, denial); return; }
+        if (denial) {
+          if (denial.startsWith('__PORT_CHECK__:')) {
+            const [, portStr, proto] = denial.split(':');
+            const hostPort = parseInt(portStr, 10);
+            if (!isHostPortApproved(containerName, hostPort, proto)) {
+              deny403(client, `Host port ${hostPort}/${proto} is not approved for this devcontainer. Approve it in the Huddle portal first.`);
+              return;
+            }
+          } else {
+            deny403(client, denial);
+            return;
+          }
+        }
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         // Force spawned containers onto the parent devcontainer's network only.
         body.HostConfig = { ...(body.HostConfig ?? {}), NetworkMode: `dc-net-${containerName}` };

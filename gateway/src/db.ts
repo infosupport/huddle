@@ -81,6 +81,16 @@ export function initDb(): void {
       enabled INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS approved_host_ports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      container_id TEXT NOT NULL,
+      host_port INTEGER NOT NULL,
+      container_port INTEGER NOT NULL DEFAULT 0,
+      protocol TEXT NOT NULL DEFAULT 'tcp',
+      description TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      UNIQUE(container_id, host_port, protocol)
+    );
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -409,4 +419,41 @@ export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, '
 
 export function deleteFolderMapping(id: number): void {
   db.prepare('DELETE FROM folder_mappings WHERE id = ?').run(id);
+}
+
+// ── Approved Host Ports ───────────────────────────────────────────────────────
+
+export interface ApprovedHostPort {
+  id: number;
+  container_id: string;
+  host_port: number;
+  container_port: number;
+  protocol: string;
+  description: string;
+  created_at: number;
+}
+
+export function listApprovedHostPorts(containerId: string): ApprovedHostPort[] {
+  return db.prepare('SELECT * FROM approved_host_ports WHERE container_id = ? ORDER BY host_port ASC')
+    .all(containerId) as ApprovedHostPort[];
+}
+
+export function addApprovedHostPort(p: Omit<ApprovedHostPort, 'id' | 'created_at'>): number {
+  const result = db.prepare(
+    `INSERT INTO approved_host_ports (container_id, host_port, container_port, protocol, description)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(container_id, host_port, protocol) DO UPDATE SET
+       container_port = excluded.container_port, description = excluded.description`
+  ).run(p.container_id, p.host_port, p.container_port, p.protocol, p.description);
+  return Number(result.lastInsertRowid);
+}
+
+export function removeApprovedHostPort(id: number): void {
+  db.prepare('DELETE FROM approved_host_ports WHERE id = ?').run(id);
+}
+
+export function isHostPortApproved(containerId: string, hostPort: number, protocol: string): boolean {
+  return !!db.prepare(
+    'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
+  ).get(containerId, hostPort, protocol);
 }
