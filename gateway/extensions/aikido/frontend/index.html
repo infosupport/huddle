@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Aikido Security</title>
+<style>
+  :root {
+    --ground:       #f3f4f8;
+    --surface:      #ffffff;
+    --surface2:     #fafbfd;
+    --hover-bg:     #eef0f5;
+    --hover-border: #d8dbe4;
+    --border:       #e7e9ef;
+    --text:         #1d212e;
+    --muted:        #6c7385;
+    --accent:   #E05252;   /* critical */
+    --high:     #D4900A;
+    --medium:   #3BA55C;
+    --low:      #4493F8;
+    --mono: 'SF Mono','Cascadia Code','Fira Code',Consolas,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }
+  :root[data-theme="dark"] {
+    --ground:       #0c0f17;
+    --surface:      #131826;
+    --surface2:     #0f1421;
+    --hover-bg:     #182033;
+    --hover-border: #2a3447;
+    --border:       #1f2839;
+    --text:         #f0f2f7;
+    --muted:        #8a93a8;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Top bar ──────────────────────────────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .topbar__title {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: .04em;
+  }
+  .topbar__breadcrumb { color: var(--muted); font-size: 12px; }
+  .topbar__breadcrumb .sep { margin: 0 6px; }
+  .topbar__ws { font-family: var(--mono); color: var(--accent); font-size: 12px; }
+  .topbar__actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+  /* ── Buttons ──────────────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 11px; border-radius: 5px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text);
+    font-family: var(--sans); font-size: 12px; cursor: pointer;
+    transition: background .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--hover-bg); border-color: var(--hover-border); }
+  .btn--danger { background: rgba(224,82,82,.12); border-color: var(--accent); color: var(--accent); }
+  .btn--danger:hover { background: rgba(224,82,82,.22); }
+  .btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn--primary:hover { background: #C94040; border-color: #C94040; }
+  .btn--ghost { background: transparent; border-color: transparent; }
+  .btn--ghost:hover { background: var(--surface2); border-color: var(--border); }
+  .btn--sm { padding: 3px 8px; font-size: 11px; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+
+  /* ── Main layout ──────────────────────────────────────────────────────── */
+  .app { flex: 1; display: flex; overflow: hidden; }
+  .main { flex: 1; overflow-y: auto; }
+  .detail-panel {
+    width: 380px; flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    display: none;
+  }
+  .detail-panel.open { display: block; }
+
+  /* ── Workspace grid ───────────────────────────────────────────────────── */
+  .ws-view { padding: 20px; }
+
+  .ws-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .ws-header__label { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+
+  .ws-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 200px;
+  }
+
+  .ws-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    text-align: left;
+    position: relative;
+    overflow: hidden;
+  }
+  .ws-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--border);
+    transition: background .15s;
+  }
+  .ws-card:hover { border-color: var(--hover-border); background: var(--surface2); }
+  .ws-card.has-critical::before { background: var(--accent); }
+  .ws-card.has-high::before { background: var(--high); }
+
+  .ws-card__name {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    color: var(--text); display: block; margin-bottom: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ws-card__lang {
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+  }
+  .ws-card__stats {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .ws-stat { display: flex; flex-direction: column; }
+  .ws-stat__val { font-family: var(--mono); font-size: 18px; font-weight: 700; line-height: 1; }
+  .ws-stat__val.critical { color: var(--accent); }
+  .ws-stat__val.high { color: var(--high); }
+  .ws-stat__val.total { color: var(--muted); }
+  .ws-stat__label { font-size: 10px; color: var(--muted); letter-spacing: .06em; }
+
+  .ws-card__footer {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .ws-card__cred {
+    font-family: var(--mono); font-size: 10px;
+  }
+  .ws-card__cred.ok { color: var(--medium); }
+  .ws-card__cred.missing { color: var(--accent); }
+  .ws-card__edit-btn {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    padding: 2px 4px; border-radius: 3px; font-size: 14px; line-height: 1;
+  }
+  .ws-card__edit-btn:hover { color: var(--text); background: var(--surface2); }
+
+  .empty-state {
+    text-align: center; padding: 60px 20px; color: var(--muted);
+  }
+  .empty-state__icon { font-size: 36px; margin-bottom: 12px; }
+  .empty-state h3 { color: var(--text); font-size: 15px; margin-bottom: 6px; }
+
+  /* ── Issues view ──────────────────────────────────────────────────────── */
+  .issues-view { display: flex; flex-direction: column; height: 100%; }
+
+  .issues-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .sev-filter {
+    display: flex; gap: 4px;
+  }
+  .sev-btn {
+    font-family: var(--mono); font-size: 11px;
+    padding: 3px 10px; border-radius: 12px;
+    border: 1px solid var(--border);
+    background: transparent; cursor: pointer;
+    transition: all .12s; color: var(--muted);
+  }
+  .sev-btn:hover, .sev-btn.active { color: var(--text); }
+  .sev-btn.critical { border-color: var(--accent); }
+  .sev-btn.critical:hover, .sev-btn.critical.active { background: rgba(224,82,82,.15); color: var(--accent); }
+  .sev-btn.high { border-color: var(--high); }
+  .sev-btn.high:hover, .sev-btn.high.active { background: rgba(212,144,10,.15); color: var(--high); }
+  .sev-btn.medium { border-color: var(--medium); }
+  .sev-btn.medium:hover, .sev-btn.medium.active { background: rgba(59,165,92,.15); color: var(--medium); }
+  .sev-btn.low { border-color: var(--low); }
+  .sev-btn.low:hover, .sev-btn.low.active { background: rgba(68,147,248,.15); color: var(--low); }
+
+  .search-box {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--ground); border: 1px solid var(--border);
+    border-radius: 5px; padding: 4px 10px;
+    flex: 1; min-width: 140px;
+  }
+  .search-box input {
+    background: none; border: none; color: var(--text); font-size: 12px;
+    width: 100%; outline: none; font-family: var(--sans);
+  }
+  .search-box input::placeholder { color: var(--muted); }
+
+  .issues-count {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    margin-left: auto;
+  }
+
+  /* Batch bar */
+  .batch-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; background: rgba(224,82,82,.08);
+    border-bottom: 1px solid rgba(224,82,82,.2);
+    flex-shrink: 0;
+  }
+  .batch-bar__count { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .batch-bar__spacer { flex: 1; }
+
+  /* Table */
+  .table-wrap { flex: 1; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 8px 12px; text-align: left;
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    letter-spacing: .08em; text-transform: uppercase;
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  thead th:hover { color: var(--text); }
+  thead th.col-check { width: 32px; cursor: default; }
+  thead th.col-score { width: 60px; text-align: right; }
+  thead th.col-actions { width: 60px; text-align: right; }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; transition: background .1s;
+  }
+  tbody tr:hover { background: var(--surface); }
+  tbody tr.selected { background: rgba(224,82,82,.06); }
+  tbody tr.selected:hover { background: rgba(224,82,82,.1); }
+
+  td { padding: 7px 12px; }
+  .col-check { text-align: center; }
+
+  input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 13px; height: 13px; cursor: pointer;
+  }
+
+  .pill {
+    display: inline-block;
+    font-family: var(--mono); font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 3px; letter-spacing: .04em;
+  }
+  .pill.critical { background: rgba(224,82,82,.18); color: var(--accent); }
+  .pill.high { background: rgba(212,144,10,.18); color: var(--high); }
+  .pill.medium { background: rgba(59,165,92,.18); color: var(--medium); }
+  .pill.low { background: rgba(68,147,248,.18); color: var(--low); }
+
+  .issue-title { max-width: 340px; font-size: 12px; }
+  .cve { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .score {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    text-align: right; display: block;
+  }
+  .score.critical { color: var(--accent); }
+  .score.high { color: var(--high); }
+  .score.medium { color: var(--medium); }
+  .score.low { color: var(--low); }
+
+  /* Pagination */
+  .table-footer {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    padding: 10px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  /* ── Detail panel ─────────────────────────────────────────────────────── */
+  .detail-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 16px; border-bottom: 1px solid var(--border); gap: 8px;
+  }
+  .detail-header h3 { font-size: 13px; font-weight: 600; line-height: 1.4; }
+  .detail-close {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 16px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+  }
+  .detail-close:hover { color: var(--text); }
+  .detail-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+
+  .detail-row { display: flex; flex-direction: column; gap: 2px; }
+  .detail-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+  .detail-val { font-size: 12px; color: var(--text); word-break: break-word; }
+  .detail-val.mono { font-family: var(--mono); }
+
+  .detail-actions {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px;
+    margin-top: auto;
+    position: sticky; bottom: 0; background: var(--surface);
+  }
+
+  .container-select-row {
+    display: flex; gap: 6px; align-items: center;
+  }
+  .container-select-row select {
+    flex: 1; background: var(--ground); border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; padding: 5px 8px;
+    font-size: 12px; font-family: var(--sans); cursor: pointer;
+  }
+
+  /* ── Modals ───────────────────────────────────────────────────────────── */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.65);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; width: 460px; max-width: 95vw;
+    max-height: 90vh; overflow-y: auto;
+  }
+  .modal__header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+  }
+  .modal__header h2 { font-size: 14px; font-weight: 600; }
+  .modal__close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; }
+  .modal__close:hover { color: var(--text); }
+  .modal__body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .modal__footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11px; color: var(--muted); font-weight: 600; }
+  .field input, .field select {
+    background: var(--ground); border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; padding: 7px 10px;
+    font-size: 13px; font-family: var(--sans); width: 100%; outline: none;
+    transition: border-color .15s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--accent); }
+  .field input::placeholder { color: var(--muted); }
+
+  .alert {
+    padding: 8px 12px; border-radius: 5px; font-size: 12px; border: 1px solid;
+  }
+  .alert.error { background: rgba(224,82,82,.1); border-color: rgba(224,82,82,.4); color: var(--accent); }
+  .alert.success { background: rgba(59,165,92,.1); border-color: rgba(59,165,92,.4); color: var(--medium); }
+  .alert.info { background: rgba(68,147,248,.1); border-color: rgba(68,147,248,.3); color: var(--low); }
+
+  /* Spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; flex-shrink: 0; }
+  .loading { display: flex; align-items: center; gap: 10px; padding: 40px; color: var(--muted); justify-content: center; }
+
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ───────────────────────────────────────────────────────────── -->
+<div class="topbar">
+  <span class="topbar__title">aikido</span>
+  <div class="topbar__breadcrumb" id="breadcrumb"></div>
+  <div class="topbar__actions" id="topbar-actions"></div>
+</div>
+
+<!-- ── App ───────────────────────────────────────────────────────────────── -->
+<div class="app">
+  <div class="main" id="main"></div>
+  <div class="detail-panel" id="detail-panel"></div>
+</div>
+
+<!-- ── Workspace modal ───────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="ws-modal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2 id="ws-modal-title">Workspace toevoegen</h2>
+      <button class="modal__close" onclick="closeWsModal()">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="field"><label>Naam</label><input id="ws-name" placeholder="mijn-workspace" /></div>
+      <div class="field"><label>Env prefix</label><input id="ws-prefix" placeholder="AIKIDO_WGK" /></div>
+      <div class="field"><label>Repo pad</label><input id="ws-path" placeholder="/workspaces/mijn-project" /></div>
+      <div class="field"><label>Workspace ID</label><input id="ws-id" placeholder="ws-abc123" /></div>
+      <div class="field">
+        <label>Taal</label>
+        <select id="ws-lang">
+          <option value="java">Java</option>
+          <option value="typescript">TypeScript</option>
+          <option value="javascript">JavaScript</option>
+          <option value="python">Python</option>
+          <option value="csharp">C#</option>
+          <option value="go">Go</option>
+          <option value="php">PHP</option>
+          <option value="ruby">Ruby</option>
+        </select>
+      </div>
+      <div class="field"><label>Repository naam (optioneel)</label><input id="ws-repo" placeholder="mijn-org/mijn-repo" /></div>
+      <div id="ws-modal-msg"></div>
+    </div>
+    <div class="modal__footer">
+      <button class="btn btn--ghost" onclick="closeWsModal()">Annuleer</button>
+      <button class="btn btn--primary" id="ws-modal-save" onclick="saveWorkspace()">Opslaan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Credentials modal ──────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="cred-modal">
+  <div class="modal">
+    <div class="modal__header">
+      <h2>Credentials — <span id="cred-modal-prefix" style="font-family:var(--mono);color:var(--accent)"></span></h2>
+      <button class="modal__close" onclick="closeCredModal()">×</button>
+    </div>
+    <div class="modal__body">
+      <div class="alert info">Maak een OAuth2-app aan in Aikido via <strong>Instellingen → API</strong> om Client ID en Secret te verkrijgen.</div>
+      <div class="field"><label>Client ID</label><input id="cred-id" placeholder="aikido_..." /></div>
+      <div class="field"><label>Client Secret</label><input id="cred-secret" type="password" placeholder="••••••••••••" /></div>
+      <div id="cred-modal-msg"></div>
+    </div>
+    <div class="modal__footer">
+      <button class="btn btn--ghost btn--danger" onclick="deleteCreds()">Verwijder</button>
+      <button class="btn btn--ghost" onclick="closeCredModal()">Annuleer</button>
+      <button class="btn btn--primary" onclick="saveCredentials()">Opslaan &amp; valideren</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const BASE = '/api/ext/aikido';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let state = {
+  view: 'workspaces',          // 'workspaces' | 'issues'
+  workspaces: [],
+  overview: {},
+  selectedWs: null,            // workspace name
+  issues: [],
+  filteredIssues: [],
+  totalIssues: 0,
+  filteredTotal: 0,
+  page: 0,
+  perPage: 25,
+  severityFilter: null,
+  search: '',
+  selected: new Set(),         // selected issue ids
+  sortCol: 'severity',
+  sortDir: 'asc',
+  openIssue: null,
+  containers: [],
+  selectedContainer: '',
+  editingWs: null,             // null = add, obj = edit
+  credPrefix: null,
+  loading: false,
+  issueLoading: false,
+};
+
+// ── API ────────────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(BASE + path, opts);
+  const ct  = res.headers.get('content-type') || '';
+  const data = ct.includes('json') ? await res.json() : await res.text();
+  if (!res.ok) throw new Error(data?.error || data || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render() {
+  renderBreadcrumb();
+  renderTopbarActions();
+  if (state.view === 'workspaces') renderWorkspaces();
+  else renderIssues();
+}
+
+function renderBreadcrumb() {
+  const el = document.getElementById('breadcrumb');
+  if (state.view === 'issues') {
+    el.innerHTML = `<span class="sep">/</span><span class="topbar__ws">${state.selectedWs}</span>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function renderTopbarActions() {
+  const el = document.getElementById('topbar-actions');
+  if (state.view === 'workspaces') {
+    el.innerHTML = `<button class="btn btn--sm" onclick="openAddWorkspace()">+ Workspace</button>`;
+  } else {
+    el.innerHTML = `
+      <button class="btn btn--sm btn--ghost" onclick="refreshIssues()">↻ Vernieuwen</button>
+      <button class="btn btn--sm" onclick="openManageCredentials()">Credentials</button>
+      <button class="btn btn--sm btn--ghost" onclick="backToWorkspaces()">← Terug</button>`;
+  }
+}
+
+// ── Workspaces view ────────────────────────────────────────────────────────
+function renderWorkspaces() {
+  const main = document.getElementById('main');
+  document.getElementById('detail-panel').classList.remove('open');
+
+  if (state.loading) {
+    main.innerHTML = `<div class="loading"><div class="spinner"></div>Workspaces laden…</div>`;
+    return;
+  }
+
+  if (!state.workspaces.length) {
+    main.innerHTML = `
+      <div class="ws-view">
+        <div class="empty-state">
+          <div class="empty-state__icon">🔒</div>
+          <h3>Geen workspaces</h3>
+          <p style="margin-bottom:16px">Voeg een workspace toe om security-issues te bekijken.</p>
+          <button class="btn btn--primary" onclick="openAddWorkspace()">+ Workspace toevoegen</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  const cards = state.workspaces.map(ws => {
+    const s = state.overview[ws.name];
+    const hasCrit = s && s.critical > 0;
+    const hasHigh = s && s.high > 0;
+    const cls = hasCrit ? 'has-critical' : hasHigh ? 'has-high' : '';
+    const credCls = ws.hasCredentials ? 'ok' : 'missing';
+    const credLabel = ws.hasCredentials ? '✓ credentials' : '✗ geen credentials';
+    return `
+      <button class="ws-card ${cls}" onclick="selectWorkspace('${esc(ws.name)}')">
+        <span class="ws-card__name">${esc(ws.name)}</span>
+        <span class="ws-card__lang">${esc(ws.language)}</span>
+        ${s ? `
+        <div class="ws-card__stats">
+          <div class="ws-stat"><span class="ws-stat__val critical">${s.critical}</span><span class="ws-stat__label">critical</span></div>
+          <div class="ws-stat"><span class="ws-stat__val high">${s.high}</span><span class="ws-stat__label">high</span></div>
+          <div class="ws-stat"><span class="ws-stat__val total">${s.total}</span><span class="ws-stat__label">total</span></div>
+        </div>` : ws.hasCredentials ? `<div style="margin-top:10px"><div class="spinner" style="width:12px;height:12px;"></div></div>` : ''}
+        <div class="ws-card__footer">
+          <span class="ws-card__cred ${credCls}">${credLabel}</span>
+          <button class="ws-card__edit-btn" title="Bewerken" onclick="event.stopPropagation();openEditWorkspace('${esc(ws.name)}')">⋯</button>
+        </div>
+      </button>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div class="ws-view">
+      <div class="ws-header">
+        <span class="ws-header__label">${state.workspaces.length} workspace${state.workspaces.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="ws-grid">${cards}</div>
+    </div>`;
+}
+
+// ── Issues view ────────────────────────────────────────────────────────────
+function renderIssues() {
+  const main = document.getElementById('main');
+
+  if (state.issueLoading) {
+    main.innerHTML = `<div class="loading"><div class="spinner"></div>Issues laden…</div>`;
+    return;
+  }
+
+  const selCount = state.selected.size;
+  const batchBar = selCount > 0 ? `
+    <div class="batch-bar">
+      <span class="batch-bar__count">${selCount} issue${selCount > 1 ? 's' : ''} geselecteerd</span>
+      <div class="batch-bar__spacer"></div>
+      <button class="btn btn--sm btn--ghost" onclick="clearSelection()">Deselecteer</button>
+      <button class="btn btn--sm btn--primary" onclick="openInjectForSelected()">▶ Fix selectie</button>
+    </div>` : '';
+
+  const issues = getDisplayIssues();
+  const allSevs = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const i of state.filteredIssues) { if (i.severity in allSevs) allSevs[i.severity]++; }
+  const ft = state.filteredTotal;
+  const showing = issues.length + state.page * state.perPage;
+
+  const rows = issues.map(i => {
+    const sel = state.selected.has(String(i.id));
+    const cve = i.related_cve_ids?.[0] || i.cve_ids?.[0] || '–';
+    return `
+      <tr class="${sel ? 'selected' : ''}" onclick="openIssueDetail(${i.id})">
+        <td class="col-check" onclick="event.stopPropagation()">
+          <input type="checkbox" ${sel ? 'checked' : ''} onchange="toggleSelect('${i.id}',this.checked)" />
+        </td>
+        <td><span class="pill ${i.severity}">${i.severity}</span></td>
+        <td class="issue-title">${esc(i.title)}</td>
+        <td class="cve">${esc(cve)}</td>
+        <td class="col-score"><span class="score ${i.severity}">${i.severity_score ?? '–'}</span></td>
+        <td class="col-actions" onclick="event.stopPropagation()">
+          <button class="btn btn--sm btn--primary" onclick="openInjectForIssue(${i.id})">Fix</button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const emptyRow = !issues.length ? `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">Geen issues gevonden</td></tr>` : '';
+
+  const sevBtns = ['critical','high','medium','low'].map(s =>
+    `<button class="sev-btn ${s} ${state.severityFilter === s ? 'active' : ''}" onclick="setSeverity('${s}')">${s} ${allSevs[s]}</button>`
+  ).join('');
+
+  const hasMore = ft > (state.page + 1) * state.perPage;
+  const hasPrev = state.page > 0;
+
+  main.innerHTML = `
+    <div class="issues-view">
+      <div class="issues-toolbar">
+        <div class="sev-filter">
+          <button class="sev-btn ${!state.severityFilter ? 'active' : ''}" onclick="setSeverity(null)" style="border-color:var(--border)">alle ${ft}</button>
+          ${sevBtns}
+        </div>
+        <div class="search-box">
+          <span style="color:var(--muted)">⌕</span>
+          <input placeholder="Zoek op titel of CVE…" value="${esc(state.search)}" oninput="setSearch(this.value)" />
+        </div>
+      </div>
+      ${batchBar}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" onchange="toggleSelectAll(this.checked)" ${state.selected.size && issues.every(i => state.selected.has(String(i.id))) ? 'checked' : ''} /></th>
+              <th onclick="setSort('severity')">Severity ${sortArrow('severity')}</th>
+              <th onclick="setSort('title')">Titel ${sortArrow('title')}</th>
+              <th>CVE</th>
+              <th class="col-score" onclick="setSort('severity_score')">Score ${sortArrow('severity_score')}</th>
+              <th class="col-actions"></th>
+            </tr>
+          </thead>
+          <tbody>${rows}${emptyRow}</tbody>
+        </table>
+      </div>
+      ${(hasPrev || hasMore) ? `
+      <div class="table-footer">
+        <button class="btn btn--sm btn--ghost" ${hasPrev ? '' : 'disabled'} onclick="changePage(-1)">← Vorige</button>
+        <span>Pagina ${state.page + 1} · ${showing} van ${ft}</span>
+        <button class="btn btn--sm btn--ghost" ${hasMore ? '' : 'disabled'} onclick="changePage(1)">Volgende →</button>
+      </div>` : ''}
+    </div>`;
+}
+
+function sortArrow(col) {
+  if (state.sortCol !== col) return '';
+  return state.sortDir === 'asc' ? '▲' : '▼';
+}
+
+function getDisplayIssues() {
+  const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  let list = [...state.filteredIssues];
+  if (state.sortCol) {
+    list.sort((a, b) => {
+      let av = a[state.sortCol], bv = b[state.sortCol];
+      if (state.sortCol === 'severity') { av = sevOrder[av] ?? 9; bv = sevOrder[bv] ?? 9; }
+      if (av < bv) return state.sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return state.sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+  const start = state.page * state.perPage;
+  return list.slice(start, start + state.perPage);
+}
+
+// ── Detail panel ───────────────────────────────────────────────────────────
+function renderDetail() {
+  const panel = document.getElementById('detail-panel');
+  if (!state.openIssue) { panel.classList.remove('open'); panel.innerHTML = ''; return; }
+  const i = state.openIssue;
+  const cves = (i.related_cve_ids || i.cve_ids || []).join(', ') || '–';
+  const locs = (i.locations || []).map(l => l.code_repo_name || l.name || l.file_path || '').filter(Boolean).join(', ') || '–';
+  const containerOptions = state.containers.map(c =>
+    `<option value="${esc(c.Names?.[0]?.replace(/^\//,'') || c.Id)}" ${state.selectedContainer === (c.Names?.[0]?.replace(/^\//,'') || c.Id) ? 'selected' : ''}>${esc(c.Names?.[0]?.replace(/^\//,'') || c.Id.slice(0,12))}</option>`
+  ).join('');
+
+  panel.innerHTML = `
+    <div class="detail-header">
+      <h3>${esc(i.title)}</h3>
+      <button class="detail-close" onclick="closeDetail()">×</button>
+    </div>
+    <div class="detail-body">
+      <div class="detail-row">
+        <span class="detail-label">Severity</span>
+        <div><span class="pill ${i.severity}">${i.severity}</span> <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">score ${i.severity_score ?? '–'}</span></div>
+      </div>
+      ${i.type ? `<div class="detail-row"><span class="detail-label">Type</span><span class="detail-val">${esc(i.type)}</span></div>` : ''}
+      ${i.affected_package ? `<div class="detail-row"><span class="detail-label">Package</span><span class="detail-val mono">${esc(i.affected_package)}</span></div>` : ''}
+      ${i.affected_file ? `<div class="detail-row"><span class="detail-label">Bestand</span><span class="detail-val mono">${esc(i.affected_file)}</span></div>` : ''}
+      <div class="detail-row"><span class="detail-label">CVE</span><span class="detail-val mono">${esc(cves)}</span></div>
+      ${locs !== '–' ? `<div class="detail-row"><span class="detail-label">Locaties</span><span class="detail-val">${esc(locs)}</span></div>` : ''}
+      ${i.exploitability ? `<div class="detail-row"><span class="detail-label">Exploitability</span><span class="detail-val">${esc(i.exploitability)}</span></div>` : ''}
+      ${i.how_to_fix ? `<div class="detail-row"><span class="detail-label">Hoe te fixen</span><span class="detail-val">${esc(i.how_to_fix)}</span></div>` : ''}
+      ${i.first_detected_at ? `<div class="detail-row"><span class="detail-label">Eerste detectie</span><span class="detail-val mono">${esc(i.first_detected_at)}</span></div>` : ''}
+    </div>
+    <div class="detail-actions">
+      <div class="detail-row"><span class="detail-label">Container</span></div>
+      <div class="container-select-row">
+        <select onchange="state.selectedContainer = this.value">
+          <option value="">Selecteer container…</option>
+          ${containerOptions}
+        </select>
+        <button class="btn btn--sm" onclick="loadContainers()">↻</button>
+      </div>
+      <button class="btn btn--primary" onclick="injectSingle(${i.id})" ${!state.selectedContainer ? 'disabled' : ''}>
+        ▶ Fix in container
+      </button>
+      <div id="inject-msg"></div>
+    </div>`;
+  panel.classList.add('open');
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+async function loadWorkspaces() {
+  state.loading = true; render();
+  try {
+    state.workspaces = await api('GET', '/workspaces');
+    state.overview = {};
+    render();
+    // Load overview in background
+    api('GET', '/overview').then(ov => { state.overview = ov; render(); }).catch(() => {});
+  } catch (e) {
+    alert('Fout bij laden workspaces: ' + e.message);
+  } finally {
+    state.loading = false; render();
+  }
+}
+
+async function selectWorkspace(name) {
+  state.selectedWs = name;
+  state.view = 'issues';
+  state.page = 0;
+  state.selected.clear();
+  state.search = '';
+  state.severityFilter = null;
+  state.openIssue = null;
+  state.issueLoading = true;
+  render();
+  await loadIssues();
+  loadContainers();
+}
+
+async function loadIssues() {
+  state.issueLoading = true; render();
+  try {
+    const data = await api('GET', `/workspaces/${encodeURIComponent(state.selectedWs)}/issues?per_page=1000`);
+    state.issues = data.groups || [];
+    applyFilters();
+  } catch (e) {
+    if (e.message.includes('no_credentials')) {
+      state.issues = [];
+      state.filteredIssues = [];
+      state.filteredTotal = 0;
+      state.issueLoading = false;
+      render();
+      // Prompt credentials
+      setTimeout(() => openManageCredentials(), 100);
+      return;
+    }
+    alert('Fout bij laden issues: ' + e.message);
+  } finally {
+    state.issueLoading = false; render();
+  }
+}
+
+function applyFilters() {
+  let list = [...state.issues];
+  if (state.severityFilter) list = list.filter(i => i.severity === state.severityFilter);
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    list = list.filter(i =>
+      (i.title || '').toLowerCase().includes(q) ||
+      (i.related_cve_ids || i.cve_ids || []).some(c => c.toLowerCase().includes(q))
+    );
+  }
+  state.filteredIssues = list;
+  state.filteredTotal = list.length;
+  state.page = 0;
+}
+
+function setSeverity(sev) {
+  state.severityFilter = sev;
+  applyFilters();
+  render();
+}
+
+function setSearch(val) {
+  state.search = val;
+  applyFilters();
+  render();
+}
+
+function setSort(col) {
+  if (state.sortCol === col) state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+  else { state.sortCol = col; state.sortDir = 'asc'; }
+  render();
+}
+
+function toggleSelect(id, checked) {
+  if (checked) state.selected.add(String(id));
+  else state.selected.delete(String(id));
+  render();
+}
+
+function toggleSelectAll(checked) {
+  const issues = getDisplayIssues();
+  for (const i of issues) {
+    if (checked) state.selected.add(String(i.id));
+    else state.selected.delete(String(i.id));
+  }
+  render();
+}
+
+function clearSelection() { state.selected.clear(); render(); }
+
+function changePage(delta) { state.page = Math.max(0, state.page + delta); render(); }
+
+function openIssueDetail(id) {
+  state.openIssue = state.issues.find(i => String(i.id) === String(id)) || null;
+  renderDetail();
+}
+
+function closeDetail() { state.openIssue = null; renderDetail(); }
+
+async function refreshIssues() {
+  try { await api('POST', `/workspaces/${encodeURIComponent(state.selectedWs)}/refresh`); } catch {}
+  await loadIssues();
+}
+
+function backToWorkspaces() {
+  state.view = 'workspaces';
+  state.selectedWs = null;
+  state.selected.clear();
+  state.openIssue = null;
+  document.getElementById('detail-panel').classList.remove('open');
+  render();
+}
+
+// ── Containers ─────────────────────────────────────────────────────────────
+async function loadContainers() {
+  try {
+    const res = await fetch('/api/containers');
+    if (!res.ok) return;
+    const all = await res.json();
+    state.containers = (all || []).filter(c => c.State === 'running');
+    renderDetail();
+  } catch {}
+}
+
+// ── Inject ─────────────────────────────────────────────────────────────────
+async function injectSingle(issueId) {
+  if (!state.selectedContainer) return;
+  const issue = state.openIssue;
+  await doInject([issue], state.selectedContainer);
+}
+
+async function openInjectForIssue(issueId) {
+  const issue = state.issues.find(i => String(i.id) === String(issueId));
+  state.openIssue = issue;
+  renderDetail();
+  await loadContainers();
+}
+
+function openInjectForSelected() {
+  state.openIssue = state.issues.find(i => state.selected.has(String(i.id)));
+  renderDetail();
+  loadContainers();
+}
+
+async function doInject(issues, containerName) {
+  const msgEl = document.getElementById('inject-msg');
+  if (msgEl) msgEl.innerHTML = `<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>Bezig met injecteren…</div></div>`;
+  try {
+    await api('POST', `/workspaces/${encodeURIComponent(state.selectedWs)}/inject`, {
+      container_name: containerName,
+      issues,
+    });
+    if (msgEl) msgEl.innerHTML = `<div class="alert success">✓ Context geïnjecteerd in <strong>${esc(containerName)}</strong>. Voer <code>aikido-fix</code> uit in de container.</div>`;
+  } catch (e) {
+    if (msgEl) msgEl.innerHTML = `<div class="alert error">Fout: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Workspace modal ────────────────────────────────────────────────────────
+function openAddWorkspace() {
+  state.editingWs = null;
+  document.getElementById('ws-modal-title').textContent = 'Workspace toevoegen';
+  document.getElementById('ws-name').value = '';
+  document.getElementById('ws-prefix').value = '';
+  document.getElementById('ws-path').value = '';
+  document.getElementById('ws-id').value = '';
+  document.getElementById('ws-lang').value = 'java';
+  document.getElementById('ws-repo').value = '';
+  document.getElementById('ws-name').disabled = false;
+  document.getElementById('ws-modal-msg').innerHTML = '';
+  document.getElementById('ws-modal').classList.add('open');
+}
+
+function openEditWorkspace(name) {
+  const ws = state.workspaces.find(w => w.name === name);
+  if (!ws) return;
+  state.editingWs = ws;
+  document.getElementById('ws-modal-title').textContent = `Workspace bewerken — ${name}`;
+  document.getElementById('ws-name').value = ws.name;
+  document.getElementById('ws-name').disabled = true;
+  document.getElementById('ws-prefix').value = ws.aikido_env_prefix;
+  document.getElementById('ws-path').value = ws.repo_path;
+  document.getElementById('ws-id').value = ws.workspace_id;
+  document.getElementById('ws-lang').value = ws.language;
+  document.getElementById('ws-repo').value = ws.code_repo_name || '';
+  document.getElementById('ws-modal-msg').innerHTML = '';
+  document.getElementById('ws-modal').classList.add('open');
+}
+
+function closeWsModal() { document.getElementById('ws-modal').classList.remove('open'); }
+
+async function saveWorkspace() {
+  const name   = document.getElementById('ws-name').value.trim();
+  const prefix = document.getElementById('ws-prefix').value.trim().toUpperCase();
+  const rpath  = document.getElementById('ws-path').value.trim();
+  const wsid   = document.getElementById('ws-id').value.trim();
+  const lang   = document.getElementById('ws-lang').value;
+  const repo   = document.getElementById('ws-repo').value.trim();
+  const msg    = document.getElementById('ws-modal-msg');
+
+  if (!name || !prefix || !rpath || !wsid || !lang) {
+    msg.innerHTML = `<div class="alert error">Alle verplichte velden zijn vereist.</div>`; return;
+  }
+
+  const body = { name, aikido_env_prefix: prefix, repo_path: rpath, workspace_id: wsid, language: lang, code_repo_name: repo || undefined };
+  try {
+    if (state.editingWs) {
+      await api('PUT', `/workspaces/${encodeURIComponent(state.editingWs.name)}`, body);
+    } else {
+      await api('POST', '/workspaces', body);
+    }
+    closeWsModal();
+    await loadWorkspaces();
+  } catch (e) {
+    msg.innerHTML = `<div class="alert error">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Credentials modal ──────────────────────────────────────────────────────
+function openManageCredentials() {
+  const ws = state.selectedWs
+    ? state.workspaces.find(w => w.name === state.selectedWs)
+    : null;
+  const prefix = ws?.aikido_env_prefix || '';
+  state.credPrefix = prefix;
+  document.getElementById('cred-modal-prefix').textContent = prefix;
+  document.getElementById('cred-id').value = '';
+  document.getElementById('cred-secret').value = '';
+  document.getElementById('cred-modal-msg').innerHTML = '';
+
+  // Load existing client_id
+  if (prefix) {
+    api('GET', `/credentials/${encodeURIComponent(prefix)}`).then(data => {
+      if (data.client_id) document.getElementById('cred-id').value = data.client_id;
+    }).catch(() => {});
+  }
+  document.getElementById('cred-modal').classList.add('open');
+}
+
+function closeCredModal() { document.getElementById('cred-modal').classList.remove('open'); }
+
+async function saveCredentials() {
+  const clientId     = document.getElementById('cred-id').value.trim();
+  const clientSecret = document.getElementById('cred-secret').value;
+  const msg          = document.getElementById('cred-modal-msg');
+  if (!clientId || !clientSecret) {
+    msg.innerHTML = `<div class="alert error">Client ID en Secret zijn verplicht.</div>`; return;
+  }
+  try {
+    const res = await api('POST', `/credentials/${encodeURIComponent(state.credPrefix)}`, { client_id: clientId, client_secret: clientSecret });
+    if (res.validated) {
+      msg.innerHTML = `<div class="alert success">✓ Credentials opgeslagen en gevalideerd.</div>`;
+    } else {
+      msg.innerHTML = `<div class="alert error">Opgeslagen, maar validatie mislukt: ${esc(res.validation_error || 'onbekend')}</div>`;
+    }
+    await loadWorkspaces();
+  } catch (e) {
+    msg.innerHTML = `<div class="alert error">${esc(e.message)}</div>`;
+  }
+}
+
+async function deleteCreds() {
+  if (!confirm('Credentials verwijderen?')) return;
+  try {
+    await api('DELETE', `/credentials/${encodeURIComponent(state.credPrefix)}`);
+    closeCredModal();
+    await loadWorkspaces();
+  } catch (e) {
+    document.getElementById('cred-modal-msg').innerHTML = `<div class="alert error">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Close modals on backdrop click
+document.getElementById('ws-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeWsModal(); });
+document.getElementById('cred-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeCredModal(); });
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+const savedTheme = localStorage.getItem('huddle-theme') || 'light';
+document.documentElement.setAttribute('data-theme', savedTheme);
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+loadWorkspaces();
+</script>
+</body>
+</html>
