@@ -7,14 +7,12 @@ export const routes: Routes = [
   { path: 'container/:name', loadComponent: () => import('./pages/container-detail/container-detail.component').then(m => m.ContainerDetailComponent) },
   { path: 'firewall', loadComponent: () => import('./pages/firewall/firewall.component').then(m => m.FirewallComponent) },
   { path: 'docker-access', loadComponent: () => import('./pages/docker-access/docker-access.component').then(m => m.DockerAccessComponent) },
-  { path: 'policies', loadComponent: () => import('./pages/placeholder/placeholder.component').then(m => m.PlaceholderComponent), data: { title: 'Policies' } },
-  { path: 'audit', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },
+{ path: 'audit', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },
   { path: 'settings', loadComponent: () => import('./pages/settings/settings.component').then(m => m.SettingsComponent) },
   { path: 'extensions', loadComponent: () => import('./pages/extensions/extensions.component').then(m => m.ExtensionsPageComponent) },
   { path: 'extensions/:id/settings', loadComponent: () => import('./pages/extensions/settings/extension-settings.component').then(m => m.ExtensionSettingsComponent) },
   { path: 'extensions/view/:id', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
   { path: 'extensions/view/:id/:repo', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
-  { path: 'mcp', loadComponent: () => import('./pages/mcp/mcp.component').then(m => m.McpPageComponent) },
-  { path: 'mcp/:id/settings', loadComponent: () => import('./pages/mcp/mcp-settings.component').then(m => m.McpSettingsComponent) },
+
 { path: '**', redirectTo: 'dashboard' },
 ];

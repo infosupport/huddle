@@ -21,6 +21,8 @@ export class AuditComponent {
   containerFilter = new FormControl('');
   domainFilter = new FormControl('');
   actionFilter = new FormControl('');
+  pathFilter = new FormControl('');
+  limitControl = new FormControl(1000);
 
   containers: string[] = [];
   expandedId = signal<number | null>(null);
@@ -30,15 +32,18 @@ export class AuditComponent {
     this.containerFilter.valueChanges.pipe(startWith('')),
     this.domainFilter.valueChanges.pipe(startWith('')),
     this.actionFilter.valueChanges.pipe(startWith('')),
+    this.pathFilter.valueChanges.pipe(startWith('')),
+    this.limitControl.valueChanges.pipe(startWith(1000)),
     interval(10_000).pipe(startWith(0)),
   ]).pipe(
     takeUntilDestroyed(this.destroyRef),
-    switchMap(([container, domain, action]) =>
+    switchMap(([container, domain, action, path, limit]) =>
       this.api.getAuditLogs({
         container: container || undefined,
         domain: domain || undefined,
         action: action || undefined,
-        limit: 500,
+        path: path || undefined,
+        limit: limit ?? 1000,
       }).pipe(
         catchError((err) => {
           this.fetchError.set(err?.message ?? 'Ophalen mislukt');
@@ -75,5 +80,18 @@ export class AuditComponent {
   prettyJson(s: string | null): string {
     if (!s) return '';
     try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; }
+  }
+
+  openRawBody(content: string): void {
+    let display = content;
+    try { display = JSON.stringify(JSON.parse(content), null, 2); } catch { /* keep as-is */ }
+    const blob = new Blob([display], { type: 'text/plain; charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  setTokenFilter(): void {
+    this.pathFilter.setValue('token');
   }
 }

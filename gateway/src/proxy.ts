@@ -3,11 +3,13 @@ import https from 'https';
 import net from 'net';
 import tls from 'tls';
 import stream from 'stream';
+import zlib from 'zlib';
 import { URL } from 'url';
 import { checkRule, isPathMode } from './rules';
 import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
+import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
 
 const PROXY_PORT = 80;
 
@@ -23,6 +25,31 @@ const NO_INTERCEPT_DOMAINS: Set<string> = new Set(
 const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
 function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
+
+// RFC 7230 §3.3.2: Content-Length and Transfer-Encoding must not coexist.
+// Some OAuth/API servers send both; strip Content-Length when TE is present.
+function sanitizeResHeaders(h: http.IncomingHttpHeaders): http.IncomingHttpHeaders {
+  if (!h['transfer-encoding'] || !h['content-length']) return h;
+  const out = { ...h };
+  delete out['content-length'];
+  return out;
+}
+
+function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string | null {
+  if (chunks.length === 0) return null;
+  const buf = Buffer.concat(chunks);
+  const enc = ((headers['content-encoding'] as string) ?? '').toLowerCase();
+  try {
+    let decoded: Buffer;
+    if (enc === 'gzip' || enc === 'x-gzip') decoded = zlib.gunzipSync(buf);
+    else if (enc === 'deflate') decoded = zlib.inflateSync(buf);
+    else if (enc === 'br') decoded = zlib.brotliDecompressSync(buf);
+    else decoded = buf;
+    return cap(decoded.toString('utf8'));
+  } catch {
+    return '[binary / niet decodeerbaar]';
+  }
+}
 
 function send403(res: http.ServerResponse, domain: string, reason: string): void {
   const body = JSON.stringify({ error: 'forbidden', domain, reason });
@@ -76,12 +103,8 @@ export function createProxyServer(): http.Server {
     let ruleId: number | null;
     if (target.hostname === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
-      const isMcpPath = target.pathname.startsWith('/mcp/');
       const allowed =
-        (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo') ||
-        (target.port === '3000' && isMcpPath) ||
-        (target.port === '80'  && isMcpPath) ||
-        (target.port === ''    && isMcpPath);
+        (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo');
       if (!allowed) {
         logAudit({
           containerId,
@@ -139,18 +162,15 @@ export function createProxyServer(): http.Server {
       completed = true;
       if (auditId == null) return;
       updateAuditResponse(auditId, {
-        reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).slice(0, CAP).toString('utf8')) : null,
+        reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
         resStatus,
         resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-        resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).slice(0, CAP).toString('utf8')) : null,
+        resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
       });
     };
 
     // MCP-verkeer naar huddle altijd via de API-poort (3000), niet de proxypoort (80).
-    const upstreamPort =
-      target.hostname === 'huddle' && target.pathname.startsWith('/mcp/')
-        ? 3000
-        : (target.port || 80);
+    const upstreamPort = target.port || 80;
 
     const upstream = http.request(
       {
@@ -161,7 +181,7 @@ export function createProxyServer(): http.Server {
         headers: outgoingHeaders,
       },
       (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+        res.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
         upstreamRes.on('data', (chunk: Buffer) => {
           if (!res.writableEnded) res.write(chunk);
           if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
@@ -338,6 +358,26 @@ export function createProxyServer(): http.Server {
       const upstreamHeaders = { ...innerReq.headers };
       delete upstreamHeaders['proxy-connection'];
 
+      // Token replacement: vervang placeholder door het echte token voor api.anthropic.com
+      if (hostname === 'api.anthropic.com') {
+        const authVal = upstreamHeaders['authorization'] as string | undefined;
+        if (authVal?.startsWith('Bearer ') && isPlaceholderToken(authVal.slice(7))) {
+          const real = resolveToken(authVal.slice(7));
+          if (real) upstreamHeaders['authorization'] = `Bearer ${real}`;
+        }
+        const apiKey = upstreamHeaders['x-api-key'] as string | undefined;
+        if (apiKey && isPlaceholderToken(apiKey)) {
+          const real = resolveToken(apiKey);
+          if (real) upstreamHeaders['x-api-key'] = real;
+        }
+      }
+
+      // Token exchange: detecteer OAuth token response van platform.claude.com
+      const isTokenRequest =
+        hostname === 'platform.claude.com' &&
+        innerReq.method === 'POST' &&
+        (innerReq.url?.split('?')[0] ?? '') === '/v1/oauth/token';
+
       const reqChunks: Buffer[] = [];
       let reqBytes = 0;
       const resChunks: Buffer[] = [];
@@ -367,7 +407,7 @@ export function createProxyServer(): http.Server {
           reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
           resStatus,
           resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-          resBody: resBytes > 0 ? cap(Buffer.concat(resChunks).toString('utf8')) : null,
+          resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
         });
       };
 
@@ -381,19 +421,58 @@ export function createProxyServer(): http.Server {
           servername: hostname,
         },
         (upstreamRes) => {
-          innerRes.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
-          upstreamRes.on('data', (chunk: Buffer) => {
-            if (!innerRes.writableEnded) innerRes.write(chunk);
-            if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
-          });
-          upstreamRes.on('end', () => {
-            if (!innerRes.writableEnded) innerRes.end();
-            complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
-          });
-          upstreamRes.on('error', () => {
-            if (!innerRes.writableEnded) innerRes.destroy();
-            complete(0, upstreamRes.headers);
-          });
+          if (isTokenRequest && upstreamRes.statusCode === 200) {
+            // Buffer de volledige OAuth-response zodat we het token kunnen vervangen.
+            const tokenResChunks: Buffer[] = [];
+            upstreamRes.on('data', (chunk: Buffer) => {
+              tokenResChunks.push(chunk);
+              if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
+            });
+            upstreamRes.on('end', () => {
+              let outBuf: Buffer;
+              let outHeaders = { ...upstreamRes.headers };
+              try {
+                const rawBody = decodeBody(tokenResChunks, upstreamRes.headers);
+                const json = rawBody ? JSON.parse(rawBody) : null;
+                if (json?.access_token) {
+                  const placeholder = storeTokenExchange(containerId ?? 'unknown', json.access_token as string);
+                  json.access_token = placeholder;
+                  console.log(`[token-exchange] placeholder issued voor container ${containerId}`);
+                  outBuf = Buffer.from(JSON.stringify(json));
+                  delete outHeaders['content-encoding'];
+                  delete outHeaders['transfer-encoding'];
+                  outHeaders['content-length'] = String(outBuf.length);
+                } else {
+                  outBuf = Buffer.concat(tokenResChunks);
+                  outHeaders['content-length'] = String(outBuf.length);
+                }
+              } catch {
+                outBuf = Buffer.concat(tokenResChunks);
+                outHeaders = { ...upstreamRes.headers };
+              }
+              innerRes.writeHead(upstreamRes.statusCode ?? 200, outHeaders);
+              innerRes.end(outBuf);
+              complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
+            });
+            upstreamRes.on('error', () => {
+              if (!innerRes.writableEnded) innerRes.destroy();
+              complete(0, upstreamRes.headers);
+            });
+          } else {
+            innerRes.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
+            upstreamRes.on('data', (chunk: Buffer) => {
+              if (!innerRes.writableEnded) innerRes.write(chunk);
+              if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
+            });
+            upstreamRes.on('end', () => {
+              if (!innerRes.writableEnded) innerRes.end();
+              complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
+            });
+            upstreamRes.on('error', () => {
+              if (!innerRes.writableEnded) innerRes.destroy();
+              complete(0, upstreamRes.headers);
+            });
+          }
         },
       );
 
