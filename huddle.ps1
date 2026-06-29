@@ -7,17 +7,6 @@ $HUDDLE_IMAGE     = "huddle"
 $HUDDLE_VOLUME    = "huddle-data"
 $HUDDLE_PORT      = 3000
 
-# Sparky LLM (vLLM) forwarder. docker-engine in WSL2 kan sparky's aparte LAN-IP niet
-# routeren; alleen de Windows-host bereikt het. Daarom twee hops:
-#   1) Windows (eenmalig, admin): netsh portproxy :SPARKY_PORT -> SPARKY_HOST:SPARKY_PORT
-#      netsh interface portproxy add v4tov4 listenport=11434 connectaddress=192.168.100.2 connectport=11434
-#   2) deze host-net container zet WSL2 :SPARKY_PORT door naar de Windows-host (de
-#      default gateway van de WSL2-distro), zodat huddle er via
-#      host.docker.internal:SPARKY_PORT (172.17.0.1) bij kan.
-$SPARKY_PROXY = "sparky-proxy"
-$SPARKY_HOST  = "192.168.100.2"
-$SPARKY_PORT  = 11434
-
 # Per-IDE base images. Elke IDE heeft een eigen base-devimage-<ide>/ folder met
 # een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
 # datzelfde label zodat de spawn-flow ze per IDE kan filteren.
@@ -68,39 +57,9 @@ function Show-Menu {
     Write-Host ""
 }
 
-# ── Sparky LLM-forwarder ────────────────────────────────────────────────────────
-
-# Host-net container die WSL2 :SPARKY_PORT doorzet naar de Windows-host (vanwaar netsh
-# het naar sparky stuurt). Idempotent: draait hij al -> niets; gestopt -> opnieuw aanmaken.
-function Start-SparkyProxy {
-    if (-not $IsWindows) { return }
-    $running = docker ps --filter "name=^${SPARKY_PROXY}$" --format "{{.Names}}"
-    if ($running) { return }
-
-    $stopped = docker ps -aq --filter "name=^${SPARKY_PROXY}$" 2>$null
-    if ($stopped) { docker rm -f $SPARKY_PROXY | Out-Null }
-
-    Write-Host "  Sparky-proxy starten (WSL2 :${SPARKY_PORT} -> Windows-host :${SPARKY_PORT})..." -ForegroundColor DarkCyan
-    # Zet :PORT door naar de default gateway van de WSL2-distro = de Windows-host,
-    # waar de netsh portproxy het naar sparky stuurt. De gateway wordt IN de container
-    # bepaald (kan na een WSL-herstart wijzigen). socat + iproute2 worden runtime
-    # geïnstalleerd (de WSL2-host heeft normale internettoegang).
-    $fwd = 'apk add --no-cache socat iproute2 >/dev/null 2>&1; set -- $(ip route show default); GW=$3; echo sparky-proxy :PORT -\> Windows $GW:PORT; exec socat TCP-LISTEN:PORT,fork,reuseaddr TCP:$GW:PORT'
-    $fwd = $fwd -replace 'PORT', "$SPARKY_PORT"
-    docker run -d --name $SPARKY_PROXY --restart unless-stopped `
-        --network host alpine sh -c $fwd | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  [OK] Sparky-proxy gestart. Vereist op Windows: netsh portproxy :${SPARKY_PORT} -> ${SPARKY_HOST}:${SPARKY_PORT}" -ForegroundColor Green
-    } else {
-        Write-Host "  [FAIL] Sparky-proxy kon niet starten (model blijft dan onbereikbaar)." -ForegroundColor Red
-    }
-}
-
 # ── Start Huddle ──────────────────────────────────────────────────────────────
 
 function Start-Huddle {
-    Start-SparkyProxy
-
     $running = docker ps --filter "name=^${HUDDLE_CONTAINER}$" --format "{{.Names}}"
     if ($running) {
         Write-Host "  Huddle draait al." -ForegroundColor Green
@@ -138,9 +97,6 @@ function Start-Huddle {
         '-d',
         '--name', $HUDDLE_CONTAINER,
         '--network', 'devcontainer-net',
-        # Laat huddle de Windows-host bereiken (voor o.a. de sparky port-proxy op
-        # host.docker.internal:11434). Modelverkeer blijft zo via de proxy lopen.
-        '--add-host', 'host.docker.internal:host-gateway',
         '-p', "${HUDDLE_PORT}:3000",
         '-v', "${HUDDLE_VOLUME}:/data",
         '-v', '/var/run/docker.sock:/var/run/docker.sock',

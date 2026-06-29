@@ -24,3 +24,6 @@ node_modules/
 dist/
 
 /aikido
+
+# AI agent config tree — beheerd buiten versiebeheer
+/.ai

@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { saveCredentials, getSetting } from './db';
+import { saveCredentials, getSetting, listFolderMappings } from './db';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 
@@ -300,15 +300,15 @@ export async function imageExists(name: string): Promise<boolean> {
   }
 }
 
-// One ustar file entry (header + zero-padded content). No EOF blocks — those are
-// appended once by makeTar() after all entries.
-function tarEntry(filename: string, content: Buffer): Buffer {
+export async function buildImage(imageName: string, dockerfilePath: string): Promise<void> {
+  const dockerfileContent = fs.readFileSync(dockerfilePath);
+  // Minimal single-file tar: just the Dockerfile.
   const header = Buffer.alloc(512);
-  Buffer.from(filename).copy(header, 0, 0, Math.min(filename.length, 99));
+  Buffer.from('Dockerfile').copy(header, 0);
   Buffer.from('0000644\0').copy(header, 100);
   Buffer.from('0000000\0').copy(header, 108);
   Buffer.from('0000000\0').copy(header, 116);
-  Buffer.from(content.length.toString(8).padStart(11, '0') + '\0').copy(header, 124);
+  Buffer.from(dockerfileContent.length.toString(8).padStart(11, '0') + '\0').copy(header, 124);
   Buffer.from(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0').copy(header, 136);
   header[156] = 0x30;
   Buffer.from('ustar\0').copy(header, 257);
@@ -317,49 +317,9 @@ function tarEntry(filename: string, content: Buffer): Buffer {
   let checksum = 0;
   for (let i = 0; i < 512; i++) checksum += header[i];
   Buffer.from(checksum.toString(8).padStart(6, '0') + '\0 ').copy(header, 148);
-  const padded = Buffer.alloc(Math.ceil(content.length / 512) * 512);
-  content.copy(padded);
-  return Buffer.concat([header, padded]);
-}
-
-// Build a tar archive (build-context) from {name, content} entries.
-function makeTar(entries: Array<{ name: string; content: Buffer }>): Buffer {
-  const parts = entries.map((e) => tarEntry(e.name, e.content));
-  parts.push(Buffer.alloc(1024)); // two zero blocks = archive end
-  return Buffer.concat(parts);
-}
-
-// Recursively collect files under `dir`, returning {name, content} with `name`
-// relative to (and including) `prefix`, e.g. ".ai/claude/CLAUDE.md".
-function collectDir(dir: string, prefix: string): Array<{ name: string; content: Buffer }> {
-  const out: Array<{ name: string; content: Buffer }> = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const abs = `${dir}/${entry.name}`;
-    const rel = `${prefix}/${entry.name}`;
-    if (entry.isDirectory()) {
-      out.push(...collectDir(abs, rel));
-    } else if (entry.isFile()) {
-      out.push({ name: rel, content: fs.readFileSync(abs) });
-    }
-  }
-  return out;
-}
-
-// The shared AI-config tree is mounted into huddle here (see huddle.ps1
-// Start-Huddle). The base-image Dockerfiles `COPY .ai/…`, so it must be part of
-// the build-context tar we send to the Docker build endpoint.
-const AI_CONFIG_DIR = '/.ai';
-
-export async function buildImage(imageName: string, dockerfilePath: string): Promise<void> {
-  const entries: Array<{ name: string; content: Buffer }> = [
-    { name: 'Dockerfile', content: fs.readFileSync(dockerfilePath) },
-  ];
-  if (fs.existsSync(AI_CONFIG_DIR)) {
-    entries.push(...collectDir(AI_CONFIG_DIR, '.ai'));
-  } else {
-    console.warn(`[huddle] ${AI_CONFIG_DIR} not mounted — base image may fail at "COPY .ai/…"`);
-  }
-  const tarData = makeTar(entries);
+  const padded = Buffer.alloc(Math.ceil(dockerfileContent.length / 512) * 512);
+  dockerfileContent.copy(padded);
+  const tarData = Buffer.concat([header, padded, Buffer.alloc(1024)]);
 
   await new Promise<void>((resolve, reject) => {
     const options: http.RequestOptions = {
@@ -426,8 +386,17 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
 // deze stap mist een vers volume CLAUDE.md/AGENTS.md/agents enz. `cp -rn`
 // overschrijft nooit bestaande bestanden, dus een al ingelogd/geconfigureerd
 // volume blijft ongemoeid.
-const SETTINGS_VOLUME_SEED = `# Seed gedeelde AI CLI-instellingen vanuit de image-defaults bij leeg volume.
-for pair in ".claude:.claude-defaults" ".codex:.codex-defaults" ".config/opencode:.opencode-defaults"; do
+function buildFolderMappingSeedScript(containerPaths: string[]): string {
+  if (containerPaths.length === 0) return '';
+  const pairs = containerPaths
+    .map(p => {
+      const rel = p.replace(/^\/home\/vscode\//, '');
+      const defaultsRel = `${rel}-defaults`;
+      return `"${rel}:${defaultsRel}"`;
+    })
+    .join(' ');
+  return `# Seed volume-gemounte AI CLI-instellingen vanuit de image-defaults bij leeg volume.
+for pair in ${pairs}; do
   dest="/home/vscode/\${pair%%:*}"
   src="/home/vscode/\${pair##*:}"
   [ -d "$src" ] || continue
@@ -437,10 +406,11 @@ for pair in ".claude:.claude-defaults" ".codex:.codex-defaults" ".config/opencod
     chown -R vscode:vscode "$dest" 2>/dev/null || true
   fi
 done`;
+}
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -534,7 +504,7 @@ mkdir -p "${containerWorkspace}" 2>/dev/null || true
 chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
-${SETTINGS_VOLUME_SEED}
+${seedScript}
 
 # Configure sudo audit logging
 mkdir -p /etc/sudoers.d
@@ -562,7 +532,7 @@ fi
 // Zelfde firewall/sudo/audit-setup als de JB-flow, maar zónder JB host-config en
 // zónder remote-dev-server: VS Code installeert zijn eigen backend (VS Code Server)
 // bij het attachen. Houd dit in sync met de vscode-branch in huddle.ps1.
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string): string {
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
@@ -596,7 +566,7 @@ mkdir -p "${containerWorkspace}" 2>/dev/null || true
 chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
-${SETTINGS_VOLUME_SEED}
+${seedScript}
 
 # Configure sudo audit logging
 mkdir -p /etc/sudoers.d
@@ -623,14 +593,23 @@ function toLinuxPath(p: string): string {
   return p;
 }
 
-interface ProviderMount { Type: 'bind' | 'volume'; Source: string; Target: string; }
-function buildProviderMount(volName: string, pathSetting: string | null, containerTarget: string): ProviderMount | null {
-  if (pathSetting && pathSetting.trim()) {
-    return { Type: 'bind', Source: pathSetting.trim(), Target: containerTarget };
-  } else if (volName) {
-    return { Type: 'volume', Source: volName, Target: containerTarget };
+interface FolderMount { Type: 'bind' | 'volume'; Source: string; Target: string; ReadOnly?: boolean; }
+
+function buildFolderMounts(containerName: string): FolderMount[] {
+  const mappings = listFolderMappings();
+  const result: FolderMount[] = [];
+  for (const m of mappings) {
+    if (!m.enabled) continue;
+    const target = m.container_path;
+    const readOnly = m.read_only === 1;
+    if (m.host_path && m.host_path.trim()) {
+      result.push({ Type: 'bind', Source: m.host_path.trim(), Target: target, ReadOnly: readOnly });
+    } else if (m.volume_name && m.volume_name.trim()) {
+      const volName = m.volume_name.trim().replace('{containerName}', containerName);
+      result.push({ Type: 'volume', Source: volName, Target: target, ReadOnly: readOnly });
+    }
   }
-  return null;
+  return result;
 }
 
 export interface StartParams {
@@ -641,6 +620,27 @@ export interface StartParams {
   presentableName: string;
   ideName?: IdeName;
   empty?: boolean;
+  memory?: string;
+  cpus?: string;
+}
+
+function parseMemoryBytes(s: string): number {
+  if (!s) return 0;
+  const m = s.trim().match(/^(\d+(?:\.\d+)?)\s*([gmkGMK]?)b?$/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  const unit = (m[2] || '').toLowerCase();
+  if (unit === 'g') return Math.floor(n * 1024 * 1024 * 1024);
+  if (unit === 'm') return Math.floor(n * 1024 * 1024);
+  if (unit === 'k') return Math.floor(n * 1024);
+  return Math.floor(n);
+}
+
+function parseCpuQuota(s: string): number {
+  if (!s) return 0;
+  const n = parseFloat(s.trim());
+  if (isNaN(n) || n <= 0) return 0;
+  return Math.floor(n * 100000);
 }
 
 export async function createAndStartContainer(params: StartParams): Promise<string> {
@@ -711,27 +711,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir), containerName);
 
-  // AI CLI-instellingen: eigen host-pad (bind, feature 14) of gedeeld named volume (feature 13).
-  const claudeMount = buildProviderMount(
-    getSetting('claudeSettingsVolume') ?? `${containerName}-claude-persistence`,
-    getSetting('claudeSettingsPath'),
-    '/home/vscode/.claude',
-  );
-  const codexMount = buildProviderMount(
-    getSetting('codexSettingsVolume') || 'huddle-codex-settings',
-    getSetting('codexSettingsPath'),
-    '/home/vscode/.codex',
-  );
-  const opencodeMount = buildProviderMount(
-    getSetting('opencodeSettingsVolume') || 'huddle-opencode-settings',
-    getSetting('opencodeSettingsPath'),
-    '/home/vscode/.config/opencode',
-  );
-  const settingsVolumeMounts = [claudeMount, codexMount, opencodeMount].filter(Boolean) as ProviderMount[];
+  const folderMounts = buildFolderMounts(containerName);
 
   // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
   const mounts = [
-    ...settingsVolumeMounts,
+    ...folderMounts,
     ...(isVscode ? [] : [{
       Type: 'volume',
       Source: 'jb_devcontainers_shared_volume',
@@ -767,6 +751,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Mounts: mounts,
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
+      Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || '8g'),
+      CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || '2'),
+      CpuPeriod: 100000,
     },
   };
 
@@ -774,10 +761,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const id: string = created.Id;
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
+  const containerPaths = folderMounts.map(m => m.Target);
+  const seedScript = buildFolderMappingSeedScript(containerPaths);
+
   // Run config script via exec — VS Code-variant zonder JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem())
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem());
+    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), seedScript)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), seedScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],

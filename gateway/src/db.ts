@@ -71,6 +71,26 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    CREATE TABLE IF NOT EXISTS folder_mappings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      host_path TEXT NOT NULL DEFAULT '',
+      volume_name TEXT NOT NULL DEFAULT '',
+      container_path TEXT NOT NULL,
+      read_only INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS approved_host_ports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      container_id TEXT NOT NULL,
+      host_port INTEGER NOT NULL,
+      container_port INTEGER NOT NULL DEFAULT 0,
+      protocol TEXT NOT NULL DEFAULT 'tcp',
+      description TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      UNIQUE(container_id, host_port, protocol)
+    );
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -348,4 +368,80 @@ export function setMcpValue(id: string, key: string, value: string): void {
 
 export function deleteMcpValues(id: string): void {
   db.prepare(`DELETE FROM ext_kv WHERE ext_id = ?`).run('mcp-' + id);
+}
+
+// ── Folder Mappings ───────────────────────────────────────────────────────────
+
+export interface FolderMapping {
+  id: number;
+  name: string;
+  host_path: string;
+  volume_name: string;
+  container_path: string;
+  read_only: number;
+  enabled: number;
+  sort_order: number;
+}
+
+export function listFolderMappings(): FolderMapping[] {
+  return db.prepare('SELECT * FROM folder_mappings ORDER BY sort_order ASC, id ASC').all() as FolderMapping[];
+}
+
+export function getFolderMapping(id: number): FolderMapping | undefined {
+  return db.prepare('SELECT * FROM folder_mappings WHERE id = ?').get(id) as FolderMapping | undefined;
+}
+
+export function createFolderMapping(m: Omit<FolderMapping, 'id'>): number {
+  const result = db.prepare(
+    `INSERT INTO folder_mappings (name, host_path, volume_name, container_path, read_only, enabled, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(m.name, m.host_path, m.volume_name, m.container_path, m.read_only, m.enabled, m.sort_order);
+  return Number(result.lastInsertRowid);
+}
+
+export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
+  const fields = Object.keys(m).map(k => `${k} = ?`).join(', ');
+  const values = [...Object.values(m), id];
+  db.prepare(`UPDATE folder_mappings SET ${fields} WHERE id = ?`).run(...values);
+}
+
+export function deleteFolderMapping(id: number): void {
+  db.prepare('DELETE FROM folder_mappings WHERE id = ?').run(id);
+}
+
+// ── Approved Host Ports ───────────────────────────────────────────────────────
+
+export interface ApprovedHostPort {
+  id: number;
+  container_id: string;
+  host_port: number;
+  container_port: number;
+  protocol: string;
+  description: string;
+  created_at: number;
+}
+
+export function listApprovedHostPorts(containerId: string): ApprovedHostPort[] {
+  return db.prepare('SELECT * FROM approved_host_ports WHERE container_id = ? ORDER BY host_port ASC')
+    .all(containerId) as ApprovedHostPort[];
+}
+
+export function addApprovedHostPort(p: Omit<ApprovedHostPort, 'id' | 'created_at'>): number {
+  const result = db.prepare(
+    `INSERT INTO approved_host_ports (container_id, host_port, container_port, protocol, description)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(container_id, host_port, protocol) DO UPDATE SET
+       container_port = excluded.container_port, description = excluded.description`
+  ).run(p.container_id, p.host_port, p.container_port, p.protocol, p.description);
+  return Number(result.lastInsertRowid);
+}
+
+export function removeApprovedHostPort(id: number): void {
+  db.prepare('DELETE FROM approved_host_ports WHERE id = ?').run(id);
+}
+
+export function isHostPortApproved(containerId: string, hostPort: number, protocol: string): boolean {
+  return !!db.prepare(
+    'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
+  ).get(containerId, hostPort, protocol);
 }

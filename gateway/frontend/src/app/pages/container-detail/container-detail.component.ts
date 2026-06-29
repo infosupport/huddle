@@ -1,7 +1,8 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { AsyncPipe, DatePipe } from '@angular/common';
-import { ApiService } from '../../core/services/api.service';
+import { FormsModule } from '@angular/forms';
+import { ApiService, ApprovedHostPort } from '../../core/services/api.service';
 import { StateService } from '../../core/services/state.service';
 import { ModalService } from '../../core/services/modal.service';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
@@ -29,7 +30,7 @@ type RulesTab  = 'allow' | 'deny' | 'path';
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent],
   templateUrl: './container-detail.component.html',
   styleUrl: './container-detail.component.css',
 })
@@ -98,13 +99,47 @@ export class ContainerDetailComponent implements OnInit {
   reconnectStatus = '';
   ideLinkStatus = '';
 
+  ports = signal<ApprovedHostPort[]>([]);
+  portsError = signal<string | null>(null);
+  newPortHost = '';
+  newPortContainer = '';
+  newPortProto = 'tcp';
+  newPortDesc = '';
+
   ngOnInit(): void {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
     this.load();
+    this.loadPorts();
     this.api.getContainerCredentials(this.name).subscribe({
       next: (c) => this.credentials = c,
       error: () => this.credentials = null,
     });
+  }
+
+  loadPorts(): void {
+    this.api.getApprovedPorts(this.name).subscribe({
+      next: (p) => this.ports.set(p),
+      error: () => this.ports.set([]),
+    });
+  }
+
+  addPort(): void {
+    const hp = Number(this.newPortHost);
+    if (!hp) return;
+    this.portsError.set(null);
+    this.api.addApprovedPort(this.name, {
+      host_port: hp,
+      container_port: Number(this.newPortContainer) || hp,
+      protocol: this.newPortProto,
+      description: this.newPortDesc,
+    }).subscribe({
+      next: () => { this.newPortHost = ''; this.newPortContainer = ''; this.newPortDesc = ''; this.loadPorts(); },
+      error: (e) => this.portsError.set(e.message),
+    });
+  }
+
+  removePort(id: number): void {
+    this.api.removeApprovedPort(this.name, id).subscribe(() => this.loadPorts());
   }
 
   load(): void {

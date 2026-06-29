@@ -91,7 +91,7 @@ export class DashboardComponent {
   );
 
   isRunning(c: Container): boolean { return (c.status || '').toLowerCase().includes('up'); }
-  isRogue(c: Container): boolean { return c.inNetwork === false; }
+  isRogue(c: Container): boolean { return this.isRunning(c) && c.inNetwork === false; }
   statusClass(c: Container): string {
     if (this.isRogue(c)) return 'rogue';
     if (this.isRunning(c)) return 'running';

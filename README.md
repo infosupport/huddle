@@ -1,109 +1,178 @@
-# Huddle DMZ Portal
+# Huddle
 
-Huddle is een security gateway tussen dev containers en het externe netwerk. Het dwingt per-domein firewall-regels af, geeft tijdelijke toegang tot de Docker socket, en biedt een management-UI voor operators.
+## Wat is Huddle?
 
-## Snel starten
+Huddle is een security gateway die devcontainers afschermt van het externe netwerk via een per-domein firewall. Elke devcontainer draait in een DMZ: al het uitgaande verkeer gaat verplicht door Huddle, en alleen domeinen op de allowlist worden doorgelaten. Operators beheren firewall-regels, Docker-toegang en audit-logs via een centrale web-UI.
 
-`huddle.ps1` is het startpunt. Open een PowerShell in de repo-root en draai:
+**Kernfuncties:**
 
-```powershell
-.\huddle.ps1
-```
+| Functie | Omschrijving |
+|---|---|
+| Per-domein firewall | Elk uitgaand HTTP/HTTPS-verzoek wordt gecontroleerd; allow of block per domein, per container of globaal |
+| Docker-toegang | Tijdelijke toegang tot de Docker-socket via time-boxed grants — buiten een grant zijn Docker-commando's geweigerd |
+| Audit-log | Alle uitgaande verzoeken en Docker-acties zijn zichtbaar voor operators in de UI |
+| Extensie-platform | Functionaliteit toevoegen via `.zip`-bestanden — geen code-deployment of herstart nodig |
+| CLI | `huddle`-commando om devcontainers te starten en de firewall te beheren vanuit elke projectmap |
 
-Het interactieve menu biedt:
+---
 
-| Optie  | Actie                                  |
-|--------|----------------------------------------|
-| 1      | Snapshot maken van draaiende container |
-| 2      | Devcontainer starten van snapshot      |
-| 3      | Base image bouwen                      |
-| 4      | Huddle bouwen en herstarten            |
-| 0      | Afsluiten                              |
+## Getting Started
 
-Na een Huddle-start is de Web UI bereikbaar op `http://localhost:3000`.
+**Vereisten:** Node.js 18+, Docker
 
-## Command CLI
-
-De nieuwe cross-platform command-variant staat in `cli/` en gebruikt uitsluitend de Huddle REST API voor container-starts en firewall-beslissingen. Na build/install kun je in een projectmap simpelweg draaien:
+### 1. Installeer dependencies
 
 ```bash
-huddle
+npm run install
 ```
 
-Dat start standaard een IntelliJ-devcontainer voor de huidige map. Voorbeelden:
+### 2. Bouw Huddle
 
 ```bash
-huddle --ide rider
-huddle ./mijn-project --ide vscode
-huddle fw list
-huddle firewall list -i
+npm run build
 ```
 
-Build/install tijdens ontwikkeling:
+### 3. Start Huddle
 
 ```bash
-npm --prefix cli install
-npm --prefix cli run build
-npm --prefix cli run install-global
+npm start
 ```
 
-`Start-Snapshot.ps1` wordt door `huddle.ps1` gebruikt en hoeft niet zelfstandig aangeroepen te worden.
+De web-UI is nu bereikbaar op `http://localhost:3000`.
 
-## Documentatie
+### 4. Installeer de CLI (optioneel)
 
-| Bestand                                  | Inhoud                                                                  |
-|------------------------------------------|-------------------------------------------------------------------------|
-| [DOCUMENTATION.html](DOCUMENTATION.html) | Volledige functionele en architecturale documentatie van het DMZ Portal |
-| [PRESENTATION.html](PRESENTATION.html)   | Presentatiedeck over Huddle                                             |
-| [SECURITY.md](SECURITY.md)               | Security review + status van alle findings + verificatie-testplan (T1–T11) |
-| [gateway/README.md](gateway/README.md)   | Technische details van de gateway (architectuur, API, tech stack)       |
-
-## Repo-indeling
-
-```
-.
-├── huddle.ps1               ← startpunt (interactief CLI menu)
-├── Start-Snapshot.ps1       ← helper voor menu-optie 1
-├── .devcontainer/           ← devcontainer setup
-├── .ai/                     ← standaard AI-CLI config per provider (zie .ai/README.md)
-├── base-devimage-rider/     ← Dockerfile voor de Rider base dev image
-├── base-devimage-intellij/  ← Dockerfile voor de IntelliJ base dev image
-├── base-devimage-vscode/    ← Dockerfile voor de VS Code base dev image
-├── gateway/                 ← Huddle gateway (Fastify API + Angular UI)
-└── bugtracker/              ← bug-rapportage opslag (bugs/, solved/)
+```bash
+npm run cli:install
 ```
 
-Elke IDE heeft een eigen base-image. **Rider** en **IntelliJ** gebruiken JetBrains
-Gateway (de backend-distro wordt door Gateway gedownload). **VS Code** installeert
-zijn eigen backend (VS Code Server) in de container bij het attachen — voor die
-variant hoeft er dus niets backend-specifieks in de image. Verbinden met een
-VS Code-container gaat via *Dev Containers: Attach to Running Container*.
+---
 
-De `.ai/`-folder bevat per geïnstalleerde AI-CLI (Claude Code, Codex, OpenCode) een
-standaardconfiguratie die elke agent uitlegt dat hij in een afgeschermde Huddle
-DMZ-devcontainer draait. Die config wordt in elke base-image meegebakken.
+## Containers starten
+
+Devcontainers kun je starten via de CLI of via de web-UI op `http://localhost:3000`.
+
+### Via de CLI
+
+Vanuit een projectmap start je een devcontainer met één commando:
+
+```bash
+huddle                            # IntelliJ (standaard), huidige map
+huddle --ide rider                # Rider
+huddle --ide vscode               # VS Code
+huddle ./mijn-project             # andere map
+huddle --ide vscode ./mijn-project
+```
+
+Overige opties:
+
+```bash
+huddle --name mijn-container      # aangepaste containernaam
+huddle --empty                    # container zonder workspace
+```
+
+Na het starten toont de CLI de containernaam en hoe je hem opent in je IDE.
+
+### Openen in JetBrains (IntelliJ / Rider)
+
+1. Open **JetBrains Gateway**
+2. Ga naar **Remote Development → Dev Containers**
+3. Selecteer de gestarte container
+4. Klik **Open Project** en kies de projectmap in de container
+
+De CLI print ook een directe gateway-link zodra de JetBrains-backend opgestart is (kan een paar seconden duren).
+
+### Openen in VS Code
+
+1. Open VS Code
+2. Open het command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+3. Kies **Dev Containers: Attach to Running Container**
+4. Selecteer de containernaam die de CLI heeft afgedrukt
+
+---
+
+## Firewall beheren
+
+Geblokkeerde verzoeken zijn zichtbaar in de web-UI onder **Firewall**. Via de CLI:
+
+```bash
+huddle fw list               # lijst van recente verzoeken
+huddle firewall list -i      # interactieve modus
+```
+
+Om een domein toe te staan: ga naar de web-UI → **Firewall** → zoek het domein → **Allow**. Tijdelijke toestemming is ook mogelijk. Blokkeer je domein? Meld het exacte domein aan een operator; omzeil de firewall nooit zelf.
+
+---
+
+## AI-configuratie (`.ai/`)
+
+De `.ai/`-folder bevat standaardconfiguraties per AI-CLI die meegebakken worden in elke devcontainer base-image. Zo weet een AI-agent meteen dat hij in een afgeschermde Huddle DMZ-omgeving draait.
+
+### Hoe het werkt
+
+Bij het bouwen van een base-image (via de UI of `npm run build`) kopieert de Dockerfile de bestanden uit `.ai/<provider>/` naar de juiste locatie in het image. Elke agent laadt die config automatisch bij het starten van een sessie.
+
+```
+Repo (Windows)                          Devcontainer (Linux)
+─────────────────────────────────────   ─────────────────────────────────────────
+C:\projects\huddle\.ai\claude\          /home/vscode/.claude/
+  CLAUDE.md                        →      CLAUDE.md        ← DMZ-uitleg + gedragsregels
+  settings.json                    →      settings.json    ← permissions, statusline
+  agents\bugfix-agent.md           →      agents/…         ← ingebouwde agents
+  agents\plan-agent.md             →      agents/…
+  skills\docker.md                 →      skills/…         ← ingebouwde skills
+  skills\markitdown.md             →      skills/…
+```
+
+Op Linux/Mac staat de repo direct op het pad; de mapping is identiek — alleen de schijfprefix verschilt.
+
+### Wat erin zit (Claude als voorbeeld)
+
+**`CLAUDE.md`** — de instructies die Claude laadt in élke sessie in de devcontainer:
+- Uitleg van de DMZ-omgeving (proxy, firewall, Docker-grants)
+- Gedragsregels: niet retryen bij netwerkfouten, exacte domeinnaam rapporteren, geen omzeiling
+- Verplichting om werk te delegeren via agent-teams
+
+**`settings.json`** — Claude Code-instellingen:
+- Experimentele agent-teams ingeschakeld (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`)
+- Permissions voor tools die agents nodig hebben
+- Statusline-configuratie
+
+**`agents/`** — herbruikbare agents die globaal beschikbaar zijn:
+- `bugfix-agent` — autonome bugfixer met self-improvement loop
+- `plan-agent` — plannen met staff-engineer rigor
+- `committer` — commits via conventional commits
+- `subagent-strategy` — parallelle taakdelegatie
+
+**`skills/`** — ingebouwde skills:
+- `docker` — Docker workflows binnen Huddle's time-boxed toegang
+- `markitdown` — PDF, Office en afbeeldingen naar Markdown (vereist `markitdown` CLI in de image)
+- `task-management` — taakbeheer en voortgangsregistratie
+- `screenshot-asset-builder` — UI-screenshots naar implementatieassets
+
+### Aanpassen
+
+Pas bestanden in `.ai/<provider>/` aan en bouw de base-image opnieuw. De gewijzigde config zit automatisch in alle nieuwe containers — bestaande containers krijgen de update pas bij een herstart.
+
+Ondersteunde providers: `claude/`, `codex/`, `opencode/`.
+
+---
 
 ## Extensies
 
-Huddle heeft een runtime extensie-platform. Extensies zijn `.zip` bestanden die via
-de UI worden geüpload — geen code-deployment of herstart nodig.
-
-**Navigatie:** *Extensies* in de sidebar toont geïnstalleerde extensies als sub-items.
-Klikken opent de extensie-UI direct binnen Huddle (geen iframe, geen nieuw tabblad).
+Huddle heeft een runtime extensie-platform. Extensies zijn `.zip`-bestanden die je via de UI uploadt — geen herstart nodig. Na het uploaden verschijnt de extensie als sub-item in de sidebar.
 
 ### Een extensie bouwen
 
-Een extensie-zip bevat drie onderdelen:
-
 ```
 mijn-extensie.zip
-├── manifest.json       ← id, naam, versie, instellingen-declaratie
-├── index.js            ← backend logica (CommonJS, Node.js)
+├── manifest.json       ← verplicht: id, naam, versie, instellingen
+├── index.js            ← backend (CommonJS, Node.js)
 └── frontend/
     └── component.js    ← UI als Web Component (optioneel)
 ```
 
-**`manifest.json`** — minimaal vereist:
+**`manifest.json`:**
 ```json
 {
   "id": "mijn-extensie",
@@ -115,12 +184,11 @@ mijn-extensie.zip
 }
 ```
 
-**`index.js`** — exporteert een `register(ctx)` functie:
+**`index.js`** — exporteer een `register(ctx)` functie:
 ```js
 exports.register = async function(ctx) {
   ctx.app.get('/api/ext/mijn-extensie/data', async (req, reply) => {
     const key = ctx.getSetting('apiKey');
-    // ... doe iets met de externe service
     return { data: '...' };
   });
 };
@@ -136,32 +204,68 @@ class MijnExtensie extends HTMLElement {
 customElements.define('ext-mijn-extensie', MijnExtensie);
 ```
 
-### Wat de extensie-context (`ctx`) biedt
+### Extensie-context (`ctx`)
 
 | | |
 |---|---|
 | `ctx.app.get/post/put/delete(pad, handler)` | Route registreren onder `/api/ext/<id>/` |
-| `ctx.app.inject(...)` | Interne Huddle-API aanroepen |
 | `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Instellingen lezen/schrijven (SQLite) |
-| `ctx.fetch(url, opts)` | HTTP-call via Huddle-proxy — verschijnt als `ext:<id>` in firewall |
+| `ctx.fetch(url, opts)` | HTTP-call via Huddle-proxy — verschijnt als `ext:<id>` in de audit-log |
 | `ctx.runInContainer(naam, cmd)` | Shell-commando uitvoeren in een draaiende devcontainer |
-| `ctx.events` | Luisteren op Huddle-events (`changed`, etc.) |
+| `ctx.events` | Luisteren op Huddle-events |
 | `ctx.db` | Directe SQLite-toegang |
 | `ctx.log(msg)` | Loggen naar de Huddle-console |
 
 ### Firewall en externe calls
 
-Externe HTTP-calls via `ctx.fetch()` lopen door de Huddle-proxy. Het domein moet op
-de firewall-allowlist staan (*Firewall* → zoek het requested domein → Allow).
-Requests verschijnen in de audit-log als `ext:<id>` zodat duidelijk is welke extensie
-welk domein nodig heeft.
+Externe calls via `ctx.fetch()` lopen door de Huddle-proxy. Het domein moet op de allowlist staan (**Firewall** → zoek het domein → **Allow**). Requests verschijnen in de audit-log als `ext:<id>`.
 
-### Voorbeeld: Freshdesk
+### Voorbeeld: Aikido Security
 
-Een Freshdesk-extensie is beschikbaar als voorbeeld in
-`features/03-extensie-architectuur/example-extensions/freshdesk-1.0.zip`.
+De ingebouwde Aikido-extensie staat in `gateway/extensions/aikido/`. Na het laden (automatisch bij start) verschijnt **Aikido Security** in de sidebar. Functionaliteit:
 
-Na uploaden en instellen (subdomein + API-sleutel via *Instellingen*):
-- Ticketlijst zichtbaar in de Huddle-sidebar onder *Freshdesk*
-- Per ticket een container starten — het ticket staat als `ticket.md` in de workspace
-- Domein `<subdomein>.freshdesk.com` toestaan in de firewall voor API-toegang
+- Open security-issues per workspace ophalen van de Aikido API
+- Issues injecteren als context in een draaiende devcontainer (`aikido/AIKIDO_CLAUDE.md`, `AIKIDO_CONTEXT.md`)
+- Een MCP-server (`aikido-mcp-server.js`) schrijven naar de container zodat Claude direct issues kan ophalen en scans kan triggeren
+- `aikido-fix`-script installeren dat Claude start met de juiste context
+
+Credentials (Client ID + Secret) stel je in via de UI onder **Aikido Security → Instellingen**.
+
+---
+
+## Bug / Feature Request
+
+Heb je een bug gevonden of een idee? Maak een issue aan op GitHub:
+
+**[github.com/infosupport/huddle/issues](https://github.com/infosupport/huddle/issues)**
+
+Van daaruit bekijken we samen waar het project naartoe gaat.
+
+---
+
+## Documentatie
+
+| Bestand | Inhoud |
+|---|---|
+| [DOCUMENTATION.html](DOCUMENTATION.html) | Volledige functionele en architecturale documentatie |
+| [PRESENTATION.html](PRESENTATION.html) | Presentatiedeck over Huddle |
+| [SECURITY.md](SECURITY.md) | Security review + status van alle findings (T1–T11) |
+| [gateway/README.md](gateway/README.md) | Technische details van de gateway (architectuur, API, tech stack) |
+| [.ai/README.md](.ai/README.md) | AI-configuratie: indeling, aanpassen, nieuwe tool toevoegen |
+
+## Repo-indeling
+
+```
+.
+├── gateway/                 ← Huddle gateway (Fastify API + Angular UI)
+│   └── extensions/aikido/   ← Ingebouwde Aikido Security extensie
+├── cli/                     ← Cross-platform CLI (`huddle`)
+├── .ai/                     ← AI-CLI standaardconfiguraties per provider
+│   ├── claude/              ← Claude Code (→ /home/vscode/.claude/)
+│   ├── codex/               ← Codex CLI
+│   └── opencode/            ← OpenCode
+├── .devcontainer/           ← Devcontainer setup voor de Huddle repo zelf
+├── base-devimage-rider/     ← Dockerfile voor Rider devcontainers
+├── base-devimage-intellij/  ← Dockerfile voor IntelliJ devcontainers
+└── base-devimage-vscode/    ← Dockerfile voor VS Code devcontainers
+```

@@ -39,4 +39,60 @@
       <button class="btn btn--accent btn-sm" [disabled]="!selectedContainer" (click)="grantAccess()">Grant</button>
     </div>
   </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Goedgekeurde host-poorten</h3></div>
+    <div class="ports-container-select">
+      <label>Container:</label>
+      @if (vm.containers.length > 0) {
+        <select [(ngModel)]="portsContainer" (ngModelChange)="onPortsContainerChange()">
+          @for (c of vm.containers; track c.name) {
+            <option [value]="c.name">{{ c.presentableName || c.name }}</option>
+          }
+        </select>
+      } @else {
+        <input type="text" [(ngModel)]="portsContainer" (change)="onPortsContainerChange()" placeholder="Container naam…" />
+      }
+    </div>
+    @if (portsError()) { <p class="ports-error">{{ portsError() }}</p> }
+    @if (ports().length === 0) {
+      <p class="empty-note">Geen goedgekeurde poorten voor deze container.</p>
+    } @else {
+      <table class="data-table" style="margin-bottom:16px">
+        <thead><tr><th>Host-poort</th><th>Container-poort</th><th>Protocol</th><th>Omschrijving</th><th class="col-actions"></th></tr></thead>
+        <tbody>
+          @for (p of ports(); track p.id) {
+            <tr>
+              <td><code>{{ p.host_port }}</code></td>
+              <td><code>{{ p.container_port || p.host_port }}</code></td>
+              <td>{{ p.protocol }}</td>
+              <td>{{ p.description || '—' }}</td>
+              <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="removePort(p.id)">Verwijder</button></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+    <div class="grant-form">
+      <label style="font-weight:600">Poort toevoegen:</label>
+      <input type="number" [(ngModel)]="newPortHost" placeholder="Host-poort" min="1" max="65535" style="width:110px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;background:var(--surface-1);color:var(--text)" />
+      <input type="number" [(ngModel)]="newPortContainer" placeholder="Container-poort" min="1" max="65535" style="width:130px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;background:var(--surface-1);color:var(--text)" />
+      <select [(ngModel)]="newPortProto">
+        <option value="tcp">tcp</option>
+        <option value="udp">udp</option>
+      </select>
+      <input type="text" [(ngModel)]="newPortDesc" placeholder="Omschrijving" style="flex:1;min-width:120px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;background:var(--surface-1);color:var(--text)" />
+      <button class="btn btn--accent btn-sm" [disabled]="!newPortHost || !portsContainer" (click)="addPort()">Toevoegen</button>
+    </div>
+  </div>
 }
+
+<style>
+  .ports-container-select { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; }
+  .ports-container-select select, .ports-container-select input {
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px;
+    font-size: 13px; background: var(--surface-1); color: var(--text);
+  }
+  .ports-error { font-size: 13px; color: var(--danger); margin: 0 0 8px; }
+  code { font-size: 12px; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; }
+</style>

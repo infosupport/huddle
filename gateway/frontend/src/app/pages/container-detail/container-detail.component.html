@@ -265,6 +265,39 @@
         </div>
       }
     </div>
+
+    <div class="card">
+      <div class="card__head"><h2 class="card__title">Goedgekeurde host-poorten</h2></div>
+      @if (portsError()) { <p class="ports-error">{{ portsError() }}</p> }
+      @if (ports().length === 0) {
+        <p class="ports-empty">Geen goedgekeurde poorten. Container kan geen host-poorten binden.</p>
+      } @else {
+        <table class="data-table ports-table">
+          <thead><tr><th>Host-poort</th><th>Container-poort</th><th>Protocol</th><th>Omschrijving</th><th></th></tr></thead>
+          <tbody>
+            @for (p of ports(); track p.id) {
+              <tr>
+                <td><code>{{ p.host_port }}</code></td>
+                <td><code>{{ p.container_port || p.host_port }}</code></td>
+                <td>{{ p.protocol }}</td>
+                <td>{{ p.description || '—' }}</td>
+                <td><button class="btn btn-delete btn-sm" (click)="removePort(p.id)">Verwijder</button></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      <div class="ports-form">
+        <input type="number" [(ngModel)]="newPortHost" placeholder="Host-poort" min="1" max="65535" />
+        <input type="number" [(ngModel)]="newPortContainer" placeholder="Container-poort (optioneel)" min="1" max="65535" />
+        <select [(ngModel)]="newPortProto">
+          <option value="tcp">tcp</option>
+          <option value="udp">udp</option>
+        </select>
+        <input type="text" [(ngModel)]="newPortDesc" placeholder="Omschrijving (optioneel)" />
+        <button class="btn btn--accent btn-sm" [disabled]="!newPortHost" (click)="addPort()">Toevoegen</button>
+      </div>
+    </div>
   }
 
   <!-- ════════════════════════════════════════════ TAB: NOOT -->
@@ -315,7 +348,7 @@ exit
 sudo cat /tmp/sudo-audit.log</code></pre>
       </div>
       <p class="noot-cmd-note">
-        Alle sudo-acties verschijnen ook in de <a routerLink="/audit">Audit Logs</a> pagina.
+        Alle sudo-acties verschijnen ook in de <a routerLink="/audit">Network Logs</a> pagina.
       </p>
     </div>
   }

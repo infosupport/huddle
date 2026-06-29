@@ -9,9 +9,29 @@ import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
 
 export interface HuddleSettings {
-  claudeSettingsVolume: string;
-  codexSettingsVolume: string;
-  opencodeSettingsVolume: string;
+  defaultMemory: string;
+  defaultCpus: string;
+}
+
+export interface ApprovedHostPort {
+  id: number;
+  container_id: string;
+  host_port: number;
+  container_port: number;
+  protocol: string;
+  description: string;
+  created_at: number;
+}
+
+export interface FolderMapping {
+  id: number;
+  name: string;
+  host_path: string;
+  volume_name: string;
+  container_path: string;
+  read_only: number;
+  enabled: number;
+  sort_order: number;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -180,5 +200,35 @@ export class ApiService {
       }
     }
     return this.handle(this.http.get<AuditLog[]>('/api/audit', { params: clean }));
+  }
+
+  // ── Folder Mappings ─────────────────────────────────────────────────────────
+  getFolderMappings(): Observable<FolderMapping[]> {
+    return this.handle(this.http.get<FolderMapping[]>('/api/folder-mappings'));
+  }
+
+  createFolderMapping(m: Omit<FolderMapping, 'id'>): Observable<{ id: number }> {
+    return this.handle(this.http.post<{ id: number }>('/api/folder-mappings', m));
+  }
+
+  updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): Observable<{ ok: boolean }> {
+    return this.handle(this.http.put<{ ok: boolean }>(`/api/folder-mappings/${id}`, m));
+  }
+
+  deleteFolderMapping(id: number): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
+  }
+
+  // ── Approved Host Ports ──────────────────────────────────────────────────────
+  getApprovedPorts(containerName: string): Observable<ApprovedHostPort[]> {
+    return this.handle(this.http.get<ApprovedHostPort[]>(`/api/containers/${encodeURIComponent(containerName)}/ports`));
+  }
+
+  addApprovedPort(containerName: string, p: Omit<ApprovedHostPort, 'id' | 'container_id' | 'created_at'>): Observable<{ id: number }> {
+    return this.handle(this.http.post<{ id: number }>(`/api/containers/${encodeURIComponent(containerName)}/ports`, p));
+  }
+
+  removeApprovedPort(containerName: string, id: number): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/containers/${encodeURIComponent(containerName)}/ports/${id}`));
   }
 }
