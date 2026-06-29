@@ -156,10 +156,6 @@ export class ApiService {
     return this.handle(this.http.get<string[]>('/api/containers'));
   }
 
-  reportBug(bug: { title: string; url: string; body?: string }): Observable<{ ok: boolean; filename: string }> {
-    return this.handle(this.http.post<{ ok: boolean; filename: string }>('/api/bugs', bug));
-  }
-
   getExtensions(): Observable<Extension[]> {
     return this.handle(this.http.get<Extension[]>('/api/extensions'));
   }

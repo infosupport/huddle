@@ -2,48 +2,113 @@
 
 ## Wat is Huddle?
 
-Huddle is een security gateway die devcontainers afschermt van het externe netwerk via een per-domein firewall. Elke devcontainer draait in een DMZ: al het uitgaande verkeer gaat verplicht door Huddle, en alleen domeinen op de allowlist worden doorgelaten. Operators beheren firewall-regels, Docker-toegang en audit-logs via een centrale web-UI.
+Huddle is een security gateway die devcontainers afschermt van het externe netwerk via een per-domein firewall. Elke devcontainer draait in een DMZ: al het uitgaande verkeer gaat verplicht door Huddle, en alleen domeinen op de allowlist worden doorgelaten. Operators beheren firewall-regels, Docker-toegang en netwerk-logs via een centrale web-UI.
 
-**Kernfuncties:**
+## Architectuur
 
-| Functie | Omschrijving |
-|---|---|
-| Per-domein firewall | Elk uitgaand HTTP/HTTPS-verzoek wordt gecontroleerd; allow of block per domein, per container of globaal |
-| Docker-toegang | Tijdelijke toegang tot de Docker-socket via time-boxed grants — buiten een grant zijn Docker-commando's geweigerd |
-| Audit-log | Alle uitgaande verzoeken en Docker-acties zijn zichtbaar voor operators in de UI |
-| Extensie-platform | Functionaliteit toevoegen via `.zip`-bestanden — geen code-deployment of herstart nodig |
-| CLI | `huddle`-commando om devcontainers te starten en de firewall te beheren vanuit elke projectmap |
+```
+Devcontainer
+  └─ HTTP/HTTPS-verkeer → Huddle proxy (poort 80)
+       └─ rules engine → allow / deny / request
+  └─ Docker socket → /tmp/dc-sockets/<naam>.sock (per-container proxy)
+       └─ label-isolatie + time-limited grant check
+
+Browser
+  └─ Angular SPA (poort 3000) + WebSocket live push
+       └─ Fastify REST API (/api/...)
+```
+
+Twee servers draaien in hetzelfde proces:
+
+| Server | Poort | Doel |
+|--------|-------|------|
+| HTTP proxy | 80 | Doorsturen/onderscheppen van alle uitgaande containertraffic |
+| API + UI | 3000 | REST API, Angular frontend, WebSocket push |
+
+---
+
+## Functies
+
+### Firewall
+- Per-container en globale allow/deny-regels opgeslagen in SQLite
+- Regels kunnen permanent of tijdgebonden zijn (vervaldatum)
+- Containers kunnen toegang *aanvragen*; operators keuren goed of wijzen af via de UI
+- HTTP: volledige request/response gelogd in het netwerklog
+- HTTPS: getunneld via CONNECT (inhoud niet onderschept)
+
+### Docker Socket Proxy
+- Elke devcontainer krijgt een eigen Unix socket op `/tmp/dc-sockets/<naam>.sock`
+- Toegang is beperkt via een tijdgebonden grant (1–120 minuten)
+- Policy wordt per request afgedwongen:
+  - `docker ps` → gefilterd tot eigen gestarte containers
+  - `docker run` → toegestaan; label `huddle.parent` automatisch toegevoegd
+  - `docker exec` → alleen eigen child-containers, nooit de devcontainer zelf
+  - `docker rm` / `docker rmi` → alleen resources die de container zelf aanmaakte
+  - `docker images` → alle images (alleen-lezen)
+- Grants overleven een Huddle-herstart; proxy sockets worden bij herstart opnieuw aangemaakt
+
+### Containerbeheer
+- Overzicht van alle devcontainers met status, image, uptime en openstaande regelverzoeken
+- Nieuwe devcontainer starten vanuit een snapshot of base image (IntelliJ / Rider / VS Code)
+- Draaiende container committen naar een snapshot-image
+- Container geforceerd verwijderen inclusief netwerkopschoning
+- Per-container Docker socket proxy wordt automatisch aangemaakt bij het starten
+
+### Netwerklog
+- Elk proxied HTTP-verzoek wordt gelogd (container, domein, methode, pad, status, headers, body — afgekapt op 20 KB)
+- Admin-acties (regelwijzigingen, grant-wijzigingen, containerbewerkingen) worden gelogd
+- Filterbaar op container, domein en actieprefix
+
+### Live UI
+- Angular 21 SPA op poort 3000
+- WebSocket-verbinding pusht een `reload`-event bij elke statuswijziging
+- Unified icon-systeem (`app-icon`) backed door een centrale SVG-registry
+- Pie-action-menu's in firewall- en containerweergaven (goedkeuren / snoozen / weigeren)
+
+
+---
+
+## Tech Stack
+
+| Laag | Technologie |
+|------|-------------|
+| Runtime | Node.js 20 (Alpine) |
+| Backend | Fastify 5, TypeScript 5 |
+| Database | SQLite via better-sqlite3 (WAL-modus) |
+| WebSocket | ws |
+| Frontend | Angular 21 (standalone components, signals) |
+| Build | Angular CLI, esbuild |
+| Container | Docker multi-stage build |
 
 ---
 
 ## Getting Started
 
-**Vereisten:** Node.js 18+, Docker
-
-### 1. Installeer dependencies
+**Vereisten:** Docker
 
 ```bash
-npm run install
+./init.sh
 ```
 
-### 2. Bouw Huddle
+Het script bouwt de image, maakt het netwerk en volume aan en start de container. De web-UI is bereikbaar op `http://localhost:3000`.
+
+### Installeer de CLI (optioneel)
 
 ```bash
-npm run build
-```
-
-### 3. Start Huddle
-
-```bash
-npm start
-```
-
-De web-UI is nu bereikbaar op `http://localhost:3000`.
-
-### 4. Installeer de CLI (optioneel)
-
-```bash
+npm --prefix cli install
 npm run cli:install
+```
+
+---
+
+## Base images bouwen (optioneel)
+
+Huddle bouwt base images automatisch wanneer je een devcontainer start. Wil je dit versnellen, bouw ze dan van tevoren:
+
+```bash
+docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
+docker build -t base-devimage-intellij  -f base-devimage-intellij/Dockerfile  .
+docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 ```
 
 ---
@@ -100,61 +165,17 @@ huddle fw list               # lijst van recente verzoeken
 huddle firewall list -i      # interactieve modus
 ```
 
-Om een domein toe te staan: ga naar de web-UI → **Firewall** → zoek het domein → **Allow**. Tijdelijke toestemming is ook mogelijk. Blokkeer je domein? Meld het exacte domein aan een operator; omzeil de firewall nooit zelf.
+Wanneer een devcontainer een geblokkeerd domein probeert te bereiken, verschijnt het verzoek in de Firewall-pagina. Van daaruit kun je het domein toestaan (permanent of tijdelijk) of weigeren — per container of globaal.
 
 ---
 
-## AI-configuratie (`.ai/`)
+## AI-configuratie
 
-De `.ai/`-folder bevat standaardconfiguraties per AI-CLI die meegebakken worden in elke devcontainer base-image. Zo weet een AI-agent meteen dat hij in een afgeschermde Huddle DMZ-omgeving draait.
+Bij het bouwen van een base-image kan Huddle automatisch AI-CLI-configuraties (zoals `CLAUDE.md`, `settings.json`, agents en skills) in de container inbakken. Je beheert dit via de Huddle-instellingen: geef daar het pad op naar je eigen AI-config-map. Huddle koppelt die map bij het bouwen van de image.
 
-### Hoe het werkt
-
-Bij het bouwen van een base-image (via de UI of `npm run build`) kopieert de Dockerfile de bestanden uit `.ai/<provider>/` naar de juiste locatie in het image. Elke agent laadt die config automatisch bij het starten van een sessie.
-
-```
-Repo (Windows)                          Devcontainer (Linux)
-─────────────────────────────────────   ─────────────────────────────────────────
-C:\projects\huddle\.ai\claude\          /home/vscode/.claude/
-  CLAUDE.md                        →      CLAUDE.md        ← DMZ-uitleg + gedragsregels
-  settings.json                    →      settings.json    ← permissions, statusline
-  agents\bugfix-agent.md           →      agents/…         ← ingebouwde agents
-  agents\plan-agent.md             →      agents/…
-  skills\docker.md                 →      skills/…         ← ingebouwde skills
-  skills\markitdown.md             →      skills/…
-```
-
-Op Linux/Mac staat de repo direct op het pad; de mapping is identiek — alleen de schijfprefix verschilt.
-
-### Wat erin zit (Claude als voorbeeld)
-
-**`CLAUDE.md`** — de instructies die Claude laadt in élke sessie in de devcontainer:
-- Uitleg van de DMZ-omgeving (proxy, firewall, Docker-grants)
-- Gedragsregels: niet retryen bij netwerkfouten, exacte domeinnaam rapporteren, geen omzeiling
-- Verplichting om werk te delegeren via agent-teams
-
-**`settings.json`** — Claude Code-instellingen:
-- Experimentele agent-teams ingeschakeld (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`)
-- Permissions voor tools die agents nodig hebben
-- Statusline-configuratie
-
-**`agents/`** — herbruikbare agents die globaal beschikbaar zijn:
-- `bugfix-agent` — autonome bugfixer met self-improvement loop
-- `plan-agent` — plannen met staff-engineer rigor
-- `committer` — commits via conventional commits
-- `subagent-strategy` — parallelle taakdelegatie
-
-**`skills/`** — ingebouwde skills:
-- `docker` — Docker workflows binnen Huddle's time-boxed toegang
-- `markitdown` — PDF, Office en afbeeldingen naar Markdown (vereist `markitdown` CLI in de image)
-- `task-management` — taakbeheer en voortgangsregistratie
-- `screenshot-asset-builder` — UI-screenshots naar implementatieassets
-
-### Aanpassen
-
-Pas bestanden in `.ai/<provider>/` aan en bouw de base-image opnieuw. De gewijzigde config zit automatisch in alle nieuwe containers — bestaande containers krijgen de update pas bij een herstart.
-
-Ondersteunde providers: `claude/`, `codex/`, `opencode/`.
+| AI-tool | Bronpad (host) | Doelpad (container) |
+|---------|---------------|---------------------|
+| claude | `/mnt/c/projects/huddle/.ai/claude/` | `/home/vscode/.claude` |
 
 ---
 
@@ -210,7 +231,7 @@ customElements.define('ext-mijn-extensie', MijnExtensie);
 |---|---|
 | `ctx.app.get/post/put/delete(pad, handler)` | Route registreren onder `/api/ext/<id>/` |
 | `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Instellingen lezen/schrijven (SQLite) |
-| `ctx.fetch(url, opts)` | HTTP-call via Huddle-proxy — verschijnt als `ext:<id>` in de audit-log |
+| `ctx.fetch(url, opts)` | HTTP-call via Huddle-proxy — verschijnt als `ext:<id>` in de netwerklog |
 | `ctx.runInContainer(naam, cmd)` | Shell-commando uitvoeren in een draaiende devcontainer |
 | `ctx.events` | Luisteren op Huddle-events |
 | `ctx.db` | Directe SQLite-toegang |
@@ -218,7 +239,7 @@ customElements.define('ext-mijn-extensie', MijnExtensie);
 
 ### Firewall en externe calls
 
-Externe calls via `ctx.fetch()` lopen door de Huddle-proxy. Het domein moet op de allowlist staan (**Firewall** → zoek het domein → **Allow**). Requests verschijnen in de audit-log als `ext:<id>`.
+Externe calls via `ctx.fetch()` lopen door de Huddle-proxy. Het domein moet op de allowlist staan (**Firewall** → zoek het domein → **Allow**). Requests verschijnen in de netwerklog als `ext:<id>`.
 
 ### Voorbeeld: Aikido Security
 
@@ -233,39 +254,64 @@ Credentials (Client ID + Secret) stel je in via de UI onder **Aikido Security �
 
 ---
 
-## Bug / Feature Request
+## API Reference
 
-Heb je een bug gevonden of een idee? Maak een issue aan op GitHub:
+| Methode | Pad | Omschrijving |
+|---------|-----|--------------|
+| GET | `/api/rules` | Lijst van regels (filter: `?status=`, `?container=`) |
+| POST | `/api/rules` | Regel aanmaken |
+| PUT | `/api/rules/:id` | Regelstatus of vervaldatum bijwerken |
+| POST | `/api/rules/:id/resolve` | Aangevraagde regel afhandelen als allow/deny (container of globaal) |
+| DELETE | `/api/rules/:id` | Regel verwijderen |
+| GET | `/api/docker/containers` | Lijst van devcontainers met openstaande regelverzoeken |
+| GET | `/api/docker/containers/:name` | Containerdetail + bijbehorende regels |
+| POST | `/api/docker/start` | Nieuwe devcontainer starten |
+| POST | `/api/docker/containers/:name/snapshot` | Container committen naar image |
+| DELETE | `/api/docker/containers/:name` | Container geforceerd verwijderen |
+| GET | `/api/docker/images` | Lijst van snapshot-images |
+| GET | `/api/authz/grants` | Lijst van actieve Docker socket grants |
+| PUT | `/api/authz/grants/:container` | Docker-toegang verlenen (body: `{ minutes }`) |
+| DELETE | `/api/authz/grants/:container` | Docker-toegang intrekken |
+| GET | `/api/audit` | Netwerklog (filter: `?container=`, `?domain=`, `?action=`) |
 
-**[github.com/infosupport/huddle/issues](https://github.com/infosupport/huddle/issues)**
-
-Van daaruit bekijken we samen waar het project naartoe gaat.
+Alle state-muterende endpoints sturen een WebSocket `{ type: "reload" }` event naar verbonden clients.
 
 ---
-
-## Documentatie
-
-| Bestand | Inhoud |
-|---|---|
-| [DOCUMENTATION.html](DOCUMENTATION.html) | Volledige functionele en architecturale documentatie |
-| [PRESENTATION.html](PRESENTATION.html) | Presentatiedeck over Huddle |
-| [SECURITY.md](SECURITY.md) | Security review + status van alle findings (T1–T11) |
-| [gateway/README.md](gateway/README.md) | Technische details van de gateway (architectuur, API, tech stack) |
-| [.ai/README.md](.ai/README.md) | AI-configuratie: indeling, aanpassen, nieuwe tool toevoegen |
 
 ## Repo-indeling
 
 ```
 .
-├── gateway/                 ← Huddle gateway (Fastify API + Angular UI)
-│   └── extensions/aikido/   ← Ingebouwde Aikido Security extensie
-├── cli/                     ← Cross-platform CLI (`huddle`)
-├── .ai/                     ← AI-CLI standaardconfiguraties per provider
-│   ├── claude/              ← Claude Code (→ /home/vscode/.claude/)
-│   ├── codex/               ← Codex CLI
-│   └── opencode/            ← OpenCode
-├── .devcontainer/           ← Devcontainer setup voor de Huddle repo zelf
-├── base-devimage-rider/     ← Dockerfile voor Rider devcontainers
-├── base-devimage-intellij/  ← Dockerfile voor IntelliJ devcontainers
-└── base-devimage-vscode/    ← Dockerfile voor VS Code devcontainers
+├── gateway/                     ← Huddle gateway (Fastify API + Angular UI)
+│   ├── src/
+│   │   ├── index.ts             # Init DB, start proxy + API, herstel socket proxies
+│   │   ├── proxy.ts             # HTTP/HTTPS proxy (poort 80), regelhandhaving, audit
+│   │   ├── api.ts               # Fastify REST API + WebSocket push (poort 3000)
+│   │   ├── docker.ts            # Docker API-helpers, container lifecycle
+│   │   ├── socket-proxy.ts      # Per-container Docker socket proxy met label-policy
+│   │   ├── rules.ts             # Regelopzoek met per-container + globale fallback
+│   │   ├── db.ts                # SQLite schema, netwerklog, Docker grants
+│   │   └── events.ts            # In-process event bus voor state-change notificaties
+│   └── frontend/src/app/
+│       ├── pages/               # dashboard, containers, firewall, docker-access, audit
+│       ├── shared/
+│       │   ├── icons/           # Centrale SVG icon-registry (icons.ts)
+│       │   └── components/      # <app-icon>, pie-menu
+│       └── core/
+│           ├── models/          # Rule, Container, Grant, AuditLog types
+│           └── services/        # ApiService, StateService, ModalService
+│   └── extensions/aikido/       ← Ingebouwde Aikido Security extensie
+├── cli/                         ← Cross-platform CLI (`huddle`)
+├── .devcontainer/               ← Devcontainer setup voor de Huddle repo zelf
+├── base-devimage-rider/         ← Dockerfile voor Rider devcontainers
+├── base-devimage-intellij/      ← Dockerfile voor IntelliJ devcontainers
+└── base-devimage-vscode/        ← Dockerfile voor VS Code devcontainers
 ```
+
+---
+
+## Bug / Feature Request
+
+Heb je een bug gevonden of een idee? Maak een issue aan op GitHub:
+
+**[github.com/infosupport/huddle/issues](https://github.com/infosupport/huddle/issues)**
