@@ -751,13 +751,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Mounts: mounts,
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
-      ...(params.memory || getSetting('defaultMemory') ? {
-        Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || ''),
-      } : {}),
-      ...(params.cpus || getSetting('defaultCpus') ? {
-        CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || ''),
-        CpuPeriod: 100000,
-      } : {}),
+      Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || '8g'),
+      CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || '2'),
+      CpuPeriod: 100000,
     },
   };
 
