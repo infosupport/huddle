@@ -148,18 +148,6 @@ export function initDb(): void {
     `INSERT INTO audit_log (container_id, domain, port, action, rule_id, method, path, req_headers, req_body, res_status, res_headers, res_body)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(null, 'gateway', null, 'system:start', null, null, null, null, null, null, null, null);
-
-  const mappingCount = (db.prepare("SELECT COUNT(*) as n FROM folder_mappings").get() as { n: number }).n;
-  if (mappingCount === 0) {
-    db.prepare(`INSERT INTO folder_mappings (name, volume_name, container_path, sort_order) VALUES (?, ?, ?, ?)`)
-      .run('Claude config', 'huddle-claude-settings', '/home/vscode/.claude', 0);
-    db.prepare(`INSERT INTO folder_mappings (name, volume_name, container_path, sort_order) VALUES (?, ?, ?, ?)`)
-      .run('Codex config', 'huddle-codex-settings', '/home/vscode/.codex', 1);
-    db.prepare(`INSERT INTO folder_mappings (name, volume_name, container_path, sort_order) VALUES (?, ?, ?, ?)`)
-      .run('OpenCode config', 'huddle-opencode-settings', '/home/vscode/.config/opencode', 2);
-    db.prepare(`INSERT INTO folder_mappings (name, host_path, volume_name, container_path, sort_order) VALUES (?, ?, ?, ?, ?)`)
-      .run('AI agents (.ai)', '/.ai', '', '/.ai', 3);
-  }
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────

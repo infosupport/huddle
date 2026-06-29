@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "hello": "node -e \"console.log('hello from devcontainer')\"",
+    "install": "npm --prefix gateway install && npm --prefix cli install",
+    "build": "npm --prefix gateway run build",
+    "start": "npm --prefix gateway start",
     "cli:build": "npm --prefix cli run build",
     "cli:typecheck": "npm --prefix cli run typecheck",
     "cli:install": "npm --prefix cli run install-global"
