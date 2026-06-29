@@ -1,4 +1,4 @@
-<div class="page-header"><h1>Network Logs</h1></div>
+<div class="page-header"><h1>Netwerklog</h1></div>
 
 <div class="card">
   <div class="card-header">
@@ -36,7 +36,7 @@
   }
   @if (logs$ | async; as logs) {
     @if (logs.length === 0) {
-      <p class="empty-note">Geen audit logs gevonden — proxy verkeer verschijnt hier zodra er verzoeken zijn verwerkt</p>
+      <p class="empty-note">Geen vermeldingen gevonden — proxy verkeer verschijnt hier zodra er verzoeken zijn verwerkt</p>
     } @else {
       <table class="data-table audit-table">
         <thead>

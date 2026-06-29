@@ -309,7 +309,7 @@
         <code>vscode</code> (jouw werkgebruiker, <b>zonder sudo</b>) en
         <code>noot</code> (beheerder <b>met sudo</b>).
         Wissel naar <code>noot</code> alleen wanneer je iets als root moet uitvoeren —
-        alle acties worden bijgehouden in het audit log.
+        alle acties worden bijgehouden in het netwerklog.
       </p>
 
       @if (credentials) {
@@ -348,7 +348,7 @@ exit
 sudo cat /tmp/sudo-audit.log</code></pre>
       </div>
       <p class="noot-cmd-note">
-        Alle sudo-acties verschijnen ook in de <a routerLink="/audit">Network Logs</a> pagina.
+        Alle sudo-acties verschijnen ook in de <a routerLink="/netwerklog">Netwerklog</a> pagina.
       </p>
     </div>
   }

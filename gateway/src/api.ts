@@ -642,52 +642,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { dbPath, rowsBefore: before, rowsAfter: after, insertedId, insertError, last5 };
   });
 
-  // ── Bug tracker ───────────────────────────────────────────────────────────
-
-  const BUGS_BASE = process.env.BUGS_DIR ?? '/bugtracker';
-
-  app.post<{ Body: { title: string; url: string; body?: string } }>(
-    '/api/bugs',
-    async (req, reply) => {
-      const { title, url, body = '' } = req.body;
-      if (!title?.trim()) return reply.code(400).send({ error: 'title required' });
-
-      const bugsDir = path.join(BUGS_BASE, 'bugs');
-      try {
-        fs.mkdirSync(bugsDir, { recursive: true });
-        fs.mkdirSync(path.join(BUGS_BASE, 'solved'), { recursive: true });
-        const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
-        const now = new Date();
-        const ts = now.toISOString().slice(0, 16).replace('T', '-').replace(':', '-');
-        const filename = `${ts}-${slug}.md`;
-        const dateStr = now.toLocaleString('nl-NL');
-        const content = `# ${title}\n\n**URL**: ${url}\n**Datum**: ${dateStr}\n\n${body}`.trimEnd() + '\n';
-        fs.writeFileSync(path.join(bugsDir, filename), content, 'utf8');
-        return { ok: true, filename };
-      } catch (err: any) {
-        return reply.code(500).send({ error: 'cannot write bug file', message: err.message });
-      }
-    }
-  );
-
-  app.get('/api/bugs', async (_req, reply) => {
-    const bugsDir = path.join(BUGS_BASE, 'bugs');
-    const solvedDir = path.join(BUGS_BASE, 'solved');
-    try {
-      const readDir = (dir: string) => {
-        try {
-          return fs.readdirSync(dir)
-            .filter(f => f.endsWith('.md'))
-            .sort()
-            .map(f => ({ filename: f, content: fs.readFileSync(path.join(dir, f), 'utf8') }));
-        } catch { return []; }
-      };
-      return { bugs: readDir(bugsDir), solved: readDir(solvedDir) };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
-    }
-  });
-
   // ── Container credentials ─────────────────────────────────────────────────
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name/credentials', async (req, reply) => {
     const creds = getCredentials(req.params.name);
