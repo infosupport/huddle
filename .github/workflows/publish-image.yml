@@ -1,11 +1,11 @@
-name: Publish Docker image
+name: Publish
 
 on:
   push:
     branches: [main, release/*]
 
 jobs:
-  push:
+  docker:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,3 +27,25 @@ jobs:
           context: ./gateway
           push: true
           tags: ghcr.io/infosupport/huddle:latest
+
+  cli:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install & build
+        run: npm --prefix cli install && npm --prefix cli run build
+
+      - name: Publish
+        run: npm --prefix cli publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
