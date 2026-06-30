@@ -43,9 +43,9 @@ jobs:
           registry-url: https://npm.pkg.github.com
 
       - name: Install & build
-        run: npm --prefix cli install && npm --prefix cli run build
+        run: cd cli && npm install && npm run build
 
       - name: Publish
-        run: npm --prefix cli publish
+        run: cd cli && npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
