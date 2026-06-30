@@ -450,9 +450,40 @@ function Build-AllBaseImages {
     }
 }
 
+# ── Tests ────────────────────────────────────────────────────────────────────
+
+function Invoke-Tests {
+    $gatewayDir = Join-Path $PSScriptRoot "gateway"
+    Write-Host ""
+    Write-Host "  Unit testen draaien..." -ForegroundColor DarkCyan
+    Push-Location $gatewayDir
+    try {
+        npm test
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [FAIL] Unit testen mislukt." -ForegroundColor Red
+            return
+        }
+        Write-Host "  [OK] Unit testen geslaagd." -ForegroundColor Green
+
+        Write-Host ""
+        Write-Host "  E2E testen draaien..." -ForegroundColor DarkCyan
+        $env:HUDDLE_E2E = "1"
+        npm run test:e2e
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] E2E testen geslaagd." -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] E2E testen mislukt." -ForegroundColor Red
+        }
+        $env:HUDDLE_E2E = $null
+    } finally {
+        Pop-Location
+    }
+}
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 Start-Huddle
+Invoke-Tests
 
 $running = $true
 while ($running) {
