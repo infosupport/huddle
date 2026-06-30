@@ -86,6 +86,33 @@ Twee servers draaien in hetzelfde proces:
 
 **Vereisten:** Docker, Node.js 18+
 
+### 1. Maak een GitHub Personal Access Token aan
+
+Ga naar [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**.
+
+Instellingen:
+- Expiration: **7 days** (of langer naar keuze)
+- Scope: **read:packages**
+
+Kopieer het token.
+
+### 2. Login bij de package registries
+
+```bash
+docker login ghcr.io -u JOUW_GITHUB_GEBRUIKERSNAAM -p JOUW_TOKEN
+```
+
+Voeg dit toe aan je gebruikersprofiel `.npmrc` (maak het bestand aan als het niet bestaat):
+- Windows: `C:\Users\JOUW_GEBRUIKERSNAAM\.npmrc`
+- Mac/Linux: `~/.npmrc`
+
+```
+@infosupport:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=JOUW_TOKEN
+```
+
+### 3. Installeer de CLI en start Huddle
+
 ```bash
 npm install -g @infosupport/huddle-cli
 huddle init
