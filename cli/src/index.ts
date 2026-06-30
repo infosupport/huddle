@@ -2,9 +2,10 @@
 
 import fs from 'fs';
 import path from 'path';
-import { setBaseUrl } from './api';
+import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList } from './firewall';
+import { runInit } from './init';
 
 interface ParsedArgs {
   positional: string[];
@@ -13,7 +14,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'help']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'help']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -75,6 +76,7 @@ function printHelp(): void {
 Gebruik:
   huddle [opties] [folder]           Devcontainer starten in huidige map of folder
   huddle start [opties] [folder]     Expliciet een devcontainer starten
+  huddle init                        Huddle pullen en opstarten via Docker
   huddle firewall list [opties]      Firewall-verzoeken weergeven
   huddle fw list [opties]            Alias voor firewall list
 
@@ -135,6 +137,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'init') {
+    await runInit();
+    return;
+  }
+
   if (cmd === 'firewall' || cmd === 'fw') {
     const subCmd = sub ?? 'list';
     if (subCmd !== 'list') {
@@ -168,5 +175,8 @@ function flagBool(flags: Record<string, string | boolean>, ...names: string[]): 
 
 main().catch((err: Error) => {
   console.error(`Fout: ${err.message ?? err}`);
+  if (err instanceof ApiError && err.message.includes('Kan Huddle API niet bereiken')) {
+    console.error('\nHuddle lijkt niet te draaien. Start het met:\n  huddle init');
+  }
   process.exit(1);
 });

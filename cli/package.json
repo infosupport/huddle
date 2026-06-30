@@ -1,5 +1,5 @@
 {
-  "name": "huddle-cli",
+  "name": "@infosupport/huddle-cli",
   "version": "1.0.0",
   "description": "Huddle CLI \u2014 start devcontainers and manage firewall rules",
   "bin": {
@@ -20,5 +20,8 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
 }

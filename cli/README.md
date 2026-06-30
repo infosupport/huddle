@@ -2,7 +2,15 @@
 
 Cross-platform Node CLI voor Huddle. De CLI praat met de bestaande Huddle REST API; containerbeheer en firewall-resolutie zitten dus in de gateway, niet opnieuw in de command-client.
 
-## Gebruik
+## Huddle opstarten
+
+```bash
+huddle init
+```
+
+Pullt `ghcr.io/infosupport/huddle:latest` en start de container. Als je `huddle` runt terwijl Huddle niet draait, krijg je automatisch de tip om dit commando uit te voeren.
+
+## Devcontainers starten
 
 ```bash
 huddle                 # start IntelliJ-devcontainer voor huidige map

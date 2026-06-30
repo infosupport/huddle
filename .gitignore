@@ -17,6 +17,12 @@ compare-working-devcontainer-empty2.json
 features/
 .worktrees/
 
+# npm auth token — nooit committen
+.npmrc
+
+# Huddle audit logs — runtime data, niet voor versiebeheer
+.audit/
+
 # Dependencies
 node_modules/
 

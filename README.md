@@ -84,19 +84,19 @@ Twee servers draaien in hetzelfde proces:
 
 ## Getting Started
 
-**Vereisten:** Docker
+**Vereisten:** Docker, Node.js 18+
 
 ```bash
-./init.sh
+npm install -g @infosupport/huddle-cli
+huddle init
 ```
 
-Het script bouwt de image, maakt het netwerk en volume aan en start de container. De web-UI is bereikbaar op `http://localhost:3000`.
+`huddle init` pullt de laatste Huddle-image en start de container. De web-UI is bereikbaar op `http://localhost:3000`.
 
-### Installeer de CLI (optioneel)
+Daarna start je devcontainers direct vanuit een projectmap:
 
 ```bash
-npm --prefix cli install
-npm run cli:install
+huddle
 ```
 
 ---
