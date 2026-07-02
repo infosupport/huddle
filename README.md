@@ -91,7 +91,7 @@ Twee servers draaien in hetzelfde proces:
 Ga naar [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**.
 
 Instellingen:
-- Expiration: **7 days** (of langer naar keuze)
+- Expiration: **7 days** (maximaal — de infosupport-organisatie staat geen langere tokens toe)
 - Scope: **read:packages**
 
 Kopieer het token.
