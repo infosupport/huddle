@@ -81,7 +81,7 @@ function checkPolicy(containerName: string): boolean {
 // Reject HostConfig shapes that would let a spawned container escape the
 // devcontainer sandbox (read host fs, see host PIDs, talk to host dockerd).
 // Returns a denial reason, or null if the config is safe.
-function validateHostConfig(hostConfig: any): string | null {
+export function validateHostConfig(hostConfig: any): string | null {
   if (!hostConfig || typeof hostConfig !== 'object') return null;
 
   if (hostConfig.Privileged === true) return 'Privileged containers not permitted';
@@ -127,7 +127,13 @@ function validateHostConfig(hostConfig: any): string | null {
 
   if (Array.isArray(hostConfig.Mounts)) {
     for (const mount of hostConfig.Mounts) {
-      if (mount && mount.Type === 'bind') return 'bind-type mounts not permitted';
+      if (!mount) continue;
+      if (mount.Type === 'bind') return 'bind-type mounts not permitted';
+      // Een `local`-volume met inline driver-config kan een willekeurig hostpad
+      // bind-backen (type=none, o=bind, device=/…) — net zo gevaarlijk als een
+      // host bind. Weiger elke volume-mount die zelf een driver meebrengt.
+      if (mount.Type === 'volume' && mount.VolumeOptions?.DriverConfig)
+        return 'volume DriverConfig not permitted';
     }
   }
 
@@ -145,6 +151,25 @@ function validateHostConfig(hostConfig: any): string | null {
     }
   }
 
+  return null;
+}
+
+// Reject volume-create bodies that map a named volume onto a host path via the
+// `local` driver (type=none / o=bind / device=…). Zo'n volume kan daarna onder
+// een niet-`/` bron-naam in een container gebonden worden en omzeilt daarmee de
+// host-path-check in validateHostConfig. Returns een denial reason, of null.
+export function validateVolumeCreate(body: any): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const driver = typeof body.Driver === 'string' ? body.Driver.toLowerCase() : 'local';
+  const opts = body.DriverOpts;
+  if (driver !== 'local' || !opts || typeof opts !== 'object') return null;
+  const norm: Record<string, string> = {};
+  for (const [k, v] of Object.entries(opts)) norm[k.toLowerCase()] = String(v).toLowerCase();
+  // `device` dekt zowel bind- (o=bind) als externe-storage-mounts (nfs/cifs);
+  // een devcontainer heeft geen van beide nodig en beide kunnen data buiten de
+  // sandbox koppelen.
+  if (norm.device || (norm.o ?? '').includes('bind') || norm.type === 'none')
+    return 'local bind-backed volumes not permitted';
   return null;
 }
 
@@ -286,6 +311,22 @@ export async function createContainerProxy(containerName: string, socketDir: str
           `Content-Length: ${newBodyBuf.length}`
         ) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+      }
+
+      function processVolumeCreate(): void {
+        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+        const rest = bodyBuf.slice(bodyContentLength);
+        let body: any;
+        try {
+          body = JSON.parse(bodyBytes.toString());
+        } catch {
+          deny403(client, 'invalid volume create body');
+          return;
+        }
+        const denial = validateVolumeCreate(body);
+        if (denial) { deny403(client, denial); return; }
+        // Body ongewijzigd doorsturen (alleen validatie, geen injectie).
+        openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
       }
 
       client.on('data', (chunk: Buffer) => {
@@ -469,9 +510,17 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Volume create — needed for docker compose named volumes
+          // Volume create — needed for docker compose named volumes. Body wordt
+          // gebufferd en gevalideerd: local bind-backed volumes (host-path
+          // escape) worden geweigerd.
           if (p === '/volumes/create') {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            savedHeaderPart = headerPart;
+            bodyHandler = processVolumeCreate;
+            phase = 'body';
+            bodyBuf = remainder;
+            if (bodyBuf.length >= bodyContentLength) bodyHandler();
             return;
           }
 
