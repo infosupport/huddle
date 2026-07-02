@@ -81,7 +81,7 @@ function Start-Huddle {
     if (-not $imageExists) {
         Write-Host "  Image '${HUDDLE_IMAGE}' niet gevonden -- bouwen..." -ForegroundColor DarkCyan
         $scriptDir = $PSScriptRoot
-        docker build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway") --no-cache
+        docker build -t $HUDDLE_IMAGE -f (Join-Path $scriptDir "gateway/Dockerfile") $scriptDir --no-cache
         if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
     }
 
@@ -138,7 +138,7 @@ function Restart-Huddle {
 function Build-HuddleImage {
     $scriptDir = $PSScriptRoot
     Write-Host "  Image '${HUDDLE_IMAGE}' bouwen..." -ForegroundColor DarkCyan
-    docker build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway") --no-cache
+    docker build -t $HUDDLE_IMAGE -f (Join-Path $scriptDir "gateway/Dockerfile") $scriptDir --no-cache
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  [OK] Image '${HUDDLE_IMAGE}' klaar." -ForegroundColor Green
     } else {

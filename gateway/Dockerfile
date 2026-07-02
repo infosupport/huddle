@@ -1,19 +1,22 @@
+# Build-context is de repo-root (niet ./gateway), zodat de base-devimage
+# Dockerfiles mee de image in kunnen. Bouwen met:
+#   docker build -f gateway/Dockerfile -t huddle .
 FROM node:20-alpine AS builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
 # Install gateway deps
-COPY package.json package-lock.json tsconfig.json ./
+COPY gateway/package.json gateway/package-lock.json gateway/tsconfig.json ./
 RUN npm ci
 
 # Install Angular frontend deps
-COPY frontend/package.json frontend/package-lock.json ./frontend/
+COPY gateway/frontend/package.json gateway/frontend/package-lock.json ./frontend/
 RUN npm ci --prefix frontend
 
 # Copy source and build
-COPY src ./src
-COPY frontend/src ./frontend/src
-COPY frontend/angular.json frontend/tsconfig*.json ./frontend/
+COPY gateway/src ./src
+COPY gateway/frontend/src ./frontend/src
+COPY gateway/frontend/angular.json gateway/frontend/tsconfig*.json ./frontend/
 RUN npm run build
 
 # Remove devDependencies so only production node_modules remain
@@ -25,8 +28,17 @@ WORKDIR /app
 RUN mkdir -p /data /tmp/dc-sockets
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY package.json ./
-COPY extensions ./extensions
+COPY gateway/package.json ./
+COPY gateway/extensions ./extensions
+
+# Base-devimage Dockerfiles meebakken zodat de gateway ze on-demand kan bouwen,
+# ook zonder repo-checkout (npm-installatie via `huddle init`). De read-only
+# mounts uit init.sh overschrijven deze paden tijdens lokale ontwikkeling.
+COPY base-devimage/Dockerfile /base-devimage/Dockerfile
+COPY base-devimage-intellij/Dockerfile /base-devimage-intellij/Dockerfile
+COPY base-devimage-rider/Dockerfile /base-devimage-rider/Dockerfile
+COPY base-devimage-vscode/Dockerfile /base-devimage-vscode/Dockerfile
+
 ENV DB_PATH=/data/huddle.db
 ENV EXT_DIR=/app/extensions
 EXPOSE 80 3000

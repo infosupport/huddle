@@ -668,9 +668,20 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   }
 
   if (!(await imageExists(imageName))) {
+    // De IDE-specifieke Dockerfiles zijn `FROM base-devimage`; bouw die
+    // gedeelde base eerst als hij nog niet bestaat.
+    if (!(await imageExists('base-devimage'))) {
+      const baseDockerfilePath = '/base-devimage/Dockerfile';
+      if (!fs.existsSync(baseDockerfilePath)) {
+        throw new Error(`Image 'base-devimage' not found and ${baseDockerfilePath} is not available in the gateway image`);
+      }
+      console.log(`[huddle] Building shared base image 'base-devimage' from ${baseDockerfilePath}...`);
+      await buildImage('base-devimage', baseDockerfilePath);
+      console.log(`[huddle] Shared base image 'base-devimage' built successfully`);
+    }
     const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
     if (!fs.existsSync(dockerfilePath)) {
-      throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
+      throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not available in the gateway image`);
     }
     console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
     await buildImage(imageName, dockerfilePath);

@@ -130,9 +130,10 @@ huddle
 
 ## Base images bouwen (optioneel)
 
-Huddle bouwt base images automatisch wanneer je een devcontainer start. Wil je dit versnellen, bouw ze dan van tevoren:
+Huddle bouwt base images automatisch wanneer je een devcontainer start (de Dockerfiles zitten in de Huddle-image, een repo-checkout is niet nodig). Wil je dit versnellen, bouw ze dan van tevoren. Bouw eerst de gedeelde `base-devimage` — de IDE-specifieke images bouwen daarop voort:
 
 ```bash
+docker build -t base-devimage           -f base-devimage/Dockerfile           .
 docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
 docker build -t base-devimage-intellij  -f base-devimage-intellij/Dockerfile  .
 docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
@@ -330,6 +331,7 @@ Alle state-muterende endpoints sturen een WebSocket `{ type: "reload" }` event n
 │   └── extensions/aikido/       ← Ingebouwde Aikido Security extensie
 ├── cli/                         ← Cross-platform CLI (`huddle`)
 ├── .devcontainer/               ← Devcontainer setup voor de Huddle repo zelf
+├── base-devimage/               ← Gedeelde base Dockerfile voor alle devcontainers
 ├── base-devimage-rider/         ← Dockerfile voor Rider devcontainers
 ├── base-devimage-intellij/      ← Dockerfile voor IntelliJ devcontainers
 └── base-devimage-vscode/        ← Dockerfile voor VS Code devcontainers

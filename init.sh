@@ -3,7 +3,10 @@ set -euo pipefail
 
 IMAGE_NAME="${HUDDLE_IMAGE:-huddle}"
 CONTAINER_NAME="${HUDDLE_CONTAINER:-huddle}"
-BUILD_CONTEXT="${HUDDLE_BUILD_CONTEXT:-./gateway}"
+# Build-context is de repo-root zodat de base-devimage Dockerfiles mee de
+# gateway-image in kunnen (zie gateway/Dockerfile).
+BUILD_CONTEXT="${HUDDLE_BUILD_CONTEXT:-.}"
+DOCKERFILE="${HUDDLE_DOCKERFILE:-gateway/Dockerfile}"
 
 HOST_PORT="${HUDDLE_PORT:-3000}"
 CONTAINER_PORT="3000"
@@ -23,7 +26,7 @@ fi
 DC_SOCKETS="${DC_SOCKETS:-/tmp/dc-sockets}"
 
 echo "==> Build image: ${IMAGE_NAME}"
-docker build "${BUILD_CONTEXT}" -t "${IMAGE_NAME}"
+docker build "${BUILD_CONTEXT}" -f "${DOCKERFILE}" -t "${IMAGE_NAME}"
 
 echo "==> Zorg dat volume bestaat: ${VOLUME_NAME}"
 docker volume inspect "${VOLUME_NAME}" >/dev/null 2>&1 || \
@@ -56,6 +59,7 @@ add_readonly_mount_if_exists() {
   fi
 }
 
+add_readonly_mount_if_exists "./base-devimage" "/base-devimage"
 add_readonly_mount_if_exists "./base-devimage-rider" "/base-devimage-rider"
 add_readonly_mount_if_exists "./base-devimage-intellij" "/base-devimage-intellij"
 add_readonly_mount_if_exists "./base-devimage-vscode" "/base-devimage-vscode"

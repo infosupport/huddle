@@ -1,8 +1,19 @@
-# Base-image builds (base-devimage-*/Dockerfile) gebruiken de repo-root als
-# build-context zodat de `COPY .ai/…` regels bij de gedeelde AI-config kunnen.
-# We sturen daarom alléén .ai mee; al het andere (node_modules, logs, .git, …)
-# blijft buiten de context. De Dockerfile zelf komt via `-f` binnen en hoeft
-# niet in de context te zitten.
+# Alle image-builds gebruiken de repo-root als build-context; de Dockerfile
+# komt via `-f` binnen. We sturen alléén mee wat de builds nodig hebben:
+# - .ai: gedeelde AI-config voor de base-devimage builds (COPY .ai/…)
+# - gateway/**: bronbestanden voor de gateway-image (gateway/Dockerfile)
+# - base-devimage*/Dockerfile: worden in de gateway-image gebakken zodat de
+#   gateway ze on-demand kan bouwen, ook zonder repo-checkout
+# Al het andere (node_modules, logs, .git, …) blijft buiten de context.
 *
 !.ai
 !.ai/**
+!gateway/**
+gateway/node_modules
+gateway/frontend/node_modules
+gateway/dist
+gateway/frontend/dist
+!base-devimage/Dockerfile
+!base-devimage-intellij/Dockerfile
+!base-devimage-rider/Dockerfile
+!base-devimage-vscode/Dockerfile
