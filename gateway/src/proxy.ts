@@ -443,6 +443,24 @@ export function createProxyServer(): http.Server {
           resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
         });
       };
+      // Variant voor paden waar de response-body al gescrubd is (token-exchange):
+      // log de meegegeven body letterlijk i.p.v. hem uit resChunks af te leiden,
+      // zodat het echte secret nooit in de audit-log terechtkomt.
+      const completeWithBody = (
+        resStatus: number | null,
+        resHeaders: http.IncomingHttpHeaders | undefined,
+        resBody: string | null,
+      ) => {
+        if (completed) return;
+        completed = true;
+        if (auditId == null) return;
+        updateAuditResponse(auditId, {
+          reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
+          resStatus,
+          resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
+          resBody,
+        });
+      };
 
       const upstreamReq = https.request(
         {
@@ -456,14 +474,19 @@ export function createProxyServer(): http.Server {
         (upstreamRes) => {
           if (isTokenRequest && upstreamRes.statusCode === 200) {
             // Buffer de volledige OAuth-response zodat we het token kunnen vervangen.
+            // BELANGRIJK: de rauwe respons bevat het ECHTE access_token en mag NIET
+            // in resChunks/de audit-log belanden. We loggen straks alleen de
+            // gescrubde (placeholder) versie via auditResBody.
             const tokenResChunks: Buffer[] = [];
             upstreamRes.on('data', (chunk: Buffer) => {
               tokenResChunks.push(chunk);
-              if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
             });
             upstreamRes.on('end', () => {
               let outBuf: Buffer;
               let outHeaders = { ...upstreamRes.headers };
+              // Wat we in de audit-log zetten: nooit het echte token. null =
+              // niets loggen (fail-safe wanneer we niet konden scrubben).
+              let auditResBody: string | null = null;
               try {
                 const rawBody = decodeBody(tokenResChunks, upstreamRes.headers);
                 const json = rawBody ? JSON.parse(rawBody) : null;
@@ -475,17 +498,21 @@ export function createProxyServer(): http.Server {
                   delete outHeaders['content-encoding'];
                   delete outHeaders['transfer-encoding'];
                   outHeaders['content-length'] = String(outBuf.length);
+                  // De placeholder-versie bevat geen secret → veilig te loggen.
+                  auditResBody = cap(JSON.stringify(json));
                 } else {
                   outBuf = Buffer.concat(tokenResChunks);
                   outHeaders['content-length'] = String(outBuf.length);
+                  auditResBody = rawBody; // geen token aanwezig
                 }
               } catch {
                 outBuf = Buffer.concat(tokenResChunks);
                 outHeaders = { ...upstreamRes.headers };
+                auditResBody = null; // niet kunnen scrubben → niets loggen i.p.v. lekken
               }
               innerRes.writeHead(upstreamRes.statusCode ?? 200, outHeaders);
               innerRes.end(outBuf);
-              complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
+              completeWithBody(upstreamRes.statusCode ?? null, outHeaders, auditResBody);
             });
             upstreamRes.on('error', () => {
               if (!innerRes.writableEnded) innerRes.destroy();
