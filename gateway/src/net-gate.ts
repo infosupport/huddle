@@ -26,15 +26,26 @@ export function cidrToRange(cidr: string): IpRange | null {
   return [(baseInt & mask) >>> 0, mask];
 }
 
-// True als `remoteAddr` binnen één van de geblokkeerde subnets valt.
+// True als `remoteAddr` als een devcontainer-bron behandeld moet worden (en dus
+// de management-API NIET mag bereiken). Fail-closed: alles wat we niet positief
+// als "veilige" bron kunnen vaststellen (loopback of een IPv4-adres buiten de
+// devcontainer-subnetten) wordt als devcontainer beschouwd. Zo kan een container
+// de gate niet omzeilen via IPv6 of een niet-parseerbaar bronadres.
 export function isDevcontainerSource(
   remoteAddr: string | null | undefined,
   subnets: IpRange[],
 ): boolean {
-  if (!remoteAddr) return false;
+  // Geen bronadres te bepalen → fail-closed.
+  if (!remoteAddr) return true;
   const ip = remoteAddr.replace(/^::ffff:/, '');
-  if (!ip.includes('.')) return false;
+  // Loopback = de huddle-host zelf (o.a. de -p 127.0.0.1 port-forward via de
+  // docker-proxy en lokale healthchecks) → nooit een devcontainer.
+  if (ip === '127.0.0.1' || ip === '::1') return false;
+  // Raw IPv6 (of ander niet-IPv4 adres): niet te matchen tegen de IPv4-subnet-
+  // lijst → fail-closed i.p.v. doorlaten (dit was de IPv6-bypass).
+  if (!ip.includes('.')) return true;
   const ipInt = ipv4ToInt(ip);
-  if (ipInt < 0) return false;
+  // Onparseerbaar IPv4 → fail-closed.
+  if (ipInt < 0) return true;
   return subnets.some(([base, mask]) => ((ipInt & mask) >>> 0) === base);
 }

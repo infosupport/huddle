@@ -52,14 +52,25 @@ describe('isDevcontainerSource', () => {
     expect(isDevcontainerSource('::ffff:172.18.0.9', subnets)).toBe(true);
   });
 
-  it('staat een IP buiten elk subnet toe (= geen devcontainer-bron)', () => {
+  it('staat een IPv4 buiten elk subnet toe (= geen devcontainer-bron, bv. docker-gateway)', () => {
     expect(isDevcontainerSource('10.0.0.1', subnets)).toBe(false);
     expect(isDevcontainerSource('172.20.1.5', subnets)).toBe(false); // /24 → buiten bereik
+    expect(isDevcontainerSource('172.17.0.1', subnets)).toBe(false); // bridge-gateway (admin via -p)
   });
 
-  it('behandelt ontbrekend/ongeldig adres als niet-devcontainer (fail-open op herkenning, niet op toegang)', () => {
-    expect(isDevcontainerSource(undefined, subnets)).toBe(false);
-    expect(isDevcontainerSource(null, subnets)).toBe(false);
-    expect(isDevcontainerSource('garbage', subnets)).toBe(false);
+  it('staat loopback toe (huddle-host zelf / port-forward)', () => {
+    expect(isDevcontainerSource('127.0.0.1', subnets)).toBe(false);
+    expect(isDevcontainerSource('::1', subnets)).toBe(false);
+  });
+
+  it('is fail-closed: raw IPv6 wordt als devcontainer behandeld (IPv6-bypass gedicht)', () => {
+    expect(isDevcontainerSource('fd00::5', subnets)).toBe(true);
+    expect(isDevcontainerSource('2001:db8::1', subnets)).toBe(true);
+  });
+
+  it('is fail-closed op ontbrekend/ongeldig adres', () => {
+    expect(isDevcontainerSource(undefined, subnets)).toBe(true);
+    expect(isDevcontainerSource(null, subnets)).toBe(true);
+    expect(isDevcontainerSource('garbage', subnets)).toBe(true);
   });
 });
