@@ -84,7 +84,7 @@ Twee servers draaien in hetzelfde proces:
 
 ## Getting Started
 
-**Vereisten:** Docker, Node.js 18+
+**Vereisten:** Docker of Podman, Node.js 18+
 
 ### 1. Maak een GitHub Personal Access Token aan
 
@@ -102,6 +102,8 @@ Kopieer het token.
 docker login ghcr.io -u JOUW_GITHUB_GEBRUIKERSNAAM -p JOUW_TOKEN
 ```
 
+Gebruik je Podman, vervang dan `docker` door `podman` in het commando hierboven.
+
 Voeg dit toe aan je gebruikersprofiel `.npmrc` (maak het bestand aan als het niet bestaat):
 - Windows: `C:\Users\JOUW_GEBRUIKERSNAAM\.npmrc`
 - Mac/Linux: `~/.npmrc`
@@ -118,7 +120,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pullt de laatste Huddle-image en start de container. De web-UI is bereikbaar op `http://localhost:3000`.
+`huddle init` pullt de laatste Huddle-image en start de container. Het detecteert automatisch of Docker of Podman beschikbaar is; met `huddle init --runtime <docker|podman>` (of de env-var `HUDDLE_RUNTIME`) kies je expliciet een runtime. De web-UI is bereikbaar op `http://localhost:3000`.
 
 Daarna start je devcontainers direct vanuit een projectmap:
 

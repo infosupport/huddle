@@ -12,7 +12,7 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'help']);
 
@@ -76,9 +76,13 @@ function printHelp(): void {
 Gebruik:
   huddle [opties] [folder]           Devcontainer starten in huidige map of folder
   huddle start [opties] [folder]     Expliciet een devcontainer starten
-  huddle init                        Huddle pullen en opstarten via Docker
+  huddle init [opties]               Huddle pullen en opstarten via Docker of Podman
   huddle firewall list [opties]      Firewall-verzoeken weergeven
   huddle fw list [opties]            Alias voor firewall list
+
+Init opties:
+  --runtime <docker|podman>          Container runtime (standaard: automatisch
+                                     gedetecteerd; ook via env-var HUDDLE_RUNTIME)
 
 Start opties:
   --ide <intellij|rider|vscode>      IDE (standaard: intellij)
@@ -138,7 +142,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'init') {
-    await runInit();
+    await runInit({ runtime: flagString(flags, 'runtime') });
     return;
   }
 

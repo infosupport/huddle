@@ -1,11 +1,16 @@
 import { execSync } from 'child_process';
 import { bold, green, dim } from './utils';
+import { resolveRuntime } from './runtime';
 
 const IMAGE = 'ghcr.io/infosupport/huddle:latest';
 const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
 const INTERNAL_NET = 'devcontainer-net';
 const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
+
+export interface InitOptions {
+  runtime?: string;
+}
 
 function run(cmd: string): void {
   execSync(cmd, { stdio: 'inherit' });
@@ -20,36 +25,38 @@ function runSilent(cmd: string): boolean {
   }
 }
 
-export async function runInit(): Promise<void> {
+export async function runInit(opts: InitOptions = {}): Promise<void> {
   console.log(`${bold('Huddle opstarten...')}\n`);
 
+  const runtime = resolveRuntime(opts.runtime);
+  const rt = runtime.name;
+  console.log(dim(`Container runtime: ${rt}`));
+
   console.log(dim(`Pull ${IMAGE}`));
-  run(`docker pull ${IMAGE}`);
+  run(`${rt} pull ${IMAGE}`);
 
   console.log(dim(`Volume: ${VOLUME}`));
-  runSilent(`docker volume inspect ${VOLUME}`) || run(`docker volume create ${VOLUME}`);
+  runSilent(`${rt} volume inspect ${VOLUME}`) || run(`${rt} volume create ${VOLUME}`);
 
   console.log(dim(`Netwerk: ${INTERNAL_NET}`));
-  runSilent(`docker network inspect ${INTERNAL_NET}`) || run(`docker network create --internal ${INTERNAL_NET}`);
+  runSilent(`${rt} network inspect ${INTERNAL_NET}`) || run(`${rt} network create --internal ${INTERNAL_NET}`);
 
   console.log(dim(`Verwijder oude container als die bestaat`));
-  runSilent(`docker rm -f ${CONTAINER}`);
-
-  const dockerSock = process.platform === 'win32' ? '//var/run/docker.sock' : '/var/run/docker.sock';
+  runSilent(`${rt} rm -f ${CONTAINER}`);
 
   console.log(dim(`Start container`));
   run(
-    `docker run -d` +
+    `${rt} run -d` +
     ` --name ${CONTAINER}` +
     ` --network ${INTERNAL_NET}` +
     ` -p ${HOST_PORT}:3000` +
     ` -v ${VOLUME}:/data` +
-    ` -v ${dockerSock}:/var/run/docker.sock` +
+    ` -v ${runtime.socketPath}:/var/run/docker.sock` +
     ` -v /tmp/dc-sockets:/tmp/dc-sockets` +
     ` ${IMAGE}`,
   );
 
-  runSilent(`docker network connect bridge ${CONTAINER}`);
+  runSilent(`${rt} network connect ${runtime.defaultNetwork} ${CONTAINER}`);
 
   console.log();
   console.log(green(`[OK] Huddle draait op http://localhost:${HOST_PORT}`));
