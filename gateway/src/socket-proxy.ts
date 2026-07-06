@@ -249,6 +249,10 @@ export async function createContainerProxy(containerName: string, socketDir: str
           'https_proxy=http://huddle:80',
           'HTTP_PROXY=http://huddle:80',
           'HTTPS_PROXY=http://huddle:80',
+          // Loopback nooit via de proxy; `[::1]` bracketed voor .NET/Aspire
+          // (zie de toelichting bij dezelfde regels in docker.ts).
+          'no_proxy=localhost,127.0.0.1,::1,[::1]',
+          'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
           'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
           'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
           'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
@@ -388,8 +392,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Inspect / logs / top — only on containers labeled by this devcontainer
-          const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top)$/)?.[1];
+          // Inspect / logs / top / archive (docker cp stat+download) — only on
+          // containers labeled by this devcontainer
+          const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive)$/)?.[1];
           if (inspectCt) {
             if (devcontainerIds.has(inspectCt)) {
               deny403(client, 'inspect of devcontainer not permitted');
@@ -486,6 +491,32 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
+          deny403(client, 'operation not permitted');
+          return;
+        }
+
+        // ── PUT ──────────────────────────────────────────────────────────────
+        if (method === 'PUT') {
+          // Archive upload (docker cp naar een container) — o.a. Aspire's DCP
+          // kopieert dev-certs in elke gestarte container (CopyFile, issue #12).
+          // Alleen toegestaan op eigen spawned containers, nooit devcontainers.
+          const archiveCt = p.match(/^\/containers\/([^/]+)\/archive$/)?.[1];
+          if (archiveCt) {
+            if (devcontainerIds.has(archiveCt)) {
+              deny403(client, 'operation on devcontainer not permitted');
+              return;
+            }
+            client.pause();
+            hasOwnLabel('container', archiveCt, containerName).then(ok => {
+              if (ok) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              } else {
+                deny403(client, 'container was not created by this devcontainer');
+              }
+              client.resume();
+            });
+            return;
+          }
           deny403(client, 'operation not permitted');
           return;
         }
