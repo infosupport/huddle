@@ -4,7 +4,7 @@ Cross-platform Node CLI voor Huddle. De CLI praat met de bestaande Huddle REST A
 
 ## Installeren
 
-Maak een GitHub Personal Access Token aan op [github.com/settings/tokens](https://github.com/settings/tokens) (classic, scope: **read:packages**, 7 dagen).
+Maak een GitHub Personal Access Token aan op [github.com/settings/tokens](https://github.com/settings/tokens) (classic, scope: **read:packages**, expiration: **maximaal 7 dagen** — de infosupport-organisatie staat geen langere tokens toe).
 
 Login bij de registries:
 
