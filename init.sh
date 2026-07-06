@@ -8,6 +8,12 @@ BUILD_CONTEXT="${HUDDLE_BUILD_CONTEXT:-./gateway}"
 HOST_PORT="${HUDDLE_PORT:-3000}"
 CONTAINER_PORT="3000"
 
+# De management-API/UI heeft geen eigen authenticatie; toegang leunt op
+# netwerkpositie. Publiceer daarom standaard alléén op de loopback zodat de
+# admin-API niet op het LAN bereikbaar is. Zet HUDDLE_BIND_ADDR bewust op
+# 0.0.0.0 als je hem breder wilt blootstellen (op eigen risico).
+HUDDLE_BIND_ADDR="${HUDDLE_BIND_ADDR:-127.0.0.1}"
+
 VOLUME_NAME="${HUDDLE_VOLUME:-huddle-data}"
 
 INTERNAL_NETWORK="${HUDDLE_INTERNAL_NETWORK:-devcontainer-net}"
@@ -64,7 +70,7 @@ echo "==> Start container op internal netwerk"
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --network "${INTERNAL_NETWORK}" \
-  -p "${HOST_PORT}:${CONTAINER_PORT}" \
+  -p "${HUDDLE_BIND_ADDR}:${HOST_PORT}:${CONTAINER_PORT}" \
   "${MOUNTS[@]}" \
   "${IMAGE_NAME}"
 

@@ -6,6 +6,11 @@ $HUDDLE_CONTAINER = "huddle"
 $HUDDLE_IMAGE     = "huddle"
 $HUDDLE_VOLUME    = "huddle-data"
 $HUDDLE_PORT      = 3000
+# De management-API/UI heeft geen eigen authenticatie; toegang leunt op
+# netwerkpositie. Publiceer daarom standaard alleen op de loopback zodat de
+# admin-API niet op het LAN bereikbaar is. Zet HUDDLE_BIND_ADDR bewust op
+# "0.0.0.0" (env var) als je hem breder wilt blootstellen (op eigen risico).
+$HUDDLE_BIND_ADDR = if ($env:HUDDLE_BIND_ADDR) { $env:HUDDLE_BIND_ADDR } else { "127.0.0.1" }
 
 # Per-IDE base images. Elke IDE heeft een eigen base-devimage-<ide>/ folder met
 # een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
@@ -97,7 +102,7 @@ function Start-Huddle {
         '-d',
         '--name', $HUDDLE_CONTAINER,
         '--network', 'devcontainer-net',
-        '-p', "${HUDDLE_PORT}:3000",
+        '-p', "${HUDDLE_BIND_ADDR}:${HUDDLE_PORT}:3000",
         '-v', "${HUDDLE_VOLUME}:/data",
         '-v', '/var/run/docker.sock:/var/run/docker.sock',
         '-v', '/tmp/dc-sockets:/tmp/dc-sockets',
