@@ -13,7 +13,7 @@ export default defineConfig({
     fileParallelism: false, // één container tegelijk; geen race op de stack
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },
-    sequence: { concurrent: false },
+    sequence: { concurrent: true }, // describe-blokken lopen parallel waar mogelijk
     retry: 0,
   },
 });
