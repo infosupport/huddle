@@ -1,4 +1,4 @@
-FROM base-devimage
+FROM ghcr.io/infosupport/base-devimage
 
 # Voor VS Code hoeft er hier GEEN backend geïnstalleerd te worden. VS Code installeert
 # zijn eigen "VS Code Server" automatisch in de container zodra je via de Dev Containers-

@@ -1,0 +1,82 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: gateway
+
+      - name: Run unit tests
+        run: npm test
+        working-directory: gateway
+
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: gateway
+
+      - name: Build Huddle image
+        run: docker build -t huddle ./gateway
+
+      - name: Start Huddle
+        run: |
+          docker network create --internal devcontainer-net
+          mkdir -p /tmp/dc-sockets
+          docker run -d \
+            --name huddle \
+            --network devcontainer-net \
+            -p 3000:3000 \
+            -v huddle-data:/data \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /tmp/dc-sockets:/tmp/dc-sockets \
+            huddle
+          docker network connect bridge huddle
+
+      - name: Wait for Huddle
+        run: |
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3000/api/rules && break
+            sleep 2
+          done
+
+      - name: Build base-devimage
+        run: docker build -t ghcr.io/infosupport/base-devimage -f base-devimage/Dockerfile .
+
+      - name: Build base-devimage-vscode
+        run: docker build -t ghcr.io/infosupport/base-devimage-vscode -f base-devimage-vscode/Dockerfile .
+
+      - name: Run e2e tests
+        run: npm run test:e2e
+        working-directory: gateway
+        env:
+          HUDDLE_E2E: "1"

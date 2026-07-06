@@ -16,11 +16,11 @@ $HUDDLE_BIND_ADDR = if ($env:HUDDLE_BIND_ADDR) { $env:HUDDLE_BIND_ADDR } else { 
 # een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
 # datzelfde label zodat de spawn-flow ze per IDE kan filteren.
 $IDE_DEFS = @(
-    [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'base-devimage-rider';    Folder = 'base-devimage-rider' }
-    [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'base-devimage-intellij'; Folder = 'base-devimage-intellij' }
+    [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'ghcr.io/infosupport/base-devimage-rider';    Folder = 'base-devimage-rider' }
+    [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'ghcr.io/infosupport/base-devimage-intellij'; Folder = 'base-devimage-intellij' }
     # VS Code installeert zijn eigen backend (VS Code Server) in de container bij
     # het attachen — er hoeft dus geen IDE-distro gedownload te worden zoals bij JB.
-    [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'base-devimage-vscode';   Folder = 'base-devimage-vscode' }
+    [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'ghcr.io/infosupport/base-devimage-vscode';   Folder = 'base-devimage-vscode' }
 )
 
 $TempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR.TrimEnd('/') } else { '/tmp' }
@@ -350,14 +350,14 @@ function Start-Devcontainer {
 function Build-SharedBase {
     param([string]$ScriptDir)
     $dockerfile = Join-Path $ScriptDir 'base-devimage\Dockerfile'
-    Write-Host "  Gedeelde base image 'base-devimage' bouwen..." -ForegroundColor DarkCyan
+    Write-Host "  Gedeelde base image 'ghcr.io/infosupport/base-devimage' bouwen..." -ForegroundColor DarkCyan
     # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
-    docker build -t base-devimage -f $dockerfile $ScriptDir --no-cache
+    docker build -t ghcr.io/infosupport/base-devimage -f $dockerfile $ScriptDir --no-cache
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [FAIL] Build van base-devimage mislukt." -ForegroundColor Red
         return $false
     }
-    Write-Host "  [OK] base-devimage klaar." -ForegroundColor Green
+    Write-Host "  [OK] ghcr.io/infosupport/base-devimage klaar." -ForegroundColor Green
     return $true
 }
 
@@ -455,9 +455,40 @@ function Build-AllBaseImages {
     }
 }
 
+# ── Tests ────────────────────────────────────────────────────────────────────
+
+function Invoke-Tests {
+    $gatewayDir = Join-Path $PSScriptRoot "gateway"
+    Write-Host ""
+    Write-Host "  Unit testen draaien..." -ForegroundColor DarkCyan
+    Push-Location $gatewayDir
+    try {
+        npm test
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [FAIL] Unit testen mislukt." -ForegroundColor Red
+            return
+        }
+        Write-Host "  [OK] Unit testen geslaagd." -ForegroundColor Green
+
+        Write-Host ""
+        Write-Host "  E2E testen draaien..." -ForegroundColor DarkCyan
+        $env:HUDDLE_E2E = "1"
+        npm run test:e2e
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] E2E testen geslaagd." -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] E2E testen mislukt." -ForegroundColor Red
+        }
+        $env:HUDDLE_E2E = $null
+    } finally {
+        Pop-Location
+    }
+}
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 Start-Huddle
+Invoke-Tests
 
 $running = $true
 while ($running) {

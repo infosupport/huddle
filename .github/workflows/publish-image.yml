@@ -30,6 +30,56 @@ jobs:
           push: true
           tags: ghcr.io/infosupport/huddle:latest
 
+  base-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base-devimage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage/Dockerfile
+          push: true
+          tags: ghcr.io/infosupport/base-devimage:latest
+
+      - name: Build and push base-devimage-vscode
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage-vscode/Dockerfile
+          push: true
+          tags: ghcr.io/infosupport/base-devimage-vscode:latest
+
+      - name: Build and push base-devimage-intellij
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage-intellij/Dockerfile
+          push: true
+          tags: ghcr.io/infosupport/base-devimage-intellij:latest
+
+      - name: Build and push base-devimage-rider
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage-rider/Dockerfile
+          push: true
+          tags: ghcr.io/infosupport/base-devimage-rider:latest
+
   cli:
     runs-on: ubuntu-latest
     permissions:

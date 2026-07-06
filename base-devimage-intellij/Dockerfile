@@ -1,4 +1,4 @@
-FROM base-devimage
+FROM ghcr.io/infosupport/base-devimage
 
 # JB Gateway downloadt zelf de JBR/JDK in de RemoteDev-dist. Als je java/mvn
 # ook in je terminal wil, voeg dan apt-install temurin-21-jdk maven toe.
