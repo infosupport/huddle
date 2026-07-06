@@ -21,9 +21,9 @@ function ensureSchema(db) {
     api_key_enc TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`).run();
-  try { db.prepare(`ALTER TABLE aikido_credentials ADD COLUMN api_key_enc TEXT`).run(); } catch (e) {
-    // Kolom bestaat al bij bestaande databases — verwachte fout, geen actie vereist
-  }
+  // Migratie voor databases aangemaakt vóór api_key_enc aan het schema werd toegevoegd.
+  // Op nieuwe databases mislukt dit altijd (kolom staat al in CREATE TABLE) — dat is verwacht.
+  try { db.prepare(`ALTER TABLE aikido_credentials ADD COLUMN api_key_enc TEXT`).run(); } catch { /* verwachte fout */ }
 }
 
 const WS_COLUMNS = 'name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name';
