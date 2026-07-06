@@ -1,11 +1,14 @@
 'use strict';
 
-const crypto  = require('crypto');
-const fs      = require('fs');
-const path    = require('path');
-const https   = require('https');
-const net     = require('net');
-const tunnel  = require('tunnel-agent');
+const crypto      = require('crypto');
+const fs          = require('fs');
+const path        = require('path');
+const https       = require('https');
+const net         = require('net');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
+const tunnel      = require('tunnel-agent');
 
 const KEY_PATH      = process.env.AIKIDO_KEY_PATH || '/data/.aikido-key';
 const API_BASE      = 'https://app.aikido.dev/api/public/v1';
@@ -237,11 +240,11 @@ function initDb(db) {
 }
 
 function loadWorkspaces(db) {
-  return db.prepare('SELECT * FROM aikido_workspaces ORDER BY name').all();
+  return db.prepare('SELECT name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name FROM aikido_workspaces ORDER BY name').all();
 }
 
 function getWorkspace(db, name) {
-  return db.prepare('SELECT * FROM aikido_workspaces WHERE name = ?').get(name) || null;
+  return db.prepare('SELECT name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name FROM aikido_workspaces WHERE name = ?').get(name) || null;
 }
 
 function resolveCredentials(db, envPrefix) {
@@ -257,6 +260,16 @@ function resolveCredentials(db, envPrefix) {
 
 function hasCredentials(db, envPrefix) {
   return resolveCredentials(db, envPrefix) !== null;
+}
+
+// ── Issue filtering ──────────────────────────────────────────────────────────
+
+function filterIssuesByRepo(issues, repoName) {
+  if (!repoName) return issues;
+  const needle = repoName.toLowerCase();
+  return issues.filter(i =>
+    (i.locations || []).some(l => ((l.code_repo_name || l.name || '')).toLowerCase() === needle)
+  );
 }
 
 // ── Extension register ────────────────────────────────────────────────────────
@@ -341,13 +354,7 @@ module.exports.register = async function register(ctx) {
 
     try {
       const cached = await fetchAllIssues(ws.aikido_env_prefix, creds);
-      let filtered = cached.issues;
-      if (ws.code_repo_name) {
-        const needle = ws.code_repo_name.toLowerCase();
-        filtered = cached.issues.filter(i =>
-          (i.locations || []).some(l => ((l.code_repo_name || l.name || '')).toLowerCase() === needle)
-        );
-      }
+      const filtered = filterIssuesByRepo(cached.issues, ws.code_repo_name);
       const summary = { total: filtered.length, critical: 0, high: 0, medium: 0, low: 0 };
       for (const i of filtered) { if (i.severity in summary) summary[i.severity]++; }
       let result = sev ? filtered.filter(i => i.severity === sev) : filtered;
@@ -370,25 +377,18 @@ module.exports.register = async function register(ctx) {
   // Overview (summaries per workspace)
   app.get('/api/ext/aikido/overview', async () => {
     const workspaces = loadWorkspaces(db);
-    const results = {};
-    for (const ws of workspaces) {
+    const entries = await Promise.all(workspaces.map(async ws => {
       const creds = resolveCredentials(db, ws.aikido_env_prefix);
-      if (!creds) { results[ws.name] = null; continue; }
+      if (!creds) return [ws.name, null];
       try {
-        const cached = await fetchAllIssues(ws.aikido_env_prefix, creds);
-        let filtered = cached.issues;
-        if (ws.code_repo_name) {
-          const needle = ws.code_repo_name.toLowerCase();
-          filtered = cached.issues.filter(i =>
-            (i.locations || []).some(l => ((l.code_repo_name || l.name || '')).toLowerCase() === needle)
-          );
-        }
+        const cached   = await fetchAllIssues(ws.aikido_env_prefix, creds);
+        const filtered = filterIssuesByRepo(cached.issues, ws.code_repo_name);
         const s = { total: filtered.length, critical: 0, high: 0, medium: 0, low: 0 };
         for (const i of filtered) { if (i.severity in s) s[i.severity]++; }
-        results[ws.name] = s;
-      } catch { results[ws.name] = null; }
-    }
-    return results;
+        return [ws.name, s];
+      } catch (err) { console.error(`Failed to fetch Aikido issues for workspace ${ws.name}:`, err); return [ws.name, null]; }
+    }));
+    return Object.fromEntries(entries);
   });
 
   // Credentials - get
@@ -489,17 +489,33 @@ module.exports.register = async function register(ctx) {
         ['/usr/local/lib/aikido-mcp-server.js']: mcpJs,
       };
 
-      const parts = Object.entries(files).map(([fp, content]) => {
-        const b64 = Buffer.from(content).toString('base64');
-        return `echo '${b64}' | base64 -d > ${fp}`;
+      // Maak doelmappen aan in de container
+      const mkdirExec = await dockerRequest('POST', `/containers/${info.Id}/exec`, {
+        User: 'root', Cmd: ['sh', '-c', `mkdir -p ${aikidoDir} /usr/local/lib /usr/local/bin`],
+        AttachStdout: false, AttachStderr: false,
       });
+      await dockerRequest('POST', `/exec/${mkdirExec.Id}/start`, { Detach: true });
 
-      const claudeB64    = Buffer.from(claudeJson).toString('base64');
-      const mergeScript  = `node -e "const fs=require('fs'),p='/home/vscode/.claude.json';let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'));}catch{}const n=JSON.parse(Buffer.from('${claudeB64}','base64').toString());s.mcpServers=Object.assign(s.mcpServers||{},n.mcpServers);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}"`;
-      const writeScript  = `mkdir -p ${aikidoDir} /usr/local/lib && ${parts.join(' && ')} && chmod +x /usr/local/bin/aikido-fix && chown -R vscode:vscode ${workspace} && ${mergeScript}`;
+      // Kopieer elk bestand via een tijdelijk hostbestand + docker cp (async, non-blocking)
+      const tmpFiles = [];
+      try {
+        for (const [containerPath, content] of Object.entries(files)) {
+          const tmpPath = `/tmp/huddle-inject-${crypto.randomBytes(8).toString('hex')}.tmp`;
+          tmpFiles.push(tmpPath);
+          await fs.promises.writeFile(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
+          await execFileAsync('docker', ['cp', tmpPath, `${info.Id}:${containerPath}`]);
+        }
+      } finally {
+        for (const tmpPath of tmpFiles) {
+          try { await fs.promises.unlink(tmpPath); } catch (err) { console.error(`Failed to cleanup tmp file ${tmpPath}:`, err); }
+        }
+      }
+
+      const mergeScript  = `node -e 'const fs=require("fs"),p="/home/vscode/.claude.json";let s={};try{s=JSON.parse(fs.readFileSync(p,"utf8"));}catch{}const n=${JSON.stringify(JSON.parse(claudeJson))};s.mcpServers=Object.assign(s.mcpServers||{},n.mcpServers);fs.writeFileSync(p,JSON.stringify(s,null,2));try{fs.chownSync(p,1000,1000);}catch{}'`;
+      const postCopyScript = `chmod +x /usr/local/bin/aikido-fix && chown -R vscode:vscode ${workspace} && ${mergeScript}`;
 
       const exec = await dockerRequest('POST', `/containers/${info.Id}/exec`, {
-        User: 'root', Cmd: ['sh', '-c', writeScript], AttachStdout: false, AttachStderr: false,
+        User: 'root', Cmd: ['sh', '-c', postCopyScript], AttachStdout: false, AttachStderr: false,
       });
       await dockerRequest('POST', `/exec/${exec.Id}/start`, { Detach: true });
 

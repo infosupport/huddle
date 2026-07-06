@@ -578,7 +578,7 @@
         try {
           s.workspaces = await this.api('GET', '/workspaces');
           this._renderView();
-          this.api('GET', '/overview').then(ov => { s.overview = ov; this._renderView(); }).catch(() => {});
+          this.api('GET', '/overview').then(ov => { s.overview = ov; this._renderView(); }).catch(e => { console.error('Failed to load overview data:', e); });
         } catch (e) {
           this._renderMain(`<div style="padding:24px;color:var(--danger)">Fout: ${this.esc(e.message)}</div>`);
         }
@@ -986,82 +986,82 @@
       } catch {}
     }
 
+    async _resolveImage (ws) {
+      const imagesRes = await fetch('/api/docker/images');
+      const images    = imagesRes.ok ? (await imagesRes.json()) : [];
+      const aikidoImg = images.find(i => (i.name || '').startsWith('aikido'));
+      if (aikidoImg?.name) return aikidoImg.name;
+      const baseRes = await fetch('/api/docker/base-image?ide=vscode');
+      const image   = baseRes.ok ? (await baseRes.json()).imageName : null;
+      if (!image) throw new Error('Geen Docker-image beschikbaar. Zorg dat de Aikido-image gebouwd is.');
+      return image;
+    }
+
+    async _ensureContainerAndInject (ws, image, containerName, toFix, setMsg, spinner) {
+      const existing  = this._s.containers.find(c => c.name === containerName);
+      const isRunning = existing?.status?.startsWith('Up');
+
+      if (existing && isRunning) {
+        setMsg(spinner(`Injecteren in bestaande container <b>${containerName}</b>…`));
+        await this.api('POST', `/workspaces/${encodeURIComponent(ws)}/inject`, {
+          container_name: containerName, issues: toFix,
+        });
+        setMsg(`<div class="alert ok">✓ Geïnjecteerd in bestaande container <b>${containerName}</b>. Voer <code>aikido-fix</code> uit in de container.</div>`);
+
+      } else if (existing && !isRunning) {
+        setMsg(spinner(`Container <b>${containerName}</b> hervatten…`));
+        await fetch(`/api/docker/containers/${encodeURIComponent(containerName)}/start`, { method: 'POST' })
+          .then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
+        setMsg(spinner(`Container geherstart, injecteren…`));
+        await new Promise(r => setTimeout(r, 1500));
+        await this.api('POST', `/workspaces/${encodeURIComponent(ws)}/inject`, {
+          container_name: containerName, issues: toFix,
+        });
+        setMsg(`<div class="alert ok">✓ Container <b>${containerName}</b> hervat en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
+
+      } else {
+        const wsObj  = this._s.workspaces.find(w => w.name === ws);
+        const wsPath = wsObj?.repo_path;
+        if (!wsPath) throw new Error('Geen repo-pad bekend voor deze workspace. Stel het in via de workspace-instellingen.');
+        setMsg(spinner(`Container <b>${containerName}</b> aanmaken…`));
+        await fetch('/api/docker/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageName: image, containerName, presentableName: `Aikido ${ws}`, workspaceDir: wsPath }),
+        }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
+        setMsg(spinner(`Container gestart, injecteren…`));
+        await new Promise(r => setTimeout(r, 2000));
+        await this.api('POST', `/workspaces/${encodeURIComponent(ws)}/inject`, {
+          container_name: containerName, issues: toFix,
+        });
+        await this._loadContainers();
+        setMsg(`<div class="alert ok">✓ Container <b>${containerName}</b> aangemaakt en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
+      }
+    }
+
     async _fixIssues (issues) {
-      const s   = this._s;
+      const s         = this._s;
       const CONTAINER = `aikido_${s.selectedWs}`;
-      const box = this.$('#fix-modal-box');
-      const msgEl = box?.querySelector('#inject-msg');
-      const fixBtn = box?.querySelector('#do-fix');
+      const box       = this.$('#fix-modal-box');
+      const msgEl     = box?.querySelector('#inject-msg');
+      const fixBtn    = box?.querySelector('#do-fix');
       if (fixBtn) fixBtn.disabled = true;
 
       const toFix = s.selected.size > 1
         ? s.issues.filter(i => s.selected.has(String(i.id)))
         : issues;
 
-      const setMsg = html => { if (msgEl) msgEl.innerHTML = html; };
+      const setMsg  = html => { if (msgEl) msgEl.innerHTML = html; };
       const spinner = text => `<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>${text}</div></div>`;
 
       try {
-        // Refresh container list to get current state
         await this._loadContainers();
         const existing = s.containers.find(c => c.name === CONTAINER);
-        const isRunning = existing?.status?.startsWith('Up');
-
-        if (existing && isRunning) {
-          // Container is al actief → direct injecteren
-          setMsg(spinner(`Injecteren in bestaande container <b>${CONTAINER}</b>…`));
-          await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
-            container_name: CONTAINER, issues: toFix,
-          });
-          setMsg(`<div class="alert ok">✓ Geïnjecteerd in bestaande container <b>${CONTAINER}</b>. Voer <code>aikido-fix</code> uit in de container.</div>`);
-
-        } else if (existing && !isRunning) {
-          // Container bestaat maar is gestopt → hervatten
-          setMsg(spinner(`Container <b>${CONTAINER}</b> hervatten…`));
-          await fetch(`/api/docker/containers/${encodeURIComponent(CONTAINER)}/start`, { method: 'POST' })
-            .then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
-
-          setMsg(spinner(`Container geherstart, injecteren…`));
-          await new Promise(r => setTimeout(r, 1500));
-
-          await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
-            container_name: CONTAINER, issues: toFix,
-          });
-          setMsg(`<div class="alert ok">✓ Container <b>${CONTAINER}</b> hervat en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
-
-        } else {
-          // Container bestaat niet → aanmaken
+        const image = existing ? null : await (async () => {
           setMsg(spinner(`Container <b>${CONTAINER}</b> bestaat niet — image ophalen…`));
-          const imagesRes = await fetch('/api/docker/images');
-          const images    = imagesRes.ok ? (await imagesRes.json()) : [];
-          const aikidoImg = images.find(i => (i.name || '').startsWith('aikido'));
-          let image = aikidoImg?.name || null;
-          if (!image) {
-            const baseRes = await fetch('/api/docker/base-image?ide=vscode');
-            image = baseRes.ok ? (await baseRes.json()).imageName : null;
-          }
-          if (!image) throw new Error('Geen Docker-image beschikbaar. Zorg dat de Aikido-image gebouwd is.');
-
-          const ws     = s.workspaces.find(w => w.name === s.selectedWs);
-          const wsPath = ws?.repo_path;
-          if (!wsPath) throw new Error('Geen repo-pad bekend voor deze workspace. Stel het in via de workspace-instellingen.');
-
-          setMsg(spinner(`Container <b>${CONTAINER}</b> aanmaken…`));
-          await fetch('/api/docker/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageName: image, containerName: CONTAINER, presentableName: `Aikido ${s.selectedWs}`, workspaceDir: wsPath }),
-          }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
-
-          setMsg(spinner(`Container gestart, injecteren…`));
-          await new Promise(r => setTimeout(r, 2000));
-
-          await this.api('POST', `/workspaces/${encodeURIComponent(s.selectedWs)}/inject`, {
-            container_name: CONTAINER, issues: toFix,
-          });
-          await this._loadContainers();
-          setMsg(`<div class="alert ok">✓ Container <b>${CONTAINER}</b> aangemaakt en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
-        }
+          return this._resolveImage(s.workspaces.find(w => w.name === s.selectedWs));
+        })();
+        await this._ensureContainerAndInject(s.selectedWs, image, CONTAINER, toFix, setMsg, spinner);
       } catch (e) {
         setMsg(`<div class="alert err">Fout: ${this.esc(e.message)}</div>`);
         if (fixBtn) fixBtn.disabled = false;
