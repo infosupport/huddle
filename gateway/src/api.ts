@@ -94,8 +94,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
   // Build the blocked-subnet cache and refresh it periodically so new
-  // dc-net-* networks (created when a devcontainer starts) get picked up.
-  refreshBlockedSubnets().catch(() => {});
+  // dc-net-* networks (created when a devcontainer starts) get picked up. De
+  // eerste vulling wordt vóór app.listen() afgewacht (zie onderaan), zodat er
+  // geen opstart-venster is waarin een devcontainer de gate omzeilt doordat de
+  // cache nog leeg is.
   setInterval(refreshBlockedSubnets, 5000).unref();
 
   // Devcontainers may only reach a tiny whitelist of endpoints (currently just
@@ -882,6 +884,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
       reply.code(500).send({ error: err.message });
     }
   });
+
+  // Vul de blocked-subnet cache vóór we verbindingen accepteren, zodat de
+  // source-IP-gate meteen vanaf de eerste request werkt (geen fail-open venster).
+  await refreshBlockedSubnets();
 
   const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
   console.log(`[api] listening on ${address}`);
