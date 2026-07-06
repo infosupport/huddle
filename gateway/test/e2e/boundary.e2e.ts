@@ -73,6 +73,25 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       expect(`${r.stdout}${r.stderr}`).toMatch(/not permitted/i);
     });
 
+    it('weigert een named local bind-backed volume (host-path escape)', async () => {
+      // grant staat nog actief. Maak een local volume dat host-/ bind-backt en
+      // probeer het te mounten — de bind-source ("hostroot") begint niet met "/"
+      // maar mag evengoed niet host-/ koppelen.
+      const create = execIn(E2E_NAME, `docker volume create --driver local --opt type=none --opt device=/ --opt o=bind hostroot`);
+      expect(`${create.stdout}${create.stderr}`).toMatch(/not permitted/i);
+      const run = execIn(E2E_NAME, `docker run --rm -v hostroot:/host ${E2E_IMAGE} cat /host/etc/hostname`);
+      expect(run.status).not.toBe(0);
+    });
+
+    it('weigert een volume-mount met inline DriverConfig (host-path escape)', async () => {
+      const r = execIn(
+        E2E_NAME,
+        `docker run --rm --mount 'type=volume,dst=/host,volume-driver=local,volume-opt=type=none,volume-opt=device=/,volume-opt=o=bind' ${E2E_IMAGE} cat /host/etc/hostname`,
+      );
+      expect(r.status).not.toBe(0);
+      expect(`${r.stdout}${r.stderr}`).toMatch(/not permitted/i);
+    });
+
     it('weigert --privileged óók met grant', async () => {
       const r = execIn(E2E_NAME, `docker run --rm --privileged ${E2E_IMAGE} true`);
       expect(r.status).not.toBe(0);
