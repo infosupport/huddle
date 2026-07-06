@@ -21,15 +21,19 @@ function ensureSchema(db) {
     api_key_enc TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`).run();
-  try { db.prepare(`ALTER TABLE aikido_credentials ADD COLUMN api_key_enc TEXT`).run(); } catch {}
+  try { db.prepare(`ALTER TABLE aikido_credentials ADD COLUMN api_key_enc TEXT`).run(); } catch (e) {
+    // Kolom bestaat al bij bestaande databases — verwachte fout, geen actie vereist
+  }
 }
 
+const WS_COLUMNS = 'name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name';
+
 function loadWorkspaces(db) {
-  return db.prepare('SELECT * FROM aikido_workspaces ORDER BY name').all();
+  return db.prepare(`SELECT ${WS_COLUMNS} FROM aikido_workspaces ORDER BY name`).all();
 }
 
 function getWorkspace(db, name) {
-  return db.prepare('SELECT * FROM aikido_workspaces WHERE name = ?').get(name) || null;
+  return db.prepare(`SELECT ${WS_COLUMNS} FROM aikido_workspaces WHERE name = ?`).get(name) || null;
 }
 
 // decrypt wordt meegegeven als parameter om circulaire afhankelijkheden te vermijden
