@@ -103,6 +103,53 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
   socket.end();
 }
 
+// Buffers en scrubt de OAuth token-exchange response zodat het echte access_token
+// nooit in de audit-log terechtkomt. Stuurt de gescrubde response naar innerRes
+// en roept complete aan met de veilige audit-body als derde argument.
+function handleTokenExchangeResponse(
+  upstreamRes: http.IncomingMessage,
+  innerRes: http.ServerResponse,
+  containerId: string | null,
+  complete: (status: number | null, headers?: http.IncomingHttpHeaders, body?: string | null) => void,
+): void {
+  const chunks: Buffer[] = [];
+  upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+  upstreamRes.on('end', () => {
+    let outBuf: Buffer;
+    let outHeaders = { ...upstreamRes.headers };
+    // Fail-safe: log null bij scrub-fouten i.p.v. het echte token te lekken.
+    let auditResBody: string | null = null;
+    try {
+      const rawBody = decodeBody(chunks, upstreamRes.headers);
+      const json = rawBody ? JSON.parse(rawBody) : null;
+      if (json?.access_token) {
+        const placeholder = storeTokenExchange(containerId ?? 'unknown', json.access_token as string);
+        json.access_token = placeholder;
+        console.log(`[token-exchange] placeholder issued voor container ${containerId}`);
+        outBuf = Buffer.from(JSON.stringify(json));
+        delete outHeaders['content-encoding'];
+        delete outHeaders['transfer-encoding'];
+        outHeaders['content-length'] = String(outBuf.length);
+        auditResBody = cap(JSON.stringify(json));
+      } else {
+        outBuf = Buffer.concat(chunks);
+        outHeaders['content-length'] = String(outBuf.length);
+        auditResBody = rawBody;
+      }
+    } catch {
+      outBuf = Buffer.concat(chunks);
+      outHeaders = { ...upstreamRes.headers };
+    }
+    innerRes.writeHead(upstreamRes.statusCode ?? 200, outHeaders);
+    innerRes.end(outBuf);
+    complete(upstreamRes.statusCode ?? null, outHeaders, auditResBody);
+  });
+  upstreamRes.on('error', () => {
+    if (!innerRes.writableEnded) innerRes.destroy();
+    complete(0, upstreamRes.headers);
+  });
+}
+
 export function createProxyServer(): http.Server {
   const server = http.createServer();
 
@@ -432,7 +479,9 @@ export function createProxyServer(): http.Server {
         reqHeaders: headersToJson(innerReq.headers),
       });
       let completed = false;
-      const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
+      // resBody: expliciet meegeven voor gescrubde paden (token-exchange) zodat het
+      // echte secret nooit in de audit-log terechtkomt. Weglaten = afleiden uit resChunks.
+      const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders, resBody?: string | null) => {
         if (completed) return;
         completed = true;
         if (auditId == null) return;
@@ -440,7 +489,7 @@ export function createProxyServer(): http.Server {
           reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
           resStatus,
           resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-          resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
+          resBody: resBody !== undefined ? resBody : resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
         });
       };
 
@@ -455,42 +504,7 @@ export function createProxyServer(): http.Server {
         },
         (upstreamRes) => {
           if (isTokenRequest && upstreamRes.statusCode === 200) {
-            // Buffer de volledige OAuth-response zodat we het token kunnen vervangen.
-            const tokenResChunks: Buffer[] = [];
-            upstreamRes.on('data', (chunk: Buffer) => {
-              tokenResChunks.push(chunk);
-              if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
-            });
-            upstreamRes.on('end', () => {
-              let outBuf: Buffer;
-              let outHeaders = { ...upstreamRes.headers };
-              try {
-                const rawBody = decodeBody(tokenResChunks, upstreamRes.headers);
-                const json = rawBody ? JSON.parse(rawBody) : null;
-                if (json?.access_token) {
-                  const placeholder = storeTokenExchange(containerId ?? 'unknown', json.access_token as string);
-                  json.access_token = placeholder;
-                  console.log(`[token-exchange] placeholder issued voor container ${containerId}`);
-                  outBuf = Buffer.from(JSON.stringify(json));
-                  delete outHeaders['content-encoding'];
-                  delete outHeaders['transfer-encoding'];
-                  outHeaders['content-length'] = String(outBuf.length);
-                } else {
-                  outBuf = Buffer.concat(tokenResChunks);
-                  outHeaders['content-length'] = String(outBuf.length);
-                }
-              } catch {
-                outBuf = Buffer.concat(tokenResChunks);
-                outHeaders = { ...upstreamRes.headers };
-              }
-              innerRes.writeHead(upstreamRes.statusCode ?? 200, outHeaders);
-              innerRes.end(outBuf);
-              complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
-            });
-            upstreamRes.on('error', () => {
-              if (!innerRes.writableEnded) innerRes.destroy();
-              complete(0, upstreamRes.headers);
-            });
+            handleTokenExchangeResponse(upstreamRes, innerRes, containerId, complete);
           } else {
             innerRes.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
             upstreamRes.on('data', (chunk: Buffer) => {

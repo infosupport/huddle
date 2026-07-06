@@ -11,6 +11,15 @@ import {
 // Spint een echte devcontainer op via de draaiende huddle-stack en exec't erin.
 // Opt-in: HUDDLE_E2E=1, en alleen op een host met Docker + draaiende huddle.
 // Zie test/e2e/README.md.
+//
+// Parallelisatie-strategie:
+//   - De drie describe-blokken raken onafhankelijke state en draaien concurrent
+//     (sequence.concurrent: true in vitest.e2e.config.ts):
+//       • per-domein firewall  → firewall-regels voor TEST_DOMAIN
+//       • docker-socket gate   → grant-state voor E2E_NAME
+//       • huddle self-traffic  → read-only, geen gedeelde state
+//   - Binnen docker-socket gate: "zonder grant"-tests sequentieel, daarna
+//     "met grant"-tests concurrent (allen read-only gegeven actieve grant).
 
 const TEST_DOMAIN = 'example.com';
 
@@ -18,7 +27,7 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   beforeAll(async () => {
     if (!dockerAvailable()) throw new Error('docker CLI niet beschikbaar op deze host');
     if (!(await huddleReachable())) throw new Error('huddle-API niet bereikbaar op de HUDDLE_URL — draait de stack?');
-    await removeDevcontainer();        // schone start
+    await removeDevcontainer();
     await spawnDevcontainer();
   });
 
@@ -28,7 +37,8 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     await removeDevcontainer();
   });
 
-  // ── Firewall: blokkeren → toestaan → opnieuw ───────────────────────────────
+  // ── Firewall: blokkeren → toestaan ────────────────────────────────────────
+  // Raakt alleen firewall-regels voor TEST_DOMAIN — geen overlap met grant-state.
   describe('per-domein firewall', () => {
     it('blokkeert een niet-toegestaan domein (curl → 403)', async () => {
       await clearRulesForDomain(TEST_DOMAIN);
@@ -49,7 +59,8 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     });
   });
 
-  // ── Docker-socket: geweigerd zonder grant → toegestaan met grant ───────────
+  // ── Docker-socket gate ────────────────────────────────────────────────────
+  // Raakt alleen grant-state — geen overlap met firewall-regels.
   describe('docker-socket gate', () => {
     it('weigert docker zonder actieve grant', async () => {
       await revokeGrant(E2E_NAME);
@@ -63,50 +74,56 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       await setGrant(E2E_NAME, 5);
       await sleep(500);
       const r = execIn(E2E_NAME, 'docker ps');
-      expect(r.status).toBe(0); // exit 0; lijst is gefilterd op eigen children
+      expect(r.status).toBe(0);
     });
 
-    it('weigert een HostConfig-escape (host-path bind) óók met grant', async () => {
-      // grant staat nog actief van de vorige test
-      const r = execIn(E2E_NAME, `docker run --rm -v /:/host ${E2E_IMAGE} true`);
-      expect(r.status).not.toBe(0);
-      expect(`${r.stdout}${r.stderr}`).toMatch(/not permitted/i);
-    });
+    // Alle onderstaande tests vereisen een actieve grant en zijn onderling
+    // onafhankelijk — ze draaien concurrent via describe.concurrent.
+    describe.concurrent('escape-pogingen met actieve grant', () => {
+      beforeAll(async () => {
+        await setGrant(E2E_NAME, 15);
+        await sleep(500);
+      });
 
-    it('weigert een named local bind-backed volume (host-path escape)', async () => {
-      // grant staat nog actief. Maak een local volume dat host-/ bind-backt en
-      // probeer het te mounten — de bind-source ("hostroot") begint niet met "/"
-      // maar mag evengoed niet host-/ koppelen.
-      const create = execIn(E2E_NAME, `docker volume create --driver local --opt type=none --opt device=/ --opt o=bind hostroot`);
-      expect(`${create.stdout}${create.stderr}`).toMatch(/not permitted/i);
-      const run = execIn(E2E_NAME, `docker run --rm -v hostroot:/host ${E2E_IMAGE} cat /host/etc/hostname`);
-      expect(run.status).not.toBe(0);
-    });
+      it('weigert een HostConfig-escape (host-path bind)', async () => {
+        const r = execIn(E2E_NAME, `docker run --rm -v /:/host ${E2E_IMAGE} true`);
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/not permitted/i);
+      });
 
-    it('weigert een volume-mount met inline DriverConfig (host-path escape)', async () => {
-      const r = execIn(
-        E2E_NAME,
-        `docker run --rm --mount 'type=volume,dst=/host,volume-driver=local,volume-opt=type=none,volume-opt=device=/,volume-opt=o=bind' ${E2E_IMAGE} cat /host/etc/hostname`,
-      );
-      expect(r.status).not.toBe(0);
-      expect(`${r.stdout}${r.stderr}`).toMatch(/not permitted/i);
-    });
+      it('weigert een named local bind-backed volume (host-path escape)', async () => {
+        const create = execIn(E2E_NAME, `docker volume create --driver local --opt type=none --opt device=/ --opt o=bind hostroot`);
+        expect(`${create.stdout}${create.stderr}`).toMatch(/not permitted/i);
+        const run = execIn(E2E_NAME, `docker run --rm -v hostroot:/host ${E2E_IMAGE} cat /host/etc/hostname`);
+        expect(run.status).not.toBe(0);
+      });
 
-    it('weigert --privileged óók met grant', async () => {
-      const r = execIn(E2E_NAME, `docker run --rm --privileged ${E2E_IMAGE} true`);
-      expect(r.status).not.toBe(0);
-      expect(`${r.stdout}${r.stderr}`).toMatch(/privileged.*not permitted/i);
-    });
+      it('weigert een volume-mount met inline DriverConfig (host-path escape)', async () => {
+        const r = execIn(
+          E2E_NAME,
+          `docker run --rm --mount 'type=volume,dst=/host,volume-driver=local,volume-opt=type=none,volume-opt=device=/,volume-opt=o=bind' ${E2E_IMAGE} cat /host/etc/hostname`,
+        );
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/not permitted/i);
+      });
 
-    it('weigert inspect van een vreemde container (huddle)', async () => {
-      const r = execIn(E2E_NAME, 'docker inspect huddle');
-      expect(r.status).not.toBe(0);
-      expect(`${r.stdout}${r.stderr}`).toMatch(/not owned|not permitted/i);
+      it('weigert --privileged', async () => {
+        const r = execIn(E2E_NAME, `docker run --rm --privileged ${E2E_IMAGE} true`);
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/privileged.*not permitted/i);
+      });
+
+      it('weigert inspect van een vreemde container (huddle)', async () => {
+        const r = execIn(E2E_NAME, 'docker inspect huddle');
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/not owned|not permitted/i);
+      });
     });
   });
 
-  // ── Huddle self-traffic via de proxy ───────────────────────────────────────
-  describe('huddle self-traffic', () => {
+  // ── Huddle self-traffic via de proxy ──────────────────────────────────────
+  // Read-only, geen gedeelde state — beide tests draaien concurrent.
+  describe.concurrent('huddle self-traffic', () => {
     it('management-API is onbereikbaar vanuit de devcontainer (→ 403)', () => {
       const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules');
       expect(code).toBe('403');
