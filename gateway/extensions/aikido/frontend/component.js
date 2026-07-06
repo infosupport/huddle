@@ -983,7 +983,7 @@
         const res = await fetch('/api/docker/containers');
         if (!res.ok) return;
         this._s.containers = (await res.json()) || [];
-      } catch {}
+      } catch (e) { console.error('Failed to load container list:', e); }
     }
 
     async _resolveImage (ws) {
@@ -1099,7 +1099,7 @@
     }
 
     async _refreshIssues () {
-      try { await this.api('POST', `/workspaces/${encodeURIComponent(this._s.selectedWs)}/refresh`); } catch {}
+      try { await this.api('POST', `/workspaces/${encodeURIComponent(this._s.selectedWs)}/refresh`); } catch (e) { console.error('Failed to refresh workspace issues:', e); }
       await this._loadIssues();
     }
 
