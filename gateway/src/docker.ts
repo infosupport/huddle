@@ -166,7 +166,7 @@ export function isIdeName(value: unknown): value is IdeName {
 
 export function getBaseImageName(ide: IdeName): string {
   const envKey = `BASE_IMAGE_${ide.toUpperCase()}`;
-  return process.env[envKey] ?? `base-devimage-${ide}`;
+  return process.env[envKey] ?? `ghcr.io/infosupport/base-devimage-${ide}`;
 }
 
 export async function inspectContainer(name: string): Promise<any> {

@@ -69,8 +69,11 @@ jobs:
             sleep 2
           done
 
+      - name: Build base-devimage
+        run: docker build -t ghcr.io/infosupport/base-devimage -f base-devimage/Dockerfile .
+
       - name: Build base-devimage-vscode
-        run: docker build -t base-devimage-vscode -f base-devimage-vscode/Dockerfile .
+        run: docker build -t ghcr.io/infosupport/base-devimage-vscode -f base-devimage-vscode/Dockerfile .
 
       - name: Run e2e tests
         run: npm run test:e2e

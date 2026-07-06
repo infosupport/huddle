@@ -1,4 +1,4 @@
-FROM base-devimage
+FROM ghcr.io/infosupport/base-devimage
 
 # JB Gateway downloadt zelf de .NET-runtime in de RemoteDev-dist. Als je dotnet
 # ook in je terminal wil, voeg dan apt-install dotnet-sdk-8.0 toe.

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 // ── Config (overschrijfbaar via env) ────────────────────────────────────────
 export const HUDDLE_URL = process.env.HUDDLE_URL ?? 'http://localhost:3000';
-export const E2E_IMAGE  = process.env.HUDDLE_E2E_IMAGE ?? 'base-devimage-vscode';
+export const E2E_IMAGE  = process.env.HUDDLE_E2E_IMAGE ?? 'ghcr.io/infosupport/base-devimage-vscode';
 export const E2E_IDE    = process.env.HUDDLE_E2E_IDE ?? 'vscode';
 export const E2E_NAME   = process.env.HUDDLE_E2E_NAME ?? 'devcontainer-e2e-boundary';
 export const E2E_ENABLED = process.env.HUDDLE_E2E === '1';

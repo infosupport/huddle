@@ -11,11 +11,11 @@ $HUDDLE_PORT      = 3000
 # een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
 # datzelfde label zodat de spawn-flow ze per IDE kan filteren.
 $IDE_DEFS = @(
-    [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'base-devimage-rider';    Folder = 'base-devimage-rider' }
-    [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'base-devimage-intellij'; Folder = 'base-devimage-intellij' }
+    [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'ghcr.io/infosupport/base-devimage-rider';    Folder = 'base-devimage-rider' }
+    [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'ghcr.io/infosupport/base-devimage-intellij'; Folder = 'base-devimage-intellij' }
     # VS Code installeert zijn eigen backend (VS Code Server) in de container bij
     # het attachen — er hoeft dus geen IDE-distro gedownload te worden zoals bij JB.
-    [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'base-devimage-vscode';   Folder = 'base-devimage-vscode' }
+    [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'ghcr.io/infosupport/base-devimage-vscode';   Folder = 'base-devimage-vscode' }
 )
 
 $TempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR.TrimEnd('/') } else { '/tmp' }
@@ -345,14 +345,14 @@ function Start-Devcontainer {
 function Build-SharedBase {
     param([string]$ScriptDir)
     $dockerfile = Join-Path $ScriptDir 'base-devimage\Dockerfile'
-    Write-Host "  Gedeelde base image 'base-devimage' bouwen..." -ForegroundColor DarkCyan
+    Write-Host "  Gedeelde base image 'ghcr.io/infosupport/base-devimage' bouwen..." -ForegroundColor DarkCyan
     # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
-    docker build -t base-devimage -f $dockerfile $ScriptDir --no-cache
+    docker build -t ghcr.io/infosupport/base-devimage -f $dockerfile $ScriptDir --no-cache
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [FAIL] Build van base-devimage mislukt." -ForegroundColor Red
         return $false
     }
-    Write-Host "  [OK] base-devimage klaar." -ForegroundColor Green
+    Write-Host "  [OK] ghcr.io/infosupport/base-devimage klaar." -ForegroundColor Green
     return $true
 }
 
