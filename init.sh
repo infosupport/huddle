@@ -11,7 +11,15 @@ CONTAINER_PORT="3000"
 VOLUME_NAME="${HUDDLE_VOLUME:-huddle-data}"
 
 # Container runtime: expliciet via HUDDLE_RUNTIME, anders automatisch (docker, dan podman)
-RUNTIME="${HUDDLE_RUNTIME:-}"
+RUNTIME=""
+if [ -n "${HUDDLE_RUNTIME:-}" ]; then
+  if [ "${HUDDLE_RUNTIME}" = "docker" ] || [ "${HUDDLE_RUNTIME}" = "podman" ]; then
+    RUNTIME="${HUDDLE_RUNTIME}"
+  else
+    echo "Fout: HUDDLE_RUNTIME moet 'docker' of 'podman' zijn, niet '${HUDDLE_RUNTIME}'." >&2
+    exit 1
+  fi
+fi
 if [ -z "${RUNTIME}" ]; then
   if docker info >/dev/null 2>&1; then
     RUNTIME="docker"
