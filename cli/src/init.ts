@@ -44,6 +44,9 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
   console.log(dim(`Verwijder oude container als die bestaat`));
   runSilent(`${rt} rm -f ${CONTAINER}`);
 
+  console.log(dim(`Maak /tmp/dc-sockets aan`));
+  execSync('mkdir -p /tmp/dc-sockets');
+
   console.log(dim(`Start container`));
   run(
     `${rt} run -d` +
