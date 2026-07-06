@@ -31,10 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
 
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -69,11 +71,42 @@ jobs:
             sleep 2
           done
 
-      - name: Build base-devimage
-        run: docker build -t ghcr.io/infosupport/base-devimage -f base-devimage/Dockerfile .
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build base-devimage-vscode
-        run: docker build -t ghcr.io/infosupport/base-devimage-vscode -f base-devimage-vscode/Dockerfile .
+      - name: Controleer of base-devimage gewijzigd is
+        id: base-changed
+        run: |
+          git diff --name-only origin/main...HEAD | grep -q '^base-devimage/' \
+            && echo "changed=true" >> $GITHUB_OUTPUT \
+            || echo "changed=false" >> $GITHUB_OUTPUT
+
+      - name: Pull base-devimage (ongewijzigd)
+        if: steps.base-changed.outputs.changed == 'false'
+        run: docker pull ghcr.io/infosupport/base-devimage:latest
+
+      - name: Build base-devimage (gewijzigd)
+        if: steps.base-changed.outputs.changed == 'true'
+        run: docker build -t ghcr.io/infosupport/base-devimage:latest -f base-devimage/Dockerfile .
+
+      - name: Controleer of base-devimage-vscode gewijzigd is
+        id: vscode-changed
+        run: |
+          git diff --name-only origin/main...HEAD | grep -q '^base-devimage-vscode/' \
+            && echo "changed=true" >> $GITHUB_OUTPUT \
+            || echo "changed=false" >> $GITHUB_OUTPUT
+
+      - name: Pull base-devimage-vscode (ongewijzigd)
+        if: steps.vscode-changed.outputs.changed == 'false'
+        run: docker pull ghcr.io/infosupport/base-devimage-vscode:latest
+
+      - name: Build base-devimage-vscode (gewijzigd)
+        if: steps.vscode-changed.outputs.changed == 'true'
+        run: docker build -t ghcr.io/infosupport/base-devimage-vscode:latest -f base-devimage-vscode/Dockerfile .
 
       - name: Run e2e tests
         run: npm run test:e2e
