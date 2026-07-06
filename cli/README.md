@@ -12,6 +12,8 @@ Login bij de registries:
 docker login ghcr.io -u JOUW_GITHUB_GEBRUIKERSNAAM -p JOUW_TOKEN
 ```
 
+Gebruik je Podman, vervang dan `docker` door `podman` in het commando hierboven.
+
 Voeg toe aan je gebruikersprofiel `.npmrc`:
 - Windows: `C:\Users\JOUW_GEBRUIKERSNAAM\.npmrc`
 - Mac/Linux: `~/.npmrc`
@@ -33,7 +35,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-Pullt `ghcr.io/infosupport/huddle:latest` en start de container. Als je `huddle` runt terwijl Huddle niet draait, krijg je automatisch de tip om dit commando uit te voeren.
+Pullt `ghcr.io/infosupport/huddle:latest` en start de container. Werkt met Docker en Podman: de runtime wordt automatisch gedetecteerd (Docker eerst, dan Podman), of kies expliciet met `huddle init --runtime <docker|podman>` of de env-var `HUDDLE_RUNTIME`. Als je `huddle` runt terwijl Huddle niet draait, krijg je automatisch de tip om dit commando uit te voeren.
 
 ## Devcontainers starten
 
