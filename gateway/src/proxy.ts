@@ -105,13 +105,12 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
 
 // Buffers en scrubt de OAuth token-exchange response zodat het echte access_token
 // nooit in de audit-log terechtkomt. Stuurt de gescrubde response naar innerRes
-// en roept completeWithBody aan met de veilige audit-body.
+// en roept complete aan met de veilige audit-body als derde argument.
 function handleTokenExchangeResponse(
   upstreamRes: http.IncomingMessage,
   innerRes: http.ServerResponse,
   containerId: string | null,
-  completeWithBody: (status: number | null, headers: http.IncomingHttpHeaders | undefined, body: string | null) => void,
-  complete: (status: number | null, headers?: http.IncomingHttpHeaders) => void,
+  complete: (status: number | null, headers?: http.IncomingHttpHeaders, body?: string | null) => void,
 ): void {
   const chunks: Buffer[] = [];
   upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -143,7 +142,7 @@ function handleTokenExchangeResponse(
     }
     innerRes.writeHead(upstreamRes.statusCode ?? 200, outHeaders);
     innerRes.end(outBuf);
-    completeWithBody(upstreamRes.statusCode ?? null, outHeaders, auditResBody);
+    complete(upstreamRes.statusCode ?? null, outHeaders, auditResBody);
   });
   upstreamRes.on('error', () => {
     if (!innerRes.writableEnded) innerRes.destroy();
@@ -480,7 +479,9 @@ export function createProxyServer(): http.Server {
         reqHeaders: headersToJson(innerReq.headers),
       });
       let completed = false;
-      const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
+      // resBody: expliciet meegeven voor gescrubde paden (token-exchange) zodat het
+      // echte secret nooit in de audit-log terechtkomt. Weglaten = afleiden uit resChunks.
+      const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders, resBody?: string | null) => {
         if (completed) return;
         completed = true;
         if (auditId == null) return;
@@ -488,25 +489,7 @@ export function createProxyServer(): http.Server {
           reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
           resStatus,
           resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-          resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
-        });
-      };
-      // Variant voor paden waar de response-body al gescrubd is (token-exchange):
-      // log de meegegeven body letterlijk i.p.v. hem uit resChunks af te leiden,
-      // zodat het echte secret nooit in de audit-log terechtkomt.
-      const completeWithBody = (
-        resStatus: number | null,
-        resHeaders: http.IncomingHttpHeaders | undefined,
-        resBody: string | null,
-      ) => {
-        if (completed) return;
-        completed = true;
-        if (auditId == null) return;
-        updateAuditResponse(auditId, {
-          reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
-          resStatus,
-          resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-          resBody,
+          resBody: resBody !== undefined ? resBody : resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
         });
       };
 
@@ -521,7 +504,7 @@ export function createProxyServer(): http.Server {
         },
         (upstreamRes) => {
           if (isTokenRequest && upstreamRes.statusCode === 200) {
-            handleTokenExchangeResponse(upstreamRes, innerRes, containerId, completeWithBody, complete);
+            handleTokenExchangeResponse(upstreamRes, innerRes, containerId, complete);
           } else {
             innerRes.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
             upstreamRes.on('data', (chunk: Buffer) => {
