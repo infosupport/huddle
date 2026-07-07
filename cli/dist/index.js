@@ -9,9 +9,10 @@ const path_1 = __importDefault(require("path"));
 const api_1 = require("./api");
 const start_1 = require("./start");
 const firewall_1 = require("./firewall");
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status']);
+const init_1 = require("./init");
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'help']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'help']);
 function parseArgs(argv) {
     const positional = [];
     const flags = {};
@@ -71,8 +72,14 @@ function printHelp() {
 Gebruik:
   huddle [opties] [folder]           Devcontainer starten in huidige map of folder
   huddle start [opties] [folder]     Expliciet een devcontainer starten
+  huddle init [opties]               Huddle + devcontainer base-images pullen en
+                                     opstarten via Docker of Podman
   huddle firewall list [opties]      Firewall-verzoeken weergeven
   huddle fw list [opties]            Alias voor firewall list
+
+Init opties:
+  --runtime <docker|podman>          Container runtime (standaard: automatisch
+                                     gedetecteerd; ook via env-var HUDDLE_RUNTIME)
 
 Start opties:
   --ide <intellij|rider|vscode>      IDE (standaard: intellij)
@@ -125,6 +132,10 @@ async function main() {
         });
         return;
     }
+    if (cmd === 'init') {
+        await (0, init_1.runInit)({ runtime: flagString(flags, 'runtime') });
+        return;
+    }
     if (cmd === 'firewall' || cmd === 'fw') {
         const subCmd = sub ?? 'list';
         if (subCmd !== 'list') {
@@ -155,5 +166,8 @@ function flagBool(flags, ...names) {
 }
 main().catch((err) => {
     console.error(`Fout: ${err.message ?? err}`);
+    if (err instanceof api_1.ApiError && err.message.includes('Kan Huddle API niet bereiken')) {
+        console.error('\nHuddle lijkt niet te draaien. Start het met:\n  huddle init');
+    }
     process.exit(1);
 });

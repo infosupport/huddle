@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cyan = exports.green = exports.red = exports.dim = exports.bold = void 0;
+exports.cyan = exports.yellow = exports.green = exports.red = exports.dim = exports.bold = void 0;
 exports.formatTime = formatTime;
 exports.promptKey = promptKey;
 exports.printTable = printTable;
@@ -16,6 +16,8 @@ const red = (t) => fmt(31, t);
 exports.red = red;
 const green = (t) => fmt(32, t);
 exports.green = green;
+const yellow = (t) => fmt(33, t);
+exports.yellow = yellow;
 const cyan = (t) => fmt(36, t);
 exports.cyan = cyan;
 function formatTime(unixSec) {
