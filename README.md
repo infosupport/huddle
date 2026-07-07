@@ -6,116 +6,116 @@
   <img alt="Provided as-is, no SLA" src="https://img.shields.io/badge/support-AS--IS%2C%20no%20SLA-lightgrey.svg">
 </p>
 
-## Wat is Huddle?
+## What is Huddle?
 
-Huddle is een security gateway die devcontainers afschermt van het externe netwerk via een per-domein firewall. Elke devcontainer draait in een DMZ: al het uitgaande verkeer gaat verplicht door Huddle, en alleen domeinen op de allowlist worden doorgelaten. Operators beheren firewall-regels, Docker-toegang en netwerk-logs via een centrale web-UI.
+Huddle is a security gateway that shields devcontainers from the external network through a per-domain firewall. Every devcontainer runs in a DMZ: all outbound traffic is forced through Huddle, and only domains on the allowlist are let through. Operators manage firewall rules, Docker access, and network logs through a central web UI.
 
-Je IDE (JetBrains of VS Code) voelt normaal aan, maar code, tools en AI draaien in een afgeschermde omgeving. De uitvoering zit geïsoleerd; het portaal houdt controle over wat er in- en uitgaat.
-
-<p align="center">
-  <img src="docs/images/huddle-portal.png" alt="Developers werken via Huddle in afgeschermde devcontainers" width="820">
-</p>
-
-## Waarom Huddle?
-
-Huddle adresseert twee grote risico's van moderne, AI-ondersteunde ontwikkeling:
-
-- **Veilig developen *mét* AI** — AI moet kunnen helpen, maar niet ongecontroleerd je systeem kunnen aanpassen of data kunnen exfiltreren.
-- **Veilig developen *tégen* AI-versterkte aanvallen** — supply-chain attacks worden slimmer, sneller en meerstaps. Huddle vangt uitgaand verkeer af en blokkeert wat niet expliciet is toegestaan.
+Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a shielded environment. Execution is isolated; the portal stays in control of what goes in and out.
 
 <p align="center">
-  <img src="docs/images/huddle-risks.png" alt="Veilig developen mét AI en tégen supply-chain aanvallen" width="820">
+  <img src="docs/images/huddle-portal.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
 </p>
 
-## Architectuur
+## Why Huddle?
+
+Huddle addresses two major risks of modern, AI-assisted development:
+
+- **Developing safely *with* AI** — AI should be able to help, but not modify your system unchecked or exfiltrate data.
+- **Developing safely *against* AI-amplified attacks** — supply-chain attacks are getting smarter, faster, and multi-stage. Huddle intercepts outbound traffic and blocks anything that isn't explicitly allowed.
+
+<p align="center">
+  <img src="docs/images/huddle-risks.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+</p>
+
+## Architecture
 
 ```
 Devcontainer
-  └─ HTTP/HTTPS-verkeer → Huddle proxy (poort 80)
+  └─ HTTP/HTTPS traffic → Huddle proxy (port 80)
        └─ rules engine → allow / deny / request
-  └─ Docker socket → /tmp/dc-sockets/<naam>/docker.sock (per-container proxy)
-       └─ label-isolatie + time-limited grant check
+  └─ Docker socket → /tmp/dc-sockets/<name>/docker.sock (per-container proxy)
+       └─ label isolation + time-limited grant check
 
 Browser
-  └─ Angular SPA (poort 3000) + WebSocket live push
+  └─ Angular SPA (port 3000) + WebSocket live push
        └─ Fastify REST API (/api/...)
 ```
 
-Twee servers draaien in hetzelfde proces:
+Two servers run in the same process:
 
-| Server | Poort | Doel |
-|--------|-------|------|
-| HTTP proxy | 80 | Doorsturen/onderscheppen van alle uitgaande containertraffic |
+| Server | Port | Purpose |
+|--------|------|---------|
+| HTTP proxy | 80 | Forward/intercept all outbound container traffic |
 | API + UI | 3000 | REST API, Angular frontend, WebSocket push |
 
 <p align="center">
-  <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: verkeer, Docker-toegang en logs lopen gecontroleerd door de DMZ" width="820">
+  <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
 </p>
 
-### Drie veiligheidsprincipes
+### Three security principles
 
-| Principe | Wat het betekent |
-|----------|------------------|
-| **Geen direct internet** | Verkeer loopt via de Huddle Gateway met firewall-approvals — geen enkele container praat rechtstreeks met het externe netwerk. |
-| **Docker proxy socket** | Geen volledige Docker socket, maar gecontroleerde Docker-acties via een per-container proxy met label-policy. |
-| **Geen root-user** | Standaard een veiligere gebruiker; `sudo` kan enkel gecontroleerd via Huddle. |
+| Principle | What it means |
+|-----------|---------------|
+| **No direct internet** | Traffic flows through the Huddle Gateway with firewall approvals — no container talks to the external network directly. |
+| **Docker proxy socket** | No full Docker socket, but controlled Docker actions through a per-container proxy with a label policy. |
+| **No root user** | A safer default user; `sudo` is only possible in a controlled way through Huddle. |
 
 ---
 
-## Functies
+## Features
 
 ### Firewall
-- Per-container en globale allow/deny-regels opgeslagen in SQLite
-- Regels kunnen permanent of tijdgebonden zijn (vervaldatum)
-- Containers kunnen toegang *aanvragen*; operators keuren goed of wijzen af via de UI
-- HTTP: volledige request/response gelogd in het netwerklog
-- HTTPS: getunneld via CONNECT (inhoud niet onderschept)
+- Per-container and global allow/deny rules stored in SQLite
+- Rules can be permanent or time-bound (with an expiry date)
+- Containers can *request* access; operators approve or reject via the UI
+- HTTP: full request/response logged in the network log
+- HTTPS: tunneled through CONNECT (contents not intercepted)
 
 ### Docker Socket Proxy
-- Elke devcontainer krijgt een eigen Unix socket op `/tmp/dc-sockets/<naam>/docker.sock`; de per-container *directory* wordt in de container gemount (op `/var/run/huddle`) en `DOCKER_HOST` wijst naar de socket. Een file-mount van de socket zelf zou na een Huddle-herstart de dode oude inode blijven zien; een directory-mount niet. Het oude platte pad `/tmp/dc-sockets/<naam>.sock` blijft als symlink bestaan voor containers van vóór deze wijziging.
-- Fijnmazige rechten per devcontainer, in twee klassen:
-  - **Tijdelijke acties** (mutaties: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — alleen effectief zolang de tijdgebonden grant (1–120 minuten) actief is én de actie-toggle in het portal aan staat
-  - **Altijd toegestane acties** (read-only: list/inspect/logs/stats, ping/version/events) — onafhankelijk van de timer, per actie in te schakelen
-  - Secure by default: **álle acties staan standaard uit**; de operator zet per devcontainer expliciet aan wat mag. Wees extra terughoudend met `image.push`: pushen loopt via de host-daemon en passeert de egress-firewall niet
-- Policy wordt per request afgedwongen:
-  - `docker ps` → gefilterd tot eigen gestarte containers
-  - `docker run` → toegestaan; label `huddle.parent` automatisch toegevoegd
-  - `docker exec` → alleen eigen child-containers, nooit de devcontainer zelf
-  - `docker rm` / `docker rmi` → alleen resources die de container zelf aanmaakte
-  - `docker volume rm` / netwerk-delete → alleen eigen (gelabelde) resources; `dc-net-*` netwerken zijn onaantastbaar
-  - `docker volume prune` → beperkt tot eigen volumes via een geïnjecteerd labelfilter
-  - `docker push` → alleen zelf gebouwde (gelabelde) images
-  - `docker images` → alle images (alleen-lezen)
-- Grants en actie-toggles overleven een Huddle-herstart; proxy sockets worden bij herstart opnieuw aangemaakt
+- Every devcontainer gets its own Unix socket at `/tmp/dc-sockets/<name>/docker.sock`; the per-container *directory* is mounted into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the socket. A file mount of the socket itself would keep seeing the dead old inode after a Huddle restart; a directory mount does not. The old flat path `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created before this change.
+- Fine-grained permissions per devcontainer, in two classes:
+  - **Temporary actions** (mutations: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — only effective while the time-bound grant (1–120 minutes) is active *and* the action toggle is enabled in the portal
+  - **Always-allowed actions** (read-only: list/inspect/logs/stats, ping/version/events) — independent of the timer, enabled per action
+  - Secure by default: **all actions are off by default**; the operator explicitly enables what each devcontainer may do. Be extra cautious with `image.push`: pushing goes through the host daemon and does not pass the egress firewall
+- Policy is enforced per request:
+  - `docker ps` → filtered to the container's own started containers
+  - `docker run` → allowed; label `huddle.parent` added automatically
+  - `docker exec` → only the container's own child containers, never the devcontainer itself
+  - `docker rm` / `docker rmi` → only resources the container created itself
+  - `docker volume rm` / network delete → only the container's own (labeled) resources; `dc-net-*` networks are untouchable
+  - `docker volume prune` → limited to the container's own volumes via an injected label filter
+  - `docker push` → only self-built (labeled) images
+  - `docker images` → all images (read-only)
+- Grants and action toggles survive a Huddle restart; proxy sockets are recreated on restart
 
-### Containerbeheer
-- Overzicht van alle devcontainers met status, image, uptime en openstaande regelverzoeken
-- Nieuwe devcontainer starten vanuit een snapshot of base image (IntelliJ / Rider / VS Code)
-- Draaiende container committen naar een snapshot-image
-- Container geforceerd verwijderen inclusief netwerkopschoning
-- Per-container Docker socket proxy wordt automatisch aangemaakt bij het starten
+### Container management
+- Overview of all devcontainers with status, image, uptime, and pending rule requests
+- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / VS Code)
+- Commit a running container to a snapshot image
+- Force-remove a container including network cleanup
+- A per-container Docker socket proxy is created automatically on start
 
-### Netwerklog
-- Elk proxied HTTP-verzoek wordt gelogd (container, domein, methode, pad, status, headers, body — afgekapt op 20 KB)
-- Admin-acties (regelwijzigingen, grant-wijzigingen, containerbewerkingen) worden gelogd
-- Filterbaar op container, domein en actieprefix
+### Network log
+- Every proxied HTTP request is logged (container, domain, method, path, status, headers, body — truncated at 20 KB)
+- Admin actions (rule changes, grant changes, container operations) are logged
+- Filterable by container, domain, and action prefix
 
 ### Live UI
-- Angular 21 SPA op poort 3000
-- WebSocket-verbinding pusht een `reload`-event bij elke statuswijziging
-- Unified icon-systeem (`app-icon`) backed door een centrale SVG-registry
-- Pie-action-menu's in firewall- en containerweergaven (goedkeuren / snoozen / weigeren)
+- Angular 21 SPA on port 3000
+- WebSocket connection pushes a `reload` event on every state change
+- Unified icon system (`app-icon`) backed by a central SVG registry
+- Pie-action menus in the firewall and container views (approve / snooze / reject)
 
 
 ---
 
 ## Tech Stack
 
-| Laag | Technologie |
-|------|-------------|
+| Layer | Technology |
+|-------|------------|
 | Runtime | Node.js 24 LTS (Alpine) |
 | Backend | Fastify 5, TypeScript 5 |
-| Database | SQLite via better-sqlite3 (WAL-modus) |
+| Database | SQLite via better-sqlite3 (WAL mode) |
 | WebSocket | ws |
 | Frontend | Angular 21 (standalone components, signals) |
 | Build | Angular CLI, esbuild |
@@ -125,45 +125,45 @@ Twee servers draaien in hetzelfde proces:
 
 ## Getting Started
 
-**Vereisten:** Docker of Podman, Node.js 18+
+**Requirements:** Docker or Podman, Node.js 18+
 
-### 1. Maak een GitHub Personal Access Token aan
+### 1. Create a GitHub Personal Access Token
 
-Ga naar [github.com/settings/tokens](https://github.com/settings/tokens/new?description=Huddle&scopes=read%3Apackages&default_expires_at=7) → **Generate new token (classic)**.
+Go to [github.com/settings/tokens](https://github.com/settings/tokens/new?description=Huddle&scopes=read%3Apackages&default_expires_at=7) → **Generate new token (classic)**.
 
-Instellingen:
-- Expiration: kies een korte geldigheidsduur (bijv. **7 dagen**); je organisatie kan een maximum afdwingen
+Settings:
+- Expiration: pick a short lifetime (e.g. **7 days**); your organization may enforce a maximum
 - Scope: **read:packages**
 
-Kopieer het token.
+Copy the token.
 
-### 2. Login bij de package registries
+### 2. Log in to the package registries
 
 ```bash
-docker login ghcr.io -u JOUW_GITHUB_GEBRUIKERSNAAM -p JOUW_TOKEN
+docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_TOKEN
 ```
 
-Gebruik je Podman, vervang dan `docker` door `podman` in het commando hierboven.
+If you use Podman, replace `docker` with `podman` in the command above.
 
-Voeg dit toe aan je gebruikersprofiel `.npmrc` (maak het bestand aan als het niet bestaat):
-- Windows: `C:\Users\JOUW_GEBRUIKERSNAAM\.npmrc`
+Add this to your user profile `.npmrc` (create the file if it doesn't exist):
+- Windows: `C:\Users\YOUR_USERNAME\.npmrc`
 - Mac/Linux: `~/.npmrc`
 
 ```
 @infosupport:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=JOUW_TOKEN
+//npm.pkg.github.com/:_authToken=YOUR_TOKEN
 ```
 
-### 3. Installeer de CLI en start Huddle
+### 3. Install the CLI and start Huddle
 
 ```bash
 npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pullt de laatste Huddle-image en start de container. Het detecteert automatisch of Docker of Podman beschikbaar is; met `huddle init --runtime <docker|podman>` (of de env-var `HUDDLE_RUNTIME`) kies je expliciet een runtime. De web-UI is bereikbaar op `http://localhost:3000`.
+`huddle init` pulls the latest Huddle image and starts the container. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
 
-Daarna start je devcontainers direct vanuit een projectmap:
+After that, you start devcontainers directly from a project directory:
 
 ```bash
 huddle
@@ -171,9 +171,9 @@ huddle
 
 ---
 
-## Base images bouwen (optioneel)
+## Building base images (optional)
 
-Huddle bouwt base images automatisch wanneer je een devcontainer start. Wil je dit versnellen, bouw ze dan van tevoren:
+Huddle builds base images automatically when you start a devcontainer. To speed this up, you can build them ahead of time:
 
 ```bash
 docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
@@ -183,316 +183,315 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 ---
 
-## Containers starten
+## Starting containers
 
-Devcontainers kun je starten via de CLI of via de web-UI op `http://localhost:3000`.
+You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
 
-### Via de CLI
+### Via the CLI
 
-Vanuit een projectmap start je een devcontainer met één commando:
+From a project directory you start a devcontainer with a single command:
 
 ```bash
-huddle                            # IntelliJ (standaard), huidige map
+huddle                            # IntelliJ (default), current directory
 huddle --ide rider                # Rider
 huddle --ide vscode               # VS Code
-huddle ./mijn-project             # andere map
-huddle --ide vscode ./mijn-project
+huddle ./my-project               # a different directory
+huddle --ide vscode ./my-project
 ```
 
-Overige opties:
+Other options:
 
 ```bash
-huddle --name mijn-container      # aangepaste containernaam
-huddle --empty                    # container zonder workspace
+huddle --name my-container        # custom container name
+huddle --empty                    # container without a workspace
 ```
 
-Na het starten toont de CLI de containernaam en hoe je hem opent in je IDE.
+After starting, the CLI shows the container name and how to open it in your IDE.
 
-### Openen in JetBrains (IntelliJ / Rider)
+### Opening in JetBrains (IntelliJ / Rider)
 
 1. Open **JetBrains Gateway**
-2. Ga naar **Remote Development → Dev Containers**
-3. Selecteer de gestarte container
-4. Klik **Open Project** en kies de projectmap in de container
+2. Go to **Remote Development → Dev Containers**
+3. Select the started container
+4. Click **Open Project** and choose the project directory in the container
 
-De CLI print ook een directe gateway-link zodra de JetBrains-backend opgestart is (kan een paar seconden duren).
+The CLI also prints a direct gateway link once the JetBrains backend has started (this can take a few seconds).
 
-### Openen in VS Code
+### Opening in VS Code
 
 1. Open VS Code
-2. Open het command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-3. Kies **Dev Containers: Attach to Running Container**
-4. Selecteer de containernaam die de CLI heeft afgedrukt
+2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+3. Choose **Dev Containers: Attach to Running Container**
+4. Select the container name the CLI printed
 
 ---
 
-## Firewall beheren
+## Managing the firewall
 
-Geblokkeerde verzoeken zijn zichtbaar in de web-UI onder **Firewall**. Via de CLI:
+Blocked requests are visible in the web UI under **Firewall**. Via the CLI:
 
 ```bash
-huddle fw list               # lijst van recente verzoeken
-huddle firewall list -i      # interactieve modus
+huddle fw list               # list of recent requests
+huddle firewall list -i      # interactive mode
 ```
 
-Wanneer een devcontainer een geblokkeerd domein probeert te bereiken, verschijnt het verzoek in de Firewall-pagina. Van daaruit kun je het domein toestaan (permanent of tijdelijk) of weigeren — per container of globaal.
+When a devcontainer tries to reach a blocked domain, the request appears on the Firewall page. From there you can allow the domain (permanently or temporarily) or reject it — per container or globally.
 
 ---
 
-## AI-configuratie
+## AI configuration
 
-Bij het bouwen van een base-image kan Huddle automatisch AI-CLI-configuraties (zoals `CLAUDE.md`, `settings.json`, agents en skills) in de container inbakken. Je beheert dit via de Huddle-instellingen: geef daar het pad op naar je eigen AI-config-map. Huddle koppelt die map bij het bouwen van de image.
+When building a base image, Huddle can automatically bake AI CLI configurations (such as `CLAUDE.md`, `settings.json`, agents, and skills) into the container. You manage this through the Huddle settings: set the path to your own AI config directory there. Huddle mounts that directory when building the image.
 
-| AI-tool | Bronpad (host) | Doelpad (container) |
-|---------|---------------|---------------------|
-| claude | `/mnt/c/projects/huddle/.ai/claude/` | `/home/vscode/.claude` |
+| AI tool | Source path (host) | Target path (container) |
+|---------|--------------------|-------------------------|
+| claude | `<your-ai-config-dir>/claude/` | `/home/vscode/.claude` |
 
 ---
 
-## Extensies
+## Extensions
 
-Huddle heeft een runtime extensie-platform. Extensies zijn `.zip`-bestanden die je via de UI uploadt — geen herstart nodig. Na het uploaden verschijnt de extensie als sub-item in de sidebar.
+Huddle has a runtime extension platform. Extensions are `.zip` files you upload through the UI — no restart needed. After uploading, the extension appears as a sub-item in the sidebar.
 
-### Een extensie bouwen
+### Building an extension
 
 ```
-mijn-extensie.zip
-├── manifest.json       ← verplicht: id, naam, versie, instellingen
+my-extension.zip
+├── manifest.json       ← required: id, name, version, settings
 ├── index.js            ← backend (CommonJS, Node.js)
 └── frontend/
-    └── component.js    ← UI als Web Component (optioneel)
+    └── component.js    ← UI as a Web Component (optional)
 ```
 
 **`manifest.json`:**
 ```json
 {
-  "id": "mijn-extensie",
-  "name": "Mijn Extensie",
+  "id": "my-extension",
+  "name": "My Extension",
   "version": "1.0.0",
   "settings": [
-    { "key": "apiKey", "label": "API-sleutel", "secret": true }
+    { "key": "apiKey", "label": "API key", "secret": true }
   ]
 }
 ```
 
-**`index.js`** — exporteer een `register(ctx)` functie:
+**`index.js`** — export a `register(ctx)` function:
 ```js
 exports.register = async function(ctx) {
-  ctx.app.get('/api/ext/mijn-extensie/data', async (req, reply) => {
+  ctx.app.get('/api/ext/my-extension/data', async (req, reply) => {
     const key = ctx.getSetting('apiKey');
     return { data: '...' };
   });
 };
 ```
 
-**`frontend/component.js`** — Web Component voor de in-app UI:
+**`frontend/component.js`** — Web Component for the in-app UI:
 ```js
-class MijnExtensie extends HTMLElement {
+class MyExtension extends HTMLElement {
   connectedCallback() {
-    this.innerHTML = '<h1>Hallo vanuit de extensie</h1>';
+    this.innerHTML = '<h1>Hello from the extension</h1>';
   }
 }
-customElements.define('ext-mijn-extensie', MijnExtensie);
+customElements.define('ext-my-extension', MyExtension);
 ```
 
-### Extensie-context (`ctx`)
+### Extension context (`ctx`)
 
 | | |
 |---|---|
-| `ctx.app.get/post/put/delete(pad, handler)` | Route registreren onder `/api/ext/<id>/` |
-| `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Instellingen lezen/schrijven (SQLite) |
-| `ctx.fetch(url, opts)` | HTTP-call via Huddle-proxy — verschijnt als `ext:<id>` in de netwerklog |
-| `ctx.runInContainer(naam, cmd)` | Shell-commando uitvoeren in een draaiende devcontainer |
-| `ctx.events` | Luisteren op Huddle-events |
-| `ctx.db` | Directe SQLite-toegang |
-| `ctx.log(msg)` | Loggen naar de Huddle-console |
+| `ctx.app.get/post/put/delete(path, handler)` | Register a route under `/api/ext/<id>/` |
+| `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Read/write settings (SQLite) |
+| `ctx.fetch(url, opts)` | HTTP call through the Huddle proxy — appears as `ext:<id>` in the network log |
+| `ctx.runInContainer(name, cmd)` | Run a shell command in a running devcontainer |
+| `ctx.events` | Listen to Huddle events |
+| `ctx.db` | Direct SQLite access |
+| `ctx.log(msg)` | Log to the Huddle console |
 
-### Firewall en externe calls
+### Firewall and external calls
 
-Externe calls via `ctx.fetch()` lopen door de Huddle-proxy. Het domein moet op de allowlist staan (**Firewall** → zoek het domein → **Allow**). Requests verschijnen in de netwerklog als `ext:<id>`.
+External calls via `ctx.fetch()` go through the Huddle proxy. The domain must be on the allowlist (**Firewall** → find the domain → **Allow**). Requests appear in the network log as `ext:<id>`.
 
-### Voorbeeld: Aikido Security
+### Example: Aikido Security
 
-De ingebouwde Aikido-extensie staat in `gateway/extensions/aikido/`. Na het laden (automatisch bij start) verschijnt **Aikido Security** in de sidebar. Functionaliteit:
+The built-in Aikido extension lives in `gateway/extensions/aikido/`. After loading (automatically on start), **Aikido Security** appears in the sidebar. Functionality:
 
-- Open security-issues per workspace ophalen van de Aikido API
-- Issues injecteren als context in een draaiende devcontainer (`aikido/AIKIDO_CLAUDE.md`, `AIKIDO_CONTEXT.md`)
-- Een MCP-server (`aikido-mcp-server.js`) schrijven naar de container zodat Claude direct issues kan ophalen en scans kan triggeren
-- `aikido-fix`-script installeren dat Claude start met de juiste context
+- Fetch open security issues per workspace from the Aikido API
+- Inject issues as context into a running devcontainer (`aikido/AIKIDO_CLAUDE.md`, `AIKIDO_CONTEXT.md`)
+- Write an MCP server (`aikido-mcp-server.js`) into the container so Claude can fetch issues and trigger scans directly
+- Install an `aikido-fix` script that starts Claude with the right context
 
-Credentials (Client ID + Secret) stel je in via de UI onder **Aikido Security → Instellingen**.
+You configure credentials (Client ID + Secret) through the UI under **Aikido Security → Settings**.
 
 ---
 
 ## API Reference
 
-| Methode | Pad | Omschrijving |
-|---------|-----|--------------|
-| GET | `/api/rules` | Lijst van regels (filter: `?status=`, `?container=`) |
-| POST | `/api/rules` | Regel aanmaken |
-| PUT | `/api/rules/:id` | Regelstatus of vervaldatum bijwerken |
-| POST | `/api/rules/:id/resolve` | Aangevraagde regel afhandelen als allow/deny (container of globaal) |
-| DELETE | `/api/rules/:id` | Regel verwijderen |
-| GET | `/api/docker/containers` | Lijst van devcontainers met openstaande regelverzoeken |
-| GET | `/api/docker/containers/:name` | Containerdetail + bijbehorende regels |
-| POST | `/api/docker/start` | Nieuwe devcontainer starten |
-| POST | `/api/docker/containers/:name/snapshot` | Container committen naar image |
-| DELETE | `/api/docker/containers/:name` | Container geforceerd verwijderen |
-| GET | `/api/docker/images` | Lijst van snapshot-images |
-| GET | `/api/authz/grants` | Lijst van actieve Docker socket grants |
-| PUT | `/api/authz/grants/:container` | Docker-toegang verlenen (body: `{ minutes }`) |
-| DELETE | `/api/authz/grants/:container` | Docker-toegang intrekken |
-| GET | `/api/authz/docker-actions` | Actie-catalogus (kind, groep, label, default) |
-| GET | `/api/authz/docker-actions/:container` | Effectieve actie-toggles + grant per container |
-| PUT | `/api/authz/docker-actions/:container/:action` | Actie aan/uit zetten (body: `{ enabled }`) |
-| GET | `/api/audit` | Netwerklog (filter: `?container=`, `?domain=`, `?action=`) |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/rules` | List rules (filter: `?status=`, `?container=`) |
+| POST | `/api/rules` | Create a rule |
+| PUT | `/api/rules/:id` | Update a rule's status or expiry |
+| POST | `/api/rules/:id/resolve` | Resolve a requested rule as allow/deny (per container or global) |
+| DELETE | `/api/rules/:id` | Delete a rule |
+| GET | `/api/docker/containers` | List devcontainers with pending rule requests |
+| GET | `/api/docker/containers/:name` | Container detail + associated rules |
+| POST | `/api/docker/start` | Start a new devcontainer |
+| POST | `/api/docker/containers/:name/snapshot` | Commit a container to an image |
+| DELETE | `/api/docker/containers/:name` | Force-remove a container |
+| GET | `/api/docker/images` | List snapshot images |
+| GET | `/api/authz/grants` | List active Docker socket grants |
+| PUT | `/api/authz/grants/:container` | Grant Docker access (body: `{ minutes }`) |
+| DELETE | `/api/authz/grants/:container` | Revoke Docker access |
+| GET | `/api/authz/docker-actions` | Action catalog (kind, group, label, default) |
+| GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
+| PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
+| GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
 
-Alle state-muterende endpoints sturen een WebSocket `{ type: "reload" }` event naar verbonden clients.
+All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
 
 ---
 
-## Repo-indeling
+## Repository layout
 
 ```
 .
 ├── gateway/                     ← Huddle gateway (Fastify API + Angular UI)
 │   ├── src/
-│   │   ├── index.ts             # Init DB, start proxy + API, herstel socket proxies
-│   │   ├── proxy.ts             # HTTP/HTTPS proxy (poort 80), regelhandhaving, audit
-│   │   ├── api.ts               # Fastify REST API + WebSocket push (poort 3000)
-│   │   ├── docker.ts            # Docker API-helpers, container lifecycle
-│   │   ├── socket-proxy.ts      # Per-container Docker socket proxy met label-policy
-│   │   ├── rules.ts             # Regelopzoek met per-container + globale fallback
-│   │   ├── db.ts                # SQLite schema, netwerklog, Docker grants
-│   │   └── events.ts            # In-process event bus voor state-change notificaties
+│   │   ├── index.ts             # Init DB, start proxy + API, restore socket proxies
+│   │   ├── proxy.ts             # HTTP/HTTPS proxy (port 80), rule enforcement, audit
+│   │   ├── api.ts               # Fastify REST API + WebSocket push (port 3000)
+│   │   ├── docker.ts            # Docker API helpers, container lifecycle
+│   │   ├── socket-proxy.ts      # Per-container Docker socket proxy with label policy
+│   │   ├── rules.ts             # Rule lookup with per-container + global fallback
+│   │   ├── db.ts                # SQLite schema, network log, Docker grants
+│   │   └── events.ts            # In-process event bus for state-change notifications
 │   └── frontend/src/app/
 │       ├── pages/               # dashboard, containers, firewall, docker-access, audit
 │       ├── shared/
-│       │   ├── icons/           # Centrale SVG icon-registry (icons.ts)
+│       │   ├── icons/           # Central SVG icon registry (icons.ts)
 │       │   └── components/      # <app-icon>, pie-menu
 │       └── core/
 │           ├── models/          # Rule, Container, Grant, AuditLog types
 │           └── services/        # ApiService, StateService, ModalService
-│   └── extensions/aikido/       ← Ingebouwde Aikido Security extensie
+│   └── extensions/aikido/       ← Built-in Aikido Security extension
 ├── cli/                         ← Cross-platform CLI (`huddle`)
-├── .devcontainer/               ← Devcontainer setup voor de Huddle repo zelf
-├── base-devimage-rider/         ← Dockerfile voor Rider devcontainers
-├── base-devimage-intellij/      ← Dockerfile voor IntelliJ devcontainers
-└── base-devimage-vscode/        ← Dockerfile voor VS Code devcontainers
+├── .devcontainer/               ← Devcontainer setup for the Huddle repo itself
+├── base-devimage-rider/         ← Dockerfile for Rider devcontainers
+├── base-devimage-intellij/      ← Dockerfile for IntelliJ devcontainers
+└── base-devimage-vscode/        ← Dockerfile for VS Code devcontainers
 ```
 
 ---
 
 ## Development setup
 
-Wil je aan Huddle zelf werken? Huddle is een monorepo met twee delen: de
-**gateway** (Fastify API + Angular UI + proxy) en de **CLI**.
+Want to work on Huddle itself? Huddle is a monorepo with two parts: the
+**gateway** (Fastify API + Angular UI + proxy) and the **CLI**.
 
-**Vereisten:** Node.js 20+ (24 LTS aanbevolen), Docker of Podman, Git.
+**Requirements:** Node.js 20+ (24 LTS recommended), Docker or Podman, Git.
 
 ```bash
 git clone https://github.com/infosupport/huddle.git
 cd huddle
 
-npm install            # installeert dependencies voor gateway én cli
-npm run build          # bouwt de gateway (API + frontend)
-npm run cli:build      # bouwt de CLI
-npm run cli:typecheck  # type-check van de CLI
+npm install            # installs dependencies for gateway and cli
+npm run build          # builds the gateway (API + frontend)
+npm run cli:build      # builds the CLI
+npm run cli:typecheck  # type-checks the CLI
 
-npm start              # start de gateway lokaal (UI op http://localhost:3000)
+npm start              # runs the gateway locally (UI at http://localhost:3000)
 ```
 
-Tests draaien:
+Running tests:
 
 ```bash
 npm --prefix gateway test          # unit + e2e tests (vitest)
 ```
 
-Zie [`CONTRIBUTING.md`](CONTRIBUTING.md) voor de volledige workflow, branching-
-strategie, commit-conventies en coding standards.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow, branching
+strategy, commit conventions, and coding standards.
 
 ---
 
 ## Troubleshooting
 
-| Probleem | Oplossing |
-|----------|-----------|
-| `docker login ghcr.io` of `npm install` faalt met **401/403** | Je token is verlopen of mist de `read:packages`-scope. Maak een nieuw token en log opnieuw in (zie [Getting Started](#getting-started)). |
-| `huddle init` vindt geen runtime | Zorg dat Docker of Podman draait. Forceer expliciet met `huddle init --runtime docker` (of `podman`), of zet `HUDDLE_RUNTIME`. |
-| Web-UI niet bereikbaar op `http://localhost:3000` | Controleer of de Huddle-container draait (`docker ps`). De management-API bindt standaard op `127.0.0.1` — benader hem lokaal, niet van een andere host. |
-| Devcontainer kan een domein niet bereiken | Verwacht gedrag: al het verkeer loopt door de firewall. Sta het domein toe via **Firewall** in de UI of `huddle fw list`. |
-| JetBrains Gateway ziet de container niet meteen | De JetBrains-backend heeft even nodig om op te starten; de CLI print de gateway-link zodra hij klaar is. |
-| `docker` in de devcontainer geeft *permission denied* | Docker-toegang loopt via een tijdgebonden grant. Verleen toegang via **Docker Access** in de UI (of `PUT /api/authz/grants/:container`). |
-| Poort 80 al in gebruik | Een andere proxy/webserver gebruikt poort 80. Stop die service of pas de poortmapping aan bij het starten van de Huddle-container. |
+| Problem | Solution |
+|---------|----------|
+| `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)). |
+| `huddle init` finds no runtime | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`. |
+| Web UI not reachable at `http://localhost:3000` | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host. |
+| Devcontainer can't reach a domain | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`. |
+| JetBrains Gateway doesn't see the container right away | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready. |
+| `docker` inside the devcontainer gives *permission denied* | Docker access runs through a time-bound grant. Grant access via **Docker Access** in the UI (or `PUT /api/authz/grants/:container`). |
+| Port 80 already in use | Another proxy/web server is using port 80. Stop that service or adjust the port mapping when starting the Huddle container. |
 
-Meer logs nodig? De netwerklog en admin-acties staan in de UI onder
-**Netwerklog**; containerlogs bekijk je met `docker logs <container>`.
+Need more logs? The network log and admin actions are in the UI under
+**Network log**; view container logs with `docker logs <container>`.
 
 ---
 
 ## FAQ
 
-**Is Huddle een vervanging voor een bedrijfsfirewall of VPN?**
-Nee. Huddle schermt *devcontainers* af op applicatieniveau (per-domein allowlist,
-gecontroleerde Docker-acties). Het is een aanvulling op, geen vervanging van,
-netwerk-infrastructuur.
+**Is Huddle a replacement for a corporate firewall or VPN?**
+No. Huddle shields *devcontainers* at the application level (per-domain
+allowlist, controlled Docker actions). It complements, but does not replace,
+network infrastructure.
 
-**Werkt Huddle met Podman?**
-Ja. `huddle init` detecteert automatisch Docker of Podman; forceren kan met
-`--runtime` of de env-var `HUDDLE_RUNTIME`.
+**Does Huddle work with Podman?**
+Yes. `huddle init` automatically detects Docker or Podman; you can force it with
+`--runtime` or the `HUDDLE_RUNTIME` env var.
 
-**Onderschept Huddle HTTPS-verkeer?**
-HTTP-verzoeken worden volledig gelogd. HTTPS wordt via `CONNECT` getunneld; de
-inhoud wordt niet onderschept, alleen het doeldomein wordt tegen de allowlist
-gecheckt.
+**Does Huddle intercept HTTPS traffic?**
+HTTP requests are logged in full. HTTPS is tunneled through `CONNECT`; its
+contents are not intercepted, only the target domain is checked against the
+allowlist.
 
-**Waar wordt de state opgeslagen?**
-In een lokale SQLite-database (WAL-modus) binnen de Huddle-container. Firewall-
-regels en Docker-grants overleven een herstart.
+**Where is state stored?**
+In a local SQLite database (WAL mode) inside the Huddle container. Firewall
+rules and Docker grants survive a restart.
 
-**Moet ik de base images zelf bouwen?**
-Nee. Huddle bouwt ze automatisch bij het starten van een devcontainer. Vooraf
-bouwen kan om het te versnellen (zie [Base images bouwen](#base-images-bouwen-optioneel)).
+**Do I have to build the base images myself?**
+No. Huddle builds them automatically when you start a devcontainer. Building them
+ahead of time can speed this up (see [Building base images](#building-base-images-optional)).
 
-**Kan ik Huddle in productie gebruiken?**
-Huddle wordt "AS IS" aangeboden zonder garanties (zie hieronder). Gebruik op
-eigen risico.
+**Can I use Huddle in production?**
+Huddle is provided "AS IS" without warranty (see below). Use at your own risk.
 
 ---
 
-## Bijdragen
+## Contributing
 
-Bijdragen zijn welkom! Lees eerst:
+Contributions are welcome! Please read first:
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — hoe je bugs meldt, features voorstelt en
-  een pull request indient.
-- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — gedragsregels in de community.
-- [`SECURITY.md`](SECURITY.md) — meld security-issues **privé**, niet als publiek
-  issue.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to report bugs, propose features, and
+  open a pull request.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community behavior guidelines.
+- [`SECURITY.md`](SECURITY.md) — report security issues **privately**, not as a
+  public issue.
 
-Bugs en ideeën meld je via GitHub Issues:
+Report bugs and ideas via GitHub Issues:
 **[github.com/infosupport/huddle/issues](https://github.com/infosupport/huddle/issues)**
 
 ---
 
 ## Support & SLA
 
-Huddle is vrije, open source software en wordt **"AS IS"** aangeboden, **zonder
-enige garantie** (zie de [GPL v3](LICENSE), secties 15–17).
+Huddle is free, open source software, provided **"AS IS"**, **without any
+warranty** (see the [GPL v3](LICENSE), sections 15–17).
 
-- Er is **geen SLA** en **geen gegarandeerde responstijd**.
-- Ondersteuning gebeurt op **vrijwillige basis** door de community.
-- Issues en pull requests zijn welkom, maar er is **geen garantie** dat een
-  melding wordt opgepakt of geïmplementeerd.
+- There is **no SLA** and **no guaranteed response time**.
+- Support is provided on a **volunteer basis** by the community.
+- Issues and pull requests are welcome, but there is **no guarantee** that a
+  report will be picked up or implemented.
 
-Zie [`SUPPORT.md`](SUPPORT.md) voor details.
+See [`SUPPORT.md`](SUPPORT.md) for details.
 
 ---
 
-## Licentie
+## License
 
-Huddle is gelicentieerd onder de **GNU General Public License v3.0 (of later)**.
-Zie het [`LICENSE`](LICENSE)-bestand voor de volledige tekst.
+Huddle is licensed under the **GNU General Public License v3.0 (or later)**.
+See the [`LICENSE`](LICENSE) file for the full text.
 
 ```
 Copyright (C) 2026 Info Support B.V.
