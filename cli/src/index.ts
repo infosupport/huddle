@@ -76,7 +76,8 @@ function printHelp(): void {
 Gebruik:
   huddle [opties] [folder]           Devcontainer starten in huidige map of folder
   huddle start [opties] [folder]     Expliciet een devcontainer starten
-  huddle init [opties]               Huddle pullen en opstarten via Docker of Podman
+  huddle init [opties]               Huddle + devcontainer base-images pullen en
+                                     opstarten via Docker of Podman
   huddle firewall list [opties]      Firewall-verzoeken weergeven
   huddle fw list [opties]            Alias voor firewall list
 

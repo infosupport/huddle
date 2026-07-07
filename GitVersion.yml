@@ -1,0 +1,13 @@
+# GitVersion-configuratie — berekent automatisch de SemVer voor de Huddle CLI.
+#
+# Mainline-modus: elke commit op main verhoogt automatisch de patch-versie
+# (1.0.1 -> 1.0.2 -> 1.0.3 ...). Grotere bumps stuur je via de commit-message:
+#   "+semver: minor"  -> 1.1.0
+#   "+semver: major"  -> 2.0.0
+# Op feature-/fix-branches krijg je een prerelease-versie (bv. 1.0.2-fix-12.3).
+#
+# Anker: maak eenmalig een git-tag op de huidige main zodat GitVersion niet de
+# volledige historie meetelt voor het patch-nummer:
+#   git tag v1.0.1 && git push origin v1.0.1
+mode: Mainline
+next-version: 1.0.1

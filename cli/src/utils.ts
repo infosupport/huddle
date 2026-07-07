@@ -9,6 +9,7 @@ export const bold = (t: string) => fmt(1, t);
 export const dim = (t: string) => fmt(2, t);
 export const red = (t: string) => fmt(31, t);
 export const green = (t: string) => fmt(32, t);
+export const yellow = (t: string) => fmt(33, t);
 export const cyan = (t: string) => fmt(36, t);
 
 export function formatTime(unixSec: number): string {

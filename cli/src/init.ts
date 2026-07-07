@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { bold, green, dim } from './utils';
+import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 
 const IMAGE = 'ghcr.io/infosupport/huddle:latest';
@@ -7,6 +7,19 @@ const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
 const INTERNAL_NET = 'devcontainer-net';
 const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
+
+/**
+ * Devcontainer-base-images die de gateway gebruikt om workspaces te starten.
+ * We pullen ze alvast tijdens init zodat de eerste `huddle start` niet hoeft te
+ * wachten op een pull (of een lokale build als fallback). De namen komen overeen
+ * met getBaseImageName() in de gateway; een override kan via BASE_IMAGE_<IDE>.
+ */
+const BASE_IMAGES: readonly string[] = [
+  process.env.BASE_IMAGE ?? 'ghcr.io/infosupport/base-devimage',
+  process.env.BASE_IMAGE_RIDER ?? 'ghcr.io/infosupport/base-devimage-rider',
+  process.env.BASE_IMAGE_INTELLIJ ?? 'ghcr.io/infosupport/base-devimage-intellij',
+  process.env.BASE_IMAGE_VSCODE ?? 'ghcr.io/infosupport/base-devimage-vscode',
+];
 
 export interface InitOptions {
   runtime?: string;
@@ -25,6 +38,28 @@ function runSilent(cmd: string): boolean {
   }
 }
 
+/**
+ * Pullt de devcontainer-base-images alvast. Best-effort: als een image (nog)
+ * niet beschikbaar is in het register, waarschuwen we alleen — de gateway bouwt
+ * hem dan bij de eerste start alsnog uit de meegeleverde Dockerfile.
+ */
+function pullBaseImages(rt: string): void {
+  console.log(dim(`Pull devcontainer base-images (${BASE_IMAGES.length})`));
+  const failed: string[] = [];
+  for (const image of BASE_IMAGES) {
+    console.log(dim(`  Pull ${image}`));
+    try {
+      run(`${rt} pull ${image}`);
+    } catch {
+      failed.push(image);
+      console.log(yellow(`  [!] Kon ${image} niet pullen — gateway bouwt hem later indien nodig.`));
+    }
+  }
+  if (failed.length === BASE_IMAGES.length) {
+    console.log(yellow('[!] Geen enkele base-image kon gepulld worden. Ben je ingelogd op ghcr.io?'));
+  }
+}
+
 export async function runInit(opts: InitOptions = {}): Promise<void> {
   console.log(`${bold('Huddle opstarten...')}\n`);
 
@@ -34,6 +69,8 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
 
   console.log(dim(`Pull ${IMAGE}`));
   run(`${rt} pull ${IMAGE}`);
+
+  pullBaseImages(rt);
 
   console.log(dim(`Volume: ${VOLUME}`));
   runSilent(`${rt} volume inspect ${VOLUME}`) || run(`${rt} volume create ${VOLUME}`);
