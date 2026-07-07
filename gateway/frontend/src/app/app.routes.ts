@@ -13,6 +13,5 @@ export const routes: Routes = [
   { path: 'extensions/:id/settings', loadComponent: () => import('./pages/extensions/settings/extension-settings.component').then(m => m.ExtensionSettingsComponent) },
   { path: 'extensions/view/:id', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
   { path: 'extensions/view/:id/:repo', loadComponent: () => import('./pages/extensions/view/extension-view.component').then(m => m.ExtensionViewComponent) },
-
 { path: '**', redirectTo: 'dashboard' },
 ];
