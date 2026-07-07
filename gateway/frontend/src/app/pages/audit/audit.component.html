@@ -1,25 +1,25 @@
-<div class="page-header"><h1>Netwerklog</h1></div>
+<div class="page-header"><h1>Network log</h1></div>
 
 <div class="card">
   <div class="card-header">
     <div class="filter-bar">
       <select [formControl]="containerFilter">
-        <option value="">Alle containers</option>
+        <option value="">All containers</option>
         @for (c of containers; track c) {
           <option [value]="c">{{ c }}</option>
         }
       </select>
-      <input type="text" [formControl]="domainFilter" placeholder="Domein zoeken..." />
-      <input type="text" [formControl]="pathFilter" placeholder="Pad zoeken..." />
+      <input type="text" [formControl]="domainFilter" placeholder="Search domain..." />
+      <input type="text" [formControl]="pathFilter" placeholder="Search path..." />
       <select [formControl]="actionFilter">
-        <option value="">Alle acties</option>
+        <option value="">All actions</option>
         <option value="allow">Allow</option>
         <option value="deny">Deny</option>
         <option value="requested">Requested</option>
         <option value="admin">Admin</option>
-        <option value="system:start">Systeem start</option>
+        <option value="system:start">System start</option>
       </select>
-      <button class="btn-filter-preset" (click)="setTokenFilter()" title="Filter op login token verzoeken">Token verzoeken</button>
+      <button class="btn-filter-preset" (click)="setTokenFilter()" title="Filter on login token requests">Token requests</button>
       <select [formControl]="limitControl">
         <option [value]="100">100</option>
         <option [value]="500">500</option>
@@ -27,26 +27,26 @@
       </select>
     </div>
     @if (logs$ | async; as logs) {
-      <span class="record-count">{{ logs.length }} vermeldingen</span>
+      <span class="record-count">{{ logs.length }} entries</span>
     }
   </div>
 
   @if (fetchError()) {
-    <p class="form-error">Fout bij ophalen: {{ fetchError() }}</p>
+    <p class="form-error">Error fetching: {{ fetchError() }}</p>
   }
   @if (logs$ | async; as logs) {
     @if (logs.length === 0) {
-      <p class="empty-note">Geen vermeldingen gevonden — proxy verkeer verschijnt hier zodra er verzoeken zijn verwerkt</p>
+      <p class="empty-note">No entries found — proxy traffic appears here once requests have been processed</p>
     } @else {
       <table class="data-table audit-table">
         <thead>
           <tr>
-            <th>Tijd</th>
+            <th>Time</th>
             <th>Container</th>
-            <th>Methode</th>
-            <th>Domein / Pad</th>
+            <th>Method</th>
+            <th>Domain / Path</th>
             <th>Status</th>
-            <th>Actie</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -95,7 +95,7 @@
                       </div>
                     }
                     @if (!log.req_headers && !log.req_body && !log.res_headers && !log.res_body) {
-                      <p class="empty-note">Geen request/response data (HTTPS tunnel)</p>
+                      <p class="empty-note">No request/response data (HTTPS tunnel)</p>
                     }
                   </div>
                 </td>

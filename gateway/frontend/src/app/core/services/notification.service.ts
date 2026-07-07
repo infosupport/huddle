@@ -44,16 +44,16 @@ export class NotificationService {
   }
 
   private async showNotification(r: Rule): Promise<void> {
-    const title = 'Huddle – URL aangevraagd';
+    const title = 'Huddle – URL requested';
     const options = {
-      body: `${r.container_name || r.container_id || 'Onbekend'} → ${r.domain}`,
+      body: `${r.container_name || r.container_id || 'Unknown'} → ${r.domain}`,
       icon: '/assets/hex-2d.png',
       requireInteraction: true,
       data: { ruleId: r.id, domain: r.domain },
       actions: [
-        { action: 'allow-all', title: 'Alles toestaan' },
-        { action: 'block-all', title: 'Alles blokkeren' },
-        { action: '5min',      title: '5 minuten'       },
+        { action: 'allow-all', title: 'Allow all' },
+        { action: 'block-all', title: 'Block all' },
+        { action: '5min',      title: '5 minutes' },
       ],
     } as NotificationOptions;
 
@@ -62,7 +62,7 @@ export class NotificationService {
         const reg = await navigator.serviceWorker.ready;
         await reg.showNotification(title, options);
         return;
-      } catch { /* val terug op standaard notificatie */ }
+      } catch { /* fall back to default notification */ }
     }
 
     new Notification(title, { body: options.body, icon: options.icon });

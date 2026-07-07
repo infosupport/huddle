@@ -4,10 +4,10 @@ import { Rule } from '../../../core/models/rule.model';
 import { RelTimePipe } from '../../pipes/rel-time.pipe';
 import { PathDomainVm } from './path-allowlist.util';
 
-// Presentatie + acties voor pad-allowlist domeinen. Gedeeld tussen de
-// firewall-pagina en het container-detail, zodat beide exact dezelfde
-// behandeling van subpaden tonen. Doet de API-calls zelf en stuurt `changed`
-// uit zodat de ouder zijn state kan herladen.
+// Presentation + actions for path-allowlist domains. Shared between the
+// firewall page and the container detail, so both show exactly the same
+// handling of subpaths. Makes the API calls itself and emits `changed`
+// so the parent can reload its state.
 @Component({
   selector: 'app-path-allowlist',
   standalone: true,
@@ -18,15 +18,15 @@ import { PathDomainVm } from './path-allowlist.util';
         <h4>
           {{ pd.domain }}
           <span class="badge badge-deny">{{ pd.scope }}</span>
-          <button class="btn btn-delete btn-sm" (click)="disablePathMode(pd.marker)" title="Pad-allowlist uitschakelen">✕ modus uit</button>
+          <button class="btn btn-delete btn-sm" (click)="disablePathMode(pd.marker)" title="Disable path allowlist">✕ mode off</button>
         </h4>
 
-        <h5>Openstaande subpaden ({{ pd.requested.length }})</h5>
+        <h5>Pending subpaths ({{ pd.requested.length }})</h5>
         @if (pd.requested.length === 0) {
-          <p class="empty-note">Geen openstaande subpaden</p>
+          <p class="empty-note">No pending subpaths</p>
         } @else {
           <table class="data-table">
-            <thead><tr><th>Pad-patroon</th><th>Verzoeken</th><th>Laatste</th><th class="col-actions">Acties</th></tr></thead>
+            <thead><tr><th>Path pattern</th><th>Requests</th><th>Last</th><th class="col-actions">Actions</th></tr></thead>
             <tbody>
               @for (r of pd.requested; track r.id) {
                 <tr>
@@ -35,17 +35,17 @@ import { PathDomainVm } from './path-allowlist.util';
                            [value]="pathEditValue(r)"
                            (input)="pathEdits[r.id] = $any($event.target).value" />
                     @if (r.last_path) {
-                      <div class="full-path" title="Laatst geziene volledige pad">laatst: {{ r.last_path }}</div>
+                      <div class="full-path" title="Last seen full path">last: {{ r.last_path }}</div>
                     }
                   </td>
                   <td>{{ r.request_count }}</td>
                   <td>{{ r.last_seen | relTime }}</td>
                   <td class="col-actions path-actions">
-                    <button class="btn btn-sm" (click)="approvePath(r, 'prefix')" title="Sta dit pad én alles eronder toe">Allow /*</button>
-                    <button class="btn btn-sm" (click)="approvePath(r, 'exact')" title="Sta alleen exact dit pad toe">Allow exact</button>
-                    <button class="btn btn-sm" (click)="approvePath(r, 'prefix', 5)" title="Tijdelijk 5 min (prefix)">5 min</button>
-                    <button class="btn btn-sm" (click)="denyPath(r)" title="Blokkeer dit pad">Deny</button>
-                    <button class="btn btn-delete btn-sm" (click)="deletePath(r)" title="Verwijder verzoek">✕</button>
+                    <button class="btn btn-sm" (click)="approvePath(r, 'prefix')" title="Allow this path and everything below it">Allow /*</button>
+                    <button class="btn btn-sm" (click)="approvePath(r, 'exact')" title="Allow only exactly this path">Allow exact</button>
+                    <button class="btn btn-sm" (click)="approvePath(r, 'prefix', 5)" title="Temporary 5 min (prefix)">5 min</button>
+                    <button class="btn btn-sm" (click)="denyPath(r)" title="Block this path">Deny</button>
+                    <button class="btn btn-delete btn-sm" (click)="deletePath(r)" title="Remove request">✕</button>
                   </td>
                 </tr>
               }
@@ -55,16 +55,16 @@ import { PathDomainVm } from './path-allowlist.util';
 
         @if (pd.allowed.length > 0) {
           <details class="path-collapse">
-            <summary><h5>Toegestane paden ({{ pd.allowed.length }})</h5></summary>
+            <summary><h5>Allowed paths ({{ pd.allowed.length }})</h5></summary>
             <table class="data-table">
-              <thead><tr><th>Pad-patroon</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
+              <thead><tr><th>Path pattern</th><th>Status</th><th>Last</th><th class="col-actions">Action</th></tr></thead>
               <tbody>
                 @for (r of pd.allowed; track r.id) {
                   <tr>
                     <td>{{ r.path_pattern }}</td>
                     <td>
                       <span class="badge badge-allow">allow</span>
-                      @if (r.expires_at && r.expires_at > now) { <span class="badge">tijdelijk · {{ r.expires_at | relTime }}</span> }
+                      @if (r.expires_at && r.expires_at > now) { <span class="badge">temporary · {{ r.expires_at | relTime }}</span> }
                     </td>
                     <td>{{ r.last_seen | relTime }}</td>
                     <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="deletePath(r)">✕</button></td>
@@ -77,9 +77,9 @@ import { PathDomainVm } from './path-allowlist.util';
 
         @if (pd.denied.length > 0) {
           <details class="path-collapse">
-            <summary><h5>Geblokkeerde paden ({{ pd.denied.length }})</h5></summary>
+            <summary><h5>Blocked paths ({{ pd.denied.length }})</h5></summary>
             <table class="data-table">
-              <thead><tr><th>Pad-patroon</th><th>Status</th><th>Laatste</th><th class="col-actions">Actie</th></tr></thead>
+              <thead><tr><th>Path pattern</th><th>Status</th><th>Last</th><th class="col-actions">Action</th></tr></thead>
               <tbody>
                 @for (r of pd.denied; track r.id) {
                   <tr>
@@ -116,21 +116,21 @@ export class PathAllowlistComponent {
   @Input() now = 0;
   @Output() changed = new EventEmitter<void>();
 
-  // Lokale, bewerkbare padpatronen per requested-subpad (key = rule.id).
+  // Local, editable path patterns per requested subpath (key = rule.id).
   pathEdits: Record<number, string> = {};
 
   pathEditValue(rule: Rule): string {
     return this.pathEdits[rule.id] ?? rule.path_pattern ?? '';
   }
 
-  // Prefix-match: garandeer een trailing `*` (`/api` → `/api/*`).
+  // Prefix match: guarantee a trailing `*` (`/api` → `/api/*`).
   private toPrefix(p: string): string {
     let s = p.trim();
     if (!s.startsWith('/')) s = '/' + s;
     if (s.endsWith('*')) return s;
     return (s.endsWith('/') ? s : s + '/') + '*';
   }
-  // Exacte match: strip een eventuele trailing `/*` of `*`.
+  // Exact match: strip any trailing `/*` or `*`.
   private toExact(p: string): string {
     let s = p.trim();
     if (!s.startsWith('/')) s = '/' + s;

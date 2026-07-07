@@ -53,8 +53,8 @@ export class StartContainerModalComponent {
     this.loadImagesForIde();
   }
 
-  // De IDE-keuze stuurt zowel de default base-image als het snapshot-filter.
-  // Beide endpoints zijn nu IDE-specifiek; deze methode haalt ze opnieuw op.
+  // The IDE choice drives both the default base image and the snapshot filter.
+  // Both endpoints are now IDE-specific; this method fetches them again.
   onIdeChange(): void {
     this.selectedImage = '';
     this.loadImagesForIde();
@@ -86,11 +86,11 @@ export class StartContainerModalComponent {
 
   confirm(): void {
     if (!this.selectedImage || !this.containerName || (!this.empty && !this.workspace)) {
-      this.error = 'Alle velden zijn verplicht'; return;
+      this.error = 'All fields are required'; return;
     }
     this.error = '';
     this.loading = true;
-    this.status = 'Container wordt gestart…';
+    this.status = 'Starting container…';
     this.api.startContainer({
       image: this.selectedImage,
       ide: this.ide,

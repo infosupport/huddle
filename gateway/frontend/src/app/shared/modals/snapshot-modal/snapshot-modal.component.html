@@ -2,17 +2,17 @@
   <div class="modal" (click)="close()">
     <div class="modal-box" (click)="$event.stopPropagation()">
       <div class="modal-header">
-        <h2>Snapshot maken</h2>
+        <h2>Create snapshot</h2>
         <button class="modal-close" (click)="close()">✕</button>
       </div>
       <div class="modal-body">
-        <label for="snapshot-name">Image naam</label>
+        <label for="snapshot-name">Image name</label>
         <input id="snapshot-name" type="text" [(ngModel)]="imageName" [placeholder]="'snapshot-' + (data?.containerName || '')" />
         @if (error) { <p class="form-error">{{ error }}</p> }
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary" (click)="confirm()">Maken</button>
-        <button class="btn btn-ghost" (click)="close()">Annuleren</button>
+        <button class="btn btn-primary" (click)="confirm()">Create</button>
+        <button class="btn btn-ghost" (click)="close()">Cancel</button>
       </div>
     </div>
   </div>

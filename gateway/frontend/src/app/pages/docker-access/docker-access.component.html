@@ -1,5 +1,5 @@
 <div class="page-header">
-  <h1>Docker-rechten</h1>
+  <h1>Docker permissions</h1>
 </div>
 
 <div class="card da-selector">
@@ -10,23 +10,23 @@
         <option [value]="c.name">{{ c.presentableName || c.name }}</option>
       }
     </select>
-    <span class="da-selector__hint">Rechten en timer gelden per devcontainer.</span>
+    <span class="da-selector__hint">Permissions and timer apply per devcontainer.</span>
   } @else {
-    <span class="da-selector__hint">Geen devcontainers gevonden.</span>
+    <span class="da-selector__hint">No devcontainers found.</span>
   }
 </div>
 
 @if (!selectedContainer()) {
   <div class="card">
-    <p class="empty-note">Selecteer een devcontainer om de Docker-rechten te beheren. Zodra er een devcontainer beschikbaar is, verschijnt die hierboven.</p>
+    <p class="empty-note">Select a devcontainer to manage its Docker permissions. As soon as a devcontainer is available, it will appear above.</p>
   </div>
 } @else {
   <app-docker-rights-panel [container]="selectedContainer()" />
 }
 
-<!-- ── Goedgekeurde host-poorten (bestaande functionaliteit) ───────────────── -->
+<!-- ── Approved host ports (existing functionality) ───────────────── -->
 <div class="card">
-  <div class="card-header"><h3>Goedgekeurde host-poorten</h3></div>
+  <div class="card-header"><h3>Approved host ports</h3></div>
   <div class="ports-container-select">
     <label>Container:</label>
     @if (containers().length > 0) {
@@ -36,15 +36,15 @@
         }
       </select>
     } @else {
-      <input type="text" [(ngModel)]="portsContainer" (change)="onPortsContainerChange()" placeholder="Container naam…" />
+      <input type="text" [(ngModel)]="portsContainer" (change)="onPortsContainerChange()" placeholder="Container name…" />
     }
   </div>
   @if (portsError()) { <p class="ports-error">{{ portsError() }}</p> }
   @if (ports().length === 0) {
-    <p class="empty-note">Geen goedgekeurde poorten voor deze container.</p>
+    <p class="empty-note">No approved ports for this container.</p>
   } @else {
     <table class="data-table" style="margin-bottom:16px">
-      <thead><tr><th>Host-poort</th><th>Container-poort</th><th>Protocol</th><th>Omschrijving</th><th class="col-actions"></th></tr></thead>
+      <thead><tr><th>Host port</th><th>Container port</th><th>Protocol</th><th>Description</th><th class="col-actions"></th></tr></thead>
       <tbody>
         @for (p of ports(); track p.id) {
           <tr>
@@ -52,21 +52,21 @@
             <td><code>{{ p.container_port || p.host_port }}</code></td>
             <td>{{ p.protocol }}</td>
             <td>{{ p.description || '—' }}</td>
-            <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="removePort(p.id)">Verwijder</button></td>
+            <td class="col-actions"><button class="btn btn-delete btn-sm" (click)="removePort(p.id)">Remove</button></td>
           </tr>
         }
       </tbody>
     </table>
   }
   <div class="grant-form">
-    <label style="font-weight:600">Poort toevoegen:</label>
-    <input class="da-port-input" type="number" [(ngModel)]="newPortHost" placeholder="Host-poort" min="1" max="65535" style="width:110px" />
-    <input class="da-port-input" type="number" [(ngModel)]="newPortContainer" placeholder="Container-poort" min="1" max="65535" style="width:130px" />
+    <label style="font-weight:600">Add port:</label>
+    <input class="da-port-input" type="number" [(ngModel)]="newPortHost" placeholder="Host port" min="1" max="65535" style="width:110px" />
+    <input class="da-port-input" type="number" [(ngModel)]="newPortContainer" placeholder="Container port" min="1" max="65535" style="width:130px" />
     <select [(ngModel)]="newPortProto">
       <option value="tcp">tcp</option>
       <option value="udp">udp</option>
     </select>
-    <input class="da-port-input" type="text" [(ngModel)]="newPortDesc" placeholder="Omschrijving" style="flex:1;min-width:120px" />
-    <button class="btn btn--accent btn-sm" [disabled]="!newPortHost || !portsContainer" (click)="addPort()">Toevoegen</button>
+    <input class="da-port-input" type="text" [(ngModel)]="newPortDesc" placeholder="Description" style="flex:1;min-width:120px" />
+    <button class="btn btn--accent btn-sm" [disabled]="!newPortHost || !portsContainer" (click)="addPort()">Add</button>
   </div>
 </div>

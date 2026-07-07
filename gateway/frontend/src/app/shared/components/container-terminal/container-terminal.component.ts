@@ -2,12 +2,12 @@ import { Component, ElementRef, Input, OnDestroy, ViewChild, AfterViewInit } fro
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 
-// Embedded terminal die via WebSocket aan /ws/terminal/<container> hangt. De
-// backend deelt één Docker exec over meerdere clients (multi-attach), dus twee
-// tabbladen op dezelfde container zien dezelfde sessie.
+// Embedded terminal that connects via WebSocket to /ws/terminal/<container>. The
+// backend shares a single Docker exec across multiple clients (multi-attach), so two
+// tabs on the same container see the same session.
 //
-// Mount xterm pas in AfterViewInit; instantieer dit component lazy (alleen
-// wanneer de Terminal-tab actief is) zodat we geen onnodige WS-verbinding openen.
+// Only mount xterm in AfterViewInit; instantiate this component lazily (only
+// when the Terminal tab is active) so we don't open an unnecessary WS connection.
 
 interface DetectedUrl {
   url: string;

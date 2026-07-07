@@ -20,7 +20,7 @@ export class DockerAccessComponent implements OnInit {
   containers = toSignal(this.state.containers$, { initialValue: [] });
   selectedContainer = signal('');
 
-  // ── Goedgekeurde host-poorten (bestaande functionaliteit) ──────────────────
+  // ── Approved host ports (existing functionality) ───────────────────────────
   portsContainer = '';
   ports = signal<ApprovedHostPort[]>([]);
   portsError = signal<string | null>(null);
@@ -47,7 +47,7 @@ export class DockerAccessComponent implements OnInit {
     this.selectedContainer.set(name);
   }
 
-  // ── Goedgekeurde host-poorten (bestaande functionaliteit) ──────────────────
+  // ── Approved host ports (existing functionality) ───────────────────────────
   onPortsContainerChange(): void { this.loadPorts(); }
 
   loadPorts(): void {

@@ -45,21 +45,21 @@ export class ContainerDetailComponent implements OnInit {
   readonly pieConfig: PieMenuConfig = {
     families: [
       {
-        id: 'approve', label: 'Toestaan', tone: 'green', icon: 'approve',
-        variants: [{ id: 'approve-all', label: 'Voor iedereen', icon: 'approve-all' }],
+        id: 'approve', label: 'Allow', tone: 'green', icon: 'approve',
+        variants: [{ id: 'approve-all', label: 'For everyone', icon: 'approve-all' }],
       },
       {
-        id: 'temp', label: 'Tijdelijk 5 min', tone: 'blue', icon: 'timer',
+        id: 'temp', label: 'Temporary 5 min', tone: 'blue', icon: 'timer',
         variants: [
-          { id: 'temp-10', label: 'Tijdelijk 10 min', icon: 'timer-long' },
-          { id: 'later',   label: 'Verberg',           icon: 'later'      },
+          { id: 'temp-10', label: 'Temporary 10 min', icon: 'timer-long' },
+          { id: 'later',   label: 'Hide',              icon: 'later'      },
         ],
       },
       {
-        id: 'deny', label: 'Blokkeren', tone: 'red', icon: 'deny',
-        variants: [{ id: 'deny-all', label: 'Voor iedereen', icon: 'deny-all' }],
+        id: 'deny', label: 'Deny', tone: 'red', icon: 'deny',
+        variants: [{ id: 'deny-all', label: 'For everyone', icon: 'deny-all' }],
       },
-      { id: 'pathmode', label: 'Pad-allowlist', tone: 'neutral', icon: 'filter' },
+      { id: 'pathmode', label: 'Path allowlist', tone: 'neutral', icon: 'filter' },
     ],
   };
 
@@ -181,7 +181,7 @@ export class ContainerDetailComponent implements OnInit {
   setTab(t: DetailTab): void { this.activeTab = t; }
 
   openIde(): void {
-    this.ideLinkStatus = 'Ophalen...';
+    this.ideLinkStatus = 'Fetching...';
     this.api.getIdeLink(this.name).subscribe({
       next: ({ link }) => { this.ideLinkStatus = ''; window.open(link, '_self'); },
       error: (err) => { this.ideLinkStatus = err.message; },
@@ -193,9 +193,9 @@ export class ContainerDetailComponent implements OnInit {
   }
 
   reconnectHuddle(): void {
-    this.reconnectStatus = 'Bezig...';
+    this.reconnectStatus = 'Working...';
     this.api.reconnectHuddle(this.name).subscribe({
-      next: () => { this.reconnectStatus = 'Verbonden'; this.load(); setTimeout(() => this.reconnectStatus = '', 2000); },
+      next: () => { this.reconnectStatus = 'Connected'; this.load(); setTimeout(() => this.reconnectStatus = '', 2000); },
       error: (err) => { this.reconnectStatus = err.message; },
     });
   }

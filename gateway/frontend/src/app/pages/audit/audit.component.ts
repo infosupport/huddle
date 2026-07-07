@@ -46,7 +46,7 @@ export class AuditComponent {
         limit: limit ?? 1000,
       }).pipe(
         catchError((err) => {
-          this.fetchError.set(err?.message ?? 'Ophalen mislukt');
+          this.fetchError.set(err?.message ?? 'Fetch failed');
           return of([] as AuditLog[]);
         })
       )

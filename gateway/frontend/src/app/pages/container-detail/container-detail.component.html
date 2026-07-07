@@ -30,14 +30,14 @@
       <h1>{{ shortName }}</h1>
       <div class="cd-head__badges">
         @if (inNetwork) {
-          <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In netwerk</span>
+          <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In network</span>
         } @else {
           <span class="cd-badge cd-badge--warn">Rogue</span>
         }
         @if (huddleConn) {
-          <span class="cd-badge cd-badge--ok">Huddle verbonden</span>
+          <span class="cd-badge cd-badge--ok">Huddle connected</span>
         } @else {
-          <span class="cd-badge cd-badge--warn">Huddle losgekoppeld</span>
+          <span class="cd-badge cd-badge--warn">Huddle disconnected</span>
         }
         @if (d.airlocked) {
           <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Airlock</span>
@@ -59,9 +59,9 @@
         [style.color]="d.airlocked ? '#fff' : ''"
         [style.borderColor]="d.airlocked ? '#7c3aed' : ''"
         (click)="toggleAirlock(!!d.airlocked)"
-        [title]="d.airlocked ? 'Airlock actief — globale regels genegeerd.' : 'Container vergrendelen.'">
+        [title]="d.airlocked ? 'Airlock active — global rules ignored.' : 'Lock container.'">
         <app-icon [name]="d.airlocked ? 'shield-check' : 'anchor'" [size]="14" />
-        {{ d.airlocked ? 'Airlock aan' : 'Airlock' }}
+        {{ d.airlocked ? 'Airlock on' : 'Airlock' }}
       </button>
     </div>
   </section>
@@ -81,15 +81,15 @@
       <span class="cd-meta__value" [title]="workspace">{{ workspace }}</span>
     </div>
     <div class="cd-meta__item">
-      <span class="cd-meta__label">Aangemaakt</span>
+      <span class="cd-meta__label">Created</span>
       <span class="cd-meta__value">{{ d.inspect.Created | date:'dd-MM-yy HH:mm' }}</span>
     </div>
     @if (!huddleConn) {
       <div class="cd-meta__item">
         <span class="cd-meta__label">Huddle</span>
         <div class="cd-meta__reconnect">
-          <span class="cd-meta__value" style="color:var(--warning)">Losgekoppeld</span>
-          <button class="btn btn-ghost btn-sm" (click)="reconnectHuddle()">Herverbinden</button>
+          <span class="cd-meta__value" style="color:var(--warning)">Disconnected</span>
+          <button class="btn btn-ghost btn-sm" (click)="reconnectHuddle()">Reconnect</button>
           @if (reconnectStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ reconnectStatus }}</span> }
         </div>
       </div>
@@ -113,14 +113,14 @@
     <!-- Pending requests -->
     <section class="cd-sec">
       <div class="cd-sec__head">
-        <h2 class="cd-sec__title">Wachtende <span class="em">verzoeken</span></h2>
-        <p class="cd-sec__sub">— voor deze container</p>
+        <h2 class="cd-sec__title">Pending <span class="em">requests</span></h2>
+        <p class="cd-sec__sub">— for this container</p>
       </div>
       <div class="card req-card">
         @if (requested.length === 0) {
           <div class="fw-empty">
             <app-icon name="circle-check" [size]="24" />
-            <span>Geen openstaande verzoeken.</span>
+            <span>No pending requests.</span>
           </div>
         } @else {
           @for (r of requested; track r.id) {
@@ -129,7 +129,7 @@
               <div class="req-row__info">
                 <div class="req-row__domain">{{ r.domain }}</div>
                 <div class="req-row__meta">
-                  <span><b>{{ r.request_count }}</b> verzoek{{ r.request_count !== 1 ? 'en' : '' }}</span>
+                  <span><b>{{ r.request_count }}</b> request{{ r.request_count !== 1 ? 's' : '' }}</span>
                   <span class="sep">·</span>
                   <span>{{ r.last_seen | relTime }}</span>
                 </div>
@@ -141,20 +141,20 @@
       </div>
     </section>
 
-    <!-- Container-specifieke regels -->
+    <!-- Container-specific rules -->
     <div class="card">
       <div class="card__head">
-        <h2 class="card__title">Container-regels</h2>
+        <h2 class="card__title">Container rules</h2>
         <div class="cd-sub-tabs">
           <button [class.on]="rulesTab === 'allow'" (click)="rulesTab = 'allow'">
-            Toegestaan <i>{{ allow.length + tempAllow.length }}</i>
+            Allowed <i>{{ allow.length + tempAllow.length }}</i>
           </button>
           <button [class.on]="rulesTab === 'deny'" (click)="rulesTab = 'deny'">
-            Geblokkeerd <i>{{ deny.length }}</i>
+            Blocked <i>{{ deny.length }}</i>
           </button>
           @if (cPathDomains.length > 0) {
             <button [class.on]="rulesTab === 'path'" (click)="rulesTab = 'path'">
-              Pad-mode <i>{{ cPathDomains.length }}</i>
+              Path mode <i>{{ cPathDomains.length }}</i>
             </button>
           }
         </div>
@@ -169,7 +169,7 @@
                 <span class="rule-row__domain">{{ r.domain }}</span>
                 <span class="chip--temp"><app-icon name="timer" [size]="12" />{{ r.expires_at! | relTime }}</span>
                 <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-                <button class="rule-row__del" title="Verwijder regel" (click)="deleteRule(r)">
+                <button class="rule-row__del" title="Delete rule" (click)="deleteRule(r)">
                   <app-icon name="x" [size]="15" />
                 </button>
               </div>
@@ -180,13 +180,13 @@
               <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
               <span class="rule-row__domain">{{ r.domain }}</span>
               <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-              <button class="rule-row__del" title="Verwijder regel" (click)="deleteRule(r)">
+              <button class="rule-row__del" title="Delete rule" (click)="deleteRule(r)">
                 <app-icon name="x" [size]="15" />
               </button>
             </div>
           }
           @if (allow.length === 0 && tempAllow.length === 0) {
-            <div class="fw-empty"><span>Geen toegestane domeinen.</span></div>
+            <div class="fw-empty"><span>No allowed domains.</span></div>
           }
         </div>
       }
@@ -198,13 +198,13 @@
               <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="14" /></span>
               <span class="rule-row__domain">{{ r.domain }}</span>
               <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-              <button class="rule-row__del" title="Verwijder regel" (click)="deleteRule(r)">
+              <button class="rule-row__del" title="Delete rule" (click)="deleteRule(r)">
                 <app-icon name="x" [size]="15" />
               </button>
             </div>
           }
           @if (deny.length === 0) {
-            <div class="fw-empty"><span>Geen geblokkeerde domeinen.</span></div>
+            <div class="fw-empty"><span>No blocked domains.</span></div>
           }
         </div>
       }
@@ -216,14 +216,14 @@
       <!-- Global rules divider -->
       @if (gAllow.length > 0 || gDeny.length > 0 || gPathDomains.length > 0) {
         <div class="cd-global-head">
-          <app-icon name="globe" [size]="13" /> Globale regels
+          <app-icon name="globe" [size]="13" /> Global rules
         </div>
         <div class="rule-list">
           @for (r of gAllow; track r.id) {
             <div class="rule-row rule-row--global">
               <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
               <span class="rule-row__domain">{{ r.domain }}</span>
-              <span class="scope-chip scope-chip--global">Globaal</span>
+              <span class="scope-chip scope-chip--global">Global</span>
               <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
             </div>
           }
@@ -231,7 +231,7 @@
             <div class="rule-row rule-row--global">
               <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="14" /></span>
               <span class="rule-row__domain">{{ r.domain }}</span>
-              <span class="scope-chip scope-chip--global">Globaal</span>
+              <span class="scope-chip scope-chip--global">Global</span>
               <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
             </div>
           }
@@ -248,13 +248,13 @@
     <app-docker-rights-panel [container]="name" />
 
     <div class="card">
-      <div class="card__head"><h2 class="card__title">Goedgekeurde host-poorten</h2></div>
+      <div class="card__head"><h2 class="card__title">Approved host ports</h2></div>
       @if (portsError()) { <p class="ports-error">{{ portsError() }}</p> }
       @if (ports().length === 0) {
-        <p class="ports-empty">Geen goedgekeurde poorten. Container kan geen host-poorten binden.</p>
+        <p class="ports-empty">No approved ports. Container cannot bind host ports.</p>
       } @else {
         <table class="data-table ports-table">
-          <thead><tr><th>Host-poort</th><th>Container-poort</th><th>Protocol</th><th>Omschrijving</th><th></th></tr></thead>
+          <thead><tr><th>Host port</th><th>Container port</th><th>Protocol</th><th>Description</th><th></th></tr></thead>
           <tbody>
             @for (p of ports(); track p.id) {
               <tr>
@@ -262,21 +262,21 @@
                 <td><code>{{ p.container_port || p.host_port }}</code></td>
                 <td>{{ p.protocol }}</td>
                 <td>{{ p.description || '—' }}</td>
-                <td><button class="btn btn-delete btn-sm" (click)="removePort(p.id)">Verwijder</button></td>
+                <td><button class="btn btn-delete btn-sm" (click)="removePort(p.id)">Delete</button></td>
               </tr>
             }
           </tbody>
         </table>
       }
       <div class="ports-form">
-        <input type="number" [(ngModel)]="newPortHost" placeholder="Host-poort" min="1" max="65535" />
-        <input type="number" [(ngModel)]="newPortContainer" placeholder="Container-poort (optioneel)" min="1" max="65535" />
+        <input type="number" [(ngModel)]="newPortHost" placeholder="Host port" min="1" max="65535" />
+        <input type="number" [(ngModel)]="newPortContainer" placeholder="Container port (optional)" min="1" max="65535" />
         <select [(ngModel)]="newPortProto">
           <option value="tcp">tcp</option>
           <option value="udp">udp</option>
         </select>
-        <input type="text" [(ngModel)]="newPortDesc" placeholder="Omschrijving (optioneel)" />
-        <button class="btn btn--accent btn-sm" [disabled]="!newPortHost" (click)="addPort()">Toevoegen</button>
+        <input type="text" [(ngModel)]="newPortDesc" placeholder="Description (optional)" />
+        <button class="btn btn--accent btn-sm" [disabled]="!newPortHost" (click)="addPort()">Add</button>
       </div>
     </div>
   }
@@ -284,52 +284,52 @@
   <!-- ════════════════════════════════════════════ TAB: NOOT -->
   @if (activeTab === 'noot') {
     <div class="card">
-      <div class="card__head"><h2 class="card__title">Noot gebruiker</h2></div>
+      <div class="card__head"><h2 class="card__title">Noot user</h2></div>
       <p class="noot-info">
-        De container heeft twee gebruikers:
-        <code>vscode</code> (jouw werkgebruiker, <b>zonder sudo</b>) en
-        <code>noot</code> (beheerder <b>met sudo</b>).
-        Wissel naar <code>noot</code> alleen wanneer je iets als root moet uitvoeren —
-        alle acties worden bijgehouden in het netwerklog.
+        The container has two users:
+        <code>vscode</code> (your work user, <b>without sudo</b>) and
+        <code>noot</code> (administrator <b>with sudo</b>).
+        Switch to <code>noot</code> only when you need to run something as root —
+        all actions are tracked in the network log.
       </p>
 
       @if (credentials) {
         <div class="noot-cred">
-          <span class="noot-cred__label">Wachtwoord</span>
+          <span class="noot-cred__label">Password</span>
           <span class="noot-cred__pass">{{ passwordVisible ? credentials.password : '•••••••••••••••••' }}</span>
           <div class="noot-cred__actions">
             <button class="btn btn-ghost btn-sm" (click)="passwordVisible = !passwordVisible">
-              {{ passwordVisible ? 'Verbergen' : 'Tonen' }}
+              {{ passwordVisible ? 'Hide' : 'Show' }}
             </button>
             <button class="btn btn-ghost btn-sm" (click)="copyPassword()">
               <app-icon [name]="copied ? 'check' : 'copy'" [size]="14" />
-              {{ copied ? 'Gekopieerd' : 'Kopiëren' }}
+              {{ copied ? 'Copied' : 'Copy' }}
             </button>
           </div>
         </div>
       } @else {
         <p style="font-size:13px;color:var(--text-muted);margin:0 0 18px">
-          Wachtwoord niet beschikbaar (container aangemaakt vóór deze versie).
+          Password not available (container created before this version).
         </p>
       }
 
       <div class="noot-cmd">
-        <h4>Hoe wissel je van gebruiker?</h4>
-        <pre><code># Wissel naar noot (heeft sudo-rechten)
+        <h4>How do you switch users?</h4>
+        <pre><code># Switch to noot (has sudo rights)
 su - noot
 
-# Voer commando's als root uit
-sudo apt install &lt;pakket&gt;
+# Run commands as root
+sudo apt install &lt;package&gt;
 sudo systemctl restart &lt;service&gt;
 
-# Wissel terug naar vscode
+# Switch back to vscode
 exit
 
-# Controleer recente sudo-acties
+# Check recent sudo actions
 sudo cat /tmp/sudo-audit.log</code></pre>
       </div>
       <p class="noot-cmd-note">
-        Alle sudo-acties verschijnen ook in de <a routerLink="/netwerklog">Netwerklog</a> pagina.
+        All sudo actions also appear on the <a routerLink="/network-log">Network log</a> page.
       </p>
     </div>
   }

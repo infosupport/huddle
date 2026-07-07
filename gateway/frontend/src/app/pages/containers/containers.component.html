@@ -18,7 +18,7 @@
       </thead>
       <tbody>
         @if (vm.containers.length === 0) {
-          <tr><td colspan="7"><p class="empty-note">Geen containers</p></td></tr>
+          <tr><td colspan="7"><p class="empty-note">No containers</p></td></tr>
         } @else {
           @for (c of vm.containers; track c.name) {
             @let score = scoreOf(c.name, vm.rules);
@@ -35,7 +35,7 @@
                     <div class="name">
                       {{ c.presentableName || c.name }}
                       @if (c.airlocked) {
-                        <span class="airlock-badge" title="Airlock actief — globale firewallregels worden genegeerd">🔒</span>
+                        <span class="airlock-badge" title="Airlock active — global firewall rules are ignored">🔒</span>
                       }
                     </div>
                     <div class="sub"><code>{{ imageName(c) }}</code></div>
@@ -47,7 +47,7 @@
                 @if (isRogue(c)) {
                   <span class="status-text rogue">✗ Rogue</span>
                 } @else {
-                  <span class="status-text ok">✓ In netwerk</span>
+                  <span class="status-text ok">✓ In network</span>
                 }
               </td>
               <td>

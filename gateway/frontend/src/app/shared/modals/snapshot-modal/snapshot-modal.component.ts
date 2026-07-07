@@ -23,7 +23,7 @@ export class SnapshotModalComponent {
   get data() { return this.modalService.snapshotData(); }
 
   confirm(): void {
-    if (!this.imageName.trim()) { this.error = 'Naam is verplicht'; return; }
+    if (!this.imageName.trim()) { this.error = 'Name is required'; return; }
     this.error = '';
     this.api.snapshotContainer(this.data!.containerName, this.imageName).subscribe({
       next: () => { this.modalService.closeSnapshot(); this.state.loadAll(); },

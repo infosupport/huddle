@@ -73,7 +73,7 @@
         </a>
       </div>
       @if (vm.recentContainers.length === 0) {
-        <p class="empty-note">Geen containers</p>
+        <p class="empty-note">No containers</p>
       } @else {
         <table class="table">
           <thead><tr><th>Container</th><th>Status</th><th>Since</th></tr></thead>
@@ -105,7 +105,7 @@
         </a>
       </div>
       @if (vm.topRequested.length === 0) {
-        <p class="empty-note">Geen openstaande aanvragen</p>
+        <p class="empty-note">No pending requests</p>
       } @else {
         @for (r of vm.topRequested; track r.id) {
           <div class="fw-rule">
@@ -130,7 +130,7 @@
         <a class="link" routerLink="/docker-access">Manage</a>
       </div>
       @if (vm.activeGrants.length === 0) {
-        <p class="empty-note">Geen actieve toegang</p>
+        <p class="empty-note">No active access</p>
       } @else {
         <table class="table">
           <thead><tr><th>Container</th><th>Expires</th><th class="col-actions">Action</th></tr></thead>
@@ -153,7 +153,7 @@
       <div class="card__head"><h3 class="card__title">Activity Feed</h3></div>
       <div class="feed">
         @if (vm.activityRules.length === 0) {
-          <p class="empty-note">Geen activiteit</p>
+          <p class="empty-note">No activity</p>
         } @else {
           @for (r of vm.activityRules; track r.id) {
             <div class="feed-item">
