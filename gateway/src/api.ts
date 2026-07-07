@@ -27,7 +27,7 @@ import {
   type StartParams,
   type IdeName,
 } from './docker';
-import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
+import { cidrToRange, isDevcontainerSource, classifyDevcontainerSource, rangeToCidr, type IpRange } from './net-gate';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
@@ -68,26 +68,51 @@ interface Rule {
 // cache + Docker-refresh eromheen.
 let blockedSubnets: IpRange[] = [];
 
+// Debug-diagnose voor de source-IP gate. Zet HUDDLE_DEBUG_GATE=1 (env-var op de
+// huddle-container) om per request te loggen welk bronadres binnenkwam, hoe het
+// geclassificeerd werd en welk subnet eventueel matchte. Bedoeld om "endpoint not
+// allowed from devcontainer network"-403's vanaf de host te diagnosticeren (bv.
+// bij Podman/rootless, waar de port-forward-bron een intern gateway-IP is).
+const DEBUG_GATE = process.env.HUDDLE_DEBUG_GATE === '1' || process.env.HUDDLE_DEBUG === '1';
+
 async function refreshBlockedSubnets(): Promise<void> {
   try {
     const nets = await listNetworks();
     const next: IpRange[] = [];
+    const debugNets: string[] = [];
     for (const n of nets) {
       const name: string = n.Name ?? '';
       if (name !== 'devcontainer-net' && !/^dc-net-/.test(name)) continue;
       for (const cfg of (n.IPAM?.Config ?? [])) {
         const range = cidrToRange(cfg.Subnet);
-        if (range) next.push(range);
+        if (range) {
+          next.push(range);
+          if (DEBUG_GATE) debugNets.push(`${name}=${cfg.Subnet}`);
+        } else if (DEBUG_GATE && cfg.Subnet) {
+          // Niet-IPv4 subnet (bv. IPv6): telt niet mee in de gate maar wél handig
+          // om te zien — een puur-IPv6 dc-net verklaart een IPv6-bron.
+          debugNets.push(`${name}=${cfg.Subnet} (genegeerd, niet-IPv4)`);
+        }
       }
     }
     blockedSubnets = next;
+    if (DEBUG_GATE) {
+      console.log(`[gate] geblokkeerde devcontainer-subnetten (${next.length}): ${debugNets.join(', ') || '(geen)'}`);
+    }
   } catch (e) {
     console.error('[api] failed to refresh blocked subnets:', (e as Error).message);
   }
 }
 
 function isFromDevcontainer(remoteAddr: string | null | undefined): boolean {
-  return isDevcontainerSource(remoteAddr, blockedSubnets);
+  if (!DEBUG_GATE) return isDevcontainerSource(remoteAddr, blockedSubnets);
+  const d = classifyDevcontainerSource(remoteAddr, blockedSubnets);
+  console.log(
+    `[gate] bron=${d.rawAddr ?? '(geen)'} genormaliseerd=${d.ip ?? '-'} ` +
+    `→ ${d.blocked ? 'GEBLOKKEERD' : 'toegestaan'} (${d.reason})` +
+    (d.matchedSubnet ? ` matcht ${rangeToCidr(d.matchedSubnet)}` : ''),
+  );
+  return d.blocked;
 }
 
 export async function createApiServer(): Promise<FastifyInstance> {
@@ -111,6 +136,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const ok = devcontainerWhitelist.some(
       w => w.method === req.method && w.path === req.url,
     );
+    if (DEBUG_GATE) {
+      console.log(
+        `[gate] ${req.method} ${req.url} vanaf ${req.socket.remoteAddress} → ` +
+        (ok ? 'toegestaan (whitelist)' : '403 endpoint not allowed from devcontainer network'),
+      );
+    }
     if (!ok) {
       reply.code(403).send({ error: 'forbidden', reason: 'endpoint not allowed from devcontainer network' });
     }
@@ -164,6 +195,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.server.on('upgrade', (req, socket, head) => {
     if (isFromDevcontainer((socket as net.Socket).remoteAddress)) {
+      if (DEBUG_GATE) console.log(`[gate] WS-upgrade ${req.url} vanaf ${(socket as net.Socket).remoteAddress} → 403`);
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;

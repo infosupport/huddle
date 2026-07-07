@@ -97,11 +97,19 @@ add_readonly_mount_if_exists "./base-devimage-rider" "/base-devimage-rider"
 add_readonly_mount_if_exists "./base-devimage-intellij" "/base-devimage-intellij"
 add_readonly_mount_if_exists "./base-devimage-vscode" "/base-devimage-vscode"
 
+# Optionele diagnose: geef HUDDLE_DEBUG_GATE door aan de container zodat de
+# source-IP gate elke beslissing logt (zie `${RUNTIME} logs ${CONTAINER_NAME}`).
+ENV_ARGS=()
+if [ -n "${HUDDLE_DEBUG_GATE:-}" ]; then
+  ENV_ARGS+=("-e" "HUDDLE_DEBUG_GATE=${HUDDLE_DEBUG_GATE}")
+fi
+
 echo "==> Start container op internal netwerk"
 "${RUNTIME}" run -d \
   --name "${CONTAINER_NAME}" \
   --network "${INTERNAL_NETWORK}" \
   -p "${HUDDLE_BIND_ADDR}:${HOST_PORT}:${CONTAINER_PORT}" \
+  "${ENV_ARGS[@]}" \
   "${MOUNTS[@]}" \
   "${IMAGE_NAME}"
 

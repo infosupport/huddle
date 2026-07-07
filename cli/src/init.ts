@@ -98,6 +98,13 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
     console.log(yellow(`[!] Kon ${hostTmpSockets} niet aanmaken: ${err}`));
   }
 
+  // Optionele diagnose: geef HUDDLE_DEBUG_GATE door zodat de source-IP gate elke
+  // beslissing logt (bekijk met `<runtime> logs huddle`). Handig om een 403
+  // "endpoint not allowed from devcontainer network" vanaf de host te herleiden.
+  const debugGate = process.env.HUDDLE_DEBUG_GATE
+    ? ` -e HUDDLE_DEBUG_GATE=${process.env.HUDDLE_DEBUG_GATE}`
+    : '';
+
   console.log(dim(`Start container`));
   run(
     `${rt} run -d` +
