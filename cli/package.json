@@ -1,6 +1,6 @@
 {
   "name": "@infosupport/huddle-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Huddle CLI \u2014 start devcontainers and manage firewall rules",
   "bin": {
     "huddle": "./dist/index.js"
