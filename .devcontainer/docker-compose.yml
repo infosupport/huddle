@@ -7,18 +7,19 @@
 # al zijn verkeer via de proxy — precies zoals een door Huddle beheerde container.
 services:
   devcontainer:
-    image: mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm
+    # Eigen image: strip sudo van de non-root `node`-user (zie Dockerfile). De
+    # container blijft root-capable zodat de devcontainer-bootstrap de workspace
+    # kan chownen (root-exec, heeft CAP_CHOWN nodig) — daarom GEEN `cap_drop: ALL`
+    # of `no-new-privileges` meer: die braken de bootstrap met
+    # `chown: Operation not permitted`. "Geen root" wordt afgedwongen doordat de
+    # agent als `node` draait (remoteUser) zonder sudo.
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: huddle-devcontainer
 
-    # ── Geen root ──────────────────────────────────────────────────────────────
-    # Draai als de non-root user van de image (uid 1000) en verbied elke vorm van
-    # privilege-escalatie. Geen NET_ADMIN of andere capabilities: de container kan
-    # dus zelf geen iptables/routes aanpassen — verkeer loopt puur via de proxy.
-    user: node
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    # Geen NET_ADMIN: de container kan zelf geen iptables/routes aanpassen, dus
+    # verkeer kan alleen via de proxy naar buiten (het netwerk is bovendien internal).
 
     # ── Alle egress verplicht via de Huddle-proxy ───────────────────────────────
     # Het interne netwerk heeft geen eigen internettoegang; dit is de enige uitweg.
