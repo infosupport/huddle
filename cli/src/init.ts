@@ -1,6 +1,9 @@
 import { execSync } from 'child_process';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const IMAGE = 'ghcr.io/infosupport/huddle:latest';
 const CONTAINER = 'huddle';
@@ -82,7 +85,18 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
   runSilent(`${rt} rm -f ${CONTAINER}`);
 
   console.log(dim(`Maak /tmp/dc-sockets aan`));
-  execSync('mkdir -p /tmp/dc-sockets');
+  // Create a host directory for dc-sockets in a cross-platform way.
+  // On Unix-like systems we use /tmp/dc-sockets. On Windows we create
+  // a directory inside the OS temp dir (e.g. C:\\Users\\...\\AppData\\Local\\Temp\\dc-sockets)
+  // and mount that into the container at /tmp/dc-sockets.
+  const hostTmpSockets = process.platform === 'win32'
+    ? path.resolve(os.tmpdir(), 'dc-sockets')
+    : '/tmp/dc-sockets';
+  try {
+    fs.mkdirSync(hostTmpSockets, { recursive: true });
+  } catch (err) {
+    console.log(yellow(`[!] Kon ${hostTmpSockets} niet aanmaken: ${err}`));
+  }
 
   console.log(dim(`Start container`));
   run(
@@ -92,7 +106,7 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
     ` -p ${HOST_PORT}:3000` +
     ` -v ${VOLUME}:/data` +
     ` -v ${runtime.socketPath}:/var/run/docker.sock` +
-    ` -v /tmp/dc-sockets:/tmp/dc-sockets` +
+    ` -v "${hostTmpSockets}:/tmp/dc-sockets"` +
     ` ${IMAGE}`,
   );
 
