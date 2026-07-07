@@ -10,9 +10,9 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
   imports: [RouterLink, IconComponent],
   template: `
     <div class="page-header">
-      <h1>Extensies</h1>
+      <h1>Extensions</h1>
       <label class="btn btn--accent" [class.btn--busy]="uploading()">
-        {{ uploading() ? 'Uploaden…' : 'Extensie uploaden (.zip)' }}
+        {{ uploading() ? 'Uploading…' : 'Upload extension (.zip)' }}
         <input type="file" accept=".zip" (change)="uploadExtension($event)" [disabled]="uploading()" hidden>
       </label>
     </div>
@@ -24,7 +24,7 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
         <p class="notice">{{ notice() }}</p>
       }
       @if (extensions().length === 0) {
-        <p class="empty-note">Geen extensies geïnstalleerd</p>
+        <p class="empty-note">No extensions installed</p>
       } @else {
         <ul class="ext-list">
           @for (ext of extensions(); track ext.id) {
@@ -32,11 +32,11 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
               <app-icon [name]="ext.icon" [size]="22" />
               <span class="ext-name">{{ ext.name }}</span>
               @if (ext.version) { <span class="ext-version">v{{ ext.version }}</span> }
-              <a class="ext-open" [routerLink]="['/extensions/view', ext.id]">Openen</a>
+              <a class="ext-open" [routerLink]="['/extensions/view', ext.id]">Open</a>
               @if (ext.settings.length > 0) {
-                <a class="ext-link" [routerLink]="['/extensions', ext.id, 'settings']">Instellingen</a>
+                <a class="ext-link" [routerLink]="['/extensions', ext.id, 'settings']">Settings</a>
               }
-              <button class="ext-del" type="button" (click)="removeExtension(ext)">Verwijderen</button>
+              <button class="ext-del" type="button" (click)="removeExtension(ext)">Remove</button>
             </li>
           }
         </ul>
@@ -92,7 +92,7 @@ export class ExtensionsPageComponent implements OnInit {
         this.uploading.set(false);
         input.value = '';
         if (res.restartRequired) {
-          this.notice.set(`"${res.name}" geüpload — herstart Huddle om de nieuwe versie te activeren.`);
+          this.notice.set(`"${res.name}" uploaded — restart Huddle to activate the new version.`);
         } else {
           this.notice.set(null);
         }
@@ -103,10 +103,10 @@ export class ExtensionsPageComponent implements OnInit {
   }
 
   removeExtension(ext: Extension): void {
-    if (!confirm(`Extensie "${ext.name}" verwijderen?`)) return;
+    if (!confirm(`Remove extension "${ext.name}"?`)) return;
     this.api.deleteExtension(ext.id).subscribe({
       next: () => {
-        this.notice.set(`"${ext.name}" verwijderd — herstart Huddle om de routes vrij te geven.`);
+        this.notice.set(`"${ext.name}" removed — restart Huddle to release the routes.`);
         this.loadExtensions();
       },
       error: (e) => this.error.set(e.message),

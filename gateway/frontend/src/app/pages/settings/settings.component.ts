@@ -8,33 +8,33 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
   imports: [FormsModule],
   template: `
     <div class="page-header">
-      <h1>Instellingen</h1>
+      <h1>Settings</h1>
     </div>
     @if (error()) { <p class="error-note">{{ error() }}</p> }
 
     <div class="card">
-      <h2>Resource limieten</h2>
+      <h2>Resource limits</h2>
       <p class="hint">
-        Standaard CPU- en geheugenlimieten voor nieuwe devcontainers. Laat leeg voor geen limiet.
+        Default CPU and memory limits for new devcontainers. Leave empty for no limit.
       </p>
       <form (ngSubmit)="saveResources()">
         <div class="field-row">
           <div class="field">
-            <label>Standaard geheugen (bijv. 4g, 2048m)</label>
+            <label>Default memory (e.g. 4g, 2048m)</label>
             <input [(ngModel)]="resources.defaultMemory" name="defaultMemory"
-                   placeholder="bijv. 4g" autocomplete="off">
+                   placeholder="e.g. 4g" autocomplete="off">
           </div>
           <div class="field">
-            <label>Standaard CPU (bijv. 2, 0.5)</label>
+            <label>Default CPU (e.g. 2, 0.5)</label>
             <input [(ngModel)]="resources.defaultCpus" name="defaultCpus"
-                   placeholder="bijv. 2" autocomplete="off">
+                   placeholder="e.g. 2" autocomplete="off">
           </div>
         </div>
         <div class="actions">
           <button type="submit" class="btn btn--accent" [disabled]="savingResources()">
-            {{ savingResources() ? 'Opslaan…' : 'Opslaan' }}
+            {{ savingResources() ? 'Saving…' : 'Save' }}
           </button>
-          @if (savedResources()) { <span class="saved-note">Opgeslagen</span> }
+          @if (savedResources()) { <span class="saved-note">Saved</span> }
         </div>
       </form>
     </div>
@@ -42,18 +42,18 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
     <div class="card">
       <h2>Folder mappings</h2>
       <p class="hint">
-        Folders of volumes die automatisch in elke nieuwe devcontainer gemount worden.
-        Gebruik een host-pad voor bind mounts, of een volume-naam voor Docker-volumes.
+        Folders or volumes that are automatically mounted in every new devcontainer.
+        Use a host path for bind mounts, or a volume name for Docker volumes.
       </p>
 
       <table class="mappings-table">
         <thead>
           <tr>
-            <th>Naam</th>
-            <th>Bron (host-pad of volume)</th>
-            <th>Container-pad</th>
+            <th>Name</th>
+            <th>Source (host path or volume)</th>
+            <th>Container path</th>
             <th>RO</th>
-            <th>Aan</th>
+            <th>On</th>
             <th></th>
           </tr>
         </thead>
@@ -70,7 +70,7 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
               </td>
               <td>
                 <button class="btn btn--danger btn--sm" (click)="deleteMapping(m.id)">
-                  Verwijder
+                  Delete
                 </button>
               </td>
             </tr>
@@ -79,25 +79,25 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
       </table>
 
       <details class="add-form">
-        <summary>+ Mapping toevoegen</summary>
+        <summary>+ Add mapping</summary>
         <form (ngSubmit)="addMapping()" class="add-mapping-form">
           <div class="field-row">
             <div class="field">
-              <label>Naam</label>
-              <input [(ngModel)]="newMapping.name" name="nm_name" placeholder="bijv. My tool config" autocomplete="off" required>
+              <label>Name</label>
+              <input [(ngModel)]="newMapping.name" name="nm_name" placeholder="e.g. My tool config" autocomplete="off" required>
             </div>
             <div class="field">
-              <label>Container-pad</label>
+              <label>Container path</label>
               <input [(ngModel)]="newMapping.container_path" name="nm_cpath" placeholder="/home/vscode/.mytool" autocomplete="off" required>
             </div>
           </div>
           <div class="field-row">
             <div class="field">
-              <label>Host-pad (bind mount, optioneel)</label>
+              <label>Host path (bind mount, optional)</label>
               <input [(ngModel)]="newMapping.host_path" name="nm_hpath" placeholder="~/.mytool" autocomplete="off">
             </div>
             <div class="field">
-              <label>Volume-naam (Docker volume, optioneel)</label>
+              <label>Volume name (Docker volume, optional)</label>
               <input [(ngModel)]="newMapping.volume_name" name="nm_vol" placeholder="huddle-mytool-settings" autocomplete="off">
             </div>
           </div>
@@ -108,7 +108,7 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
           </div>
           <div class="actions">
             <button type="submit" class="btn btn--accent" [disabled]="addingMapping()">
-              {{ addingMapping() ? 'Toevoegen…' : 'Toevoegen' }}
+              {{ addingMapping() ? 'Adding…' : 'Add' }}
             </button>
           </div>
         </form>

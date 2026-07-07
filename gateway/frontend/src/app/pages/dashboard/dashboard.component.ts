@@ -27,30 +27,30 @@ export class DashboardComponent {
     families: [
       {
         id: 'approve',
-        label: 'Goedkeuren',
+        label: 'Approve',
         tone: 'green',
         icon: 'approve',
         variants: [
-          { id: 'approve-all', label: 'Voor iedereen', icon: 'approve-all' },
+          { id: 'approve-all', label: 'For everyone', icon: 'approve-all' },
         ],
       },
       {
         id: 'temp',
-        label: 'Tijdelijk 5 min',
+        label: 'Temporary 5 min',
         tone: 'blue',
         icon: 'timer',
         variants: [
-          { id: 'temp-10', label: 'Tijdelijk 10 min', icon: 'timer-long' },
-          { id: 'later',   label: 'Vraag later',      icon: 'later'      },
+          { id: 'temp-10', label: 'Temporary 10 min', icon: 'timer-long' },
+          { id: 'later',   label: 'Ask later',        icon: 'later'      },
         ],
       },
       {
         id: 'deny',
-        label: 'Afkeuren',
+        label: 'Deny',
         tone: 'red',
         icon: 'deny',
         variants: [
-          { id: 'deny-all', label: 'Voor iedereen', icon: 'deny-all' },
+          { id: 'deny-all', label: 'For everyone', icon: 'deny-all' },
         ],
       },
     ],

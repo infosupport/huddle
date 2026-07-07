@@ -10,7 +10,7 @@ import { ApiService } from '../../../core/services/api.service';
       @if (error) {
         <p class="empty-note">{{ error }}</p>
       } @else if (!ready) {
-        <p class="empty-note">Extensie laden…</p>
+        <p class="empty-note">Loading extension…</p>
       }
       <div #host class="ext-host"></div>
     </div>
@@ -43,10 +43,10 @@ export class ExtensionViewComponent implements OnInit, OnDestroy {
     this.api.getExtensions().subscribe({
       next: (exts) => {
         const ext = exts.find(e => e.id === id);
-        if (!ext) { this.error = `Extensie "${id}" niet gevonden.`; return; }
+        if (!ext) { this.error = `Extension "${id}" not found.`; return; }
         this.mountWebComponent(id, ext.name, repo);
       },
-      error: () => { this.error = 'Kon extensielijst niet ophalen.'; }
+      error: () => { this.error = 'Could not fetch the extension list.'; }
     });
   }
 
@@ -80,7 +80,7 @@ export class ExtensionViewComponent implements OnInit, OnDestroy {
       customElements.whenDefined(tagName).then(mount);
     };
     this.scriptEl.onerror = () => {
-      this.error = `"${name}" heeft geen in-app UI (component.js ontbreekt). Open de extensie via de Openen-knop.`;
+      this.error = `"${name}" has no in-app UI (component.js is missing). Open the extension via the Open button.`;
     };
     document.head.appendChild(this.scriptEl);
   }

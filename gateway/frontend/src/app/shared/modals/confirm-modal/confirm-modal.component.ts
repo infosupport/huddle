@@ -20,8 +20,8 @@ export class ConfirmModalComponent {
 
   get message(): string {
     if (!this.data) return '';
-    const verb = this.data.status === 'allow' ? 'toestaan' : 'blokkeren';
-    return `"${this.data.rule.domain}" globaal ${verb} voor alle containers?`;
+    const verb = this.data.status === 'allow' ? 'allow' : 'block';
+    return `Globally ${verb} "${this.data.rule.domain}" for all containers?`;
   }
 
   confirm(): void {

@@ -23,13 +23,13 @@
       <app-icon name="anchor" [size]="20" />
       <span>Docker Access</span>
     </a>
-<a class="nav__item" routerLink="netwerklog" routerLinkActive="nav__item--active">
+<a class="nav__item" routerLink="network-log" routerLinkActive="nav__item--active">
       <app-icon name="file-text" [size]="20" />
-      <span>Netwerklog</span>
+      <span>Network log</span>
     </a>
 
     @if (extensions().length > 0) {
-      <div class="nav__section">Extensies</div>
+      <div class="nav__section">Extensions</div>
       @for (ext of extensions(); track ext.id) {
         <a class="nav__item nav__item--sub" [routerLink]="['/extensions/view', ext.id]" routerLinkActive="nav__item--active">
           <app-icon [name]="ext.icon || 'box'" [size]="18" />
@@ -38,12 +38,12 @@
       }
       <a class="nav__item nav__item--manage" routerLink="extensions" routerLinkActive="nav__item--active">
         <app-icon name="settings" [size]="16" />
-        <span>Beheer extensies</span>
+        <span>Manage extensions</span>
       </a>
     } @else {
       <a class="nav__item" routerLink="extensions" routerLinkActive="nav__item--active">
         <app-icon name="box" [size]="20" />
-        <span>Extensies</span>
+        <span>Extensions</span>
       </a>
     }
 

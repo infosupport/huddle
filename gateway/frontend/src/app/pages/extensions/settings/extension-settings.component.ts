@@ -11,7 +11,7 @@ import { Extension, ExtensionSetting } from '../../../core/extensions/extension.
   imports: [FormsModule, RouterLink],
   template: `
     <div class="page-header">
-      <h1>{{ extension()?.name ?? 'Extensie' }} — instellingen</h1>
+      <h1>{{ extension()?.name ?? 'Extension' }} — settings</h1>
     </div>
     <div class="card">
       @if (error()) {
@@ -32,10 +32,10 @@ import { Extension, ExtensionSetting } from '../../../core/extensions/extension.
           }
           <div class="actions">
             <button type="submit" class="btn btn--primary" [disabled]="saving()">
-              {{ saving() ? 'Opslaan…' : 'Opslaan' }}
+              {{ saving() ? 'Saving…' : 'Save' }}
             </button>
-            <a class="btn" routerLink="/extensions">Terug</a>
-            @if (saved()) { <span class="saved-note">Opgeslagen</span> }
+            <a class="btn" routerLink="/extensions">Back</a>
+            @if (saved()) { <span class="saved-note">Saved</span> }
           </div>
         </form>
       }
@@ -72,7 +72,7 @@ export class ExtensionSettingsComponent implements OnInit {
       next: ({ extensions, settings }) => {
         const ext = extensions.find((e) => e.id === this.id) ?? null;
         this.extension.set(ext);
-        if (!ext) { this.error.set('Onbekende extensie'); return; }
+        if (!ext) { this.error.set('Unknown extension'); return; }
         for (const s of ext.settings) {
           if (s.secret) {
             this.hasSecret[s.key] = Boolean(settings[`has${this.cap(s.key)}`]);
@@ -87,7 +87,7 @@ export class ExtensionSettingsComponent implements OnInit {
   }
 
   placeholder(s: ExtensionSetting): string {
-    if (s.secret) return this.hasSecret[s.key] ? '•••••••• (laat leeg om te behouden)' : '';
+    if (s.secret) return this.hasSecret[s.key] ? '•••••••• (leave empty to keep)' : '';
     return '';
   }
 

@@ -16,7 +16,7 @@
         <label for="start-image">Image</label>
         <select id="start-image" [(ngModel)]="selectedImage">
           @if (baseImage) {
-            <option [value]="baseImage">[Standaard] {{ baseImage }}</option>
+            <option [value]="baseImage">[Default] {{ baseImage }}</option>
           }
           @for (img of images; track img.id) {
             @if (img.name !== baseImage && img.name !== baseImage + ':latest') {
@@ -24,27 +24,27 @@
             }
           }
           @if (!baseImage && images.length === 0) {
-            <option value="">Geen images beschikbaar voor deze IDE</option>
+            <option value="">No images available for this IDE</option>
           }
         </select>
 
         <label class="empty-toggle">
           <input type="checkbox" [(ngModel)]="empty" (ngModelChange)="onEmptyToggle()" />
-          Leeg (clone handmatig)
+          Empty (clone manually)
         </label>
 
         <label for="start-workspace">Workspace directory</label>
-        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/mijn-project" [disabled]="empty" />
+        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/my-project" [disabled]="empty" />
 
-        <label for="start-name">Containernaam</label>
-        <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-mijn-project" />
+        <label for="start-name">Container name</label>
+        <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-my-project" />
 
         @if (error) { <p class="form-error">{{ error }}</p> }
         @if (status) { <p class="form-status">{{ status }}</p> }
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary" [disabled]="loading" (click)="confirm()">Starten</button>
-        <button class="btn btn-ghost" (click)="close()">Annuleren</button>
+        <button class="btn btn-primary" [disabled]="loading" (click)="confirm()">Start</button>
+        <button class="btn btn-ghost" (click)="close()">Cancel</button>
       </div>
     </div>
   </div>

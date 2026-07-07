@@ -28,7 +28,7 @@ export class DockerAccessComponent implements OnInit {
     }))
   );
 
-  // Poorten
+  // Ports
   portsContainer = '';
   ports = signal<ApprovedHostPort[]>([]);
   portsError = signal<string | null>(null);
