@@ -1,4 +1,17 @@
 {
+  "name": "huddle-monorepo",
+  "version": "1.0.0",
+  "description": "Huddle — a security gateway that shields devcontainers behind a per-domain firewall",
+  "license": "GPL-3.0-or-later",
+  "author": "Info Support B.V.",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/infosupport/huddle.git"
+  },
+  "bugs": {
+    "url": "https://github.com/infosupport/huddle/issues"
+  },
   "scripts": {
     "install": "npm --prefix gateway install && npm --prefix cli install",
     "build": "npm --prefix gateway run build",

@@ -1,0 +1,57 @@
+# Huddle issue/PR label taxonomy.
+#
+# This file documents the labels used in the repository. It is the source of
+# truth referenced by CONTRIBUTING.md. It is NOT applied automatically (to avoid
+# adding an un-pinned third-party GitHub Action to a security-focused project).
+#
+# To create these labels once, a maintainer can run (requires the `gh` CLI):
+#
+#   while read -r name color desc; do \
+#     gh label create "$name" --color "$color" --description "$desc" --force; \
+#   done < <(yq -r '.[] | "\(.name)\t\(.color)\t\(.description)"' .github/labels.yml)
+#
+# or apply with a label-sync action of their choice (pinned to a commit SHA).
+
+- name: bug
+  color: d73a4a
+  description: Something isn't working as intended
+
+- name: enhancement
+  color: a2eeef
+  description: New feature or improvement request
+
+- name: documentation
+  color: 0075ca
+  description: Docs-only changes or gaps
+
+- name: question
+  color: d876e3
+  description: A usage or clarification question
+
+- name: good first issue
+  color: 7057ff
+  description: A well-scoped starting point for newcomers
+
+- name: help wanted
+  color: 008672
+  description: Maintainers would welcome outside help
+
+- name: security
+  color: b60205
+  description: Security-related (usually from a private advisory)
+
+- name: duplicate
+  color: cfd3d7
+  description: Already tracked by another issue
+
+- name: wontfix
+  color: ffffff
+  description: Valid, but intentionally not being addressed
+
+- name: needs triage
+  color: fbca04
+  description: Not yet reviewed by a maintainer
+
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates or issues

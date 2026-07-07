@@ -1,6 +1,13 @@
 {
   "name": "huddle",
   "version": "1.0.0",
+  "license": "GPL-3.0-or-later",
+  "author": "Info Support B.V.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/infosupport/huddle.git",
+    "directory": "gateway"
+  },
   "scripts": {
     "build:ts": "tsc",
     "build:ui": "npm run build --prefix frontend",

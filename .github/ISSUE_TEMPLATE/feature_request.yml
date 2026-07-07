@@ -1,0 +1,45 @@
+name: "✨ Feature request"
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Feature requests are discussed openly. There's no guarantee a request will be implemented — see [SUPPORT.md](../blob/main/SUPPORT.md).
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues (open and closed) and found no duplicate.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem are you trying to solve? Focus on the "why".
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Are you willing to contribute this?
+      options:
+        - "Yes, I'd like to work on it"
+        - "Maybe, with guidance"
+        - "No"
+    validations:
+      required: true
