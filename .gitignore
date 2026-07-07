@@ -1,6 +1,8 @@
 .ijdevc/
 
-# Local Claude Code settings (per-machine permission allowlist)
+# Claude Code / AI-tool state — local only, never commit
+.claude/
+**/.claude/
 .claude/settings.local.json
 
 # Runtime / debug logs (incl. rider-client-diagnose.log generated in workspaces)
@@ -32,7 +34,13 @@ node_modules/
 # Build output
 dist/
 
+# Stray/self-referential nested CLI package (accidental) — never commit
+cli/cli/
+
 /aikido
 
 # AI agent config tree — beheerd buiten versiebeheer
 /.ai
+
+# Interne presentatie/binaries — niet voor de publieke repo
+*.pptx

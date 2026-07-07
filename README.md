@@ -1,8 +1,31 @@
 # Huddle
 
+<p align="center">
+  <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/License-GPLv3-blue.svg"></a>
+  <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg"></a>
+  <img alt="Provided as-is, no SLA" src="https://img.shields.io/badge/support-AS--IS%2C%20no%20SLA-lightgrey.svg">
+</p>
+
 ## Wat is Huddle?
 
 Huddle is een security gateway die devcontainers afschermt van het externe netwerk via een per-domein firewall. Elke devcontainer draait in een DMZ: al het uitgaande verkeer gaat verplicht door Huddle, en alleen domeinen op de allowlist worden doorgelaten. Operators beheren firewall-regels, Docker-toegang en netwerk-logs via een centrale web-UI.
+
+Je IDE (JetBrains of VS Code) voelt normaal aan, maar code, tools en AI draaien in een afgeschermde omgeving. De uitvoering zit geïsoleerd; het portaal houdt controle over wat er in- en uitgaat.
+
+<p align="center">
+  <img src="docs/images/huddle-portal.png" alt="Developers werken via Huddle in afgeschermde devcontainers" width="820">
+</p>
+
+## Waarom Huddle?
+
+Huddle adresseert twee grote risico's van moderne, AI-ondersteunde ontwikkeling:
+
+- **Veilig developen *mét* AI** — AI moet kunnen helpen, maar niet ongecontroleerd je systeem kunnen aanpassen of data kunnen exfiltreren.
+- **Veilig developen *tégen* AI-versterkte aanvallen** — supply-chain attacks worden slimmer, sneller en meerstaps. Huddle vangt uitgaand verkeer af en blokkeert wat niet expliciet is toegestaan.
+
+<p align="center">
+  <img src="docs/images/huddle-risks.png" alt="Veilig developen mét AI en tégen supply-chain aanvallen" width="820">
+</p>
 
 ## Architectuur
 
@@ -24,6 +47,18 @@ Twee servers draaien in hetzelfde proces:
 |--------|-------|------|
 | HTTP proxy | 80 | Doorsturen/onderscheppen van alle uitgaande containertraffic |
 | API + UI | 3000 | REST API, Angular frontend, WebSocket push |
+
+<p align="center">
+  <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: verkeer, Docker-toegang en logs lopen gecontroleerd door de DMZ" width="820">
+</p>
+
+### Drie veiligheidsprincipes
+
+| Principe | Wat het betekent |
+|----------|------------------|
+| **Geen direct internet** | Verkeer loopt via de Huddle Gateway met firewall-approvals — geen enkele container praat rechtstreeks met het externe netwerk. |
+| **Docker proxy socket** | Geen volledige Docker socket, maar gecontroleerde Docker-acties via een per-container proxy met label-policy. |
+| **Geen root-user** | Standaard een veiligere gebruiker; `sudo` kan enkel gecontroleerd via Huddle. |
 
 ---
 
@@ -72,7 +107,7 @@ Twee servers draaien in hetzelfde proces:
 
 | Laag | Technologie |
 |------|-------------|
-| Runtime | Node.js 20 (Alpine) |
+| Runtime | Node.js 24 LTS (Alpine) |
 | Backend | Fastify 5, TypeScript 5 |
 | Database | SQLite via better-sqlite3 (WAL-modus) |
 | WebSocket | ws |
@@ -91,7 +126,7 @@ Twee servers draaien in hetzelfde proces:
 Ga naar [github.com/settings/tokens](https://github.com/settings/tokens/new?description=Huddle&scopes=read%3Apackages&default_expires_at=7) → **Generate new token (classic)**.
 
 Instellingen:
-- Expiration: **7 days** (maximaal — de infosupport-organisatie staat geen langere tokens toe)
+- Expiration: kies een korte geldigheidsduur (bijv. **7 dagen**); je organisatie kan een maximum afdwingen
 - Scope: **read:packages**
 
 Kopieer het token.
@@ -339,8 +374,126 @@ Alle state-muterende endpoints sturen een WebSocket `{ type: "reload" }` event n
 
 ---
 
-## Bug / Feature Request
+## Development setup
 
-Heb je een bug gevonden of een idee? Maak een issue aan op GitHub:
+Wil je aan Huddle zelf werken? Huddle is een monorepo met twee delen: de
+**gateway** (Fastify API + Angular UI + proxy) en de **CLI**.
 
+**Vereisten:** Node.js 20+ (24 LTS aanbevolen), Docker of Podman, Git.
+
+```bash
+git clone https://github.com/infosupport/huddle.git
+cd huddle
+
+npm install            # installeert dependencies voor gateway én cli
+npm run build          # bouwt de gateway (API + frontend)
+npm run cli:build      # bouwt de CLI
+npm run cli:typecheck  # type-check van de CLI
+
+npm start              # start de gateway lokaal (UI op http://localhost:3000)
+```
+
+Tests draaien:
+
+```bash
+npm --prefix gateway test          # unit + e2e tests (vitest)
+```
+
+Zie [`CONTRIBUTING.md`](CONTRIBUTING.md) voor de volledige workflow, branching-
+strategie, commit-conventies en coding standards.
+
+---
+
+## Troubleshooting
+
+| Probleem | Oplossing |
+|----------|-----------|
+| `docker login ghcr.io` of `npm install` faalt met **401/403** | Je token is verlopen of mist de `read:packages`-scope. Maak een nieuw token en log opnieuw in (zie [Getting Started](#getting-started)). |
+| `huddle init` vindt geen runtime | Zorg dat Docker of Podman draait. Forceer expliciet met `huddle init --runtime docker` (of `podman`), of zet `HUDDLE_RUNTIME`. |
+| Web-UI niet bereikbaar op `http://localhost:3000` | Controleer of de Huddle-container draait (`docker ps`). De management-API bindt standaard op `127.0.0.1` — benader hem lokaal, niet van een andere host. |
+| Devcontainer kan een domein niet bereiken | Verwacht gedrag: al het verkeer loopt door de firewall. Sta het domein toe via **Firewall** in de UI of `huddle fw list`. |
+| JetBrains Gateway ziet de container niet meteen | De JetBrains-backend heeft even nodig om op te starten; de CLI print de gateway-link zodra hij klaar is. |
+| `docker` in de devcontainer geeft *permission denied* | Docker-toegang loopt via een tijdgebonden grant. Verleen toegang via **Docker Access** in de UI (of `PUT /api/authz/grants/:container`). |
+| Poort 80 al in gebruik | Een andere proxy/webserver gebruikt poort 80. Stop die service of pas de poortmapping aan bij het starten van de Huddle-container. |
+
+Meer logs nodig? De netwerklog en admin-acties staan in de UI onder
+**Netwerklog**; containerlogs bekijk je met `docker logs <container>`.
+
+---
+
+## FAQ
+
+**Is Huddle een vervanging voor een bedrijfsfirewall of VPN?**
+Nee. Huddle schermt *devcontainers* af op applicatieniveau (per-domein allowlist,
+gecontroleerde Docker-acties). Het is een aanvulling op, geen vervanging van,
+netwerk-infrastructuur.
+
+**Werkt Huddle met Podman?**
+Ja. `huddle init` detecteert automatisch Docker of Podman; forceren kan met
+`--runtime` of de env-var `HUDDLE_RUNTIME`.
+
+**Onderschept Huddle HTTPS-verkeer?**
+HTTP-verzoeken worden volledig gelogd. HTTPS wordt via `CONNECT` getunneld; de
+inhoud wordt niet onderschept, alleen het doeldomein wordt tegen de allowlist
+gecheckt.
+
+**Waar wordt de state opgeslagen?**
+In een lokale SQLite-database (WAL-modus) binnen de Huddle-container. Firewall-
+regels en Docker-grants overleven een herstart.
+
+**Moet ik de base images zelf bouwen?**
+Nee. Huddle bouwt ze automatisch bij het starten van een devcontainer. Vooraf
+bouwen kan om het te versnellen (zie [Base images bouwen](#base-images-bouwen-optioneel)).
+
+**Kan ik Huddle in productie gebruiken?**
+Huddle wordt "AS IS" aangeboden zonder garanties (zie hieronder). Gebruik op
+eigen risico.
+
+---
+
+## Bijdragen
+
+Bijdragen zijn welkom! Lees eerst:
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — hoe je bugs meldt, features voorstelt en
+  een pull request indient.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — gedragsregels in de community.
+- [`SECURITY.md`](SECURITY.md) — meld security-issues **privé**, niet als publiek
+  issue.
+
+Bugs en ideeën meld je via GitHub Issues:
 **[github.com/infosupport/huddle/issues](https://github.com/infosupport/huddle/issues)**
+
+---
+
+## Support & SLA
+
+Huddle is vrije, open source software en wordt **"AS IS"** aangeboden, **zonder
+enige garantie** (zie de [GPL v3](LICENSE), secties 15–17).
+
+- Er is **geen SLA** en **geen gegarandeerde responstijd**.
+- Ondersteuning gebeurt op **vrijwillige basis** door de community.
+- Issues en pull requests zijn welkom, maar er is **geen garantie** dat een
+  melding wordt opgepakt of geïmplementeerd.
+
+Zie [`SUPPORT.md`](SUPPORT.md) voor details.
+
+---
+
+## Licentie
+
+Huddle is gelicentieerd onder de **GNU General Public License v3.0 (of later)**.
+Zie het [`LICENSE`](LICENSE)-bestand voor de volledige tekst.
+
+```
+Copyright (C) 2026 Info Support B.V.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+```

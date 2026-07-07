@@ -1,7 +1,18 @@
 {
   "name": "@infosupport/huddle-cli",
-  "version": "1.0.1",
+  "version": "1.2.0",
   "description": "Huddle CLI \u2014 start devcontainers and manage firewall rules",
+  "license": "GPL-3.0-or-later",
+  "author": "Info Support B.V.",
+  "homepage": "https://github.com/infosupport/huddle",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/infosupport/huddle.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/infosupport/huddle/issues"
+  },
   "bin": {
     "huddle": "./dist/index.js"
   },

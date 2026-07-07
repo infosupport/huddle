@@ -1,0 +1,29 @@
+name: "❓ Question"
+description: Ask a usage or clarification question
+title: "[Question]: "
+labels: ["question", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For usage questions. Please check the [README](../blob/main/README.md) (including Troubleshooting and FAQ) first.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I read the README (including the Troubleshooting and FAQ sections).
+          required: true
+        - label: I searched existing issues and discussions.
+          required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What are you trying to achieve? Include versions/OS if relevant.

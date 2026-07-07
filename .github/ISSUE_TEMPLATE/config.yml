@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/infosupport/huddle/security/advisories/new
+    about: Please report security issues privately via GitHub Security Advisories, not as a public issue.
+  - name: 💬 Questions & discussion
+    url: https://github.com/infosupport/huddle/discussions
+    about: For open-ended questions and discussion (if Discussions is enabled).

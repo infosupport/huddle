@@ -1,0 +1,70 @@
+name: "🐛 Bug report"
+description: Report something that isn't working as intended
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please search existing issues first to avoid duplicates.
+
+        **Do not report security vulnerabilities here** — see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues (open and closed) and found no duplicate.
+          required: true
+        - label: I am running the latest released version.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, reproducible steps.
+      placeholder: |
+        1. Run `huddle ...`
+        2. Open the UI at ...
+        3. See error ...
+    validations:
+      required: true
+  - type: input
+    id: cli-version
+    attributes:
+      label: Huddle version
+      description: CLI version (`huddle --version`) and/or container image tag.
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Container runtime
+      options:
+        - Docker
+        - Podman
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Windows 11 (WSL2), macOS 14, Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / screenshots
+      description: Paste logs or the network-log entry. **Redact any secrets or tokens.**
+      render: shell
