@@ -107,8 +107,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          # GitVersion heeft de volledige historie én tags nodig.
+          # GitVersion heeft de volledige historie én tags (het anker) nodig.
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Install GitVersion
         uses: gittools/actions/gitversion/setup@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
@@ -125,7 +126,14 @@ jobs:
           registry-url: https://npm.pkg.github.com
 
       - name: Set package version
-        run: cd cli && npm version "${{ steps.gitversion.outputs.semVer }}" --no-git-tag-version --allow-same-version
+        # patch = tag-patch + aantal commits sinds de tag -> uniek en oplopend
+        # per commit, onafhankelijk van de GitVersion-modus.
+        run: |
+          cd cli
+          PATCH=$(( ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }} ))
+          VERSION="${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${PATCH}"
+          echo "Berekende versie: $VERSION (patch ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }} commits)"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install & build
         run: cd cli && npm install && npm run build

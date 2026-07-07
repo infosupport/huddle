@@ -88,7 +88,7 @@ Twee servers draaien in hetzelfde proces:
 
 ### 1. Maak een GitHub Personal Access Token aan
 
-Ga naar [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**.
+Ga naar [github.com/settings/tokens](https://github.com/settings/tokens/new?description=Huddle&scopes=read%3Apackages&default_expires_at=7) → **Generate new token (classic)**.
 
 Instellingen:
 - Expiration: **7 days** (maximaal — de infosupport-organisatie staat geen langere tokens toe)
