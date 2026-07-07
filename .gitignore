@@ -20,6 +20,9 @@ features/
 # npm auth token — nooit committen
 .npmrc
 
+# Lokaal GitHub-token — nooit committen
+github.txt
+
 # Huddle audit logs — runtime data, niet voor versiebeheer
 .audit/
 
