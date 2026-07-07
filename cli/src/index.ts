@@ -23,8 +23,8 @@ interface ParsedArgs {
 }
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'help']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -81,6 +81,20 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { positional, flags };
 }
 
+function readVersion(): string {
+  // package.json wordt door npm altijd in de gepubliceerde tarball meegeleverd
+  // en bevat de versie die door de CI (GitVersion) is gepubliceerd naar de
+  // GitHub-packages registry. dist/index.js -> ../package.json.
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string') return pkg.version;
+  } catch {
+    // val terug op 'onbekend' hieronder
+  }
+  return 'onbekend';
+}
+
 function printHelp(): void {
   console.log(`
 Gebruik:
@@ -117,6 +131,8 @@ Globale opties:
   --url <url>                        Huddle URL (standaard: http://localhost:3000)
                                      Of via env-var HUDDLE_URL
   --help, -h                         Help weergeven
+  --version, -v                      Versie weergeven (zoals gepubliceerd in
+                                     GitHub packages)
 `);
 }
 
@@ -132,6 +148,11 @@ async function main(): Promise<void> {
 
   const { positional, flags } = parsed;
   const [cmd, sub] = positional;
+
+  if (flagBool(flags, 'version', 'v') || cmd === 'version') {
+    console.log(readVersion());
+    return;
+  }
 
   if (flagBool(flags, 'help', 'h') || cmd === 'help') {
     printHelp();
