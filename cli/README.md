@@ -1,52 +1,52 @@
 # Huddle CLI
 
-Cross-platform Node CLI voor Huddle. De CLI praat met de bestaande Huddle REST API; containerbeheer en firewall-resolutie zitten dus in de gateway, niet opnieuw in de command-client.
+Cross-platform Node CLI for Huddle. The CLI talks to the existing Huddle REST API; container management and firewall resolution therefore live in the gateway, not re-implemented in the command client.
 
-## Installeren
+## Installing
 
-De packages zijn publiek, dus je hebt geen GitHub-token of registry-login nodig.
+The packages are public, so you don't need a GitHub token or registry login.
 
 ```bash
 npm install -g @infosupport/huddle-cli
 ```
 
-## Huddle opstarten
+## Starting Huddle
 
 ```bash
 huddle init
 ```
 
-Pullt `ghcr.io/infosupport/huddle:latest` en start de container. Werkt met Docker en Podman: de runtime wordt automatisch gedetecteerd (Docker eerst, dan Podman), of kies expliciet met `huddle init --runtime <docker|podman>` of de env-var `HUDDLE_RUNTIME`. Als je `huddle` runt terwijl Huddle niet draait, krijg je automatisch de tip om dit commando uit te voeren.
+Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with Docker and Podman: the runtime is detected automatically (Docker first, then Podman), or pick one explicitly with `huddle init --runtime <docker|podman>` or the `HUDDLE_RUNTIME` env var. If you run `huddle` while Huddle isn't running, you automatically get a hint to run this command.
 
-## Devcontainers starten
+## Starting devcontainers
 
 ```bash
-huddle                 # start IntelliJ-devcontainer voor huidige map
-huddle ./project       # start voor specifieke map
+huddle                 # start an IntelliJ devcontainer for the current directory
+huddle ./project       # start for a specific directory
 huddle --ide rider
 huddle --ide vscode --name devcontainer-demo
 huddle fw list
 huddle firewall list -i
 ```
 
-Standaard API URL: `http://localhost:3000`. Overschrijven kan met `--url` of `HUDDLE_URL`.
+Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
 
-## Experimenten
+## Experiments
 
-Een experiment is een volledige Huddle-versie (CLI + alle Docker images) gekoppeld aan één GitHub issue. Push een branch `experiment/<issuenummer>-<omschrijving>` en de pipeline publiceert alles onder de tag `experiment-<issuenummer>`, volledig gescheiden van de normale releases.
+An experiment is a complete Huddle version (CLI + all Docker images) tied to a single GitHub issue. Push a branch `experiment/<issue-number>-<description>` and the pipeline publishes everything under the tag `experiment-<issue-number>`, fully separated from the normal releases.
 
 ```bash
-huddle init --experiment 123   # experiment activeren en init draaien
-huddle experiment use 123      # zelfde als hierboven
-huddle experiment status       # actief kanaal en CLI-versie tonen
-huddle experiment reset        # terug naar de stabiele release
+huddle init --experiment 123   # activate the experiment and run init
+huddle experiment use 123      # same as above
+huddle experiment status       # show the active channel and CLI version
+huddle experiment reset        # back to the stable release
 ```
 
-Bij het activeren bewaart de CLI het experiment in `~/.huddle/config.json`, installeert zichzelf opnieuw als `@infosupport/huddle-cli@experiment-123`, herstart zichzelf en voert daarna `huddle init` uit met de `experiment-123` Docker images. CLI en images draaien dus altijd op exact dezelfde versie.
+On activation the CLI stores the experiment in `~/.huddle/config.json`, reinstalls itself as `@infosupport/huddle-cli@experiment-123`, restarts itself, and then runs `huddle init` with the `experiment-123` Docker images. So the CLI and the images always run on exactly the same version.
 
-Het experiment blijft actief — ook bij een volgende `huddle init` — totdat je expliciet `huddle experiment reset` uitvoert. Dat verwijdert de lokale experiment-config, installeert de stabiele CLI opnieuw en vanaf dan gebruikt `huddle init` weer de `latest` images.
+The experiment stays active — including on the next `huddle init` — until you explicitly run `huddle experiment reset`. That removes the local experiment config, reinstalls the stable CLI, and from then on `huddle init` uses the `latest` images again.
 
-## Ontwikkelen
+## Development
 
 ```bash
 npm install
@@ -54,15 +54,15 @@ npm run build
 npm run install-global
 ```
 
-Belangrijkste flags:
+Main flags:
 
 ```text
 --ide <intellij|rider|vscode>
---workspace <pad>
---name <naam>
+--workspace <path>
+--name <name>
 --image <image>
 --empty
 -i, --interactive
---container <naam>
+--container <name>
 --status <requested|allow|deny>
 ```
