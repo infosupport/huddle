@@ -24,7 +24,7 @@ export async function apiCall<T>(method: string, path: string, body?: unknown): 
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    throw new ApiError(`Kan Huddle API niet bereiken op ${baseUrl}: ${detail}`);
+    throw new ApiError(`Cannot reach Huddle API at ${baseUrl}: ${detail}`);
   }
 
   const raw = await res.text();
@@ -45,7 +45,7 @@ export const del = <T>(path: string) => apiCall<T>('DELETE', path);
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim();
-  if (!trimmed) throw new Error('Huddle URL mag niet leeg zijn');
+  if (!trimmed) throw new Error('Huddle URL must not be empty');
   return trimmed.replace(/\/+$/, '');
 }
 

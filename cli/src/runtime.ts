@@ -4,9 +4,9 @@ export type RuntimeName = 'docker' | 'podman';
 
 export interface ContainerRuntime {
   name: RuntimeName;
-  /** Pad op de host naar de container-socket, gemount als /var/run/docker.sock. */
+  /** Path on the host to the container socket, mounted as /var/run/docker.sock. */
   socketPath: string;
-  /** Naam van het standaard bridge-netwerk ('bridge' bij Docker, 'podman' bij Podman). */
+  /** Name of the default bridge network ('bridge' for Docker, 'podman' for Podman). */
   defaultNetwork: string;
 }
 
@@ -19,12 +19,12 @@ function commandOutput(cmd: string): string | undefined {
 }
 
 function isAvailable(runtime: RuntimeName): boolean {
-  // 'info' slaagt alleen als de daemon/machine ook echt bereikbaar is.
+  // 'info' only succeeds if the daemon/machine is actually reachable.
   return commandOutput(`${runtime} info`) !== undefined;
 }
 
 function podmanSocketPath(): string {
-  // Podman weet zelf waar zijn (rootless of rootful) socket staat.
+  // Podman knows where its own (rootless or rootful) socket lives.
   const reported = commandOutput(`podman info --format "{{.Host.RemoteSocket.Path}}"`);
   if (reported) {
     return reported.replace(/^unix:\/\//, '');
@@ -46,20 +46,20 @@ function buildRuntime(name: RuntimeName): ContainerRuntime {
 export function parseRuntimeName(value: string): RuntimeName {
   const normalized = value.toLowerCase().trim();
   if (normalized === 'docker' || normalized === 'podman') return normalized;
-  throw new Error(`Onbekende container runtime: ${value}. Kies docker of podman.`);
+  throw new Error(`Unknown container runtime: ${value}. Choose docker or podman.`);
 }
 
 /**
- * Bepaalt de te gebruiken container runtime.
- * Expliciete keuze (via --runtime of HUDDLE_RUNTIME) wint; anders wordt
- * automatisch gedetecteerd: eerst Docker, dan Podman.
+ * Determines which container runtime to use.
+ * An explicit choice (via --runtime or HUDDLE_RUNTIME) wins; otherwise it is
+ * auto-detected: Docker first, then Podman.
  */
 export function resolveRuntime(explicit?: string): ContainerRuntime {
   const requested = explicit ?? process.env.HUDDLE_RUNTIME;
   if (requested) {
     const name = parseRuntimeName(requested);
     if (!isAvailable(name)) {
-      throw new Error(`Container runtime '${name}' is niet beschikbaar. Draait de daemon/machine?`);
+      throw new Error(`Container runtime '${name}' is not available. Is the daemon/machine running?`);
     }
     return buildRuntime(name);
   }
@@ -68,7 +68,7 @@ export function resolveRuntime(explicit?: string): ContainerRuntime {
   if (isAvailable('podman')) return buildRuntime('podman');
 
   throw new Error(
-    'Geen werkende container runtime gevonden. Installeer en start Docker of Podman,\n' +
-    'of kies er expliciet een met --runtime <docker|podman> of de env-var HUDDLE_RUNTIME.',
+    'No working container runtime found. Install and start Docker or Podman,\n' +
+    'or pick one explicitly with --runtime <docker|podman> or the HUDDLE_RUNTIME env var.',
   );
 }

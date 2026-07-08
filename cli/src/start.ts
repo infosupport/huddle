@@ -58,7 +58,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
 
   const result = await post<StartResponse>('/api/docker/start', body);
 
-  console.log(green(`[OK] Container gestart: ${result.containerName} (${result.id.slice(0, 12)})`));
+  console.log(green(`[OK] Container started: ${result.containerName} (${result.id.slice(0, 12)})`));
   console.log();
 
   if (ide === 'vscode') {
@@ -86,10 +86,10 @@ function resolveWorkspace(workspace?: string): string {
   try {
     stat = fs.statSync(resolved);
   } catch {
-    throw new Error(`Workspace-map bestaat niet: ${resolved}`);
+    throw new Error(`Workspace directory does not exist: ${resolved}`);
   }
   if (!stat.isDirectory()) {
-    throw new Error(`Workspace-pad is geen map: ${resolved}`);
+    throw new Error(`Workspace path is not a directory: ${resolved}`);
   }
   return resolved.replace(/[\\/]+$/, '');
 }
@@ -102,7 +102,7 @@ function defaultContainerName(baseName: string): string {
 function validateContainerName(name: string): string {
   const trimmed = name.trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(trimmed)) {
-    throw new Error(`Ongeldige containernaam: ${name}`);
+    throw new Error(`Invalid container name: ${name}`);
   }
   return trimmed;
 }
@@ -112,5 +112,5 @@ function parseIde(value: string): IdeName {
   if (normalized === 'rider') return 'rider';
   if (normalized === 'vscode' || normalized === 'code') return 'vscode';
   if (normalized === 'intellij' || normalized === 'intelij' || normalized === 'idea') return 'intellij';
-  throw new Error(`Onbekende IDE: ${value}. Kies intellij, rider of vscode.`);
+  throw new Error(`Unknown IDE: ${value}. Choose intellij, rider, or vscode.`);
 }
