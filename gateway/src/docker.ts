@@ -454,6 +454,10 @@ fi
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
 
+# Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
+# (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
+ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true
+
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
@@ -537,6 +541,10 @@ function buildVscodeConfigScript(containerWorkspace: string, containerName: stri
   return `#!/bin/sh
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
+
+# Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
+# (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
+ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true
 
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
@@ -708,6 +716,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
     'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
     'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
+    // De docker-proxy-socket zit in de gemounte directory /var/run/huddle (zie
+    // Mounts). DOCKER_HOST laat docker/compose/SDK's hem daar vinden; voor tools
+    // die het defaultpad hardcoden legt het config-script ook een symlink op
+    // /var/run/docker.sock.
+    'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
     ...(isVscode ? [] : [
       'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
       'XDG_DATA_HOME=/.jbdevcontainer/data',
@@ -733,9 +746,14 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Target: containerWorkspace,
     }]),
     {
+      // Mount de per-container socket-DIRECTORY, niet het socket-bestand zelf:
+      // een file-bind pint de inode en wijst na een huddle-herstart (unlink +
+      // nieuwe socket) voorgoed naar de dode oude socket. Via de directory ziet
+      // de container altijd de actuele socket; DOCKER_HOST (env) en de symlink
+      // /var/run/docker.sock (config-script) wijzen ernaar.
       Type: 'bind',
-      Source: `${SOCKET_DIR}/${containerName}.sock`,
-      Target: '/var/run/docker.sock',
+      Source: `${SOCKET_DIR}/${containerName}`,
+      Target: '/var/run/huddle',
     },
   ];
 

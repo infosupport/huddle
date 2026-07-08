@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest';
-import { validateHostConfig, validateVolumeCreate } from '../src/socket-proxy';
+import { describe, it, expect, vi } from 'vitest';
+
+// socket-proxy importeert db.ts alleen voor de grant-checks; mocken houdt de
+// native better-sqlite3-binding buiten deze test (die ontbreekt in een verse
+// DMZ-devcontainer, zie rules.test.ts / grants.test.ts). De geteste functies
+// zijn puur en raken de db niet.
+vi.mock('../src/db', () => ({
+  getGrant: () => null,
+  isHostPortApproved: () => false,
+}));
+
+const { validateHostConfig, validateVolumeCreate } = await import('../src/socket-proxy');
 
 // ── Boundary — socket-proxy HostConfig / volume policy ──────────────────────
 // De per-container Docker-socket-proxy moet elke poging blokkeren om via een
