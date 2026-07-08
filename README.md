@@ -205,6 +205,7 @@ Bij het bouwen van een base-image kan Huddle automatisch AI-CLI-configuraties (z
 | AI-tool | Bronpad (host) | Doelpad (container) |
 |---------|---------------|---------------------|
 | claude | `/mnt/c/projects/huddle/.ai/claude/` | `/home/vscode/.claude` |
+| copilot | `/mnt/c/projects/huddle/.ai/copilot/` | `/home/vscode/.copilot` |
 
 ---
 

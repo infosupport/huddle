@@ -18,13 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js 24 (vereist voor claude-code en codex CLIs)
+# Node.js 24 (vereist voor claude-code, codex en copilot CLIs)
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Global CLIs
-RUN npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @github/copilot opencode-ai 
 
 # markitdown: converteert PDF/Office/HTML/afbeeldingen → Markdown.
 # Wordt gebruikt door de markitdown-skill (.ai/claude/skills/markitdown.md).
@@ -35,10 +35,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 # Mappen aanmaken voor AI CLI-tools. Inhoud wordt bij container-start
 # via de instelbare folder mappings (Huddle Instellingen) gemount.
 RUN mkdir -p /home/vscode/.claude/agents /home/vscode/.claude/skills \
-             /home/vscode/.codex /home/vscode/.config/opencode/agents \
+             /home/vscode/.codex /home/vscode/.copilot \
+             /home/vscode/.config/opencode/agents \
              /home/vscode/.ai/mcp \
     && chown -R vscode:vscode /home/vscode/.claude /home/vscode/.codex \
-                              /home/vscode/.config /home/vscode/.ai
+                              /home/vscode/.copilot /home/vscode/.config \
+                              /home/vscode/.ai
 
 # Verwijder sudo-rechten van vscode (mcr base geeft ze standaard, wij willen dit niet)
 RUN gpasswd -d vscode sudo 2>/dev/null || true \
