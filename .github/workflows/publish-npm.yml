@@ -38,7 +38,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
           # GitVersion heeft de volledige historie én tags (het anker) nodig.
@@ -54,7 +54,7 @@ jobs:
         id: gitversion
         uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # Node 24 levert npm >= 11.5.1, vereist voor trusted publishing
           # (npm 10.x faalt met een misleidende 404).
@@ -89,7 +89,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
@@ -109,7 +109,7 @@ jobs:
           echo "tag=experiment-$ISSUE" >> "$GITHUB_OUTPUT"
           echo "Experiment-tag: experiment-$ISSUE"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # Node 24 levert npm >= 11.5.1, vereist voor trusted publishing
           # (npm 10.x faalt met een misleidende 404).
