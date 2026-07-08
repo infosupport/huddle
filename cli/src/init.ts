@@ -27,38 +27,38 @@ function runSilent(cmd: string): boolean {
 }
 
 /**
- * Pullt de devcontainer-base-images alvast. Best-effort: als een image (nog)
- * niet beschikbaar is in het register, waarschuwen we alleen — de gateway bouwt
- * hem dan bij de eerste start alsnog uit de meegeleverde Dockerfile.
+ * Pulls the devcontainer base images ahead of time. Best-effort: if an image is
+ * not (yet) available in the registry, we only warn — the gateway then builds it
+ * from the bundled Dockerfile on the first start.
  */
 function pullBaseImages(rt: string, images: string[]): void {
-  console.log(dim(`Pull devcontainer base-images (${images.length})`));
+  console.log(dim(`Pulling devcontainer base images (${images.length})`));
   const failed: string[] = [];
   for (const image of images) {
-    console.log(dim(`  Pull ${image}`));
+    console.log(dim(`  Pulling ${image}`));
     try {
       run(`${rt} pull ${image}`);
     } catch {
       failed.push(image);
-      console.log(yellow(`  [!] Kon ${image} niet pullen — gateway bouwt hem later indien nodig.`));
+      console.log(yellow(`  [!] Could not pull ${image} — the gateway will build it later if needed.`));
     }
   }
   if (failed.length === images.length) {
-    console.log(yellow('[!] Geen enkele base-image kon gepulld worden. Ben je ingelogd op ghcr.io?'));
+    console.log(yellow('[!] No base image could be pulled. Are the images published and reachable?'));
   }
 }
 
 /**
- * Start de Huddle-gateway. Welke images er draaien (stable of experiment)
- * beslist de aanroeper via `images` (zie resolveImages() in images.ts);
- * deze functie doet alleen runtime- en container-orkestratie.
+ * Starts the Huddle gateway. Which images run (stable or experiment) is decided
+ * by the caller via `images` (see resolveImages() in images.ts); this function
+ * only does runtime and container orchestration.
  */
 export async function runInit(opts: InitOptions, images: ResolvedImages): Promise<void> {
-  console.log(`${bold('Huddle opstarten...')}\n`);
+  console.log(`${bold('Starting Huddle...')}\n`);
 
   const IMAGE = images.image;
   if (images.experiment !== undefined) {
-    console.log(yellow(`Experiment ${images.experiment} actief → images met tag ${images.tag}`));
+    console.log(yellow(`Experiment ${images.experiment} active → images with tag ${images.tag}`));
   }
 
   const runtime = resolveRuntime(opts.runtime);
@@ -66,9 +66,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   console.log(dim(`Container runtime: ${rt}`));
 
   if (process.env.HUDDLE_NO_PULL === '1') {
-    console.log(dim(`HUDDLE_NO_PULL=1 → pull overslaan, lokale image ${IMAGE} gebruiken`));
+    console.log(dim(`HUDDLE_NO_PULL=1 → skipping pull, using local image ${IMAGE}`));
   } else {
-    console.log(dim(`Pull ${IMAGE}`));
+    console.log(dim(`Pulling ${IMAGE}`));
     run(`${rt} pull ${IMAGE}`);
     pullBaseImages(rt, images.baseImages.map((b) => b.image));
   }
@@ -76,33 +76,33 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   console.log(dim(`Volume: ${VOLUME}`));
   runSilent(`${rt} volume inspect ${VOLUME}`) || run(`${rt} volume create ${VOLUME}`);
 
-  console.log(dim(`Netwerk: ${INTERNAL_NET}`));
+  console.log(dim(`Network: ${INTERNAL_NET}`));
   runSilent(`${rt} network inspect ${INTERNAL_NET}`) || run(`${rt} network create --internal ${INTERNAL_NET}`);
 
-  console.log(dim(`Verwijder oude container als die bestaat`));
+  console.log(dim(`Removing old container if it exists`));
   runSilent(`${rt} rm -f ${CONTAINER}`);
 
-  console.log(dim(`Socket-directory: /tmp/dc-sockets`));
-  // De mount-SOURCE moet het pad op de Docker-ENGINE-host zijn (onder Windows:
-  // de WSL2/Linux-VM), óók als de CLI zelf op Windows draait. De gateway
-  // (SOCKET_DIR in docker.ts) en elke devcontainer-socket-mount rekenen op
-  // /tmp/dc-sockets op de engine-host; een Windows-tempdir mounten splitst
-  // gateway en devcontainers over twee filesystems, en op zo'n drvfs/9p-mount
-  // zijn Unix-sockets bovendien onbetrouwbaar.
+  console.log(dim(`Socket directory: /tmp/dc-sockets`));
+  // The mount SOURCE must be the path on the Docker ENGINE host (on Windows:
+  // the WSL2/Linux VM), even when the CLI itself runs on Windows. The gateway
+  // (SOCKET_DIR in docker.ts) and every devcontainer socket mount rely on
+  // /tmp/dc-sockets on the engine host; mounting a Windows temp dir splits
+  // gateway and devcontainers across two filesystems, and Unix sockets are
+  // unreliable on such a drvfs/9p mount anyway.
   const hostTmpSockets = '/tmp/dc-sockets';
   if (process.platform === 'win32') {
-    // Niet lokaal aan te maken vanaf Windows; de engine maakt een ontbrekende
-    // bind-source zelf aan in de VM bij `run`.
-    console.log(dim(`  (Windows: de engine maakt ${hostTmpSockets} in de VM aan)`));
+    // Cannot be created locally from Windows; the engine creates a missing
+    // bind source itself in the VM on `run`.
+    console.log(dim(`  (Windows: the engine creates ${hostTmpSockets} in the VM)`));
   } else {
     try {
       fs.mkdirSync(hostTmpSockets, { recursive: true });
     } catch (err) {
-      console.log(yellow(`[!] Kon ${hostTmpSockets} niet aanmaken: ${err}`));
+      console.log(yellow(`[!] Could not create ${hostTmpSockets}: ${err}`));
     }
   }
 
-  console.log(dim(`Start container`));
+  console.log(dim(`Starting container`));
   run(
     `${rt} run -d` +
     ` --name ${CONTAINER}` +
@@ -118,5 +118,5 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   runSilent(`${rt} network connect ${runtime.defaultNetwork} ${CONTAINER}`);
 
   console.log();
-  console.log(green(`[OK] Huddle draait op http://localhost:${HOST_PORT}`));
+  console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
 }

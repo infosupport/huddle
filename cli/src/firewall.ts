@@ -27,7 +27,7 @@ export async function runFirewallList(opts: FirewallListOptions): Promise<void> 
   const rules = await get<Rule[]>(`/api/rules?${qs}`);
 
   if (rules.length === 0) {
-    console.log(dim('Geen openstaande firewall-verzoeken.'));
+    console.log(dim('No pending firewall requests.'));
     return;
   }
 
@@ -36,7 +36,7 @@ export async function runFirewallList(opts: FirewallListOptions): Promise<void> 
     return;
   }
 
-  console.log(`${bold(String(rules.length))} openstaand(e) verzoek(en). Beoordeel elk:\n`);
+  console.log(`${bold(String(rules.length))} pending request(s). Review each:\n`);
 
   for (let i = 0; i < rules.length; i++) {
     await reviewRule(rules[i], i + 1, rules.length);
@@ -46,40 +46,40 @@ export async function runFirewallList(opts: FirewallListOptions): Promise<void> 
 
 async function reviewRule(rule: Rule, idx: number, total: number): Promise<void> {
   const target = formatTarget(rule);
-  const scope = rule.container_id ? `container: ${rule.container_id}` : 'globaal';
-  const example = rule.last_path ? `, voorbeeld: ${rule.last_path}` : '';
+  const scope = rule.container_id ? `container: ${rule.container_id}` : 'global';
+  const example = rule.last_path ? `, example: ${rule.last_path}` : '';
 
   console.log(
     `[${idx}/${total}] ${bold(cyan(target))}  ${dim(`(${scope}, ${rule.request_count} req, ${formatTime(rule.last_seen)}${example})`)}`
   );
 
   const key = await promptKey(
-    `  ${bold('[a]')}llow  ${bold('[d]')}eny  ${bold('[A]')}llow globaal  ${bold('[D]')}eny globaal  ${bold('[s]')}kip > `
+    `  ${bold('[a]')}llow  ${bold('[d]')}eny  ${bold('[A]')}llow global  ${bold('[D]')}eny global  ${bold('[s]')}kip > `
   );
 
   switch (key) {
     case 'a':
       await resolveRule(rule, 'allow', 'rule');
-      console.log(green(`  [OK] Toegestaan voor ${rule.container_id ?? 'globaal'}`));
+      console.log(green(`  [OK] Allowed for ${rule.container_id ?? 'global'}`));
       break;
 
     case 'd':
       await resolveRule(rule, 'deny', 'rule');
-      console.log(red(`  [OK] Geblokkeerd voor ${rule.container_id ?? 'globaal'}`));
+      console.log(red(`  [OK] Blocked for ${rule.container_id ?? 'global'}`));
       break;
 
     case 'A':
       await resolveRule(rule, 'allow', 'global');
-      console.log(green(`  [OK] Globaal toegestaan: ${target}`));
+      console.log(green(`  [OK] Allowed globally: ${target}`));
       break;
 
     case 'D':
       await resolveRule(rule, 'deny', 'global');
-      console.log(red(`  [OK] Globaal geblokkeerd: ${target}`));
+      console.log(red(`  [OK] Blocked globally: ${target}`));
       break;
 
     default:
-      console.log(dim('  Overgeslagen'));
+      console.log(dim('  Skipped'));
   }
 }
 
@@ -88,12 +88,12 @@ async function resolveRule(rule: Rule, status: 'allow' | 'deny', scope: 'rule' |
 }
 
 function printRulesTable(rules: Rule[]): void {
-  const headers = ['ID', 'Status', 'Domein/pad', 'Container', 'Verzoeken', 'Gezien'];
+  const headers = ['ID', 'Status', 'Domain/path', 'Container', 'Requests', 'Seen'];
   const rows = rules.map((r) => [
     String(r.id),
     r.status,
     formatTarget(r),
-    r.container_id ?? '(globaal)',
+    r.container_id ?? '(global)',
     String(r.request_count),
     formatTime(r.last_seen),
   ]);
