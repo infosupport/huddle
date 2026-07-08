@@ -121,37 +121,17 @@ Two servers run in the same process:
 
 **Requirements:** Docker or Podman, Node.js 18+
 
-### 1. Create a GitHub Personal Access Token
+Huddle's packages are public, so no GitHub token or registry login is needed.
 
-Go to [github.com/settings/tokens](https://github.com/settings/tokens/new?description=Huddle&scopes=read%3Apackages&default_expires_at=7) → **Generate new token (classic)**.
-
-Settings:
-- Expiration: pick a short lifetime (e.g. **7 days**); your organization may enforce a maximum
-- Scope: **read:packages**
-
-Copy the token.
-
-### 2. Log in to the package registries
-
-```bash
-docker login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_TOKEN
-```
-
-If you use Podman, replace `docker` with `podman` in the command above.
-
-Add this to your user profile `.npmrc` (create the file if it doesn't exist):
-- Windows: `C:\Users\YOUR_USERNAME\.npmrc`
-- Mac/Linux: `~/.npmrc`
-
-```
-@infosupport:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=YOUR_TOKEN
-```
-
-### 3. Install the CLI and start Huddle
+### 1. Install the CLI
 
 ```bash
 npm install -g @infosupport/huddle-cli
+```
+
+### 2. Start Huddle
+
+```bash
 huddle init
 ```
 

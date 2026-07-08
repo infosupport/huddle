@@ -4,26 +4,7 @@ Cross-platform Node CLI voor Huddle. De CLI praat met de bestaande Huddle REST A
 
 ## Installeren
 
-Maak een GitHub Personal Access Token aan op [github.com/settings/tokens](https://github.com/settings/tokens) (classic, scope: **read:packages**, expiration: kies een korte geldigheidsduur, bijv. **7 dagen** — je organisatie kan een maximum afdwingen).
-
-Login bij de registries:
-
-```bash
-docker login ghcr.io -u JOUW_GITHUB_GEBRUIKERSNAAM -p JOUW_TOKEN
-```
-
-Gebruik je Podman, vervang dan `docker` door `podman` in het commando hierboven.
-
-Voeg toe aan je gebruikersprofiel `.npmrc`:
-- Windows: `C:\Users\JOUW_GEBRUIKERSNAAM\.npmrc`
-- Mac/Linux: `~/.npmrc`
-
-```
-@infosupport:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=JOUW_TOKEN
-```
-
-Installeer de CLI:
+De packages zijn publiek, dus je hebt geen GitHub-token of registry-login nodig.
 
 ```bash
 npm install -g @infosupport/huddle-cli
