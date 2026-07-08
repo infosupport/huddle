@@ -74,4 +74,16 @@ describe('createContainerProxy socket-layout', () => {
     await connect(sockPath);
     await connect(path.join(dir, 'dc-c.sock'));
   });
+
+  // containerName vloeit via path.join() in de socket-paden. De naam komt uit
+  // huddle's eigen orchestratie, maar we dwingen de Docker-naamgrammatica
+  // expliciet af zodat `..`/`/`/leidende punt onmogelijk buiten socketDir kunnen
+  // schrijven of lezen (path-traversal). Deze test borgt die guard.
+  it('weigert onveilige containernamen (path-traversal)', async () => {
+    for (const bad of ['../evil', 'a/b', '..', '.hidden', '/abs', 'foo/../bar']) {
+      await expect(createContainerProxy(bad, dir)).rejects.toThrow(/unsafe container name/);
+    }
+    // Er mag niets buiten socketDir zijn aangemaakt.
+    expect(fs.existsSync(path.join(dir, '..', 'evil'))).toBe(false);
+  });
 });
