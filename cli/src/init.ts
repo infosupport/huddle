@@ -2,8 +2,6 @@ import { execSync } from 'child_process';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import fs from 'fs';
-import os from 'os';
-import path from 'path';
 
 // Standaard de gepubliceerde image; overschrijfbaar via HUDDLE_IMAGE zodat je een
 // lokaal gebouwde (bv. debug-)image via de CLI kunt draaien. Zet dan ook
@@ -91,18 +89,24 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
   console.log(dim(`Verwijder oude container als die bestaat`));
   runSilent(`${rt} rm -f ${CONTAINER}`);
 
-  console.log(dim(`Maak /tmp/dc-sockets aan`));
-  // Create a host directory for dc-sockets in a cross-platform way.
-  // On Unix-like systems we use /tmp/dc-sockets. On Windows we create
-  // a directory inside the OS temp dir (e.g. C:\\Users\\...\\AppData\\Local\\Temp\\dc-sockets)
-  // and mount that into the container at /tmp/dc-sockets.
-  const hostTmpSockets = process.platform === 'win32'
-    ? path.resolve(os.tmpdir(), 'dc-sockets')
-    : '/tmp/dc-sockets';
-  try {
-    fs.mkdirSync(hostTmpSockets, { recursive: true });
-  } catch (err) {
-    console.log(yellow(`[!] Kon ${hostTmpSockets} niet aanmaken: ${err}`));
+  console.log(dim(`Socket-directory: /tmp/dc-sockets`));
+  // De mount-SOURCE moet het pad op de Docker-ENGINE-host zijn (onder Windows:
+  // de WSL2/Linux-VM), óók als de CLI zelf op Windows draait. De gateway
+  // (SOCKET_DIR in docker.ts) en elke devcontainer-socket-mount rekenen op
+  // /tmp/dc-sockets op de engine-host; een Windows-tempdir mounten splitst
+  // gateway en devcontainers over twee filesystems, en op zo'n drvfs/9p-mount
+  // zijn Unix-sockets bovendien onbetrouwbaar.
+  const hostTmpSockets = '/tmp/dc-sockets';
+  if (process.platform === 'win32') {
+    // Niet lokaal aan te maken vanaf Windows; de engine maakt een ontbrekende
+    // bind-source zelf aan in de VM bij `run`.
+    console.log(dim(`  (Windows: de engine maakt ${hostTmpSockets} in de VM aan)`));
+  } else {
+    try {
+      fs.mkdirSync(hostTmpSockets, { recursive: true });
+    } catch (err) {
+      console.log(yellow(`[!] Kon ${hostTmpSockets} niet aanmaken: ${err}`));
+    }
   }
 
   console.log(dim(`Start container`));
