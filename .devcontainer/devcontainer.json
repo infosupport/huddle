@@ -1,8 +1,24 @@
 {
-  "name": "huddle-agent",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/huddle,type=bind",
+  "name": "huddle (in bestaande Huddle)",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "devcontainer",
   "workspaceFolder": "/workspaces/huddle",
+
+  // Geen root voor de agent: attach als de non-root user `node` (sudo is uit de
+  // image gestript, zie Dockerfile). containerUser laten we op de default (root)
+  // zodat de bootstrap de workspace naar `node` kan chownen — anders faalt de
+  // devcontainer-setup met `chown: Operation not permitted`.
+  "remoteUser": "node",
+
+  // Respecteer het `command: sleep infinity` uit docker-compose.yml i.p.v. het te
+  // overschrijven, zodat de container in het Huddle-netwerk blijft draaien.
+  "overrideCommand": false,
+
+  // Haal de Huddle-MITM-CA op naar een user-eigen pad (zonder root). Loopt direct
+  // naar de Huddle-API (huddle staat in NO_PROXY). Lukt het niet, dan tunnelt de
+  // proxy HTTPS alsnog ongeïntercepteerd — de devcontainer werkt gewoon door.
+  "postCreateCommand": "curl -fsS http://huddle:3000/api/tls/ca.crt -o $HOME/.huddle-ca.crt && echo 'Huddle CA opgehaald -> $HOME/.huddle-ca.crt' || echo 'Huddle CA niet opgehaald (HTTPS wordt getunneld, geen MITM)'",
+
   "customizations": {
     "vscode": {
       "extensions": []

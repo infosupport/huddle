@@ -1,0 +1,54 @@
+# Devcontainer die aansluit op een REEDS DRAAIENDE Huddle.
+#
+# `huddle init` maakt het interne netwerk `devcontainer-net` aan en start daar de
+# container `huddle` op. Dit netwerk is `--internal`: er is geen eigen route naar
+# buiten. De enige uitweg is de Huddle-proxy op `huddle:80`. Deze devcontainer
+# sluit op datzelfde netwerk aan (external), draait als non-root user en stuurt
+# al zijn verkeer via de proxy — precies zoals een door Huddle beheerde container.
+services:
+  devcontainer:
+    # Eigen image: strip sudo van de non-root `node`-user (zie Dockerfile). De
+    # container blijft root-capable zodat de devcontainer-bootstrap de workspace
+    # kan chownen (root-exec, heeft CAP_CHOWN nodig) — daarom GEEN `cap_drop: ALL`
+    # of `no-new-privileges` meer: die braken de bootstrap met
+    # `chown: Operation not permitted`. "Geen root" wordt afgedwongen doordat de
+    # agent als `node` draait (remoteUser) zonder sudo.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: huddle-devcontainer
+
+    # Geen NET_ADMIN: de container kan zelf geen iptables/routes aanpassen, dus
+    # verkeer kan alleen via de proxy naar buiten (het netwerk is bovendien internal).
+
+    # ── Alle egress verplicht via de Huddle-proxy ───────────────────────────────
+    # Het interne netwerk heeft geen eigen internettoegang; dit is de enige uitweg.
+    # `huddle` staat in NO_PROXY zodat directe calls naar de Huddle-API (poort 3000)
+    # en het ophalen van de CA niet door de proxy (poort 80) hoeven.
+    environment:
+      HTTP_PROXY: http://huddle:80
+      HTTPS_PROXY: http://huddle:80
+      http_proxy: http://huddle:80
+      https_proxy: http://huddle:80
+      NO_PROXY: localhost,127.0.0.1,::1,[::1],huddle
+      no_proxy: localhost,127.0.0.1,::1,[::1],huddle
+      # Vertrouw de Huddle-MITM-CA zonder root: postCreateCommand haalt hem hierheen.
+      # Ontbreekt het bestand nog, dan valt Node terug op zijn eigen CA-bundle.
+      NODE_EXTRA_CA_CERTS: /home/node/.huddle-ca.crt
+
+    volumes:
+      - ..:/workspaces/huddle:cached
+
+    # Blijf draaien zodat de IDE eraan kan attachen (devcontainer.json zet
+    # overrideCommand:false zodat dit commando gerespecteerd wordt).
+    command: sleep infinity
+
+    networks:
+      - huddle-net
+
+networks:
+  # Sluit aan op het interne netwerk dat `huddle init` al heeft aangemaakt.
+  # `external: true` betekent: niet zelf aanmaken, maar het bestaande gebruiken.
+  huddle-net:
+    external: true
+    name: devcontainer-net

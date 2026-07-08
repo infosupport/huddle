@@ -5,7 +5,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-const IMAGE = 'ghcr.io/infosupport/huddle:latest';
+// Standaard de gepubliceerde image; overschrijfbaar via HUDDLE_IMAGE zodat je een
+// lokaal gebouwde (bv. debug-)image via de CLI kunt draaien. Zet dan ook
+// HUDDLE_NO_PULL=1 zodat de CLI die lokale image niet met een registry-pull
+// overschrijft.
+const IMAGE = process.env.HUDDLE_IMAGE ?? 'ghcr.io/infosupport/huddle:latest';
 const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
 const INTERNAL_NET = 'devcontainer-net';
@@ -70,10 +74,13 @@ export async function runInit(opts: InitOptions = {}): Promise<void> {
   const rt = runtime.name;
   console.log(dim(`Container runtime: ${rt}`));
 
-  console.log(dim(`Pull ${IMAGE}`));
-  run(`${rt} pull ${IMAGE}`);
-
-  pullBaseImages(rt);
+  if (process.env.HUDDLE_NO_PULL === '1') {
+    console.log(dim(`HUDDLE_NO_PULL=1 → pull overslaan, lokale image ${IMAGE} gebruiken`));
+  } else {
+    console.log(dim(`Pull ${IMAGE}`));
+    run(`${rt} pull ${IMAGE}`);
+    pullBaseImages(rt);
+  }
 
   console.log(dim(`Volume: ${VOLUME}`));
   runSilent(`${rt} volume inspect ${VOLUME}`) || run(`${rt} volume create ${VOLUME}`);
