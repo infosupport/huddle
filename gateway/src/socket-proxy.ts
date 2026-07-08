@@ -181,14 +181,40 @@ function deny403(client: net.Socket, msg: string): void {
 
 // ── Per-container socket proxy ────────────────────────────────────────────────
 
+// containerName vloeit in path.join() voor de socket-directory. De naam komt uit
+// huddle's eigen orchestratie (Docker-containernaam), maar we dwingen de
+// Docker-naamgrammatica hier expliciet af: geen slashes en geen leidende punt,
+// dus onmogelijk om met `..`/`/` buiten socketDir te schrijven of te lezen.
+const CONTAINER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+function assertSafeContainerName(name: string): void {
+  if (typeof name !== 'string' || !CONTAINER_NAME_RE.test(name))
+    throw new Error(`unsafe container name: ${JSON.stringify(name)}`);
+}
+
 export async function createContainerProxy(containerName: string, socketDir: string): Promise<net.Server> {
+  assertSafeContainerName(containerName);
   const existing = proxyServers.get(containerName);
   if (existing) { existing.close(); proxyServers.delete(containerName); }
 
   const { id, shortId } = await lookupContainerId(containerName);
   registerDevcontainer(containerName, id);
 
-  const socketPath = path.join(socketDir, `${containerName}.sock`);
+  // De socket leeft in een per-container subdirectory die als DIRECTORY in de
+  // devcontainer gemount wordt. Een bind-mount van het socket-bestand zelf pint
+  // de inode: na een huddle-herstart (unlink + nieuwe listen) kijkt zo'n mount
+  // voorgoed naar de dode oude socket. Een directory-mount overleeft dat.
+  const containerDir = path.join(socketDir, containerName);
+  const socketPath = path.join(containerDir, 'docker.sock');
+  // Oude platte pad (`<naam>.sock`): blijft als symlink bestaan voor
+  // devcontainers van vóór de directory-mount; die werken dan weer na een
+  // eigen herstart (docker volgt de symlink bij het opzetten van de bind).
+  const legacySocketPath = path.join(socketDir, `${containerName}.sock`);
+  try {
+    fs.mkdirSync(containerDir, { recursive: true });
+  } catch (err) {
+    console.error(`[socket-proxy] failed to create directory ${containerDir}:`, err);
+  }
   try { fs.unlinkSync(socketPath); } catch {}
 
   return new Promise((resolve, reject) => {
@@ -575,9 +601,10 @@ export async function createContainerProxy(containerName: string, socketDir: str
     });
 
     server.on('error', reject);
-    try { fs.mkdirSync(socketDir, { recursive: true }); } catch {}
     server.listen(socketPath, () => {
       try { fs.chmodSync(socketPath, 0o777); } catch {}
+      try { fs.unlinkSync(legacySocketPath); } catch {}
+      try { fs.symlinkSync(socketPath, legacySocketPath); } catch {}
       console.log(`[socket-proxy] ${containerName} (${shortId || 'id-unknown'}) → ${socketPath}`);
       proxyServers.set(containerName, server);
       resolve(server);

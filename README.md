@@ -10,7 +10,7 @@ Huddle is een security gateway die devcontainers afschermt van het externe netwe
 Devcontainer
   └─ HTTP/HTTPS-verkeer → Huddle proxy (poort 80)
        └─ rules engine → allow / deny / request
-  └─ Docker socket → /tmp/dc-sockets/<naam>.sock (per-container proxy)
+  └─ Docker socket → /tmp/dc-sockets/<naam>/docker.sock (per-container proxy)
        └─ label-isolatie + time-limited grant check
 
 Browser
@@ -37,7 +37,7 @@ Twee servers draaien in hetzelfde proces:
 - HTTPS: getunneld via CONNECT (inhoud niet onderschept)
 
 ### Docker Socket Proxy
-- Elke devcontainer krijgt een eigen Unix socket op `/tmp/dc-sockets/<naam>.sock`
+- Elke devcontainer krijgt een eigen Unix socket op `/tmp/dc-sockets/<naam>/docker.sock`; de per-container *directory* wordt in de container gemount (op `/var/run/huddle`) en `DOCKER_HOST` wijst naar de socket. Een file-mount van de socket zelf zou na een Huddle-herstart de dode oude inode blijven zien; een directory-mount niet. Het oude platte pad `/tmp/dc-sockets/<naam>.sock` blijft als symlink bestaan voor containers van vóór deze wijziging.
 - Toegang is beperkt via een tijdgebonden grant (1–120 minuten)
 - Policy wordt per request afgedwongen:
   - `docker ps` → gefilterd tot eigen gestarte containers

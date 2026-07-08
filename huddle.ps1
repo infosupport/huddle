@@ -4,13 +4,7 @@
 
 $HUDDLE_CONTAINER = "huddle"
 $HUDDLE_IMAGE     = "huddle"
-$HUDDLE_VOLUME    = "huddle-data"
 $HUDDLE_PORT      = 3000
-# De management-API/UI heeft geen eigen authenticatie; toegang leunt op
-# netwerkpositie. Publiceer daarom standaard alleen op de loopback zodat de
-# admin-API niet op het LAN bereikbaar is. Zet HUDDLE_BIND_ADDR bewust op
-# "0.0.0.0" (env var) als je hem breder wilt blootstellen (op eigen risico).
-$HUDDLE_BIND_ADDR = if ($env:HUDDLE_BIND_ADDR) { $env:HUDDLE_BIND_ADDR } else { "127.0.0.1" }
 
 # Per-IDE base images. Elke IDE heeft een eigen base-devimage-<ide>/ folder met
 # een Dockerfile en draagt LABEL com.devcontainer.ide=<ide>. Snapshots inheriten
@@ -56,86 +50,94 @@ function Show-Menu {
     Write-Host "   1  Snapshot maken van draaiende container" -ForegroundColor White
     Write-Host "   2  Devcontainer starten (IDE -> standaard of snapshot)" -ForegroundColor White
     Write-Host "   3  Base image bouwen per IDE (of alle parallel)" -ForegroundColor White
-    Write-Host "   4  Huddle bouwen en herstarten" -ForegroundColor White
+    Write-Host "   4  Huddle bouwen en herinitialiseren (CLI, no-pull)" -ForegroundColor White
+    Write-Host "   5  Tests draaien (unit + e2e)" -ForegroundColor White
     Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
     Write-Host "   0  Afsluiten" -ForegroundColor DarkGray
     Write-Host ""
 }
 
-# ── Start Huddle ──────────────────────────────────────────────────────────────
+# ── Reset-keuze bij opstarten ─────────────────────────────────────────────────
 
-function Start-Huddle {
-    $running = docker ps --filter "name=^${HUDDLE_CONTAINER}$" --format "{{.Names}}"
-    if ($running) {
-        Write-Host "  Huddle draait al." -ForegroundColor Green
-        return
-    }
+# Multiselect: welke onderdelen opnieuw gebouwd/geïnstalleerd moeten worden
+# voordat we via de CLI initialiseren. Retourneert een array met een subset van
+# 'huddle-image', 'devimages' en 'cli'; Enter zonder keuze = niets resetten.
+function Select-ResetComponents {
+    Write-Host "  Wat wil je resetten? (meerdere mogelijk, komma-gescheiden)" -ForegroundColor DarkCyan
+    Write-Host "   1)  Huddle image  (gateway-image opnieuw bouwen)"
+    Write-Host "   2)  Devimages     (base + per-IDE images opnieuw bouwen)"
+    Write-Host "   3)  CLI           (huddle-cli opnieuw installeren vanaf ./cli)"
+    Write-Host "   a)  Alles"
+    Write-Host "   Enter = niets resetten, alleen initialiseren" -ForegroundColor DarkGray
+    $answer = Read-Host "`n  Keuze (bv. 1,3)"
 
-    $netExists = docker network ls --filter 'name=^devcontainer-net$' --format "{{.Name}}"
-    if (-not $netExists) {
-        Write-Host "  Netwerk 'devcontainer-net' aanmaken (intern)..." -ForegroundColor DarkCyan
-        docker network create --internal devcontainer-net | Out-Null
-    } else {
-        $netInternal = docker network inspect devcontainer-net --format '{{.Internal}}' 2>$null
-        if ($netInternal -ne 'true') {
-            Write-Host "  WAARSCHUWING: 'devcontainer-net' is niet intern. Voer 'docker network rm devcontainer-net' uit (stop eerst alle containers) en herstart Huddle." -ForegroundColor Yellow
+    if (-not $answer) { return @() }
+    if ($answer.Trim().ToLower() -eq 'a') { return @('huddle-image', 'devimages', 'cli') }
+
+    $selected = @()
+    foreach ($part in ($answer -split ',')) {
+        switch ($part.Trim()) {
+            '1' { $selected += 'huddle-image' }
+            '2' { $selected += 'devimages' }
+            '3' { $selected += 'cli' }
+            default { if ($part.Trim()) { Write-Host "  Onbekende keuze '$($part.Trim())' -- genegeerd." -ForegroundColor Yellow } }
         }
     }
-
-    $imageExists = docker images --filter "reference=${HUDDLE_IMAGE}" --format "{{.Repository}}"
-    if (-not $imageExists) {
-        Write-Host "  Image '${HUDDLE_IMAGE}' niet gevonden -- bouwen..." -ForegroundColor DarkCyan
-        $scriptDir = $PSScriptRoot
-        docker build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway") --no-cache
-        if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
-    }
-
-    $stopped = docker ps -aq --filter "name=^${HUDDLE_CONTAINER}$" 2>$null
-    if ($stopped) { docker rm $HUDDLE_CONTAINER | Out-Null }
-
-    Write-Host "  Huddle starten..." -ForegroundColor DarkCyan
-    $scriptDir = $PSScriptRoot
-    $bugtrackerDir = Join-Path $scriptDir "bugtracker"
-    New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "bugs") | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $bugtrackerDir "solved") | Out-Null
-    $runArgs = @(
-        '-d',
-        '--name', $HUDDLE_CONTAINER,
-        '--network', 'devcontainer-net',
-        '-p', "${HUDDLE_BIND_ADDR}:${HUDDLE_PORT}:3000",
-        '-v', "${HUDDLE_VOLUME}:/data",
-        '-v', '/var/run/docker.sock:/var/run/docker.sock',
-        '-v', '/tmp/dc-sockets:/tmp/dc-sockets',
-        '-v', "${bugtrackerDir}:/bugtracker"
-    )
-    foreach ($ide in $IDE_DEFS) {
-        $folderHost = Join-Path $scriptDir $ide.Folder
-        if (Test-Path $folderHost) {
-            $runArgs += @('-v', "${folderHost}:/$($ide.Folder):ro")
-        }
-    }
-    # Gedeelde AI-config (.ai) mee zodat de gateway base-images kan bouwen met de
-    # `COPY .ai/…` regels (zie gateway/src/docker.ts buildImage).
-    $aiHost = Join-Path $scriptDir ".ai"
-    if (Test-Path $aiHost) {
-        $runArgs += @('-v', "${aiHost}:/.ai:ro")
-    }
-    $runArgs += $HUDDLE_IMAGE
-    $id = docker run @runArgs
-    # Verbind Huddle ook met de default bridge zodat het zelf internet kan bereiken
-    # voor proxy-verzoeken, terwijl devcontainers alleen op het interne netwerk zitten.
-    docker network connect bridge $HUDDLE_CONTAINER | Out-Null
-    Write-Host "  [OK] Gestart: $id" -ForegroundColor Green
-    Write-Host "  Web UI: http://localhost:${HUDDLE_PORT}" -ForegroundColor Cyan
+    return $selected | Select-Object -Unique
 }
 
-function Restart-Huddle {
-    $existing = docker ps -aq --filter "name=^${HUDDLE_CONTAINER}$" 2>$null
-    if ($existing) {
-        Write-Host "  Huddle stoppen..." -ForegroundColor DarkCyan
-        docker rm -f $HUDDLE_CONTAINER | Out-Null
+# ── CLI installeren ───────────────────────────────────────────────────────────
+
+# Bouwt en installeert de huddle-CLI globaal vanaf ./cli (npm run install-global
+# = tsc build + npm install -g .). Retourneert $true bij succes.
+function Install-HuddleCli {
+    $cliDir = Join-Path $PSScriptRoot 'cli'
+    Write-Host "  Huddle CLI installeren vanaf $cliDir..." -ForegroundColor DarkCyan
+    Push-Location $cliDir
+    try {
+        npm install
+        if ($LASTEXITCODE -ne 0) { Write-Host "  [FAIL] npm install mislukt." -ForegroundColor Red; return $false }
+        npm run install-global
+        if ($LASTEXITCODE -ne 0) { Write-Host "  [FAIL] CLI-installatie mislukt." -ForegroundColor Red; return $false }
+        Write-Host "  [OK] Huddle CLI geinstalleerd." -ForegroundColor Green
+        return $true
+    } finally {
+        Pop-Location
     }
-    Start-Huddle
+}
+
+# ── Initialiseren via de CLI ──────────────────────────────────────────────────
+
+# Alle opstartlogica (volume, intern netwerk, dc-sockets, container-run) zit in
+# `huddle init`; dit script levert alleen de lokaal gebouwde image aan via
+# HUDDLE_IMAGE + HUDDLE_NO_PULL zodat er niets uit het register gepulld wordt.
+function Initialize-Huddle {
+    if (-not (Get-Command huddle -ErrorAction SilentlyContinue)) {
+        Write-Host "  [FAIL] 'huddle' CLI niet gevonden. Kies de reset-optie 'CLI' om hem te installeren." -ForegroundColor Red
+        return $false
+    }
+
+    docker image inspect $HUDDLE_IMAGE *>$null 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Image '${HUDDLE_IMAGE}' niet gevonden -- eerst bouwen..." -ForegroundColor DarkCyan
+        Build-HuddleImage
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
+
+    Write-Host "  Initialiseren via 'huddle init' (HUDDLE_NO_PULL=1, image '${HUDDLE_IMAGE}')..." -ForegroundColor DarkCyan
+    $env:HUDDLE_IMAGE   = $HUDDLE_IMAGE
+    $env:HUDDLE_NO_PULL = '1'
+    $env:HUDDLE_PORT    = "$HUDDLE_PORT"
+    try {
+        huddle init
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [FAIL] 'huddle init' mislukt." -ForegroundColor Red
+            return $false
+        }
+        return $true
+    } finally {
+        Remove-Item Env:HUDDLE_IMAGE, Env:HUDDLE_NO_PULL, Env:HUDDLE_PORT -ErrorAction SilentlyContinue
+    }
 }
 
 # ── Build Huddle image ────────────────────────────────────────────────────────
@@ -485,10 +487,32 @@ function Invoke-Tests {
     }
 }
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
-Start-Huddle
-Invoke-Tests
+# Opstartflow: vraag (multiselect) welke onderdelen gereset moeten worden, bouw/
+# installeer die opnieuw, en initialiseer daarna altijd via de CLI met no-pull.
+Write-Banner
+$resetOk = $true
+$reset = Select-ResetComponents
+Write-Host ""
+
+if ($reset -contains 'cli') {
+    if (-not (Install-HuddleCli)) { $resetOk = $false }
+}
+if ($resetOk -and $reset -contains 'huddle-image') {
+    Build-HuddleImage
+    if ($LASTEXITCODE -ne 0) { $resetOk = $false }
+}
+if ($resetOk -and $reset -contains 'devimages') {
+    Build-AllBaseImages
+}
+
+if ($resetOk) {
+    Initialize-Huddle | Out-Null
+} else {
+    Write-Host "  Reset niet volledig gelukt -- initialisatie overgeslagen." -ForegroundColor Red
+}
+Read-Host "`n  Druk Enter voor het menu"
 
 $running = $true
 while ($running) {
@@ -499,7 +523,8 @@ while ($running) {
         '1' { New-Snapshot;       Read-Host "`n  Druk Enter om terug te gaan" }
         '2' { Start-Devcontainer; Read-Host "`n  Druk Enter om terug te gaan" }
         '3' { Build-BaseImage;    Read-Host "`n  Druk Enter om terug te gaan" }
-        '4' { Build-HuddleImage; if ($LASTEXITCODE -eq 0) { Restart-Huddle }; Read-Host "`n  Druk Enter om terug te gaan" }
+        '4' { Build-HuddleImage; if ($LASTEXITCODE -eq 0) { Initialize-Huddle | Out-Null }; Read-Host "`n  Druk Enter om terug te gaan" }
+        '5' { Invoke-Tests;       Read-Host "`n  Druk Enter om terug te gaan" }
         '0' { $running = $false }
         default { Write-Host "  Ongeldige keuze." -ForegroundColor Red; Start-Sleep -Seconds 1 }
     }
