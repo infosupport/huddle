@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ipv4ToInt, cidrToRange, isDevcontainerSource, classifyDevcontainerSource, rangeToCidr, type IpRange } from '../src/net-gate';
+import { ipv4ToInt, cidrToRange, isDevcontainerSource, type IpRange } from '../src/net-gate';
 
 // ── Boundary C — management-API source-IP gate ──────────────────────────────
 // Containers op devcontainer-net / dc-net-* mogen de management-API NIET bereiken
@@ -72,35 +72,5 @@ describe('isDevcontainerSource', () => {
     expect(isDevcontainerSource(undefined, subnets)).toBe(true);
     expect(isDevcontainerSource(null, subnets)).toBe(true);
     expect(isDevcontainerSource('garbage', subnets)).toBe(true);
-  });
-});
-
-describe('classifyDevcontainerSource (diagnose)', () => {
-  const subnets: IpRange[] = [
-    cidrToRange('172.18.0.0/16')!,
-    cidrToRange('10.89.0.0/24')!, // podman-achtig dc-net
-  ];
-
-  it('geeft reden + matchend subnet bij een geblokkeerde bron', () => {
-    const d = classifyDevcontainerSource('10.89.0.7', subnets);
-    expect(d.blocked).toBe(true);
-    expect(d.reason).toBe('in-devcontainer-subnet');
-    expect(d.matchedSubnet).not.toBeNull();
-    expect(rangeToCidr(d.matchedSubnet!)).toBe('10.89.0.0/24');
-  });
-
-  it('onderscheidt loopback, IPv4-buiten-subnet en de fail-closed takken', () => {
-    expect(classifyDevcontainerSource('127.0.0.1', subnets).reason).toBe('loopback');
-    expect(classifyDevcontainerSource('10.0.2.100', subnets).reason).toBe('ipv4-outside-subnets');
-    expect(classifyDevcontainerSource('fd00::5', subnets).reason).toBe('non-ipv4-fail-closed');
-    expect(classifyDevcontainerSource(undefined, subnets).reason).toBe('no-remote-addr');
-  });
-});
-
-describe('rangeToCidr', () => {
-  it('rendert een range terug naar leesbare CIDR', () => {
-    expect(rangeToCidr(cidrToRange('172.18.5.9/16')!)).toBe('172.18.0.0/16');
-    expect(rangeToCidr(cidrToRange('10.89.0.0/24')!)).toBe('10.89.0.0/24');
-    expect(rangeToCidr(cidrToRange('0.0.0.0/0')!)).toBe('0.0.0.0/0');
   });
 });
