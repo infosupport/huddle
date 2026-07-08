@@ -408,6 +408,13 @@ for pair in ${pairs}; do
 done`;
 }
 
+// Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
+// (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
+// Gedeeld tussen het JetBrains- en het VS Code-startscript.
+const DOCKER_SOCK_SYMLINK = `# Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
+# (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
+ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
+
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
 function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
@@ -454,9 +461,7 @@ fi
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
 
-# Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
-# (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
-ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true
+${DOCKER_SOCK_SYMLINK}
 
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
@@ -542,9 +547,7 @@ function buildVscodeConfigScript(containerWorkspace: string, containerName: stri
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
 
-# Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
-# (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
-ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true
+${DOCKER_SOCK_SYMLINK}
 
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
