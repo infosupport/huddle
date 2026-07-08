@@ -1,37 +1,37 @@
 # Huddle CLI
 
-Cross-platform Node CLI voor Huddle. De CLI praat met de bestaande Huddle REST API; containerbeheer en firewall-resolutie zitten dus in de gateway, niet opnieuw in de command-client.
+Cross-platform Node CLI for Huddle. The CLI talks to the existing Huddle REST API; container management and firewall resolution therefore live in the gateway, not re-implemented in the command client.
 
-## Installeren
+## Installing
 
-De packages zijn publiek, dus je hebt geen GitHub-token of registry-login nodig.
+The packages are public, so you don't need a GitHub token or registry login.
 
 ```bash
 npm install -g @infosupport/huddle-cli
 ```
 
-## Huddle opstarten
+## Starting Huddle
 
 ```bash
 huddle init
 ```
 
-Pullt `ghcr.io/infosupport/huddle:latest` en start de container. Werkt met Docker en Podman: de runtime wordt automatisch gedetecteerd (Docker eerst, dan Podman), of kies expliciet met `huddle init --runtime <docker|podman>` of de env-var `HUDDLE_RUNTIME`. Als je `huddle` runt terwijl Huddle niet draait, krijg je automatisch de tip om dit commando uit te voeren.
+Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with Docker and Podman: the runtime is detected automatically (Docker first, then Podman), or pick one explicitly with `huddle init --runtime <docker|podman>` or the `HUDDLE_RUNTIME` env var. If you run `huddle` while Huddle isn't running, you automatically get a hint to run this command.
 
-## Devcontainers starten
+## Starting devcontainers
 
 ```bash
-huddle                 # start IntelliJ-devcontainer voor huidige map
-huddle ./project       # start voor specifieke map
+huddle                 # start an IntelliJ devcontainer for the current directory
+huddle ./project       # start for a specific directory
 huddle --ide rider
 huddle --ide vscode --name devcontainer-demo
 huddle fw list
 huddle firewall list -i
 ```
 
-Standaard API URL: `http://localhost:3000`. Overschrijven kan met `--url` of `HUDDLE_URL`.
+Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
 
-## Ontwikkelen
+## Development
 
 ```bash
 npm install
@@ -39,15 +39,15 @@ npm run build
 npm run install-global
 ```
 
-Belangrijkste flags:
+Main flags:
 
 ```text
 --ide <intellij|rider|vscode>
---workspace <pad>
---name <naam>
+--workspace <path>
+--name <name>
 --image <image>
 --empty
 -i, --interactive
---container <naam>
+--container <name>
 --status <requested|allow|deny>
 ```
