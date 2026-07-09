@@ -19,6 +19,46 @@ $IDE_DEFS = @(
 
 $TempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR.TrimEnd('/') } else { '/tmp' }
 
+# ── Container runtime (Docker of Podman) ──────────────────────────────────────
+
+# Spiegelt cli/src/runtime.ts: 'info' slaagt alleen als de daemon/machine ook
+# echt bereikbaar is.
+function Test-Runtime {
+    param([string]$Name)
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { return $false }
+    & $Name info *>$null 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Bepaalt de te gebruiken runtime: expliciete keuze (HUDDLE_RUNTIME) wint, anders
+# automatisch — eerst Docker, dan Podman. Zelfde volgorde als de CLI, zodat het
+# script en de gedelegeerde `huddle init` dezelfde engine kiezen.
+function Resolve-Runtime {
+    $explicit = $env:HUDDLE_RUNTIME
+    if ($explicit) {
+        $name = $explicit.Trim().ToLower()
+        if ($name -ne 'docker' -and $name -ne 'podman') {
+            Write-Host "  [FAIL] Onbekende HUDDLE_RUNTIME '$explicit' -- kies docker of podman." -ForegroundColor Red
+            exit 1
+        }
+        if (-not (Test-Runtime $name)) {
+            Write-Host "  [FAIL] Container runtime '$name' is niet beschikbaar. Draait de daemon/machine?" -ForegroundColor Red
+            exit 1
+        }
+        return $name
+    }
+    if (Test-Runtime 'docker') { return 'docker' }
+    if (Test-Runtime 'podman') { return 'podman' }
+    Write-Host "  [FAIL] Geen werkende container runtime gevonden. Installeer en start Docker of Podman," -ForegroundColor Red
+    Write-Host "         of kies er expliciet een met de env-var HUDDLE_RUNTIME=<docker|podman>." -ForegroundColor Red
+    exit 1
+}
+
+$RUNTIME = Resolve-Runtime
+# Geef de gekozen engine door aan `huddle init` (en verdere CLI-calls) zodat die
+# exact dezelfde runtime gebruikt als waarmee dit script images bouwt/inspecteert.
+$env:HUDDLE_RUNTIME = $RUNTIME
+
 function Write-Banner {
     Clear-Host
 #     Write-Host ""
@@ -34,7 +74,7 @@ function Write-Banner {
 }
 
 function Write-Status {
-    $running = docker ps --filter "name=^${HUDDLE_CONTAINER}$" --format "{{.Names}}"
+    $running = & $RUNTIME ps --filter "name=^${HUDDLE_CONTAINER}$" --format "{{.Names}}"
     if ($running) {
         Write-Host "  [ON]  Huddle draait  -->  http://localhost:${HUDDLE_PORT}" -ForegroundColor Green
     } else {
@@ -117,14 +157,14 @@ function Initialize-Huddle {
         return $false
     }
 
-    docker image inspect $HUDDLE_IMAGE *>$null 2>&1
+    & $RUNTIME image inspect $HUDDLE_IMAGE *>$null 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  Image '${HUDDLE_IMAGE}' niet gevonden -- eerst bouwen..." -ForegroundColor DarkCyan
         Build-HuddleImage
         if ($LASTEXITCODE -ne 0) { return $false }
     }
 
-    Write-Host "  Initialiseren via 'huddle init' (HUDDLE_NO_PULL=1, image '${HUDDLE_IMAGE}')..." -ForegroundColor DarkCyan
+    Write-Host "  Initialiseren via 'huddle init' (runtime '${RUNTIME}', HUDDLE_NO_PULL=1, image '${HUDDLE_IMAGE}')..." -ForegroundColor DarkCyan
     $env:HUDDLE_IMAGE   = $HUDDLE_IMAGE
     $env:HUDDLE_NO_PULL = '1'
     $env:HUDDLE_PORT    = "$HUDDLE_PORT"
@@ -145,7 +185,7 @@ function Initialize-Huddle {
 function Build-HuddleImage {
     $scriptDir = $PSScriptRoot
     Write-Host "  Image '${HUDDLE_IMAGE}' bouwen..." -ForegroundColor DarkCyan
-    docker build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway") --no-cache
+    & $RUNTIME build -t $HUDDLE_IMAGE (Join-Path $scriptDir "gateway") --no-cache
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  [OK] Image '${HUDDLE_IMAGE}' klaar." -ForegroundColor Green
     } else {
@@ -170,7 +210,7 @@ function Select-Ide {
 # com.devcontainer.ide, dan via fallback op de naam-conventie base-devimage-<ide>.
 function Get-ImageIde {
     param([string]$ImageRef)
-    $json = docker inspect $ImageRef 2>$null | Out-String
+    $json = & $RUNTIME inspect $ImageRef 2>$null | Out-String
     if ($json) {
         try {
             $label = (ConvertFrom-Json $json)[0].Config.Labels.'com.devcontainer.ide'
@@ -190,7 +230,7 @@ function New-Snapshot {
     Write-Host "  Draaiende devcontainers:" -ForegroundColor DarkCyan
 
     $fmt = "{{.ID}}|{{.Names}}|{{.Image}}"
-    $rows = @(docker ps --filter 'label=com.intellij.devcontainer.id' --format $fmt |
+    $rows = @(& $RUNTIME ps --filter 'label=com.intellij.devcontainer.id' --format $fmt |
         ForEach-Object {
             $p = $_ -split '\|'
             [PSCustomObject]@{ ID = $p[0]; Name = $p[1]; Image = $p[2] }
@@ -210,7 +250,7 @@ function New-Snapshot {
     # (`customizations.jetbrains.backend`). Dan kan de spawn-UI dit snapshot
     # filteren als "Rider-snapshot" / "IntelliJ-snapshot".
     $ideKey = $null
-    $inspectJson = docker inspect $container.ID 2>$null | Out-String
+    $inspectJson = & $RUNTIME inspect $container.ID 2>$null | Out-String
     if ($inspectJson) {
         try {
             $modelLabel = (ConvertFrom-Json $inspectJson)[0].Config.Labels.'com.intellij.devcontainer.model'
@@ -233,7 +273,7 @@ function New-Snapshot {
 
     Write-Host "  Commit $($container.Name) -> $imageName  (IDE: $ideKey)" -ForegroundColor DarkCyan
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    docker commit `
+    & $RUNTIME commit `
         --change 'LABEL com.devcontainer.snapshot=true' `
         --change "LABEL com.devcontainer.source=$($container.Name)" `
         --change "LABEL com.devcontainer.created=$timestamp" `
@@ -254,7 +294,7 @@ function Start-Devcontainer {
     Write-Host "  Beschikbare images voor $($ide.Display):" -ForegroundColor DarkCyan
     $options = @()
 
-    $baseExists = docker image inspect $ide.Image *>$null 2>&1
+    $baseExists = & $RUNTIME image inspect $ide.Image *>$null 2>&1
     if ($LASTEXITCODE -eq 0) {
         $options += [PSCustomObject]@{ Name = $ide.Image; Kind = 'standaard'; Detail = 'base image' }
     } else {
@@ -262,7 +302,7 @@ function Start-Devcontainer {
     }
 
     $fmt = "{{.Repository}}:{{.Tag}}|{{.Size}}|{{.CreatedSince}}"
-    $snapRows = @(docker images --filter 'label=com.devcontainer.snapshot=true' --filter "label=com.devcontainer.ide=$($ide.Key)" --format $fmt |
+    $snapRows = @(& $RUNTIME images --filter 'label=com.devcontainer.snapshot=true' --filter "label=com.devcontainer.ide=$($ide.Key)" --format $fmt |
         ForEach-Object {
             $p = $_ -split '\|'
             # base-devimage-* zelf óók een snapshot; sla over zodat hij niet dubbel staat.
@@ -285,7 +325,7 @@ function Start-Devcontainer {
         Write-Host "  Image '$($picked.Name)' nog niet aanwezig -- bouwen..." -ForegroundColor DarkCyan
         $scriptDir = $PSScriptRoot
         # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
-        docker build -t $picked.Name -f (Join-Path $scriptDir "$($ide.Folder)/Dockerfile") $scriptDir --no-cache
+        & $RUNTIME build -t $picked.Name -f (Join-Path $scriptDir "$($ide.Folder)/Dockerfile") $scriptDir --no-cache
         if ($LASTEXITCODE -ne 0) { Write-Host "  Build mislukt." -ForegroundColor Red; return }
     }
 
@@ -303,11 +343,11 @@ function Start-Devcontainer {
     $containerName = Read-Host "  Containernaam [$defaultName]"
     if (-not $containerName) { $containerName = $defaultName }
 
-    $existing = docker ps -aq --filter "name=^${containerName}$" 2>$null
+    $existing = & $RUNTIME ps -aq --filter "name=^${containerName}$" 2>$null
     if ($existing) {
         $confirm = Read-Host "  Container '$containerName' bestaat al. Verwijderen? [j/N]"
         if ($confirm -ne 'j') { return }
-        docker rm -f $containerName | Out-Null
+        & $RUNTIME rm -f $containerName | Out-Null
     }
 
     # De gateway doet alle container-aanmaaklogica: per-container socket-proxy,
@@ -354,7 +394,7 @@ function Build-SharedBase {
     $dockerfile = Join-Path $ScriptDir 'base-devimage\Dockerfile'
     Write-Host "  Gedeelde base image 'ghcr.io/infosupport/base-devimage' bouwen..." -ForegroundColor DarkCyan
     # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
-    docker build -t ghcr.io/infosupport/base-devimage -f $dockerfile $ScriptDir --no-cache
+    & $RUNTIME build -t ghcr.io/infosupport/base-devimage -f $dockerfile $ScriptDir --no-cache
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [FAIL] Build van base-devimage mislukt." -ForegroundColor Red
         return $false
@@ -387,7 +427,7 @@ function Build-BaseImage {
     }
     Write-Host "  Image '$($ide.Image)' bouwen ($($ide.Display))..." -ForegroundColor DarkCyan
     # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
-    docker build -t $ide.Image -f (Join-Path $buildPath 'Dockerfile') $scriptDir --no-cache
+    & $RUNTIME build -t $ide.Image -f (Join-Path $buildPath 'Dockerfile') $scriptDir --no-cache
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  [OK] Image '$($ide.Image)' klaar." -ForegroundColor Green
     } else {
@@ -419,7 +459,7 @@ function Build-AllBaseImages {
         $logOut = Join-Path $TempDir "huddle-build-$($ide.Key).out.log"
         $logErr = Join-Path $TempDir "huddle-build-$($ide.Key).err.log"
         # Build-context = repo-root zodat de Dockerfile `COPY .ai/…` kan; Dockerfile via -f.
-        $proc = Start-Process -FilePath 'docker' `
+        $proc = Start-Process -FilePath $RUNTIME `
             -ArgumentList @('build', '-t', $ide.Image, '-f', $dockerfile, $scriptDir) `
             -NoNewWindow -PassThru `
             -RedirectStandardOutput $logOut -RedirectStandardError $logErr

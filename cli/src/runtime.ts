@@ -8,6 +8,20 @@ export interface ContainerRuntime {
   socketPath: string;
   /** Name of the default bridge network ('bridge' for Docker, 'podman' for Podman). */
   defaultNetwork: string;
+  /**
+   * Draait de engine in een VM (Podman machine, Docker Desktop) i.p.v. native op
+   * de host? Bepaalt of bind-sources zoals /tmp/dc-sockets in de VM aangemaakt
+   * moeten worden: Docker Desktop maakt een ontbrekende source zelf aan, Podman
+   * niet — dan moeten we hem via `podman machine ssh` in de VM aanmaken.
+   */
+  isRemote: boolean;
+  /**
+   * Extra `--security-opt` vlaggen voor de huddle-container. Rootless Podman
+   * geeft zijn socket een SELinux-label; zonder `label=disable` mag het
+   * (SELinux-confined) huddle-proces de socket niet benaderen. Docker heeft dit
+   * niet nodig (leeg).
+   */
+  securityOpts: string[];
 }
 
 function commandOutput(cmd: string): string | undefined {
@@ -36,11 +50,31 @@ function dockerSocketPath(): string {
   return process.platform === 'win32' ? '//var/run/docker.sock' : '/var/run/docker.sock';
 }
 
+function podmanIsRemote(): boolean {
+  // Op macOS/Windows draait Podman altijd in een `podman machine`-VM; ook op
+  // Linux kan de client op een remote socket wijzen. `ServiceIsRemote` is de
+  // gezaghebbende bron.
+  return commandOutput(`podman info --format "{{.Host.ServiceIsRemote}}"`) === 'true';
+}
+
 function buildRuntime(name: RuntimeName): ContainerRuntime {
   if (name === 'podman') {
-    return { name, socketPath: podmanSocketPath(), defaultNetwork: 'podman' };
+    return {
+      name,
+      socketPath: podmanSocketPath(),
+      defaultNetwork: 'podman',
+      isRemote: podmanIsRemote(),
+      securityOpts: ['label=disable'],
+    };
   }
-  return { name, socketPath: dockerSocketPath(), defaultNetwork: 'bridge' };
+  return {
+    name,
+    socketPath: dockerSocketPath(),
+    defaultNetwork: 'bridge',
+    // Docker Desktop (macOS/Windows) draait in een VM; native Docker op Linux niet.
+    isRemote: process.platform !== 'linux',
+    securityOpts: [],
+  };
 }
 
 export function parseRuntimeName(value: string): RuntimeName {

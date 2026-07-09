@@ -8,6 +8,14 @@ import { ensureWorktree } from './worktree';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
+// De CLI geeft de gedetecteerde container-engine door via HUDDLE_RUNTIME. Bij
+// (rootless) Podman is de per-container proxy-socket SELinux-gelabeld; een
+// SELinux-confined devcontainer mag hem dan niet benaderen. `label=disable` op
+// de devcontainer heft die confinement op zodat DOCKER_HOST/de socket werken.
+// (Docker/Docker Desktop hebben dit niet nodig.)
+const CONTAINER_RUNTIME = process.env.HUDDLE_RUNTIME ?? 'docker';
+const RUNTIME_SECURITY_OPT: string[] = CONTAINER_RUNTIME === 'podman' ? ['label=disable'] : [];
+
 // ── IP → container name cache (used by proxy) ────────────────────────────────
 
 const CACHE_TTL_MS = 10_000;
@@ -778,6 +786,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Mounts: mounts,
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
+      ...(RUNTIME_SECURITY_OPT.length ? { SecurityOpt: RUNTIME_SECURITY_OPT } : {}),
       Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || '8g'),
       CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || '2'),
       CpuPeriod: 100000,

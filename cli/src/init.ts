@@ -90,10 +90,19 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // gateway and devcontainers across two filesystems, and Unix sockets are
   // unreliable on such a drvfs/9p mount anyway.
   const hostTmpSockets = '/tmp/dc-sockets';
-  if (process.platform === 'win32') {
-    // Cannot be created locally from Windows; the engine creates a missing
-    // bind source itself in the VM on `run`.
-    console.log(dim(`  (Windows: the engine creates ${hostTmpSockets} in the VM)`));
+  if (runtime.isRemote) {
+    if (runtime.name === 'podman') {
+      // Podman does NOT create a missing bind source itself (unlike Docker
+      // Desktop) and fails with "statfs: no such file or directory". So create
+      // the directory explicitly in the machine VM; the socket lives there too.
+      console.log(dim(`  (Podman: creating ${hostTmpSockets} in the machine VM)`));
+      if (!runSilent(`podman machine ssh "mkdir -p ${hostTmpSockets}"`)) {
+        console.log(yellow(`[!] Could not create ${hostTmpSockets} in the Podman VM.`));
+      }
+    } else {
+      // Docker Desktop creates a missing bind source itself in the VM on `run`.
+      console.log(dim(`  (${runtime.name}: the engine creates ${hostTmpSockets} in the VM)`));
+    }
   } else {
     try {
       fs.mkdirSync(hostTmpSockets, { recursive: true });
@@ -103,10 +112,17 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   }
 
   console.log(dim(`Starting container`));
+  // The gateway is engine-agnostic (talks the Docker-compatible API on the
+  // mounted socket), but does need to know it's Podman: it then sets
+  // `--security-opt label=disable` on every devcontainer so it can reach the
+  // SELinux-labeled proxy socket.
+  const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
   run(
     `${rt} run -d` +
     ` --name ${CONTAINER}` +
     ` --network ${runtime.defaultNetwork}` +
+    securityOptFlags +
+    ` -e HUDDLE_RUNTIME=${runtime.name}` +
     ` -p ${HOST_PORT}:3000` +
     ` -v ${VOLUME}:/data` +
     ` -v ${runtime.socketPath}:/var/run/docker.sock` +
