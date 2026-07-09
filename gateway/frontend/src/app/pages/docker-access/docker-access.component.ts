@@ -1,34 +1,26 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
-import { AsyncPipe, NgClass } from '@angular/common';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { StateService } from '../../core/services/state.service';
 import { ApiService, ApprovedHostPort } from '../../core/services/api.service';
-import { combineLatest, map } from 'rxjs';
+import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
 
 @Component({
   selector: 'app-docker-access',
   standalone: true,
-  imports: [AsyncPipe, NgClass, FormsModule],
+  imports: [FormsModule, DockerRightsPanelComponent],
   templateUrl: './docker-access.component.html',
-  styles: [`:host { display: contents; }`]
+  styleUrl: './docker-access.component.css',
 })
 export class DockerAccessComponent implements OnInit {
   private state = inject(StateService);
   private api = inject(ApiService);
+  private destroyRef = inject(DestroyRef);
 
-  selectedContainer = '';
-  selectedMinutes = 15;
-  minuteOptions = [5, 10, 15, 20, 30];
+  containers = toSignal(this.state.containers$, { initialValue: [] });
+  selectedContainer = signal('');
 
-  vm$ = combineLatest([this.state.grants$, this.state.containers$]).pipe(
-    map(([grants, containers]) => ({
-      entries: Object.entries(grants),
-      containers,
-      now: Math.floor(Date.now() / 1000),
-    }))
-  );
-
-  // Poorten
+  // ── Goedgekeurde host-poorten (bestaande functionaliteit) ──────────────────
   portsContainer = '';
   ports = signal<ApprovedHostPort[]>([]);
   portsError = signal<string | null>(null);
@@ -38,27 +30,24 @@ export class DockerAccessComponent implements OnInit {
   newPortDesc = '';
 
   ngOnInit(): void {
-    this.state.containers$.subscribe(cs => {
-      if (!this.portsContainer && cs.length > 0) {
-        this.portsContainer = cs[0].name;
-        this.loadPorts();
-      }
-    });
+    this.state.containers$
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(cs => {
+        if (!this.selectedContainer() && cs.length > 0) {
+          this.selectedContainer.set(cs[0].name);
+        }
+        if (!this.portsContainer && cs.length > 0) {
+          this.portsContainer = cs[0].name;
+          this.loadPorts();
+        }
+      });
   }
 
-  remainingMinutes(until: number): number {
-    return Math.ceil((until - Math.floor(Date.now() / 1000)) / 60);
+  selectContainer(name: string): void {
+    this.selectedContainer.set(name);
   }
 
-  revoke(container: string): void {
-    this.api.deleteGrant(container).subscribe(() => this.state.loadAll());
-  }
-
-  grantAccess(): void {
-    if (!this.selectedContainer || !this.selectedMinutes) return;
-    this.api.setGrant(this.selectedContainer, this.selectedMinutes).subscribe(() => this.state.loadAll());
-  }
-
+  // ── Goedgekeurde host-poorten (bestaande functionaliteit) ──────────────────
   onPortsContainerChange(): void { this.loadPorts(); }
 
   loadPorts(): void {

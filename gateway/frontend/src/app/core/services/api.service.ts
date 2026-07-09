@@ -5,6 +5,7 @@ import { catchError } from 'rxjs/operators';
 import { Container, ContainerDetail, DockerImage } from '../models/container.model';
 import { Rule, RuleStatus } from '../models/rule.model';
 import { Grant, GrantMap } from '../models/grant.model';
+import { DockerActionCatalog, DockerActionPolicies, DockerActionPolicyResult } from '../models/docker-action.model';
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
 
@@ -134,6 +135,22 @@ export class ApiService {
 
   deleteGrant(container: string): Observable<void> {
     return this.handle(this.http.delete<void>(`/api/authz/grants/${container}`));
+  }
+
+  // ── Docker action policies (fijnmazige Docker-rechten) ─────────────────────
+  getDockerActionCatalog(): Observable<DockerActionCatalog> {
+    return this.handle(this.http.get<DockerActionCatalog>('/api/authz/docker-actions'));
+  }
+
+  getDockerActionPolicies(container: string): Observable<DockerActionPolicies> {
+    return this.handle(this.http.get<DockerActionPolicies>(`/api/authz/docker-actions/${encodeURIComponent(container)}`));
+  }
+
+  setDockerActionPolicy(container: string, action: string, enabled: boolean): Observable<DockerActionPolicyResult> {
+    return this.handle(this.http.put<DockerActionPolicyResult>(
+      `/api/authz/docker-actions/${encodeURIComponent(container)}/${encodeURIComponent(action)}`,
+      { enabled },
+    ));
   }
 
   deleteContainer(name: string): Observable<{ok: boolean}> {

@@ -1,0 +1,275 @@
+import { Component, DestroyRef, OnInit, PLATFORM_ID, computed, effect, inject, input, signal } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { StateService } from '../../../core/services/state.service';
+import { ApiService } from '../../../core/services/api.service';
+import { DockerActionDef, DockerActionGroup, DockerActionKind } from '../../../core/models/docker-action.model';
+
+interface GroupMeta {
+  title: string;
+  colorClass: string;
+  iconId: string;
+  tempSubtitle: string;
+  alwaysSubtitle: string;
+}
+
+interface ActionGroupVm {
+  group: DockerActionGroup;
+  title: string;
+  subtitle: string;
+  colorClass: string;
+  iconId: string;
+  actions: DockerActionDef[];
+}
+
+const GROUP_ORDER: DockerActionGroup[] = ['containers', 'images', 'volumes', 'networks', 'system'];
+
+const GROUP_META: Record<DockerActionGroup, GroupMeta> = {
+  containers: {
+    title: 'Containers', colorClass: 'ic-green', iconId: 'container',
+    tempSubtitle: 'Beheer en wijzig containers.', alwaysSubtitle: 'Bekijk en monitor containers.',
+  },
+  images: {
+    title: 'Images', colorClass: 'ic-purple', iconId: 'cube',
+    tempSubtitle: 'Bouw, pull en beheer images.', alwaysSubtitle: 'Bekijk en inspecteer images.',
+  },
+  volumes: {
+    title: 'Volumes', colorClass: 'ic-blue', iconId: 'db',
+    tempSubtitle: 'Beheer persistente opslag.', alwaysSubtitle: 'Bekijk en inspecteer volumes.',
+  },
+  networks: {
+    title: 'Networks', colorClass: 'ic-blue', iconId: 'network',
+    tempSubtitle: 'Beheer netwerkverbindingen.', alwaysSubtitle: 'Bekijk en inspecteer netwerken.',
+  },
+  system: {
+    title: 'System', colorClass: 'ic-gray', iconId: 'gear',
+    tempSubtitle: 'Systeeminformatie en status.', alwaysSubtitle: 'Systeeminformatie en status.',
+  },
+};
+
+const ACTION_ICONS: Record<string, string> = {
+  'container.create': 'plus',
+  'container.start': 'play',
+  'container.stop': 'stop',
+  'container.restart': 'refresh',
+  'container.remove': 'trash',
+  'container.update': 'refresh',
+  'container.exec': 'terminal',
+  'image.pull': 'download',
+  'image.build': 'hammer',
+  'image.push': 'upload',
+  'image.remove': 'trash',
+  'image.tag': 'tag',
+  'volume.create': 'plus',
+  'volume.remove': 'trash',
+  'volume.prune': 'hammer',
+  'network.create': 'plus',
+  'network.remove': 'trash',
+  'network.connect': 'link',
+  'network.disconnect': 'link',
+  'container.list': 'list',
+  'container.inspect': 'search',
+  'container.logs': 'file',
+  'container.stats': 'stats',
+  'image.list': 'list',
+  'image.inspect': 'search',
+  'volume.list': 'list',
+  'volume.inspect': 'search',
+  'network.list': 'list',
+  'network.inspect': 'search',
+  'system.ping': 'activity',
+  'system.version': 'search',
+  'system.events': 'bell',
+};
+
+const DURATION_STORE_PREFIX = 'huddle.dockerActions.duration.';
+
+/**
+ * Herbruikbaar paneel met de fijnmazige Docker-rechten voor één devcontainer:
+ * timer-hero + tijdelijke acties + altijd toegestane acties + proxy-uitleg.
+ * Host-poorten horen hier bewust niet bij.
+ */
+@Component({
+  selector: 'app-docker-rights-panel',
+  standalone: true,
+  templateUrl: './docker-rights-panel.component.html',
+  styleUrl: './docker-rights-panel.component.css',
+})
+export class DockerRightsPanelComponent implements OnInit {
+  private state = inject(StateService);
+  private api = inject(ApiService);
+  private destroyRef = inject(DestroyRef);
+  private platformId = inject(PLATFORM_ID);
+
+  /** Naam van de devcontainer waarvoor rechten en timer gelden. */
+  container = input.required<string>();
+
+  catalog = signal<DockerActionDef[]>([]);
+  policies = signal<Record<string, boolean>>({});
+  policiesLoading = signal(false);
+  error = signal<string | null>(null);
+
+  /** Server-grant (unix-seconden) voor de container, of null. */
+  grantUntil = signal<number | null>(null);
+  /** Laatst ingestelde duur (seconden) — basis voor het ring-percentage. */
+  durationSeconds = signal(0);
+  private now = signal(Math.floor(Date.now() / 1000));
+
+  remainingSeconds = computed(() => {
+    const until = this.grantUntil();
+    return until ? Math.max(0, until - this.now()) : 0;
+  });
+  timerExpired = computed(() => this.remainingSeconds() <= 0);
+  timerHours = computed(() => this.format2(Math.floor(this.remainingSeconds() / 3600)));
+  timerMinutes = computed(() => this.format2(Math.floor((this.remainingSeconds() % 3600) / 60)));
+  timerSecondsDisplay = computed(() => this.format2(this.remainingSeconds() % 60));
+  ringStyle = computed(() => {
+    const remaining = this.remainingSeconds();
+    const duration = this.durationSeconds();
+    if (remaining <= 0) return 'conic-gradient(var(--ring-empty) 0 360deg)';
+    const pct = duration > 0 ? Math.max(0, Math.min(1, remaining / duration)) : 1;
+    const deg = Math.round(pct * 360);
+    return `conic-gradient(var(--sec) 0 ${deg}deg, var(--ring-empty) ${deg}deg 360deg)`;
+  });
+
+  temporaryGroups = computed(() => this.buildGroups('temporary'));
+  alwaysGroups = computed(() => this.buildGroups('always').filter(g => g.group !== 'system'));
+  systemGroup = computed(() => this.buildGroups('always').find(g => g.group === 'system') ?? null);
+
+  constructor() {
+    if (isPlatformBrowser(this.platformId)) {
+      const tick = setInterval(() => this.now.set(Math.floor(Date.now() / 1000)), 1000);
+      this.destroyRef.onDestroy(() => clearInterval(tick));
+    }
+    // Bij (her)zetten van de container-input: policies + grant opnieuw laden.
+    effect(() => {
+      const container = this.container();
+      this.grantUntil.set(null);
+      this.durationSeconds.set(0);
+      this.policies.set({});
+      if (container) this.loadPolicies(container);
+    });
+    // Houd de timer in sync met server-pushes (WS/poll).
+    this.state.grants$
+      .pipe(takeUntilDestroyed())
+      .subscribe(grants => {
+        const c = this.container();
+        if (!c) return;
+        this.grantUntil.set(grants[c]?.until ?? null);
+      });
+  }
+
+  ngOnInit(): void {
+    this.api.getDockerActionCatalog().subscribe({
+      next: (res) => this.catalog.set(res.actions),
+      error: (e) => this.error.set(`Kon de actie-catalogus niet laden: ${e.message}`),
+    });
+  }
+
+  private loadPolicies(container: string): void {
+    this.policiesLoading.set(true);
+    this.api.getDockerActionPolicies(container).subscribe({
+      next: (res) => {
+        this.policies.set(res.policies);
+        this.grantUntil.set(res.grant?.until ?? null);
+        const stored = this.getStoredDuration(container);
+        const remaining = res.grant ? Math.max(0, res.grant.until - Math.floor(Date.now() / 1000)) : 0;
+        this.durationSeconds.set(stored ?? remaining);
+        this.policiesLoading.set(false);
+      },
+      error: (e) => {
+        this.policiesLoading.set(false);
+        this.error.set(`Kon rechten voor ${container} niet laden: ${e.message}`);
+      },
+    });
+  }
+
+  isEnabled(def: DockerActionDef): boolean {
+    return this.policies()[def.action] ?? def.defaultEnabled;
+  }
+
+  toggleAction(def: DockerActionDef): void {
+    const container = this.container();
+    if (!container) return;
+    const current = this.isEnabled(def);
+    const next = !current;
+    // Optimistische update; bij fout terugdraaien.
+    this.policies.update(p => ({ ...p, [def.action]: next }));
+    this.api.setDockerActionPolicy(container, def.action, next).subscribe({
+      error: (e) => {
+        this.policies.update(p => ({ ...p, [def.action]: current }));
+        this.error.set(`Kon '${def.label}' (${def.action}) niet opslaan: ${e.message}`);
+      },
+    });
+  }
+
+  // ── Timer ────────────────────────────────────────────────────────────────────
+  setTimer(minutes: number): void {
+    const container = this.container();
+    if (!container) return;
+    this.api.setGrant(container, minutes).subscribe({
+      next: (grant) => {
+        this.grantUntil.set(grant.until);
+        this.durationSeconds.set(minutes * 60);
+        this.setStoredDuration(container, minutes * 60);
+        this.state.loadAll();
+      },
+      error: (e) => this.error.set(`Kon de timer niet instellen: ${e.message}`),
+    });
+  }
+
+  stopTimer(): void {
+    const container = this.container();
+    if (!container) return;
+    this.api.deleteGrant(container).subscribe({
+      next: () => {
+        this.grantUntil.set(null);
+        this.state.loadAll();
+      },
+      error: (e) => this.error.set(`Kon de timer niet stoppen: ${e.message}`),
+    });
+  }
+
+  dismissError(): void {
+    this.error.set(null);
+  }
+
+  actionIcon(action: string): string {
+    return ACTION_ICONS[action] ?? 'gear';
+  }
+
+  private buildGroups(kind: DockerActionKind): ActionGroupVm[] {
+    const actions = this.catalog().filter(a => a.kind === kind);
+    const groups: ActionGroupVm[] = [];
+    for (const group of GROUP_ORDER) {
+      const groupActions = actions.filter(a => a.group === group);
+      if (groupActions.length === 0) continue;
+      const meta = GROUP_META[group];
+      groups.push({
+        group,
+        title: meta.title,
+        subtitle: kind === 'temporary' ? meta.tempSubtitle : meta.alwaysSubtitle,
+        colorClass: meta.colorClass,
+        iconId: meta.iconId,
+        actions: groupActions,
+      });
+    }
+    return groups;
+  }
+
+  private format2(value: number): string {
+    return String(value).padStart(2, '0');
+  }
+
+  private getStoredDuration(container: string): number | null {
+    if (!isPlatformBrowser(this.platformId)) return null;
+    const raw = localStorage.getItem(DURATION_STORE_PREFIX + container);
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  private setStoredDuration(container: string, seconds: number): void {
+    if (!isPlatformBrowser(this.platformId)) return;
+    localStorage.setItem(DURATION_STORE_PREFIX + container, String(seconds));
+  }
+}

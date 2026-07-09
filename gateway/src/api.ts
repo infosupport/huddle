@@ -6,7 +6,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import {
   listDevcontainers,
   inspectContainer,
@@ -602,6 +603,43 @@ export async function createApiServer(): Promise<FastifyInstance> {
       logAudit({ containerId: container, domain: 'docker-access', action: 'admin:grant-revoke' });
       notifyStateChanged();
       return { ok: true };
+    }
+  );
+
+  // ── Fijnmazige Docker-actie-rechten ───────────────────────────────────────
+
+  app.get('/api/authz/docker-actions', async () => ({ actions: DOCKER_ACTIONS }));
+
+  app.get<{ Params: { container: string } }>(
+    '/api/authz/docker-actions/:container',
+    async (req) => {
+      const { container } = req.params;
+      return {
+        policies: getEffectivePolicies(container),
+        grant: getGrant(container),
+      };
+    }
+  );
+
+  app.put<{ Params: { container: string; action: string }; Body: { enabled: boolean } }>(
+    '/api/authz/docker-actions/:container/:action',
+    async (req, reply) => {
+      const { container, action } = req.params;
+      const { enabled } = req.body ?? {};
+      if (!isKnownAction(action)) {
+        return reply.code(400).send({ error: `unknown docker action '${action}'` });
+      }
+      if (typeof enabled !== 'boolean') {
+        return reply.code(400).send({ error: 'enabled must be a boolean' });
+      }
+      setActionPolicy(container, action, enabled);
+      logAudit({
+        containerId: container,
+        domain: 'docker-access',
+        action: `admin:docker-action-${action}-${enabled ? 'on' : 'off'}`,
+      });
+      notifyStateChanged();
+      return { container, action, enabled };
     }
   );
 

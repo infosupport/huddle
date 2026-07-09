@@ -21,6 +21,12 @@ export function initDb(): void {
       container_id TEXT PRIMARY KEY,
       until INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS docker_action_policies (
+      container_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      enabled INTEGER NOT NULL,
+      PRIMARY KEY (container_id, action)
+    );
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -198,6 +204,31 @@ export function getAllGrants(): Record<string, { until: number }> {
   const rows = db.prepare(`SELECT container_id, until FROM docker_grants`).all() as
     { container_id: string; until: number }[];
   return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
+}
+
+// ── Docker action policies (fijnmazige rechten per actie) ────────────────────
+// Alleen expliciete overrides staan in de db; ontbreekt een rij, dan geldt de
+// default uit de actie-catalogus (docker-actions.ts).
+
+export function getActionPolicy(containerId: string, action: string): boolean | null {
+  const row = db.prepare(
+    `SELECT enabled FROM docker_action_policies WHERE container_id = ? AND action = ?`
+  ).get(containerId, action) as { enabled: number } | undefined;
+  return row ? row.enabled === 1 : null;
+}
+
+export function setActionPolicy(containerId: string, action: string, enabled: boolean): void {
+  db.prepare(
+    `INSERT INTO docker_action_policies (container_id, action, enabled) VALUES (?, ?, ?)
+     ON CONFLICT(container_id, action) DO UPDATE SET enabled = excluded.enabled`
+  ).run(containerId, action, enabled ? 1 : 0);
+}
+
+export function getActionPolicies(containerId: string): Record<string, boolean> {
+  const rows = db.prepare(
+    `SELECT action, enabled FROM docker_action_policies WHERE container_id = ?`
+  ).all(containerId) as { action: string; enabled: number }[];
+  return Object.fromEntries(rows.map(r => [r.action, r.enabled === 1]));
 }
 
 // ── Audit logging ────────────────────────────────────────────────────────────

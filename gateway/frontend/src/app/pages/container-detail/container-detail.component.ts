@@ -7,13 +7,13 @@ import { StateService } from '../../core/services/state.service';
 import { ModalService } from '../../core/services/modal.service';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
 import { Rule } from '../../core/models/rule.model';
-import { GrantMap } from '../../core/models/grant.model';
 import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
 import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { IconComponent } from '../../shared/components/icon/icon.component';
+import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
 import { BehaviorSubject } from 'rxjs';
 
 interface DetailData {
@@ -30,7 +30,7 @@ type RulesTab  = 'allow' | 'deny' | 'path';
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent],
   templateUrl: './container-detail.component.html',
   styleUrl: './container-detail.component.css',
 })
@@ -40,7 +40,6 @@ export class ContainerDetailComponent implements OnInit {
   private state = inject(StateService);
   modal = inject(ModalService);
 
-  protected Math = Math;
   get nowTs(): number { return Math.floor(Date.now() / 1000); }
 
   readonly pieConfig: PieMenuConfig = {
@@ -90,7 +89,6 @@ export class ContainerDetailComponent implements OnInit {
 
   detail$ = new BehaviorSubject<DetailData | null>(null);
   error$ = new BehaviorSubject<string | null>(null);
-  grants$ = this.state.grants$;
   credentials: { password: string; createdAt: number } | null = null;
   passwordVisible = false;
   copied = false;
@@ -178,23 +176,6 @@ export class ContainerDetailComponent implements OnInit {
       this.copied = true;
       setTimeout(() => { this.copied = false; }, 2000);
     });
-  }
-
-  remainingMinutes(until: number): number {
-    return Math.ceil((until - Math.floor(Date.now() / 1000)) / 60);
-  }
-
-  grantRemaining(grants: GrantMap): number {
-    const g = grants[this.name];
-    if (!g) return 0;
-    return Math.max(0, g.until - Math.floor(Date.now() / 1000));
-  }
-
-  grant(minutes: number): void {
-    this.api.setGrant(this.name, minutes).subscribe(() => this.state.loadAll());
-  }
-  revoke(): void {
-    this.api.deleteGrant(this.name).subscribe(() => this.state.loadAll());
   }
 
   setTab(t: DetailTab): void { this.activeTab = t; }
