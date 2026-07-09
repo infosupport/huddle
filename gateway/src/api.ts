@@ -643,6 +643,22 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
+  // ── Client-side logging (frontend → container logs) ──────────────────────
+  // De Angular-UI stuurt onafgevangen runtime-fouten hierheen zodat ze in
+  // `docker logs huddle` zichtbaar zijn. Alleen loggen, niets persisteren.
+
+  app.post<{ Body: { level?: string; message?: string; stack?: string; url?: string } }>(
+    '/api/client-log',
+    async (req) => {
+      const { level = 'error', message = '', stack, url } = req.body ?? {};
+      const lvl = String(level).slice(0, 10);
+      const line = `[client:${lvl}] ${String(message).slice(0, 2000)}${url ? ` @ ${String(url).slice(0, 300)}` : ''}`;
+      console.error(line);
+      if (stack) console.error(`[client:${lvl}] ${String(stack).slice(0, 6000)}`);
+      return { ok: true };
+    }
+  );
+
   // ── Audit log ─────────────────────────────────────────────────────────────
 
   app.get<{ Querystring: { container?: string; domain?: string; action?: string; path?: string; limit?: string; offset?: string } }>(
