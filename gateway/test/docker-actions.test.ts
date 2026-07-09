@@ -95,42 +95,52 @@ describe('classifyRequest', () => {
 });
 
 describe('authorizeAction — temporary acties', () => {
-  it('weigert zonder actieve grant-timer', () => {
+  it('weigert standaard (secure by default), zelfs met actieve grant', () => {
+    state.grant = { until: future() };
+    expect(authorizeAction(CN, 'container.create')).toMatch(/disabled/);
+    expect(authorizeAction(CN, 'image.push')).toMatch(/disabled/);
+  });
+
+  it('weigert met aan-toggle maar zonder actieve grant-timer', () => {
+    state.policies.set('container.create', true);
     expect(authorizeAction(CN, 'container.create')).toMatch(/access timer/);
   });
 
-  it('weigert met verlopen grant', () => {
+  it('weigert met aan-toggle maar verlopen grant', () => {
     state.grant = { until: past() };
+    state.policies.set('container.start', true);
     expect(authorizeAction(CN, 'container.start')).toMatch(/access timer/);
   });
 
-  it('staat toe met actieve grant en default-aan toggle', () => {
+  it('staat toe met actieve grant én aan-toggle', () => {
     state.grant = { until: future() };
+    state.policies.set('container.create', true);
     expect(authorizeAction(CN, 'container.create')).toBeNull();
   });
 
-  it('weigert met actieve grant als de toggle uit staat', () => {
+  it('expliciet uitgezette toggle blijft geweigerd met actieve grant', () => {
     state.grant = { until: future() };
     state.policies.set('container.exec', false);
     expect(authorizeAction(CN, 'container.exec')).toMatch(/disabled/);
   });
-
-  it('image.push staat standaard uit, ook met actieve grant', () => {
-    state.grant = { until: future() };
-    expect(authorizeAction(CN, 'image.push')).toMatch(/disabled/);
-    state.policies.set('image.push', true);
-    expect(authorizeAction(CN, 'image.push')).toBeNull();
-  });
 });
 
 describe('authorizeAction — always acties', () => {
-  it('staat read-only acties toe zonder grant', () => {
+  it('weigert standaard, ook read-only (secure by default)', () => {
+    expect(authorizeAction(CN, 'container.list')).toMatch(/disabled/);
+    expect(authorizeAction(CN, 'system.ping')).toMatch(/disabled/);
+  });
+
+  it('staat read-only acties toe zonder grant zodra de toggle aan staat', () => {
+    state.policies.set('container.list', true);
+    state.policies.set('system.ping', true);
+    state.policies.set('volume.inspect', true);
     expect(authorizeAction(CN, 'container.list')).toBeNull();
     expect(authorizeAction(CN, 'system.ping')).toBeNull();
     expect(authorizeAction(CN, 'volume.inspect')).toBeNull();
   });
 
-  it('respecteert een uit-geschakelde toggle', () => {
+  it('respecteert een weer uit-geschakelde toggle', () => {
     state.policies.set('container.logs', false);
     expect(authorizeAction(CN, 'container.logs')).toMatch(/disabled/);
   });
@@ -150,14 +160,20 @@ describe('catalogus & effectieve policies', () => {
     }
   });
 
+  it('alle acties staan standaard uit (secure by default)', () => {
+    for (const def of DOCKER_ACTIONS) {
+      expect(def.defaultEnabled, `actie ${def.action} moet standaard uit staan`).toBe(false);
+    }
+  });
+
   it('getEffectivePolicies levert alle acties met defaults en overrides', () => {
     state.policies.set('image.push', true);
-    state.policies.set('container.list', false);
+    state.policies.set('container.list', true);
     const eff = getEffectivePolicies(CN);
     expect(Object.keys(eff).length).toBe(DOCKER_ACTIONS.length);
-    expect(eff['image.push']).toBe(true);      // override wint van default-uit
-    expect(eff['container.list']).toBe(false); // override wint van default-aan
-    expect(eff['container.create']).toBe(true); // default
+    expect(eff['image.push']).toBe(true);        // override wint van default-uit
+    expect(eff['container.list']).toBe(true);    // override wint van default-uit
+    expect(eff['container.create']).toBe(false); // default
   });
 
   it('elke catalogus-actie is bereikbaar via ten minste één API-pad', () => {

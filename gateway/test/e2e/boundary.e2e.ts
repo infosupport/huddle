@@ -62,33 +62,33 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   // ── Docker-socket gate ────────────────────────────────────────────────────
   // Raakt alleen grant-state — geen overlap met firewall-regels.
   describe('docker-socket gate', () => {
-    // Read-only acties ('always') werken onafhankelijk van de grant-timer;
-    // mutaties ('temporary') vereisen een actieve timer én een aan-toggle.
-    it('read-only docker (ps) werkt ook zonder actieve grant', async () => {
+    // Secure by default: álle acties (ook read-only) staan uit tot de
+    // operator ze aanzet. Read-only ('always') werkt daarna zonder timer;
+    // mutaties ('temporary') vereisen bovendien een actieve grant.
+    it('standaard staat alles uit — ook read-only wordt geweigerd', async () => {
       await revokeGrant(E2E_NAME);
       await sleep(500);
+      const r = execIn(E2E_NAME, 'docker ps');
+      expect(r.status).not.toBe(0);
+      expect(`${r.stdout}${r.stderr}`).toMatch(/disabled/i);
+    });
+
+    it('read-only werkt zonder grant zodra de toggle aan staat', async () => {
+      await setActionPolicy(E2E_NAME, 'system.ping', true);
+      await setActionPolicy(E2E_NAME, 'container.list', true);
       const r = execIn(E2E_NAME, 'docker ps');
       expect(r.status).toBe(0);
     });
 
-    it('weigert mutaties zonder actieve grant', async () => {
+    it('weigert mutaties met aan-toggle maar zonder actieve grant', async () => {
+      await setActionPolicy(E2E_NAME, 'volume.create', true);
       const r = execIn(E2E_NAME, 'docker volume create e2e-no-grant-probe');
       expect(r.status).not.toBe(0);
       expect(`${r.stdout}${r.stderr}`).toMatch(/access timer/i);
     });
 
-    it('een uitgeschakelde actie-toggle blokkeert ook read-only acties', async () => {
-      await setActionPolicy(E2E_NAME, 'container.list', false);
-      try {
-        const r = execIn(E2E_NAME, 'docker ps');
-        expect(r.status).not.toBe(0);
-        expect(`${r.stdout}${r.stderr}`).toMatch(/disabled/i);
-      } finally {
-        await setActionPolicy(E2E_NAME, 'container.list', true);
-      }
-    });
-
     it('staat mutaties toe binnen een actieve grant (incl. eigen-volume delete)', async () => {
+      await setActionPolicy(E2E_NAME, 'volume.remove', true);
       await setGrant(E2E_NAME, 5);
       await sleep(500);
       // create + rm bewijst ook de huddle.parent-labelinjectie: rm van een
@@ -101,6 +101,11 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     // onafhankelijk — ze draaien concurrent via describe.concurrent.
     describe.concurrent('escape-pogingen met actieve grant', () => {
       beforeAll(async () => {
+        // Toggles aan die de escape-pogingen nodig hebben om überhaupt bij de
+        // harde security-checks (HostConfig/ownership) aan te komen.
+        for (const action of ['system.ping', 'container.create', 'container.start', 'container.inspect', 'volume.create']) {
+          await setActionPolicy(E2E_NAME, action, true);
+        }
         await setGrant(E2E_NAME, 15);
         await sleep(500);
       });

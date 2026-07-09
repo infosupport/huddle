@@ -40,8 +40,8 @@ Twee servers draaien in hetzelfde proces:
 - Elke devcontainer krijgt een eigen Unix socket op `/tmp/dc-sockets/<naam>/docker.sock`; de per-container *directory* wordt in de container gemount (op `/var/run/huddle`) en `DOCKER_HOST` wijst naar de socket. Een file-mount van de socket zelf zou na een Huddle-herstart de dode oude inode blijven zien; een directory-mount niet. Het oude platte pad `/tmp/dc-sockets/<naam>.sock` blijft als symlink bestaan voor containers van vóór deze wijziging.
 - Fijnmazige rechten per devcontainer, in twee klassen:
   - **Tijdelijke acties** (mutaties: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — alleen effectief zolang de tijdgebonden grant (1–120 minuten) actief is én de actie-toggle in het portal aan staat
-  - **Altijd toegestane acties** (read-only: list/inspect/logs/stats, ping/version/events) — onafhankelijk van de timer, maar per actie uitschakelbaar
-  - `image.push` staat standaard uit: pushen loopt via de host-daemon en passeert de egress-firewall niet
+  - **Altijd toegestane acties** (read-only: list/inspect/logs/stats, ping/version/events) — onafhankelijk van de timer, per actie in te schakelen
+  - Secure by default: **álle acties staan standaard uit**; de operator zet per devcontainer expliciet aan wat mag. Wees extra terughoudend met `image.push`: pushen loopt via de host-daemon en passeert de egress-firewall niet
 - Policy wordt per request afgedwongen:
   - `docker ps` → gefilterd tot eigen gestarte containers
   - `docker run` → toegestaan; label `huddle.parent` automatisch toegevoegd

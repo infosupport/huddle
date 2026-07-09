@@ -7,6 +7,8 @@
 //     uitschakelbaar in het portal.
 // De aan/uit-stand per (container, actie) leeft in SQLite
 // (docker_action_policies); ontbreekt een rij, dan geldt defaultEnabled.
+// Secure by default: álle acties staan standaard uit — de operator zet per
+// devcontainer expliciet aan wat mag.
 
 import { getActionPolicy, getGrant } from './db';
 
@@ -23,41 +25,41 @@ export interface DockerActionDef {
 
 export const DOCKER_ACTIONS: DockerActionDef[] = [
   // Tijdelijke (mutatie-)acties
-  { action: 'container.create',   kind: 'temporary', group: 'containers', label: 'Create',     defaultEnabled: true },
-  { action: 'container.start',    kind: 'temporary', group: 'containers', label: 'Start',      defaultEnabled: true },
-  { action: 'container.stop',     kind: 'temporary', group: 'containers', label: 'Stop',       defaultEnabled: true },
-  { action: 'container.restart',  kind: 'temporary', group: 'containers', label: 'Restart',    defaultEnabled: true },
-  { action: 'container.remove',   kind: 'temporary', group: 'containers', label: 'Remove',     defaultEnabled: true },
-  { action: 'container.update',   kind: 'temporary', group: 'containers', label: 'Update',     defaultEnabled: true },
-  { action: 'container.exec',     kind: 'temporary', group: 'containers', label: 'Exec',       defaultEnabled: true },
-  { action: 'image.pull',         kind: 'temporary', group: 'images',     label: 'Pull',       defaultEnabled: true },
-  { action: 'image.build',        kind: 'temporary', group: 'images',     label: 'Build',      defaultEnabled: true },
-  // Push verlaat de sandbox via de docker-daemon van de host en passeert de
-  // huddle-egress-firewall dus niet: standaard uit.
+  { action: 'container.create',   kind: 'temporary', group: 'containers', label: 'Create',     defaultEnabled: false },
+  { action: 'container.start',    kind: 'temporary', group: 'containers', label: 'Start',      defaultEnabled: false },
+  { action: 'container.stop',     kind: 'temporary', group: 'containers', label: 'Stop',       defaultEnabled: false },
+  { action: 'container.restart',  kind: 'temporary', group: 'containers', label: 'Restart',    defaultEnabled: false },
+  { action: 'container.remove',   kind: 'temporary', group: 'containers', label: 'Remove',     defaultEnabled: false },
+  { action: 'container.update',   kind: 'temporary', group: 'containers', label: 'Update',     defaultEnabled: false },
+  { action: 'container.exec',     kind: 'temporary', group: 'containers', label: 'Exec',       defaultEnabled: false },
+  { action: 'image.pull',         kind: 'temporary', group: 'images',     label: 'Pull',       defaultEnabled: false },
+  { action: 'image.build',        kind: 'temporary', group: 'images',     label: 'Build',      defaultEnabled: false },
+  // Push verdient extra terughoudendheid bij het aanzetten: hij verlaat de
+  // sandbox via de docker-daemon van de host en passeert de egress-firewall niet.
   { action: 'image.push',         kind: 'temporary', group: 'images',     label: 'Push',       defaultEnabled: false },
-  { action: 'image.remove',       kind: 'temporary', group: 'images',     label: 'Remove',     defaultEnabled: true },
-  { action: 'image.tag',          kind: 'temporary', group: 'images',     label: 'Tag',        defaultEnabled: true },
-  { action: 'volume.create',      kind: 'temporary', group: 'volumes',    label: 'Create',     defaultEnabled: true },
-  { action: 'volume.remove',      kind: 'temporary', group: 'volumes',    label: 'Remove',     defaultEnabled: true },
-  { action: 'volume.prune',       kind: 'temporary', group: 'volumes',    label: 'Prune',      defaultEnabled: true },
-  { action: 'network.create',     kind: 'temporary', group: 'networks',   label: 'Create',     defaultEnabled: true },
-  { action: 'network.remove',     kind: 'temporary', group: 'networks',   label: 'Remove',     defaultEnabled: true },
-  { action: 'network.connect',    kind: 'temporary', group: 'networks',   label: 'Connect',    defaultEnabled: true },
-  { action: 'network.disconnect', kind: 'temporary', group: 'networks',   label: 'Disconnect', defaultEnabled: true },
+  { action: 'image.remove',       kind: 'temporary', group: 'images',     label: 'Remove',     defaultEnabled: false },
+  { action: 'image.tag',          kind: 'temporary', group: 'images',     label: 'Tag',        defaultEnabled: false },
+  { action: 'volume.create',      kind: 'temporary', group: 'volumes',    label: 'Create',     defaultEnabled: false },
+  { action: 'volume.remove',      kind: 'temporary', group: 'volumes',    label: 'Remove',     defaultEnabled: false },
+  { action: 'volume.prune',       kind: 'temporary', group: 'volumes',    label: 'Prune',      defaultEnabled: false },
+  { action: 'network.create',     kind: 'temporary', group: 'networks',   label: 'Create',     defaultEnabled: false },
+  { action: 'network.remove',     kind: 'temporary', group: 'networks',   label: 'Remove',     defaultEnabled: false },
+  { action: 'network.connect',    kind: 'temporary', group: 'networks',   label: 'Connect',    defaultEnabled: false },
+  { action: 'network.disconnect', kind: 'temporary', group: 'networks',   label: 'Disconnect', defaultEnabled: false },
   // Altijd-toegestane (read-only) acties
-  { action: 'container.list',     kind: 'always',    group: 'containers', label: 'List',       defaultEnabled: true },
-  { action: 'container.inspect',  kind: 'always',    group: 'containers', label: 'Inspect',    defaultEnabled: true },
-  { action: 'container.logs',     kind: 'always',    group: 'containers', label: 'Logs',       defaultEnabled: true },
-  { action: 'container.stats',    kind: 'always',    group: 'containers', label: 'Stats',      defaultEnabled: true },
-  { action: 'image.list',         kind: 'always',    group: 'images',     label: 'List',       defaultEnabled: true },
-  { action: 'image.inspect',      kind: 'always',    group: 'images',     label: 'Inspect',    defaultEnabled: true },
-  { action: 'volume.list',        kind: 'always',    group: 'volumes',    label: 'List',       defaultEnabled: true },
-  { action: 'volume.inspect',     kind: 'always',    group: 'volumes',    label: 'Inspect',    defaultEnabled: true },
-  { action: 'network.list',       kind: 'always',    group: 'networks',   label: 'List',       defaultEnabled: true },
-  { action: 'network.inspect',    kind: 'always',    group: 'networks',   label: 'Inspect',    defaultEnabled: true },
-  { action: 'system.ping',        kind: 'always',    group: 'system',     label: 'Ping',       defaultEnabled: true },
-  { action: 'system.version',     kind: 'always',    group: 'system',     label: 'Version',    defaultEnabled: true },
-  { action: 'system.events',      kind: 'always',    group: 'system',     label: 'Events',     defaultEnabled: true },
+  { action: 'container.list',     kind: 'always',    group: 'containers', label: 'List',       defaultEnabled: false },
+  { action: 'container.inspect',  kind: 'always',    group: 'containers', label: 'Inspect',    defaultEnabled: false },
+  { action: 'container.logs',     kind: 'always',    group: 'containers', label: 'Logs',       defaultEnabled: false },
+  { action: 'container.stats',    kind: 'always',    group: 'containers', label: 'Stats',      defaultEnabled: false },
+  { action: 'image.list',         kind: 'always',    group: 'images',     label: 'List',       defaultEnabled: false },
+  { action: 'image.inspect',      kind: 'always',    group: 'images',     label: 'Inspect',    defaultEnabled: false },
+  { action: 'volume.list',        kind: 'always',    group: 'volumes',    label: 'List',       defaultEnabled: false },
+  { action: 'volume.inspect',     kind: 'always',    group: 'volumes',    label: 'Inspect',    defaultEnabled: false },
+  { action: 'network.list',       kind: 'always',    group: 'networks',   label: 'List',       defaultEnabled: false },
+  { action: 'network.inspect',    kind: 'always',    group: 'networks',   label: 'Inspect',    defaultEnabled: false },
+  { action: 'system.ping',        kind: 'always',    group: 'system',     label: 'Ping',       defaultEnabled: false },
+  { action: 'system.version',     kind: 'always',    group: 'system',     label: 'Version',    defaultEnabled: false },
+  { action: 'system.events',      kind: 'always',    group: 'system',     label: 'Events',     defaultEnabled: false },
 ];
 
 const ACTIONS_BY_ID = new Map(DOCKER_ACTIONS.map(a => [a.action, a]));
