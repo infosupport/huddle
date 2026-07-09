@@ -149,14 +149,6 @@ export class DockerRightsPanelComponent implements OnInit {
       this.policies.set({});
       if (container) this.loadPolicies(container);
     });
-    // Houd de timer in sync met server-pushes (WS/poll).
-    this.state.grants$
-      .pipe(takeUntilDestroyed())
-      .subscribe(grants => {
-        const c = this.container();
-        if (!c) return;
-        this.grantUntil.set(grants[c]?.until ?? null);
-      });
   }
 
   ngOnInit(): void {
@@ -164,6 +156,17 @@ export class DockerRightsPanelComponent implements OnInit {
       next: (res) => this.catalog.set(res.actions),
       error: (e) => this.error.set(`Kon de actie-catalogus niet laden: ${e.message}`),
     });
+    // Houd de timer in sync met server-pushes (WS/poll). Bewust in ngOnInit en
+    // niet in de constructor: grants$ is een BehaviorSubject die synchroon bij
+    // subscribe emit, en de required input `container` heeft pas ná de eerste
+    // binding een waarde (lezen in de constructor gooit NG0950).
+    this.state.grants$
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(grants => {
+        const c = this.container();
+        if (!c) return;
+        this.grantUntil.set(grants[c]?.until ?? null);
+      });
   }
 
   private loadPolicies(container: string): void {
