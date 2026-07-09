@@ -6,15 +6,22 @@ import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList } from './firewall';
 import { runInit } from './init';
+import {
+  ensureCliForChannel,
+  parseIssueNumber,
+  runExperimentReset,
+  runExperimentStatus,
+  runExperimentUse,
+} from './experiment';
 
 interface ParsedArgs {
   positional: string[];
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'help']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'help']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -80,10 +87,16 @@ Gebruik:
                                      opstarten via Docker of Podman
   huddle firewall list [opties]      Firewall-verzoeken weergeven
   huddle fw list [opties]            Alias voor firewall list
+  huddle experiment use <nr>         Experimentele build van issue <nr> activeren
+                                     en init uitvoeren
+  huddle experiment reset            Terug naar de stabiele release
+  huddle experiment status           Actief kanaal en CLI-versie tonen
 
 Init opties:
   --runtime <docker|podman>          Container runtime (standaard: automatisch
                                      gedetecteerd; ook via env-var HUDDLE_RUNTIME)
+  --experiment <nr>                  Experimentele build van issue <nr> gebruiken
+                                     (zelfde als "huddle experiment use <nr>")
 
 Start opties:
   --ide <intellij|rider|vscode>      IDE (standaard: intellij)
@@ -143,7 +156,33 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'init') {
-    await runInit({ runtime: flagString(flags, 'runtime') });
+    const initOpts = { runtime: flagString(flags, 'runtime') };
+    const experimentFlag = flagString(flags, 'experiment');
+    if (experimentFlag !== undefined) {
+      await runExperimentUse(parseIssueNumber(experimentFlag), initOpts);
+      return;
+    }
+    // Zolang een experiment actief is, moet ook de CLI zelf op de bijbehorende
+    // versie draaien; zo nodig installeert dit de juiste versie en herstart het
+    // proces zichzelf (keert dan niet terug).
+    ensureCliForChannel(process.argv.slice(2));
+    await runInit(initOpts);
+    return;
+  }
+
+  if (cmd === 'experiment') {
+    const subCmd = sub ?? 'status';
+    if (subCmd === 'use') {
+      await runExperimentUse(parseIssueNumber(positional[2]), { runtime: flagString(flags, 'runtime') });
+    } else if (subCmd === 'reset') {
+      await runExperimentReset();
+    } else if (subCmd === 'status') {
+      runExperimentStatus();
+    } else {
+      console.error(`Onbekend experiment-subcommando: ${subCmd}`);
+      console.error('Gebruik: huddle experiment <use <nr>|reset|status>');
+      process.exit(1);
+    }
     return;
   }
 
