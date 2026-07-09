@@ -683,7 +683,10 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   try {
     await connectNetwork(netName, 'huddle');
   } catch (err: any) {
-    if (!String(err.message).includes('already exists in network')) throw err;
+    // Al gekoppeld is geen fout. Docker en Podman formuleren dit verschillend:
+    // Docker → "already exists in network", Podman → "network is already connected".
+    const msg = String(err.message);
+    if (!msg.includes('already exists in network') && !msg.includes('already connected')) throw err;
   }
 
   if (!(await imageExists(imageName))) {
