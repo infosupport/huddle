@@ -30,9 +30,24 @@ function Test-Runtime {
     return ($LASTEXITCODE -eq 0)
 }
 
+# Bepaalt de ECHTE engine achter een commando, of $null als die niet bereikbaar
+# is. Vertrouw niet op de commandonaam: `docker` is vaak een symlink/shim naar
+# Podman (podman-docker) en Podman emuleert dan zelfs `docker --version`.
+# Podman's `info` kent wél het veld Host.ServiceIsRemote; Docker's schema niet.
+function Get-TrueEngine {
+    param([string]$Command)
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) { return $null }
+    $probe = & $Command info --format '{{.Host.ServiceIsRemote}}' 2>$null
+    if ($LASTEXITCODE -eq 0 -and $probe) { return 'podman' }
+    & $Command info *>$null 2>&1
+    if ($LASTEXITCODE -eq 0) { return 'docker' }
+    return $null
+}
+
 # Bepaalt de te gebruiken runtime: expliciete keuze (HUDDLE_RUNTIME) wint, anders
-# automatisch — eerst Docker, dan Podman. Zelfde volgorde als de CLI, zodat het
-# script en de gedelegeerde `huddle init` dezelfde engine kiezen.
+# automatisch — eerst achter `docker` kijken (kan een Podman-shim zijn), dan
+# `podman`. Zelfde logica als de CLI, zodat het script en de gedelegeerde
+# `huddle init` dezelfde engine kiezen.
 function Resolve-Runtime {
     $explicit = $env:HUDDLE_RUNTIME
     if ($explicit) {
@@ -47,8 +62,9 @@ function Resolve-Runtime {
         }
         return $name
     }
-    if (Test-Runtime 'docker') { return 'docker' }
-    if (Test-Runtime 'podman') { return 'podman' }
+    $engine = Get-TrueEngine 'docker'
+    if (-not $engine) { $engine = Get-TrueEngine 'podman' }
+    if ($engine) { return $engine }
     Write-Host "  [FAIL] Geen werkende container runtime gevonden. Installeer en start Docker of Podman," -ForegroundColor Red
     Write-Host "         of kies er expliciet een met de env-var HUDDLE_RUNTIME=<docker|podman>." -ForegroundColor Red
     exit 1

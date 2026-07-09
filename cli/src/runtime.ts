@@ -37,6 +37,22 @@ function isAvailable(runtime: RuntimeName): boolean {
   return commandOutput(`${runtime} info`) !== undefined;
 }
 
+/**
+ * Bepaalt de ECHTE engine achter een commando, of undefined als de engine niet
+ * bereikbaar is. Vertrouw niet op de commandonaam: `docker` is vaak een
+ * symlink/shim naar Podman (podman-docker) en Podman emuleert dan zelfs
+ * `docker --version`. Podman's `info` kent daarentegen het veld
+ * Host.ServiceIsRemote; Docker's info-schema niet. Dat is een betrouwbaar
+ * onderscheid dat ook via de shim werkt.
+ */
+function detectEngine(command: RuntimeName): RuntimeName | undefined {
+  if (commandOutput(`${command} info --format "{{.Host.ServiceIsRemote}}"`) !== undefined) {
+    return 'podman';
+  }
+  if (isAvailable(command)) return 'docker';
+  return undefined;
+}
+
 function podmanSocketPath(): string {
   // Podman knows where its own (rootless or rootful) socket lives.
   const reported = commandOutput(`podman info --format "{{.Host.RemoteSocket.Path}}"`);
@@ -98,8 +114,11 @@ export function resolveRuntime(explicit?: string): ContainerRuntime {
     return buildRuntime(name);
   }
 
-  if (isAvailable('docker')) return buildRuntime('docker');
-  if (isAvailable('podman')) return buildRuntime('podman');
+  // Auto-detectie: kijk eerst achter het `docker`-commando (dat een Podman-shim
+  // kan zijn), daarna naar `podman`. Zo wint een echte Docker-engine als die er
+  // is, maar herkennen we Podman ook als het zich als `docker` voordoet.
+  const detected = detectEngine('docker') ?? detectEngine('podman');
+  if (detected) return buildRuntime(detected);
 
   throw new Error(
     'No working container runtime found. Install and start Docker or Podman,\n' +
