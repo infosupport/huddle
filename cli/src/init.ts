@@ -1,8 +1,7 @@
 import { execSync } from 'child_process';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
-import { resolveImages, gatewayEnvFlags } from './images';
-import { cliVersion } from './self-update';
+import { ResolvedImages, gatewayEnvFlags } from './images';
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
@@ -49,15 +48,14 @@ function pullBaseImages(rt: string, images: string[]): void {
   }
 }
 
-export async function runInit(opts: InitOptions = {}): Promise<void> {
+/**
+ * Start de Huddle-gateway. Welke images er draaien (stable of experiment)
+ * beslist de aanroeper via `images` (zie resolveImages() in images.ts);
+ * deze functie doet alleen runtime- en container-orkestratie.
+ */
+export async function runInit(opts: InitOptions, images: ResolvedImages): Promise<void> {
   console.log(`${bold('Huddle opstarten...')}\n`);
 
-  // Experiment #1: extra logging om de experiment-pipeline end-to-end te
-  // testen. Toont de exacte CLI-build zodat direct zichtbaar is dat de
-  // experimentele versie draait.
-  console.log(dim(`CLI-versie: ${cliVersion()} (Node ${process.version}, ${process.platform}/${process.arch})`));
-
-  const images = resolveImages();
   const IMAGE = images.image;
   if (images.experiment !== undefined) {
     console.log(yellow(`Experiment ${images.experiment} actief → images met tag ${images.tag}`));

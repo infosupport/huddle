@@ -6,6 +6,9 @@ import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList } from './firewall';
 import { runInit } from './init';
+import { resolveImages } from './images';
+import { cliVersion } from './self-update';
+import { dim } from './utils';
 import {
   ensureCliForChannel,
   parseIssueNumber,
@@ -156,6 +159,11 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'init') {
+    // Experiment #1: extra logging om de experiment-pipeline end-to-end te
+    // testen. Toont de exacte CLI-build zodat direct zichtbaar is dat de
+    // experimentele versie draait.
+    console.log(dim(`CLI-versie: ${cliVersion()} (Node ${process.version}, ${process.platform}/${process.arch})`));
+
     const initOpts = { runtime: flagString(flags, 'runtime') };
     const experimentFlag = flagString(flags, 'experiment');
     if (experimentFlag !== undefined) {
@@ -166,7 +174,7 @@ async function main(): Promise<void> {
     // versie draaien; zo nodig installeert dit de juiste versie en herstart het
     // proces zichzelf (keert dan niet terug).
     ensureCliForChannel(process.argv.slice(2));
-    await runInit(initOpts);
+    await runInit(initOpts, resolveImages());
     return;
   }
 

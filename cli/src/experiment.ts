@@ -1,6 +1,7 @@
-import { green, bold, dim, yellow } from './utils';
+import { green, dim, yellow } from './utils';
 import { activeExperiment, configPath, readConfig, writeConfig } from './config';
-import { CLI_PACKAGE, cliVersion, installGlobalCli, relaunchCli, wasRelaunched } from './self-update';
+import { CLI_PACKAGE, cliVersion, switchGlobalCli } from './self-update';
+import { resolveImages } from './images';
 import { runInit, InitOptions } from './init';
 
 /**
@@ -23,35 +24,21 @@ export function parseIssueNumber(raw: string | undefined): number {
 
 /**
  * Zorgt dat het draaiende CLI-proces bij het geconfigureerde kanaal hoort.
- * Wijkt de versie af, dan installeren we de juiste versie globaal en herstarten
- * we onszelf met relaunchArgs; in dat geval keert deze functie niet terug
- * (process.exit met de exitcode van het nieuwe proces).
+ * Deze functie bepaalt alleen wélke versie er hoort te draaien; het wisselen
+ * zelf (installatie + herstart) doet self-update.ts. Bij een wissel keert
+ * deze functie niet terug (process.exit met de exitcode van het nieuwe proces).
  */
 export function ensureCliForChannel(relaunchArgs: string[]): void {
   const wanted = activeExperiment();
-  const current = cliExperiment();
-  if (wanted === current) return;
+  if (wanted === cliExperiment()) return;
 
   const spec = wanted !== undefined ? `${CLI_PACKAGE}@experiment-${wanted}` : `${CLI_PACKAGE}@latest`;
-  if (wasRelaunched()) {
-    throw new Error(
-      `CLI-versie (${cliVersion()}) hoort na herinstallatie nog steeds niet bij het ` +
-        `geconfigureerde kanaal (${wanted !== undefined ? `experiment ${wanted}` : 'stable'}). ` +
-        `Controleer ${configPath()} of installeer handmatig: npm install -g ${spec}`,
-    );
-  }
-
-  console.log(bold(`CLI wisselen naar ${spec}`));
-  console.log(dim(`Huidige versie: ${cliVersion()}`));
   try {
-    installGlobalCli(spec);
-  } catch {
-    throw new Error(
-      `Kon ${spec} niet installeren. Bestaat het experiment en heb je toegang tot ` +
-        `npm.pkg.github.com? Met "huddle experiment reset" ga je terug naar stable.`,
-    );
+    switchGlobalCli(spec, relaunchArgs);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${message} Met "huddle experiment reset" ga je terug naar stable (config: ${configPath()}).`);
   }
-  relaunchCli(relaunchArgs);
 }
 
 /**
@@ -72,7 +59,7 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
     writeConfig(previous);
     throw err;
   }
-  await runInit(initOpts);
+  await runInit(initOpts, resolveImages());
 }
 
 /** Zet Huddle terug naar de stabiele release. */

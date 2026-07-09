@@ -1,7 +1,7 @@
 import { execSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { dim } from './utils';
+import { bold, dim } from './utils';
 
 /**
  * Infrastructuur voor zelf-updates van de CLI: versie-informatie van de eigen
@@ -25,18 +25,36 @@ export function cliVersion(): string {
   }
 }
 
+/**
+ * Wisselt de globale CLI naar de gegeven package-spec en herstart daarna dit
+ * proces met relaunchArgs. Keert nooit terug: het proces eindigt met de
+ * exitcode van de nieuwe CLI, of deze functie gooit een fout (installatie
+ * mislukt, of dit proces was zelf al een herstart en zit dus in een loop).
+ */
+export function switchGlobalCli(spec: string, relaunchArgs: string[]): never {
+  if (wasRelaunched()) {
+    throw new Error(
+      `Kon niet wisselen naar ${spec}: dit proces is al herstart na een herinstallatie, ` +
+        `maar draait nog steeds versie ${cliVersion()}. Installeer handmatig: npm install -g ${spec}`,
+    );
+  }
+  console.log(bold(`CLI wisselen naar ${spec}`));
+  console.log(dim(`Huidige versie: ${cliVersion()}`));
+  try {
+    execSync(`npm install -g ${spec}`, { stdio: 'inherit' });
+  } catch {
+    throw new Error(`Kon ${spec} niet installeren. Ben je ingelogd op npm.pkg.github.com?`);
+  }
+  relaunchCli(relaunchArgs);
+}
+
 /** True wanneer dit proces al een herstart na een zelf-update is. */
-export function wasRelaunched(): boolean {
+function wasRelaunched(): boolean {
   return process.env[RELAUNCH_ENV] === '1';
 }
 
-/** Installeert de gegeven package-spec (bv. `@infosupport/huddle-cli@latest`) globaal. */
-export function installGlobalCli(spec: string): void {
-  execSync(`npm install -g ${spec}`, { stdio: 'inherit' });
-}
-
 /** Herstart de (zojuist geïnstalleerde) globale CLI met de gegeven argumenten. */
-export function relaunchCli(args: string[]): never {
+function relaunchCli(args: string[]): never {
   console.log(dim(`Herstart: huddle ${args.join(' ')}`));
   const env = { ...process.env, [RELAUNCH_ENV]: '1' };
   const entry = resolveGlobalEntry();
