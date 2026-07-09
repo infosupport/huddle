@@ -3,6 +3,7 @@ import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { activeExperiment, imageTag } from './config';
 import fs from 'fs';
+import path from 'path';
 
 const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
@@ -76,6 +77,16 @@ function pullBaseImages(rt: string, images: string[]): void {
 
 export async function runInit(opts: InitOptions = {}): Promise<void> {
   console.log(`${bold('Huddle opstarten...')}\n`);
+
+  // Experiment #1: extra logging om de experiment-pipeline end-to-end te
+  // testen. Toont de exacte CLI-build zodat direct zichtbaar is dat de
+  // experimentele versie draait.
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    console.log(dim(`CLI-versie: ${pkg.version} (Node ${process.version}, ${process.platform}/${process.arch})`));
+  } catch {
+    // geen versie-info beschikbaar; niet blokkerend
+  }
 
   const experiment = activeExperiment();
   const tag = imageTag();
