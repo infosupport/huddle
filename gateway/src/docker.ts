@@ -5,6 +5,7 @@ import { createContainerProxy } from './socket-proxy';
 import { saveCredentials, getSetting, listFolderMappings } from './db';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
+import { sanitizeResolvConf } from './dns-egress';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -364,10 +365,16 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
 
 export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
+  // Koppelt de gateway zelf een (internal) devcontainer-net bij, dan zet Podman
+  // de aardvark-DNS van dat net vooraan in resolv.conf — die faalt op externe
+  // namen. Herstel de volgorde zodat egress blijft werken (zie dns-egress.ts).
+  if (containerName === 'huddle') await sanitizeResolvConf();
 }
 
 export async function disconnectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/disconnect`, { Container: containerName });
+  // Ook een disconnect laat Podman resolv.conf opnieuw genereren.
+  if (containerName === 'huddle') await sanitizeResolvConf();
 }
 
 export async function deleteNetwork(name: string): Promise<void> {

@@ -139,6 +139,10 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     ` ${IMAGE}`,
   );
 
+  // Attaching devcontainer-net after the container has started pollutes
+  // resolv.conf on Podman with that network's internal aardvark-DNS; the
+  // gateway cleans that up itself (see dns-egress.ts / the startup sanitize in
+  // index.ts).
   runSilent(`${rt} network connect ${INTERNAL_NET} ${CONTAINER}`);
 
   console.log();

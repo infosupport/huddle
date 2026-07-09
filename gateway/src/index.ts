@@ -4,6 +4,7 @@ import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
+import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -65,5 +66,10 @@ async function initContainerIptables(): Promise<void> {
 }
 
 initContainerProxies();
-initContainerNetworks();
+// Reconnecten aan de devcontainer-netwerken vervuilt resolv.conf (Podman zet de
+// internal-net aardvark-DNS erin); sanitize erna zodat egress-DNS blijft werken,
+// óók als er (nog) geen devcontainers zijn. De settling-runs vangen bovendien de
+// devcontainer-net-connect op die `huddle init` pas ná de start uitvoert.
+initContainerNetworks().finally(() => { void sanitizeResolvConf(); });
+scheduleSettlingSanitize();
 initContainerIptables();
