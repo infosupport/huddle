@@ -1,25 +1,7 @@
-import { execSync, spawnSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { bold, green, dim, yellow } from './utils';
+import { green, bold, dim, yellow } from './utils';
 import { activeExperiment, configPath, readConfig, writeConfig } from './config';
+import { CLI_PACKAGE, cliVersion, installGlobalCli, relaunchCli, wasRelaunched } from './self-update';
 import { runInit, InitOptions } from './init';
-
-const PACKAGE = '@infosupport/huddle-cli';
-
-// Guard tegen een herstart-loop: als we na een zelf-upgrade opnieuw opstarten
-// en de versie klopt dan nóg niet, stoppen we met een foutmelding in plaats
-// van eindeloos opnieuw te installeren.
-const RELAUNCH_ENV = 'HUDDLE_EXPERIMENT_RELAUNCHED';
-
-export function cliVersion(): string {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-    return String(pkg.version ?? 'onbekend');
-  } catch {
-    return 'onbekend';
-  }
-}
 
 /**
  * Experiment-nummer dat in de versie van deze CLI-build is gebakken.
@@ -50,47 +32,26 @@ export function ensureCliForChannel(relaunchArgs: string[]): void {
   const current = cliExperiment();
   if (wanted === current) return;
 
-  if (process.env[RELAUNCH_ENV] === '1') {
+  const spec = wanted !== undefined ? `${CLI_PACKAGE}@experiment-${wanted}` : `${CLI_PACKAGE}@latest`;
+  if (wasRelaunched()) {
     throw new Error(
       `CLI-versie (${cliVersion()}) hoort na herinstallatie nog steeds niet bij het ` +
         `geconfigureerde kanaal (${wanted !== undefined ? `experiment ${wanted}` : 'stable'}). ` +
-        `Controleer ${configPath()} of installeer handmatig: npm install -g ${PACKAGE}@${wanted !== undefined ? `experiment-${wanted}` : 'latest'}`,
+        `Controleer ${configPath()} of installeer handmatig: npm install -g ${spec}`,
     );
   }
 
-  const spec = wanted !== undefined ? `${PACKAGE}@experiment-${wanted}` : `${PACKAGE}@latest`;
   console.log(bold(`CLI wisselen naar ${spec}`));
   console.log(dim(`Huidige versie: ${cliVersion()}`));
   try {
-    execSync(`npm install -g ${spec}`, { stdio: 'inherit' });
+    installGlobalCli(spec);
   } catch {
     throw new Error(
       `Kon ${spec} niet installeren. Bestaat het experiment en heb je toegang tot ` +
         `npm.pkg.github.com? Met "huddle experiment reset" ga je terug naar stable.`,
     );
   }
-  relaunch(relaunchArgs);
-}
-
-/** Herstart de (zojuist geïnstalleerde) globale CLI met de gegeven argumenten. */
-function relaunch(args: string[]): never {
-  console.log(dim(`Herstart: huddle ${args.join(' ')}`));
-  const env = { ...process.env, [RELAUNCH_ENV]: '1' };
-  const entry = resolveGlobalEntry();
-  const result = entry
-    ? spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit', env })
-    : spawnSync('huddle', args, { stdio: 'inherit', env, shell: process.platform === 'win32' });
-  process.exit(result.status ?? 1);
-}
-
-function resolveGlobalEntry(): string | undefined {
-  try {
-    const root = execSync('npm root -g', { encoding: 'utf8' }).trim();
-    const entry = path.join(root, ...PACKAGE.split('/'), 'dist', 'index.js');
-    return fs.existsSync(entry) ? entry : undefined;
-  } catch {
-    return undefined;
-  }
+  relaunchCli(relaunchArgs);
 }
 
 /**
@@ -142,8 +103,7 @@ export function runExperimentStatus(): void {
   } else {
     console.log('Kanaal:      stable (images: latest)');
   }
-  const mismatch = cliExperiment() !== experiment;
-  if (mismatch) {
+  if (cliExperiment() !== experiment) {
     console.log(
       yellow(
         '[!] CLI-versie hoort niet bij het geconfigureerde kanaal; ' +
