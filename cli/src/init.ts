@@ -117,6 +117,14 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // `--security-opt label=disable` on every devcontainer so it can reach the
   // SELinux-labeled proxy socket.
   const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
+  // The container is created on the engine's default network first (with -p),
+  // then joins devcontainer-net (--internal) afterwards. Docker needs this
+  // ordering because it skips the host port-forward entirely when a container
+  // is created directly on an --internal network (moby/moby#36174). Rootless
+  // Podman needs the same ordering for a different reason: its pasta port-
+  // forwarder delivers host traffic in via the PRIMARY network interface, so if
+  // devcontainer-net were primary the operator's browser would appear to come
+  // from the devcontainer subnet and get blocked by the source-IP gate (api.ts).
   run(
     `${rt} run -d` +
     ` --name ${CONTAINER}` +
