@@ -1,0 +1,23 @@
+:host { display: contents; }
+
+/* ── Container-selector ──────────────────────────────────────────────────── */
+.da-selector { flex-direction: row; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 22px; }
+.da-selector label { font-size: 13.5px; font-weight: 600; }
+.da-selector select {
+  padding: 7px 12px; border-radius: 8px; font-size: 13.5px; min-width: 220px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+}
+.da-selector__hint { font-size: 12.5px; color: var(--text-muted); }
+
+/* ── Goedgekeurde host-poorten ───────────────────────────────────────────── */
+.ports-container-select { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; }
+.ports-container-select select, .ports-container-select input {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px;
+  font-size: 13px; background: var(--surface); color: var(--text);
+}
+.ports-error { font-size: 13px; color: var(--danger); margin: 0 0 8px; }
+.da-port-input {
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px;
+  font-size: 13px; background: var(--surface); color: var(--text);
+}
+code { font-size: 12px; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; }

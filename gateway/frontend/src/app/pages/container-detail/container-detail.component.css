@@ -495,41 +495,6 @@
   font-size: 12.5px;
 }
 
-/* ===== Docker grant ===== */
-.docker-grant {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 14px 0;
-}
-
-.docker-grant__timer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 18px;
-  border-radius: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-muted);
-  min-width: 140px;
-}
-
-.docker-grant__timer--active {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: transparent;
-}
-
-.docker-grant__btns {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 /* ===== Noot tab ===== */
 .noot-info {
   font-size: 13.5px;

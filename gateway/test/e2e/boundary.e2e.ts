@@ -4,7 +4,7 @@ import {
   dockerAvailable, huddleReachable,
   spawnDevcontainer, removeDevcontainer,
   execIn, curlStatusIn,
-  clearRulesForDomain, allowDomain, setGrant, revokeGrant, sleep,
+  clearRulesForDomain, allowDomain, setGrant, revokeGrant, setActionPolicy, sleep,
 } from './helpers';
 
 // ── LIVE security-boundary suite (T1–T11 stijl) ─────────────────────────────
@@ -18,8 +18,8 @@ import {
 //       • per-domein firewall  → firewall-regels voor TEST_DOMAIN
 //       • docker-socket gate   → grant-state voor E2E_NAME
 //       • huddle self-traffic  → read-only, geen gedeelde state
-//   - Binnen docker-socket gate: "zonder grant"-tests sequentieel, daarna
-//     "met grant"-tests concurrent (allen read-only gegeven actieve grant).
+//   - Binnen docker-socket gate: de grant/toggle-tests sequentieel (ze muteren
+//     grant- en policy-state), daarna de escape-tests concurrent.
 
 const TEST_DOMAIN = 'example.com';
 
@@ -62,18 +62,38 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   // ── Docker-socket gate ────────────────────────────────────────────────────
   // Raakt alleen grant-state — geen overlap met firewall-regels.
   describe('docker-socket gate', () => {
-    it('weigert docker zonder actieve grant', async () => {
+    // Secure by default: álle acties (ook read-only) staan uit tot de
+    // operator ze aanzet. Read-only ('always') werkt daarna zonder timer;
+    // mutaties ('temporary') vereisen bovendien een actieve grant.
+    it('standaard staat alles uit — ook read-only wordt geweigerd', async () => {
       await revokeGrant(E2E_NAME);
       await sleep(500);
       const r = execIn(E2E_NAME, 'docker ps');
       expect(r.status).not.toBe(0);
-      expect(`${r.stdout}${r.stderr}`).toMatch(/denied by policy/i);
+      expect(`${r.stdout}${r.stderr}`).toMatch(/disabled/i);
     });
 
-    it('staat docker toe binnen een actieve grant', async () => {
+    it('read-only werkt zonder grant zodra de toggle aan staat', async () => {
+      await setActionPolicy(E2E_NAME, 'system.ping', true);
+      await setActionPolicy(E2E_NAME, 'container.list', true);
+      const r = execIn(E2E_NAME, 'docker ps');
+      expect(r.status).toBe(0);
+    });
+
+    it('weigert mutaties met aan-toggle maar zonder actieve grant', async () => {
+      await setActionPolicy(E2E_NAME, 'volume.create', true);
+      const r = execIn(E2E_NAME, 'docker volume create e2e-no-grant-probe');
+      expect(r.status).not.toBe(0);
+      expect(`${r.stdout}${r.stderr}`).toMatch(/access timer/i);
+    });
+
+    it('staat mutaties toe binnen een actieve grant (incl. eigen-volume delete)', async () => {
+      await setActionPolicy(E2E_NAME, 'volume.remove', true);
       await setGrant(E2E_NAME, 5);
       await sleep(500);
-      const r = execIn(E2E_NAME, 'docker ps');
+      // create + rm bewijst ook de huddle.parent-labelinjectie: rm van een
+      // eigen volume mag, van andermans volume niet.
+      const r = execIn(E2E_NAME, 'docker volume create e2e-grant-probe && docker volume rm e2e-grant-probe');
       expect(r.status).toBe(0);
     });
 
@@ -81,6 +101,11 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     // onafhankelijk — ze draaien concurrent via describe.concurrent.
     describe.concurrent('escape-pogingen met actieve grant', () => {
       beforeAll(async () => {
+        // Toggles aan die de escape-pogingen nodig hebben om überhaupt bij de
+        // harde security-checks (HostConfig/ownership) aan te komen.
+        for (const action of ['system.ping', 'container.create', 'container.start', 'container.inspect', 'volume.create']) {
+          await setActionPolicy(E2E_NAME, action, true);
+        }
         await setGrant(E2E_NAME, 15);
         await sleep(500);
       });

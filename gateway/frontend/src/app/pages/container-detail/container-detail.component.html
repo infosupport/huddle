@@ -245,26 +245,7 @@
 
   <!-- ════════════════════════════════════════════ TAB: DOCKER -->
   @if (activeTab === 'docker') {
-    <div class="card">
-      <div class="card__head"><h2 class="card__title">Docker toegang</h2></div>
-      @if (grants$ | async; as grants) {
-        @let rem = grantRemaining(grants);
-        <div class="docker-grant">
-          <div class="docker-grant__timer" [class.docker-grant__timer--active]="rem > 0">
-            <app-icon [name]="rem > 0 ? 'clock' : 'anchor'" [size]="18" />
-            {{ rem > 0 ? (Math.ceil(rem / 60) + ' min over') : 'Geen toegang' }}
-          </div>
-          @if (rem > 0) {
-            <button class="btn btn-delete btn-sm" (click)="revoke()">Intrekken</button>
-          }
-          <div class="docker-grant__btns">
-            @for (m of [5, 10, 15, 30]; track m) {
-              <button class="btn btn-ghost btn-sm" (click)="grant(m)">+{{ m }} min</button>
-            }
-          </div>
-        </div>
-      }
-    </div>
+    <app-docker-rights-panel [container]="name" />
 
     <div class="card">
       <div class="card__head"><h2 class="card__title">Goedgekeurde host-poorten</h2></div>

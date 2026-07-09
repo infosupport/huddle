@@ -38,14 +38,20 @@ Twee servers draaien in hetzelfde proces:
 
 ### Docker Socket Proxy
 - Elke devcontainer krijgt een eigen Unix socket op `/tmp/dc-sockets/<naam>/docker.sock`; de per-container *directory* wordt in de container gemount (op `/var/run/huddle`) en `DOCKER_HOST` wijst naar de socket. Een file-mount van de socket zelf zou na een Huddle-herstart de dode oude inode blijven zien; een directory-mount niet. Het oude platte pad `/tmp/dc-sockets/<naam>.sock` blijft als symlink bestaan voor containers van vóór deze wijziging.
-- Toegang is beperkt via een tijdgebonden grant (1–120 minuten)
+- Fijnmazige rechten per devcontainer, in twee klassen:
+  - **Tijdelijke acties** (mutaties: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — alleen effectief zolang de tijdgebonden grant (1–120 minuten) actief is én de actie-toggle in het portal aan staat
+  - **Altijd toegestane acties** (read-only: list/inspect/logs/stats, ping/version/events) — onafhankelijk van de timer, per actie in te schakelen
+  - Secure by default: **álle acties staan standaard uit**; de operator zet per devcontainer expliciet aan wat mag. Wees extra terughoudend met `image.push`: pushen loopt via de host-daemon en passeert de egress-firewall niet
 - Policy wordt per request afgedwongen:
   - `docker ps` → gefilterd tot eigen gestarte containers
   - `docker run` → toegestaan; label `huddle.parent` automatisch toegevoegd
   - `docker exec` → alleen eigen child-containers, nooit de devcontainer zelf
   - `docker rm` / `docker rmi` → alleen resources die de container zelf aanmaakte
+  - `docker volume rm` / netwerk-delete → alleen eigen (gelabelde) resources; `dc-net-*` netwerken zijn onaantastbaar
+  - `docker volume prune` → beperkt tot eigen volumes via een geïnjecteerd labelfilter
+  - `docker push` → alleen zelf gebouwde (gelabelde) images
   - `docker images` → alle images (alleen-lezen)
-- Grants overleven een Huddle-herstart; proxy sockets worden bij herstart opnieuw aangemaakt
+- Grants en actie-toggles overleven een Huddle-herstart; proxy sockets worden bij herstart opnieuw aangemaakt
 
 ### Containerbeheer
 - Overzicht van alle devcontainers met status, image, uptime en openstaande regelverzoeken
@@ -205,7 +211,6 @@ Bij het bouwen van een base-image kan Huddle automatisch AI-CLI-configuraties (z
 | AI-tool | Bronpad (host) | Doelpad (container) |
 |---------|---------------|---------------------|
 | claude | `/mnt/c/projects/huddle/.ai/claude/` | `/home/vscode/.claude` |
-| copilot | `/mnt/c/projects/huddle/.ai/copilot/` | `/home/vscode/.copilot` |
 
 ---
 
@@ -302,6 +307,9 @@ Credentials (Client ID + Secret) stel je in via de UI onder **Aikido Security �
 | GET | `/api/authz/grants` | Lijst van actieve Docker socket grants |
 | PUT | `/api/authz/grants/:container` | Docker-toegang verlenen (body: `{ minutes }`) |
 | DELETE | `/api/authz/grants/:container` | Docker-toegang intrekken |
+| GET | `/api/authz/docker-actions` | Actie-catalogus (kind, groep, label, default) |
+| GET | `/api/authz/docker-actions/:container` | Effectieve actie-toggles + grant per container |
+| PUT | `/api/authz/docker-actions/:container/:action` | Actie aan/uit zetten (body: `{ enabled }`) |
 | GET | `/api/audit` | Netwerklog (filter: `?container=`, `?domain=`, `?action=`) |
 
 Alle state-muterende endpoints sturen een WebSocket `{ type: "reload" }` event naar verbonden clients.

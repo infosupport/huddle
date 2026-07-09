@@ -6,7 +6,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import {
   listDevcontainers,
   inspectContainer,
@@ -601,6 +602,59 @@ export async function createApiServer(): Promise<FastifyInstance> {
       deleteGrant(container);
       logAudit({ containerId: container, domain: 'docker-access', action: 'admin:grant-revoke' });
       notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  // ── Fijnmazige Docker-actie-rechten ───────────────────────────────────────
+
+  app.get('/api/authz/docker-actions', async () => ({ actions: DOCKER_ACTIONS }));
+
+  app.get<{ Params: { container: string } }>(
+    '/api/authz/docker-actions/:container',
+    async (req) => {
+      const { container } = req.params;
+      return {
+        policies: getEffectivePolicies(container),
+        grant: getGrant(container),
+      };
+    }
+  );
+
+  app.put<{ Params: { container: string; action: string }; Body: { enabled: boolean } }>(
+    '/api/authz/docker-actions/:container/:action',
+    async (req, reply) => {
+      const { container, action } = req.params;
+      const { enabled } = req.body ?? {};
+      if (!isKnownAction(action)) {
+        return reply.code(400).send({ error: `unknown docker action '${action}'` });
+      }
+      if (typeof enabled !== 'boolean') {
+        return reply.code(400).send({ error: 'enabled must be a boolean' });
+      }
+      setActionPolicy(container, action, enabled);
+      logAudit({
+        containerId: container,
+        domain: 'docker-access',
+        action: `admin:docker-action-${action}-${enabled ? 'on' : 'off'}`,
+      });
+      notifyStateChanged();
+      return { container, action, enabled };
+    }
+  );
+
+  // ── Client-side logging (frontend → container logs) ──────────────────────
+  // De Angular-UI stuurt onafgevangen runtime-fouten hierheen zodat ze in
+  // `docker logs huddle` zichtbaar zijn. Alleen loggen, niets persisteren.
+
+  app.post<{ Body: { level?: string; message?: string; stack?: string; url?: string } }>(
+    '/api/client-log',
+    async (req) => {
+      const { level = 'error', message = '', stack, url } = req.body ?? {};
+      const lvl = String(level).slice(0, 10);
+      const line = `[client:${lvl}] ${String(message).slice(0, 2000)}${url ? ` @ ${String(url).slice(0, 300)}` : ''}`;
+      console.error(line);
+      if (stack) console.error(`[client:${lvl}] ${String(stack).slice(0, 6000)}`);
       return { ok: true };
     }
   );

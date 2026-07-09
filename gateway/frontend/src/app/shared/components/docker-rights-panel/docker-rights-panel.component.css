@@ -1,0 +1,225 @@
+/* container-type maakt het panel z'n eigen query-container: de breakpoints
+   hieronder reageren op de beschikbare paneelbreedte, niet op de viewport.
+   Op de container-detailpagina is de content smaller dan het scherm; een
+   viewport-media-query grijpt daar nooit in en de derde hero-kolom (de
+   timer-knoppen) werd door overflow:hidden onzichtbaar afgeknipt. */
+:host { display: flex; flex-direction: column; gap: 20px; min-width: 0; container-type: inline-size; }
+
+/* ── Foutmelding ─────────────────────────────────────────────────────────── */
+.da-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--danger-soft); color: var(--danger);
+  border: 1px solid var(--danger);
+  font-size: 13.5px; font-weight: 500;
+}
+
+/* ── Secties ─────────────────────────────────────────────────────────────── */
+.da-section {
+  position: relative; overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--sec-border);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  padding: 28px 24px 22px;
+}
+.da-section::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(135deg, var(--sec-wash), transparent 45%);
+  pointer-events: none;
+}
+.da-section > * { position: relative; }
+
+/* Sectiespecifieke kleuren — leesbaar op licht én donker */
+.da-section.temporary {
+  --sec: var(--da-orange, #ff7d1f);
+  --sec-strong: var(--da-orange-strong, #f26a00);
+  --sec-soft: rgba(255, 125, 31, .14);
+  --sec-border: rgba(255, 125, 31, .40);
+  --sec-wash: rgba(255, 125, 31, .07);
+  --ring-empty: rgba(255, 125, 31, .22);
+}
+.da-section.always {
+  --sec: var(--da-blue, #3d8bfd);
+  --sec-strong: var(--da-blue-strong, #2673e8);
+  --sec-soft: rgba(61, 139, 253, .14);
+  --sec-border: rgba(61, 139, 253, .40);
+  --sec-wash: rgba(61, 139, 253, .07);
+  --ring-empty: rgba(61, 139, 253, .22);
+}
+
+/* ── Hero (intro / timer / knoppen) ──────────────────────────────────────── */
+.da-hero {
+  display: grid; grid-template-columns: 300px 1fr 260px;
+  gap: 26px; align-items: center; margin-bottom: 26px;
+}
+.da-intro { display: flex; gap: 20px; align-items: center; min-height: 120px; }
+.da-hero .da-intro { border-right: 1px solid var(--border); padding-right: 18px; }
+.da-intro__badge {
+  width: 92px; height: 92px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--sec-soft); color: var(--sec);
+}
+.da-intro__badge .da-ic { width: 44px; height: 44px; }
+.da-intro h2 { margin: 0 0 8px; font-size: 19px; line-height: 1.25; color: var(--sec); letter-spacing: .02em; }
+.da-intro p { margin: 0; color: var(--text-muted); font-size: 13.5px; line-height: 1.6; }
+
+.da-timer {
+  display: grid; grid-template-columns: 1fr 104px; align-items: center; gap: 18px;
+  border-right: 1px solid var(--border); padding-right: 26px;
+}
+.da-timer__label { font-size: 12.5px; font-weight: 800; letter-spacing: .06em; color: var(--text-muted); margin: 0 0 10px; }
+.da-digits { display: flex; align-items: center; gap: 10px; }
+.da-box {
+  width: 78px; height: 66px;
+  border: 1px solid var(--sec-border); background: var(--surface);
+  border-radius: 10px; display: grid; place-items: center;
+  color: var(--sec); font-size: 40px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  font-family: 'Space Grotesk', 'DM Sans', sans-serif;
+  box-shadow: var(--shadow-card);
+}
+.da-colon { font-size: 40px; color: var(--text-dim); margin-top: -8px; }
+.da-unit-row { display: flex; gap: 10px; margin-top: 8px; }
+.da-unit-row span { width: 78px; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--text-muted); }
+.da-ring { width: 104px; height: 104px; border-radius: 50%; position: relative; }
+.da-ring::after { content: ""; position: absolute; inset: 12px; border-radius: 50%; background: var(--surface); }
+
+.da-timer.expired .da-box { color: var(--text-dim); border-color: var(--border); }
+.da-timer.expired .da-timer__label { color: var(--text-dim); }
+
+.da-extend h3 { font-size: 12.5px; margin: 0 0 14px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
+.da-extend__buttons { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.da-stop { min-width: 150px; justify-content: center; }
+
+/* ── Kaart-grid ──────────────────────────────────────────────────────────── */
+.da-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.da-card {
+  background: var(--surface);
+  border: 1px solid var(--sec-border);
+  border-radius: 13px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden; min-height: 180px;
+}
+.da-card__head { display: flex; align-items: center; gap: 16px; padding: 22px 18px 16px; }
+.da-icon-circle {
+  width: 56px; height: 56px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--icon-bg); color: var(--icon);
+}
+.da-icon-circle .da-ic { width: 28px; height: 28px; }
+.ic-green  { --icon: var(--success); --icon-bg: var(--success-soft); }
+.ic-purple { --icon: #a05ef0; --icon-bg: rgba(147, 73, 232, .14); }
+.ic-blue   { --icon: var(--info); --icon-bg: var(--info-soft); }
+.ic-gray   { --icon: var(--text-muted); --icon-bg: var(--surface-hover); }
+.da-card__title h3 { margin: 0 0 6px; font-size: 16.5px; }
+.da-card__title p { margin: 0; color: var(--text-muted); font-size: 11px; font-weight: 600; line-height: 1.4; }
+
+/* ── Actie-rijen ─────────────────────────────────────────────────────────── */
+.da-row {
+  height: 50px; border-top: 1px solid var(--border);
+  display: grid; grid-template-columns: 30px 1fr 42px;
+  align-items: center; padding: 0 18px; gap: 9px;
+  font-weight: 700; font-size: 13.5px; color: var(--text);
+  transition: opacity .18s ease;
+}
+.da-row .da-ic { width: 20px; height: 20px; color: var(--text-muted); }
+.da-row.is-off { color: var(--text-dim); }
+.da-row.is-off .da-ic { color: var(--text-dim); }
+/* Timer verlopen: tijdelijke acties niet effectief → gedimd, maar wél bedienbaar */
+.da-row.is-locked { opacity: .55; }
+
+/* ── Toggle-switch ───────────────────────────────────────────────────────── */
+.da-toggle {
+  width: 40px; height: 24px; border: 0; border-radius: 999px;
+  background: var(--border-strong); padding: 2px; justify-self: end;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .06);
+  cursor: pointer; transition: background .18s ease;
+  appearance: none; flex-shrink: 0;
+}
+.da-toggle::before {
+  content: ""; display: block; width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; transform: translateX(0);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .25);
+  transition: transform .18s ease;
+}
+.da-toggle.on { background: linear-gradient(90deg, var(--sec-strong), var(--sec)); }
+.da-toggle.on::before { transform: translateX(16px); }
+.da-toggle:focus-visible { outline: 2px solid var(--sec); outline-offset: 2px; }
+
+/* ── Notice ──────────────────────────────────────────────────────────────── */
+.da-notice {
+  border-radius: 10px; border: 1px solid var(--sec-border);
+  display: flex; align-items: center; gap: 14px;
+  margin-top: 22px; padding: 12px 18px;
+  color: var(--sec); font-size: 13.5px; line-height: 1.5;
+  background: var(--sec-wash);
+}
+.da-notice .da-ic { width: 22px; height: 22px; flex-shrink: 0; }
+
+/* ── Altijd-sectie ───────────────────────────────────────────────────────── */
+.da-section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; flex-wrap: wrap; }
+.da-section-head .da-intro { min-height: 80px; }
+.da-pill {
+  border: 1px solid var(--success); background: var(--success-soft); color: var(--success);
+  border-radius: 8px; height: 38px; padding: 0 16px;
+  display: flex; align-items: center; gap: 9px;
+  font-size: 13px; font-weight: 800; white-space: nowrap;
+}
+.da-pill .da-ic { width: 16px; height: 16px; }
+.da-system-grid { display: grid; grid-template-columns: minmax(280px, 370px) 1fr; gap: 14px; margin-top: 14px; }
+.da-system-card { min-height: 0; }
+
+/* ── Uitleg: hoe werkt de Docker-proxy? ──────────────────────────────────── */
+.da-explain {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.da-explain summary {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 20px;
+  cursor: pointer; user-select: none;
+  font-size: 14.5px; font-weight: 600; color: var(--text);
+  list-style: none;
+}
+.da-explain summary::-webkit-details-marker { display: none; }
+.da-explain summary .da-ic { width: 20px; height: 20px; color: var(--text-muted); flex-shrink: 0; }
+.da-explain summary span { flex: 1; }
+.da-explain__chevron { transition: transform .18s ease; }
+.da-explain[open] .da-explain__chevron { transform: rotate(180deg); }
+.da-explain summary:hover { color: var(--accent); }
+.da-explain__body {
+  padding: 2px 20px 18px;
+  border-top: 1px solid var(--border);
+  font-size: 13.5px; color: var(--text-muted); line-height: 1.65;
+}
+.da-explain__body p { margin: 12px 0 0; }
+.da-explain__subhead { font-weight: 600; color: var(--text); }
+.da-explain__body ul { margin: 8px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.da-explain__body code {
+  font-family: monospace; font-size: 12px;
+  background: var(--surface-hover); color: var(--text);
+  padding: 1px 5px; border-radius: 4px;
+}
+
+/* ── SVG-basis ───────────────────────────────────────────────────────────── */
+.da-ic {
+  width: 22px; height: 22px;
+  stroke: currentColor; stroke-width: 2; fill: none;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ── Responsief (op paneelbreedte, zie :host) ────────────────────────────── */
+@container (max-width: 1180px) {
+  .da-cards { grid-template-columns: repeat(2, 1fr); }
+  .da-hero { grid-template-columns: 1fr; }
+  .da-hero .da-intro, .da-timer { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 20px; }
+  .da-system-grid { grid-template-columns: 1fr; }
+}
+@container (max-width: 640px) {
+  .da-cards { grid-template-columns: 1fr; }
+  .da-digits { transform: scale(.82); transform-origin: left; }
+  .da-extend__buttons { flex-wrap: wrap; }
+}

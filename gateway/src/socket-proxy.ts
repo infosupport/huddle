@@ -2,7 +2,8 @@ import net from 'net';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { getGrant, isHostPortApproved } from './db';
+import { isHostPortApproved } from './db';
+import { authorizeAction, classifyRequest } from './docker-actions';
 
 const DOCKER_SOCKET = '/var/run/docker.sock';
 const proxyServers = new Map<string, net.Server>();
@@ -44,6 +45,17 @@ async function hasOwnLabel(type: 'container' | 'image', targetId: string, contai
   } catch { return false; }
 }
 
+// Ownership-lookup voor netwerken en volumes: geeft het huddle.parent-label en
+// de echte naam terug (het pad kan ook een ID bevatten).
+async function lookupParentLabel(kind: 'network' | 'volume', id: string): Promise<{ parent: string | null; name: string }> {
+  try {
+    const data = await dockerGet(
+      kind === 'network' ? `/networks/${encodeURIComponent(id)}` : `/volumes/${encodeURIComponent(id)}`
+    );
+    return { parent: data.Labels?.['huddle.parent'] ?? null, name: data.Name ?? '' };
+  } catch { return { parent: null, name: '' }; }
+}
+
 function lookupContainerId(containerName: string): Promise<{ id: string; shortId: string }> {
   return dockerGet(`/containers/${encodeURIComponent(containerName)}/json`)
     .then(data => { const id: string = data.Id ?? ''; return { id, shortId: id.slice(0, 12) }; })
@@ -51,15 +63,30 @@ function lookupContainerId(containerName: string): Promise<{ id: string; shortId
 }
 
 // Add/merge a label filter into a Docker API query string.
-function withLabelFilter(rawUrl: string, label: string): string {
+//
+// De Docker-client (CLI/compose, API 1.55) verstuurt `filters` nog steeds in het
+// legacy map-formaat: `{"label":{"foo=bar":true},"status":{"running":true}}`. De
+// daemon accepteert dat, maar ook het array-formaat (`{"label":["foo=bar"]}`).
+// Wat de daemon NIET accepteert is een gemengde vorm — en die kregen we als we
+// alleen `label` naar een array omzetten en de andere sleutels (bv. `status`) als
+// map lieten staan: dat levert "Error response from daemon: invalid filter" op en
+// breekt o.a. `docker compose up`. Normaliseer daarom ELKE sleutel naar het
+// array-formaat voordat we de labelfilter toevoegen.
+function toArrayFilter(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (value && typeof value === 'object') return Object.keys(value as object);
+  return [];
+}
+
+export function withLabelFilter(rawUrl: string, label: string): string {
   const qi = rawUrl.indexOf('?');
   const base = qi === -1 ? rawUrl : rawUrl.slice(0, qi);
   const params = new URLSearchParams(qi === -1 ? '' : rawUrl.slice(qi + 1));
-  let filters: Record<string, string[]> = {};
-  try { filters = JSON.parse(params.get('filters') ?? '{}'); } catch {}
-  const existingLabel = filters.label;
-  const existingArr = Array.isArray(existingLabel) ? existingLabel : existingLabel != null ? Object.keys(existingLabel) : [];
-  filters.label = [...existingArr, label];
+  let raw: Record<string, unknown> = {};
+  try { raw = JSON.parse(params.get('filters') ?? '{}'); } catch {}
+  const filters: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(raw)) filters[k] = toArrayFilter(v);
+  filters.label = [...(filters.label ?? []), label];
   params.set('filters', JSON.stringify(filters));
   return `${base}?${params.toString()}`;
 }
@@ -72,11 +99,9 @@ function rewriteFirstLine(headerPart: string, newUrl: string): string {
 }
 
 // ── Policy ────────────────────────────────────────────────────────────────────
-
-function checkPolicy(containerName: string): boolean {
-  const grant = getGrant(containerName);
-  return Boolean(grant && grant.until > Math.floor(Date.now() / 1000));
-}
+// De vroegere alles-of-niets grant-check is vervangen door fijnmazige
+// per-actie-autorisatie: classifyRequest bepaalt de actie, authorizeAction
+// (docker-actions.ts) combineert de toggle-stand met de grant-timer.
 
 // Reject HostConfig shapes that would let a spawned container escape the
 // devcontainer sandbox (read host fs, see host PIDs, talk to host dockerd).
@@ -292,7 +317,26 @@ export async function createContainerProxy(containerName: string, socketDir: str
         }
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         // Force spawned containers onto the parent devcontainer's network only.
-        body.HostConfig = { ...(body.HostConfig ?? {}), NetworkMode: `dc-net-${containerName}` };
+        const netName = `dc-net-${containerName}`;
+        body.HostConfig = { ...(body.HostConfig ?? {}), NetworkMode: netName };
+        // Compose zet in de create-body óók een NetworkingConfig.EndpointsConfig
+        // die naar zijn eigen netwerk (bv. `socialekaart_default`) wijst. Als we
+        // alleen NetworkMode omzetten wint die EndpointsConfig en landt de
+        // container tóch op het compose-net — onbereikbaar voor de devcontainer en
+        // zonder egress via de huddle-proxy. Klap daarom álle endpoints samen tot
+        // één entry op dc-net-<naam>, met behoud van de Aliases (service-namen)
+        // zodat DNS tussen compose-services blijft werken.
+        const endpoints = body.NetworkingConfig?.EndpointsConfig;
+        if (endpoints && typeof endpoints === 'object') {
+          const aliases = new Set<string>();
+          for (const ep of Object.values(endpoints)) {
+            const a = (ep as any)?.Aliases;
+            if (Array.isArray(a)) for (const x of a) if (typeof x === 'string') aliases.add(x);
+          }
+          body.NetworkingConfig = {
+            EndpointsConfig: { [netName]: aliases.size ? { Aliases: [...aliases] } : {} },
+          };
+        }
         // Inject Huddle proxy env vars so child containers can reach the internet
         // through the proxy without requiring manual configuration.
         const proxyEnv = [
@@ -351,8 +395,15 @@ export async function createContainerProxy(containerName: string, socketDir: str
         }
         const denial = validateVolumeCreate(body);
         if (denial) { deny403(client, denial); return; }
-        // Body ongewijzigd doorsturen (alleen validatie, geen injectie).
-        openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
+        // Label-injectie maakt volumes herleidbaar naar hun devcontainer, zodat
+        // remove/prune ownership kunnen afdwingen.
+        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+        const newBodyBuf = Buffer.from(JSON.stringify(body));
+        const newHeader = savedHeaderPart.replace(
+          /content-length:\s*\d+/i,
+          `Content-Length: ${newBodyBuf.length}`
+        ) + '\r\n\r\n';
+        openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
       }
 
       client.on('data', (chunk: Buffer) => {
@@ -379,29 +430,61 @@ export async function createContainerProxy(containerName: string, socketDir: str
         const rawUrl = parts[1] ?? '';
         const p = rawUrl.replace(/^\/v[\d.]+/, '').split('?')[0];
 
-        if (!checkPolicy(containerName)) {
-          deny403(client, 'authorization denied by policy');
+        const action = classifyRequest(method, p);
+        if (!action) {
+          console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
+          deny403(client, 'path not allowed');
+          return;
+        }
+        const policyDenial = authorizeAction(containerName, action);
+        if (policyDenial) {
+          deny403(client, policyDenial);
           return;
         }
 
         // ── DELETE ───────────────────────────────────────────────────────────
         if (method === 'DELETE') {
           const ctId = p.match(/^\/containers\/([^/]+)$/)?.[1];
-          const imgId = p.match(/^\/images\/([^/]+)$/)?.[1];
+          // Image-namen kunnen slashes bevatten (registry/repo:tag).
+          const imgId = p.match(/^\/images\/(.+)$/)?.[1];
           const targetId = ctId ?? imgId;
           const type = ctId ? 'container' : 'image';
 
-          // Network delete
+          // Network delete — alleen eigen (huddle.parent-gelabelde) netwerken.
+          // Ongelabelde netwerken van vóór deze wijziging blijven verwijderbaar,
+          // behalve de door huddle beheerde dc-net-* netwerken.
           const netId = p.match(/^\/networks\/([^/]+)$/)?.[1];
           if (netId) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            client.pause();
+            lookupParentLabel('network', netId).then(({ parent, name }) => {
+              if (parent === containerName) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              } else if (parent) {
+                deny403(client, 'cannot delete network owned by another devcontainer');
+              } else if (name.startsWith('dc-net-') || netId.startsWith('dc-net-')) {
+                deny403(client, 'cannot delete huddle-managed network');
+              } else {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              }
+              client.resume();
+            });
             return;
           }
 
-          // Volume delete — needed for docker compose down -v
+          // Volume delete — needed for docker compose down -v. Alleen eigen of
+          // ongelabelde (pre-bestaande) volumes; volumes van een andere
+          // devcontainer zijn onaantastbaar.
           const volId = p.match(/^\/volumes\/([^/]+)$/)?.[1];
           if (volId) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            client.pause();
+            lookupParentLabel('volume', volId).then(({ parent }) => {
+              if (parent && parent !== containerName) {
+                deny403(client, 'cannot delete volume owned by another devcontainer');
+              } else {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              }
+              client.resume();
+            });
             return;
           }
 
@@ -423,7 +506,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         if (method === 'GET' || method === 'HEAD') {
           if (p === '/version' || p === '/info' || p === '/_ping' ||
               /^\/exec\/[^/]+\/json$/.test(p) ||
-              /^\/images\/[^/]+\/json$/.test(p)) {
+              /^\/images\/.+\/json$/.test(p)) {
             openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             return;
           }
@@ -461,7 +544,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
           // Inspect / logs / top / archive (docker cp stat+download) — only on
           // containers labeled by this devcontainer
-          const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive)$/)?.[1];
+          const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
           if (inspectCt) {
             if (devcontainerIds.has(inspectCt)) {
               deny403(client, 'inspect of devcontainer not permitted');
@@ -517,8 +600,32 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
+          // Image tag — lokale metadata-operatie, toegestaan op elk image.
+          if (/^\/images\/.+\/tag$/.test(p)) {
+            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            return;
+          }
+
+          // Image push — alleen eigen (huddle.parent-gelabelde, dus zelf
+          // gebouwde) images. Push loopt via de docker-daemon van de host en
+          // passeert de huddle-egress-firewall dus niet; de actie staat
+          // bovendien standaard uit in het portal.
+          const pushImg = p.match(/^\/images\/(.+)\/push$/)?.[1];
+          if (pushImg) {
+            client.pause();
+            hasOwnLabel('image', pushImg, containerName).then(ok => {
+              if (ok) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+              } else {
+                deny403(client, 'cannot push image not built by this devcontainer');
+              }
+              client.resume();
+            });
+            return;
+          }
+
           // Container management: only for own spawned containers, never devcontainers
-          const ctId = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait)$/)?.[1];
+          const ctId = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait|update)$/)?.[1];
           if (ctId) {
             if (devcontainerIds.has(ctId)) {
               deny403(client, 'operation on devcontainer not permitted');
@@ -547,6 +654,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
             phase = 'body';
             bodyBuf = remainder;
             if (bodyBuf.length >= bodyContentLength) bodyHandler();
+            return;
+          }
+
+          // Volume prune — beperkt tot eigen volumes door een verplicht
+          // labelfilter te injecteren; volumes van andere containers (of van
+          // vóór de label-injectie) blijven buiten schot.
+          if (p === '/volumes/prune') {
+            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
             return;
           }
 
