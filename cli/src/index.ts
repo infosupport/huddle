@@ -159,9 +159,8 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'init') {
-    // Experiment #1: extra logging om de experiment-pipeline end-to-end te
-    // testen. Toont de exacte CLI-build zodat direct zichtbaar is dat de
-    // experimentele versie draait.
+    // Toont de exacte CLI-build, zodat bij experimenten direct zichtbaar is
+    // welke versie er draait.
     console.log(dim(`CLI-versie: ${cliVersion()} (Node ${process.version}, ${process.platform}/${process.arch})`));
 
     const initOpts = { runtime: flagString(flags, 'runtime') };
