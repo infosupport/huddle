@@ -41,8 +41,10 @@ De suite ruimt de container + testregels achteraf op (`afterAll`).
 |------|---------|
 | firewall: niet-toegestaan domein → 403 | proxy blokkeert niet-allowlisted domeinen |
 | firewall: na approval → 200 | een allow-regel opent het domein meteen |
-| docker zonder grant → `denied by policy` | socket-gate weigert zonder actieve grant |
-| docker met grant → exit 0 | grant opent de socket (gefilterd op eigen children) |
+| `docker ps` zonder grant → exit 0 | read-only ('always') acties werken zonder timer |
+| mutatie zonder grant → `access timer` | tijdelijke acties vereisen een actieve timer |
+| toggle `container.list` uit → `disabled` | een uit-geschakelde actie-toggle blokkeert, ook read-only |
+| mutatie met grant → exit 0 | timer opent mutaties; eigen-volume delete bewijst labelinjectie |
 | `-v /:/host` → `not permitted` (T11) | HostConfig-escape (host-path bind) geweigerd |
 | `--privileged` → `not permitted` (T11) | privileged spawn geweigerd |
 | `docker inspect huddle` → geweigerd (T3) | inspect van vreemde container geweigerd |

@@ -93,6 +93,15 @@ export async function revokeGrant(container: string): Promise<void> {
   try { await api('DELETE', `/api/authz/grants/${encodeURIComponent(container)}`); } catch { /* none */ }
 }
 
+// Zet een fijnmazige actie-toggle (bv. 'container.list') aan of uit.
+export async function setActionPolicy(container: string, action: string, enabled: boolean): Promise<void> {
+  await api(
+    'PUT',
+    `/api/authz/docker-actions/${encodeURIComponent(container)}/${encodeURIComponent(action)}`,
+    { enabled },
+  );
+}
+
 // ── Container-lifecycle via de huddle API ────────────────────────────────────
 export async function spawnDevcontainer(): Promise<void> {
   await api('POST', '/api/docker/start', {
