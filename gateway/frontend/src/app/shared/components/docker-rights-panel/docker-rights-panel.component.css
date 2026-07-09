@@ -1,4 +1,9 @@
-:host { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+/* container-type maakt het panel z'n eigen query-container: de breakpoints
+   hieronder reageren op de beschikbare paneelbreedte, niet op de viewport.
+   Op de container-detailpagina is de content smaller dan het scherm; een
+   viewport-media-query grijpt daar nooit in en de derde hero-kolom (de
+   timer-knoppen) werd door overflow:hidden onzichtbaar afgeknipt. */
+:host { display: flex; flex-direction: column; gap: 20px; min-width: 0; container-type: inline-size; }
 
 /* ── Foutmelding ─────────────────────────────────────────────────────────── */
 .da-error {
@@ -206,14 +211,14 @@
   stroke-linecap: round; stroke-linejoin: round;
 }
 
-/* ── Responsief ──────────────────────────────────────────────────────────── */
-@media (max-width: 1250px) {
+/* ── Responsief (op paneelbreedte, zie :host) ────────────────────────────── */
+@container (max-width: 1180px) {
   .da-cards { grid-template-columns: repeat(2, 1fr); }
   .da-hero { grid-template-columns: 1fr; }
   .da-hero .da-intro, .da-timer { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 20px; }
   .da-system-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 700px) {
+@container (max-width: 640px) {
   .da-cards { grid-template-columns: 1fr; }
   .da-digits { transform: scale(.82); transform-origin: left; }
   .da-extend__buttons { flex-wrap: wrap; }
