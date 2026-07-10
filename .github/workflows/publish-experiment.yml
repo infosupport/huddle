@@ -140,38 +140,6 @@ jobs:
             ghcr.io/infosupport/base-devimage-rider:${{ needs.meta.outputs.tag }}
             ghcr.io/infosupport/base-devimage-rider:${{ needs.meta.outputs.sha-tag }}
 
-  cli:
-    needs: meta
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
-
-      - name: Set experiment version
-        # De versie bevat de experiment-tag zodat de CLI zelf kan bepalen bij
-        # welk experiment hij hoort (zie cliExperiment() in de CLI). Run-nummer
-        # en -attempt maken elke publish uniek.
-        run: |
-          cd cli
-          VERSION="0.0.0-${{ needs.meta.outputs.tag }}.${{ github.run_number }}.${{ github.run_attempt }}"
-          echo "Experiment-versie: $VERSION"
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-      - name: Install & build
-        run: cd cli && npm install && npm run build
-
-      - name: Publish
-        # dist-tag experiment-<nr> zodat gebruikers installeren met
-        # @infosupport/huddle-cli@experiment-<nr>; `latest` blijft onaangeroerd.
-        run: cd cli && npm publish --access public --tag ${{ needs.meta.outputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  # De npm-publish van de experimentele CLI leeft in publish-npm.yml: npm
+  # trusted publishing staat maar één trusted publisher (workflow-bestand)
+  # per package toe.

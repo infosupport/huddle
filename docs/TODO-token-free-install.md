@@ -5,10 +5,12 @@
 token or registry login**.
 
 **Status:** the README already promises a token-free install. The code side is
-done: `cli/package.json` and both publish workflows point at npmjs.com (tasks 2c
-and 2d below). What remains is manual: make the ghcr images public (task 1),
-claim the npm scope (2a), and configure the `NPM_TOKEN` secret (2b). Until 2a/2b
-are done, every CLI publish job (including experiment builds) will fail.
+done: `cli/package.json` points at npmjs.com and all CLI publishing lives in
+`.github/workflows/publish-npm.yml` using **npm trusted publishing** (OIDC — no
+npm token secret at all; tasks 2c and 2d below). What remains is manual: make
+the ghcr images public (task 1), claim the npm scope (2a), do the first manual
+publish, and configure the trusted publisher on npmjs.com (2b). Until 2a/2b are
+done, every CLI publish job (including experiment builds) will fail.
 
 ---
 
@@ -51,11 +53,27 @@ No code change; this is a GitHub setting.
 - Scoped packages are private by default on npm, so publishing must use
   `--access public` (see 2c).
 
-### 2b. Create an npm publish token and add it to GitHub Actions
-1. On npmjs.com: **Access Tokens → Generate New Token → Automation** (CI-safe,
-   bypasses 2FA).
-2. In the GitHub repo: **Settings → Secrets and variables → Actions → New
-   repository secret**, name it **`NPM_TOKEN`**, paste the token.
+### 2b. First manual publish + configure trusted publishing (OIDC, no token)
+CI authenticates via **npm trusted publishing**: npmjs.com verifies a
+short-lived OIDC credential from the configured GitHub Actions workflow, so no
+npm token is stored anywhere.
+
+1. **First publish must be manual** — trusted publishing can only be configured
+   on a package that already exists on the registry. From a logged-in machine:
+   `cd cli && npm run build && npm publish --access public`.
+2. On npmjs.com, open the package → **Settings → Trusted Publisher** and add:
+   - Organization or user: `infosupport`
+   - Repository: `huddle`
+   - Workflow filename: `publish-npm.yml`
+   - Environment: leave empty (we don't use one; a mismatch here fails with a
+     misleading 404)
+
+Gotchas:
+- npm allows **one trusted publisher per package** — which is why all CLI
+  publishing (stable + experiment) lives in the single `publish-npm.yml`.
+- Trusted publishing requires **npm ≥ 11.5.1**; the workflow uses Node 24 for
+  that. npm 10.x (Node 20/22) fails with a 404 that gives no hint.
+- `--provenance` requires the GitHub repo to be **public** first.
 
 ### 2c. Point the package at npmjs
 Edit `cli/package.json` — replace the GitHub Packages registry with npmjs and
@@ -78,22 +96,24 @@ force public access:
 harmless. Also update the `name` field and every `@infosupport/huddle-cli`
 reference in the READMEs.)
 
-### 2d. Update the publish workflow
-In `.github/workflows/publish-image.yml`, the npm publish job currently uses
-`GITHUB_TOKEN` against GitHub Packages. Change it to npmjs:
+### 2d. Update the publish workflow — done, see `publish-npm.yml`
+All CLI publishing (stable + experiment) is consolidated in
+`.github/workflows/publish-npm.yml`, because npm allows only one trusted
+publisher per package. The jobs use:
 
 ```yaml
+    permissions:
+      contents: read
+      id-token: write          # OIDC for trusted publishing
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org   # was: https://npm.pkg.github.com
-
-      # ... version calc + build unchanged ...
+          node-version: 24     # npm >= 11.5.1 required
+          registry-url: https://registry.npmjs.org
 
       - name: Publish
-        run: cd cli && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}   # was: secrets.GITHUB_TOKEN
+        run: cd cli && npm publish --provenance --access public
+        # no NODE_AUTH_TOKEN — auth is the OIDC exchange
 ```
 
 The GitVersion-based version calculation stays as-is — it still sets
@@ -112,9 +132,11 @@ huddle --version                             # matches the published version
 
 ## Definition of done
 - [ ] All Huddle ghcr images set to **Public**; anonymous `docker pull` works.
-- [x] `publishConfig` and publish workflows point at **npmjs.com** (2c + 2d).
-- [ ] `@infosupport/huddle-cli` published to **npmjs.com**.
-- [ ] `NPM_TOKEN` secret configured; publish workflow green.
+- [x] `publishConfig` and publish workflows point at **npmjs.com**, publishing
+      via trusted publishing / OIDC from `publish-npm.yml` (2c + 2d).
+- [ ] First manual publish of `@infosupport/huddle-cli` to **npmjs.com** done.
+- [ ] Trusted publisher configured on npmjs.com (repo `infosupport/huddle`,
+      workflow `publish-npm.yml`); publish workflow green.
 - [ ] Clean-machine `npm install -g @infosupport/huddle-cli` works with no token.
 - [ ] README / cli/README install instructions verified end-to-end.
 

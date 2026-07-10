@@ -1,0 +1,117 @@
+name: Publish npm
+
+# Eén workflow voor álle npm-publishes van de CLI (stable én experiment).
+# npm trusted publishing staat maar één trusted publisher (= één workflow-
+# bestand) per package toe; daarom leven beide publish-jobs hier en niet in
+# publish-image.yml / publish-experiment.yml. Op npmjs.com configureer je als
+# trusted publisher: org infosupport, repo huddle, workflow publish-npm.yml.
+on:
+  push:
+    branches: [main, release/*, experiment/**]
+
+jobs:
+  stable:
+    if: ${{ !startsWith(github.ref_name, 'experiment/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted publishing: npm verifieert een kortlevend OIDC-token van deze
+      # workflow i.p.v. een opgeslagen npm-token (zie npmjs.com package settings).
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # GitVersion heeft de volledige historie én tags (het anker) nodig.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+        with:
+          versionSpec: '5.x'
+
+      - name: Determine version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 levert npm >= 11.5.1, vereist voor trusted publishing
+          # (npm 10.x faalt met een misleidende 404).
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Set package version
+        # patch = tag-patch + aantal commits sinds de tag -> uniek en oplopend
+        # per commit, onafhankelijk van de GitVersion-modus.
+        run: |
+          cd cli
+          PATCH=$(( ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }} ))
+          VERSION="${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${PATCH}"
+          echo "Berekende versie: $VERSION (patch ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }} commits)"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install & build
+        run: cd cli && npm install && npm run build
+
+      - name: Publish
+        # Provenance vereist een publieke source-repo; auth loopt via OIDC
+        # (trusted publisher), er is geen token-secret meer.
+        run: cd cli && npm publish --provenance --access public
+
+  experiment:
+    if: ${{ startsWith(github.ref_name, 'experiment/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted publishing: npm verifieert een kortlevend OIDC-token van deze
+      # workflow i.p.v. een opgeslagen npm-token (zie npmjs.com package settings).
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Issue-nummer uit branchnaam lezen
+        id: meta
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          ISSUE=$(echo "$BRANCH" | sed -nE 's#^experiment/([0-9]+).*#\1#p')
+          if [ -z "$ISSUE" ]; then
+            echo "::error::Branchnaam '$BRANCH' bevat geen issue-nummer. Verwacht: experiment/<issuenummer>-<omschrijving>"
+            exit 1
+          fi
+          # Leading zeros strippen zodat de tag overeenkomt met wat de CLI
+          # uit het issue-nummer afleidt (experiment/007-... -> experiment-7).
+          ISSUE=$((10#$ISSUE))
+          echo "tag=experiment-$ISSUE" >> "$GITHUB_OUTPUT"
+          echo "Experiment-tag: experiment-$ISSUE"
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 levert npm >= 11.5.1, vereist voor trusted publishing
+          # (npm 10.x faalt met een misleidende 404).
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Set experiment version
+        # De versie bevat de experiment-tag zodat de CLI zelf kan bepalen bij
+        # welk experiment hij hoort (zie cliExperiment() in de CLI). Run-nummer
+        # en -attempt maken elke publish uniek.
+        run: |
+          cd cli
+          VERSION="0.0.0-${{ steps.meta.outputs.tag }}.${{ github.run_number }}.${{ github.run_attempt }}"
+          echo "Experiment-versie: $VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install & build
+        run: cd cli && npm install && npm run build
+
+      - name: Publish
+        # dist-tag experiment-<nr> zodat gebruikers installeren met
+        # @infosupport/huddle-cli@experiment-<nr>; `latest` blijft onaangeroerd.
+        run: cd cli && npm publish --provenance --access public --tag ${{ steps.meta.outputs.tag }}
