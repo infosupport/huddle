@@ -4,8 +4,11 @@
 (`npm install -g @infosupport/huddle-cli` + `huddle init`) **without any GitHub
 token or registry login**.
 
-**Status:** the README already promises a token-free install. Two things still
-need to be done for that promise to actually hold.
+**Status:** the README already promises a token-free install. The code side is
+done: `cli/package.json` and both publish workflows point at npmjs.com (tasks 2c
+and 2d below). What remains is manual: make the ghcr images public (task 1),
+claim the npm scope (2a), and configure the `NPM_TOKEN` secret (2b). Until 2a/2b
+are done, every CLI publish job (including experiment builds) will fail.
 
 ---
 
@@ -109,6 +112,7 @@ huddle --version                             # matches the published version
 
 ## Definition of done
 - [ ] All Huddle ghcr images set to **Public**; anonymous `docker pull` works.
+- [x] `publishConfig` and publish workflows point at **npmjs.com** (2c + 2d).
 - [ ] `@infosupport/huddle-cli` published to **npmjs.com**.
 - [ ] `NPM_TOKEN` secret configured; publish workflow green.
 - [ ] Clean-machine `npm install -g @infosupport/huddle-cli` works with no token.
