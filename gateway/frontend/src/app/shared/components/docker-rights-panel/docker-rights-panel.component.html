@@ -33,23 +33,23 @@
 @if (error()) {
   <div class="da-error" role="alert">
     <span>{{ error() }}</span>
-    <button class="btn btn-sm btn-ghost" type="button" (click)="dismissError()">Sluiten</button>
+    <button class="btn btn-sm btn-ghost" type="button" (click)="dismissError()">Dismiss</button>
   </div>
 }
 
-<!-- ── TIJDELIJKE ACTIES ─────────────────────────────────────────────────── -->
+<!-- ── TEMPORARY ACTIONS ─────────────────────────────────────────────────── -->
 <section class="da-section temporary">
   <div class="da-hero">
     <div class="da-intro">
       <div class="da-intro__badge"><svg class="da-ic"><use href="#da-hourglass"/></svg></div>
       <div>
-        <h2>TIJDELIJKE<br>ACTIES</h2>
-        <p>Deze acties zijn alleen toegestaan zolang de timer actief is.</p>
+        <h2>TEMPORARY<br>ACTIONS</h2>
+        <p>These actions are only allowed while the timer is active.</p>
       </div>
     </div>
     <div class="da-timer" [class.expired]="timerExpired()">
       <div>
-        <p class="da-timer__label">{{ timerExpired() ? 'TIMER VERLOPEN' : 'TIMER ACTIEF' }}</p>
+        <p class="da-timer__label">{{ timerExpired() ? 'TIMER EXPIRED' : 'TIMER ACTIVE' }}</p>
         <div class="da-digits">
           <div class="da-box">{{ timerHours() }}</div>
           <div class="da-colon">:</div>
@@ -57,23 +57,23 @@
           <div class="da-colon">:</div>
           <div class="da-box">{{ timerSecondsDisplay() }}</div>
         </div>
-        <div class="da-unit-row"><span>UUR</span><span></span><span>MIN</span><span></span><span>SEC</span></div>
+        <div class="da-unit-row"><span>HRS</span><span></span><span>MIN</span><span></span><span>SEC</span></div>
       </div>
       <div class="da-ring" [style.background]="ringStyle()"></div>
     </div>
     <div class="da-extend">
-      <h3>TIJD INSTELLEN</h3>
+      <h3>SET TIME</h3>
       <div class="da-extend__buttons">
         <button class="btn" type="button" (click)="setTimer(5)">5 min</button>
         <button class="btn" type="button" (click)="setTimer(10)">10 min</button>
         <button class="btn" type="button" (click)="setTimer(30)">30 min</button>
       </div>
-      <button class="btn btn-delete da-stop" type="button" [disabled]="timerExpired()" (click)="stopTimer()">Tijd stoppen</button>
+      <button class="btn btn-delete da-stop" type="button" [disabled]="timerExpired()" (click)="stopTimer()">Stop timer</button>
     </div>
   </div>
 
   @if (policiesLoading()) {
-    <p class="empty-note">Rechten laden…</p>
+    <p class="empty-note">Loading permissions…</p>
   }
   <div class="da-cards">
     @for (group of temporaryGroups(); track group.group) {
@@ -90,7 +90,7 @@
             <svg class="da-ic"><use [attr.href]="'#da-' + actionIcon(a.action)"/></svg>
             <span>{{ a.label }}</span>
             <button class="da-toggle" type="button" [class.on]="isEnabled(a)"
-                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' aan' : ' uit')"
+                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' on' : ' off')"
                     (click)="toggleAction(a)"></button>
           </div>
         }
@@ -100,21 +100,21 @@
 
   <div class="da-notice">
     <svg class="da-ic"><use href="#da-info"/></svg>
-    <span>De toggles zijn configuratie en blijven altijd bedienbaar. Zolang de timer verlopen is, zijn tijdelijke acties niet effectief en worden de rijen gedimd weergegeven — je togglestand blijft bewaard en geldt weer zodra je de timer opnieuw start.</span>
+    <span>The toggles are configuration and always stay operable. While the timer is expired, temporary actions are not effective and the rows are shown dimmed — your toggle state is preserved and applies again as soon as you restart the timer.</span>
   </div>
 </section>
 
-<!-- ── ALTIJD TOEGESTANE ACTIES ──────────────────────────────────────────── -->
+<!-- ── ALWAYS-ALLOWED ACTIONS ────────────────────────────────────────────── -->
 <section class="da-section always">
   <div class="da-section-head">
     <div class="da-intro">
       <div class="da-intro__badge"><svg class="da-ic"><use href="#da-shield"/></svg></div>
       <div>
-        <h2>ALTIJD TOEGESTANE ACTIES</h2>
-        <p>Deze acties werken onafhankelijk van de timer en zijn per actie in of uit te schakelen.</p>
+        <h2>ALWAYS-ALLOWED ACTIONS</h2>
+        <p>These actions work independently of the timer and can be enabled or disabled per action.</p>
       </div>
     </div>
-    <div class="da-pill"><svg class="da-ic"><use href="#da-check"/></svg>Altijd actief</div>
+    <div class="da-pill"><svg class="da-ic"><use href="#da-check"/></svg>Always active</div>
   </div>
 
   <div class="da-cards">
@@ -132,7 +132,7 @@
             <svg class="da-ic"><use [attr.href]="'#da-' + actionIcon(a.action)"/></svg>
             <span>{{ a.label }}</span>
             <button class="da-toggle" type="button" [class.on]="isEnabled(a)"
-                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' aan' : ' uit')"
+                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' on' : ' off')"
                     (click)="toggleAction(a)"></button>
           </div>
         }
@@ -155,7 +155,7 @@
             <svg class="da-ic"><use [attr.href]="'#da-' + actionIcon(a.action)"/></svg>
             <span>{{ a.label }}</span>
             <button class="da-toggle" type="button" [class.on]="isEnabled(a)"
-                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' aan' : ' uit')"
+                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' on' : ' off')"
                     (click)="toggleAction(a)"></button>
           </div>
         }
@@ -165,51 +165,51 @@
 
   <div class="da-notice">
     <svg class="da-ic"><use href="#da-shield"/></svg>
-    <span>Deze acties zijn veilig om altijd toe te staan en hebben geen invloed op de omgeving.</span>
+    <span>These actions are safe to always allow and do not affect the environment.</span>
   </div>
 </section>
 
-<!-- ── Uitleg: hoe werkt de Docker-proxy? ────────────────────────────────── -->
+<!-- ── Explainer: how does the Docker proxy work? ────────────────────────── -->
 <details class="da-explain">
   <summary>
     <svg class="da-ic"><use href="#da-info"/></svg>
-    <span>Hoe werkt de Docker-proxy?</span>
+    <span>How does the Docker proxy work?</span>
     <svg class="da-ic da-explain__chevron"><use href="#da-chevron"/></svg>
   </summary>
   <div class="da-explain__body">
     <p>
-      Elke devcontainer krijgt een eigen Unix-socket, gemount op <code>/var/run/huddle</code>;
-      <code>DOCKER_HOST</code> wijst daarnaartoe. Docker-commando's gaan dus nooit rechtstreeks naar de
-      Docker-daemon van de host, maar lopen altijd door de Huddle-proxy.
+      Every devcontainer gets its own Unix socket, mounted at <code>/var/run/huddle</code>;
+      <code>DOCKER_HOST</code> points there. Docker commands therefore never go directly to the
+      host's Docker daemon, but always pass through the Huddle proxy.
     </p>
     <p>
-      De proxy classificeert elk verzoek naar precies één actie (bijvoorbeeld <code>container.create</code>
-      of <code>image.pull</code>) en toetst die aan de toggles op deze pagina; tijdelijke acties vereisen
-      daarnaast een actieve timer. Onbekende API-paden worden altijd geweigerd.
+      The proxy classifies each request into exactly one action (for example <code>container.create</code>
+      or <code>image.pull</code>) and checks it against the toggles on this page; temporary actions
+      additionally require an active timer. Unknown API paths are always rejected.
     </p>
-    <p class="da-explain__subhead">Wat Huddle onderweg injecteert of afdwingt:</p>
+    <p class="da-explain__subhead">What Huddle injects or enforces along the way:</p>
     <ul>
       <li>
-        Een <code>huddle.parent</code>-label op alles wat de container aanmaakt (containers, images via build,
-        volumes en netwerken). Daarmee wordt eigendom afgedwongen: lijsten worden erop gefilterd en
-        <code>exec</code>, <code>logs</code>, <code>inspect</code>, <code>delete</code> en <code>push</code>
-        werken alleen op eigen resources — nooit op devcontainers zelf.
+        A <code>huddle.parent</code> label on everything the container creates (containers, images via build,
+        volumes, and networks). This enforces ownership: listings are filtered on it and
+        <code>exec</code>, <code>logs</code>, <code>inspect</code>, <code>delete</code>, and <code>push</code>
+        only work on the container's own resources — never on devcontainers themselves.
       </li>
       <li>
-        Nieuw gestarte containers worden geforceerd op het eigen <code>dc-net</code>-netwerk gezet en krijgen
-        automatisch de Huddle-proxy-omgevingsvariabelen en het CA-certificaat mee, zodat ook hún
-        internetverkeer door de egress-firewall loopt.
+        Newly started containers are forced onto the container's own <code>dc-net</code> network and
+        automatically receive the Huddle proxy environment variables and the CA certificate, so their
+        internet traffic also passes through the egress firewall.
       </li>
       <li>
-        Gevaarlijke instellingen worden geweigerd: privileged containers, bind-mounts vanaf de host,
-        host-namespaces (PID/IPC/UTS/userns/cgroup), extra capabilities en uitgeschakelde seccomp of AppArmor.
-        Host-poorten binden kan alleen na goedkeuring in de poortenlijst.
+        Dangerous settings are rejected: privileged containers, bind mounts from the host,
+        host namespaces (PID/IPC/UTS/userns/cgroup), extra capabilities, and disabled seccomp or AppArmor.
+        Binding host ports is only possible after approval in the port list.
       </li>
       <li>
-        <code>docker volume prune</code> wordt beperkt tot eigen volumes; <code>docker push</code> werkt alleen
-        voor zelf gebouwde images en staat standaard uit, omdat pushen buiten de egress-firewall om gaat.
+        <code>docker volume prune</code> is limited to the container's own volumes; <code>docker push</code> only
+        works for self-built images and is off by default, because pushing bypasses the egress firewall.
       </li>
     </ul>
-    <p>Toggle-wijzigingen en timer-acties worden vastgelegd in het netwerklog (audit).</p>
+    <p>Toggle changes and timer actions are recorded in the network log (audit).</p>
   </div>
 </details>

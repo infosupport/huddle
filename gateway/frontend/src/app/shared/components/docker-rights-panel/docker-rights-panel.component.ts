@@ -27,23 +27,23 @@ const GROUP_ORDER: DockerActionGroup[] = ['containers', 'images', 'volumes', 'ne
 const GROUP_META: Record<DockerActionGroup, GroupMeta> = {
   containers: {
     title: 'Containers', colorClass: 'ic-green', iconId: 'container',
-    tempSubtitle: 'Beheer en wijzig containers.', alwaysSubtitle: 'Bekijk en monitor containers.',
+    tempSubtitle: 'Manage and modify containers.', alwaysSubtitle: 'View and monitor containers.',
   },
   images: {
     title: 'Images', colorClass: 'ic-purple', iconId: 'cube',
-    tempSubtitle: 'Bouw, pull en beheer images.', alwaysSubtitle: 'Bekijk en inspecteer images.',
+    tempSubtitle: 'Build, pull, and manage images.', alwaysSubtitle: 'View and inspect images.',
   },
   volumes: {
     title: 'Volumes', colorClass: 'ic-blue', iconId: 'db',
-    tempSubtitle: 'Beheer persistente opslag.', alwaysSubtitle: 'Bekijk en inspecteer volumes.',
+    tempSubtitle: 'Manage persistent storage.', alwaysSubtitle: 'View and inspect volumes.',
   },
   networks: {
     title: 'Networks', colorClass: 'ic-blue', iconId: 'network',
-    tempSubtitle: 'Beheer netwerkverbindingen.', alwaysSubtitle: 'Bekijk en inspecteer netwerken.',
+    tempSubtitle: 'Manage network connections.', alwaysSubtitle: 'View and inspect networks.',
   },
   system: {
     title: 'System', colorClass: 'ic-gray', iconId: 'gear',
-    tempSubtitle: 'Systeeminformatie en status.', alwaysSubtitle: 'Systeeminformatie en status.',
+    tempSubtitle: 'System information and status.', alwaysSubtitle: 'System information and status.',
   },
 };
 
@@ -85,9 +85,9 @@ const ACTION_ICONS: Record<string, string> = {
 const DURATION_STORE_PREFIX = 'huddle.dockerActions.duration.';
 
 /**
- * Herbruikbaar paneel met de fijnmazige Docker-rechten voor één devcontainer:
- * timer-hero + tijdelijke acties + altijd toegestane acties + proxy-uitleg.
- * Host-poorten horen hier bewust niet bij.
+ * Reusable panel with the fine-grained Docker permissions for one devcontainer:
+ * timer hero + temporary actions + always-allowed actions + proxy explainer.
+ * Host ports deliberately do not belong here.
  */
 @Component({
   selector: 'app-docker-rights-panel',
@@ -101,7 +101,7 @@ export class DockerRightsPanelComponent implements OnInit {
   private destroyRef = inject(DestroyRef);
   private platformId = inject(PLATFORM_ID);
 
-  /** Naam van de devcontainer waarvoor rechten en timer gelden. */
+  /** Name of the devcontainer the permissions and timer apply to. */
   container = input.required<string>();
 
   catalog = signal<DockerActionDef[]>([]);
@@ -109,9 +109,9 @@ export class DockerRightsPanelComponent implements OnInit {
   policiesLoading = signal(false);
   error = signal<string | null>(null);
 
-  /** Server-grant (unix-seconden) voor de container, of null. */
+  /** Server grant (unix seconds) for the container, or null. */
   grantUntil = signal<number | null>(null);
-  /** Laatst ingestelde duur (seconden) — basis voor het ring-percentage. */
+  /** Last configured duration (seconds) — basis for the ring percentage. */
   durationSeconds = signal(0);
   private now = signal(Math.floor(Date.now() / 1000));
 
@@ -141,7 +141,7 @@ export class DockerRightsPanelComponent implements OnInit {
       const tick = setInterval(() => this.now.set(Math.floor(Date.now() / 1000)), 1000);
       this.destroyRef.onDestroy(() => clearInterval(tick));
     }
-    // Bij (her)zetten van de container-input: policies + grant opnieuw laden.
+    // When the container input is (re)set: reload policies + grant.
     effect(() => {
       const container = this.container();
       this.grantUntil.set(null);
@@ -154,12 +154,12 @@ export class DockerRightsPanelComponent implements OnInit {
   ngOnInit(): void {
     this.api.getDockerActionCatalog().subscribe({
       next: (res) => this.catalog.set(res.actions),
-      error: (e) => this.error.set(`Kon de actie-catalogus niet laden: ${e.message}`),
+      error: (e) => this.error.set(`Could not load the action catalog: ${e.message}`),
     });
-    // Houd de timer in sync met server-pushes (WS/poll). Bewust in ngOnInit en
-    // niet in de constructor: grants$ is een BehaviorSubject die synchroon bij
-    // subscribe emit, en de required input `container` heeft pas ná de eerste
-    // binding een waarde (lezen in de constructor gooit NG0950).
+    // Keep the timer in sync with server pushes (WS/poll). Deliberately in
+    // ngOnInit and not in the constructor: grants$ is a BehaviorSubject that
+    // emits synchronously on subscribe, and the required input `container` only
+    // has a value after the first binding (reading it in the constructor throws NG0950).
     this.state.grants$
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(grants => {
@@ -182,7 +182,7 @@ export class DockerRightsPanelComponent implements OnInit {
       },
       error: (e) => {
         this.policiesLoading.set(false);
-        this.error.set(`Kon rechten voor ${container} niet laden: ${e.message}`);
+        this.error.set(`Could not load permissions for ${container}: ${e.message}`);
       },
     });
   }
@@ -196,12 +196,12 @@ export class DockerRightsPanelComponent implements OnInit {
     if (!container) return;
     const current = this.isEnabled(def);
     const next = !current;
-    // Optimistische update; bij fout terugdraaien.
+    // Optimistic update; roll back on error.
     this.policies.update(p => ({ ...p, [def.action]: next }));
     this.api.setDockerActionPolicy(container, def.action, next).subscribe({
       error: (e) => {
         this.policies.update(p => ({ ...p, [def.action]: current }));
-        this.error.set(`Kon '${def.label}' (${def.action}) niet opslaan: ${e.message}`);
+        this.error.set(`Could not save '${def.label}' (${def.action}): ${e.message}`);
       },
     });
   }
@@ -217,7 +217,7 @@ export class DockerRightsPanelComponent implements OnInit {
         this.setStoredDuration(container, minutes * 60);
         this.state.loadAll();
       },
-      error: (e) => this.error.set(`Kon de timer niet instellen: ${e.message}`),
+      error: (e) => this.error.set(`Could not set the timer: ${e.message}`),
     });
   }
 
@@ -229,7 +229,7 @@ export class DockerRightsPanelComponent implements OnInit {
         this.grantUntil.set(null);
         this.state.loadAll();
       },
-      error: (e) => this.error.set(`Kon de timer niet stoppen: ${e.message}`),
+      error: (e) => this.error.set(`Could not stop the timer: ${e.message}`),
     });
   }
 

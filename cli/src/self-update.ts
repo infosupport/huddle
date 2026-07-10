@@ -4,58 +4,58 @@ import path from 'path';
 import { bold, dim } from './utils';
 
 /**
- * Infrastructuur voor zelf-updates van de CLI: versie-informatie van de eigen
- * build, globale (her)installatie via npm en het herstarten van het eigen
- * proces. Welke versie er geïnstalleerd moet worden (stable of experiment) is
- * een domeinbeslissing en leeft in experiment.ts.
+ * Infrastructure for CLI self-updates: version info of the running build,
+ * global (re)installation via npm, and restarting the process itself.
+ * Which version should be installed (stable or experiment) is a domain
+ * decision and lives in experiment.ts.
  */
 
 export const CLI_PACKAGE = '@infosupport/huddle-cli';
 
-// Guard tegen een herstart-loop: gezet bij een relaunch, zodat de nieuwe CLI
-// niet opnieuw gaat installeren wanneer de versie dan nóg niet klopt.
+// Guard against a restart loop: set on a relaunch, so the new CLI doesn't
+// reinstall again if the version still doesn't match.
 const RELAUNCH_ENV = 'HUDDLE_EXPERIMENT_RELAUNCHED';
 
 export function cliVersion(): string {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-    return String(pkg.version ?? 'onbekend');
+    return String(pkg.version ?? 'unknown');
   } catch {
-    return 'onbekend';
+    return 'unknown';
   }
 }
 
 /**
- * Wisselt de globale CLI naar de gegeven package-spec en herstart daarna dit
- * proces met relaunchArgs. Keert nooit terug: het proces eindigt met de
- * exitcode van de nieuwe CLI, of deze functie gooit een fout (installatie
- * mislukt, of dit proces was zelf al een herstart en zit dus in een loop).
+ * Switches the global CLI to the given package spec and then restarts this
+ * process with relaunchArgs. Never returns: the process exits with the exit
+ * code of the new CLI, or this function throws (installation failed, or this
+ * process was already a restart and is therefore stuck in a loop).
  */
 export function switchGlobalCli(spec: string, relaunchArgs: string[]): never {
   if (wasRelaunched()) {
     throw new Error(
-      `Kon niet wisselen naar ${spec}: dit proces is al herstart na een herinstallatie, ` +
-        `maar draait nog steeds versie ${cliVersion()}. Installeer handmatig: npm install -g ${spec}`,
+      `Could not switch to ${spec}: this process was already restarted after a reinstall, ` +
+        `but is still running version ${cliVersion()}. Install manually: npm install -g ${spec}`,
     );
   }
-  console.log(bold(`CLI wisselen naar ${spec}`));
-  console.log(dim(`Huidige versie: ${cliVersion()}`));
+  console.log(bold(`Switching CLI to ${spec}`));
+  console.log(dim(`Current version: ${cliVersion()}`));
   try {
     execSync(`npm install -g ${spec}`, { stdio: 'inherit' });
   } catch {
-    throw new Error(`Kon ${spec} niet installeren. Ben je ingelogd op npm.pkg.github.com?`);
+    throw new Error(`Could not install ${spec}. Is the package published and reachable?`);
   }
   relaunchCli(relaunchArgs);
 }
 
-/** True wanneer dit proces al een herstart na een zelf-update is. */
+/** True when this process is already a restart after a self-update. */
 function wasRelaunched(): boolean {
   return process.env[RELAUNCH_ENV] === '1';
 }
 
-/** Herstart de (zojuist geïnstalleerde) globale CLI met de gegeven argumenten. */
+/** Restarts the (just installed) global CLI with the given arguments. */
 function relaunchCli(args: string[]): never {
-  console.log(dim(`Herstart: huddle ${args.join(' ')}`));
+  console.log(dim(`Restarting: huddle ${args.join(' ')}`));
   const env = { ...process.env, [RELAUNCH_ENV]: '1' };
   const entry = resolveGlobalEntry();
   const result = entry

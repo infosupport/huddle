@@ -3,9 +3,9 @@ import os from 'os';
 import path from 'path';
 
 /**
- * Lokale Huddle-configuratie in ~/.huddle/config.json. Hier onthouden we o.a.
- * welk experiment actief is, zodat elke volgende `huddle init` op hetzelfde
- * kanaal blijft draaien totdat de gebruiker expliciet reset.
+ * Local Huddle configuration in ~/.huddle/config.json. Among other things we
+ * remember which experiment is active here, so every subsequent `huddle init`
+ * keeps running on the same channel until the user explicitly resets.
  */
 export interface HuddleConfig {
   channel?: 'stable' | 'experiment';
@@ -32,7 +32,7 @@ export function writeConfig(config: HuddleConfig): void {
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-/** Actief experiment-nummer, of undefined wanneer we op stable draaien. */
+/** Active experiment number, or undefined when running on stable. */
 export function activeExperiment(): number | undefined {
   const cfg = readConfig();
   if (cfg.channel === 'experiment' && Number.isInteger(cfg.experiment) && (cfg.experiment as number) > 0) {
@@ -41,7 +41,7 @@ export function activeExperiment(): number | undefined {
   return undefined;
 }
 
-/** Docker-image-tag die bij het actieve kanaal hoort. */
+/** Docker image tag that belongs to the active channel. */
 export function imageTag(): string {
   const experiment = activeExperiment();
   return experiment !== undefined ? `experiment-${experiment}` : 'latest';

@@ -137,7 +137,7 @@ export class ApiService {
     return this.handle(this.http.delete<void>(`/api/authz/grants/${container}`));
   }
 
-  // ── Docker action policies (fijnmazige Docker-rechten) ─────────────────────
+  // ── Docker action policies (fine-grained Docker permissions) ───────────────
   getDockerActionCatalog(): Observable<DockerActionCatalog> {
     return this.handle(this.http.get<DockerActionCatalog>('/api/authz/docker-actions'));
   }

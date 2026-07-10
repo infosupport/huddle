@@ -1,22 +1,22 @@
 # Live security-boundary E2E
 
-Deze suite test de échte afscherming end-to-end: hij spint via de draaiende huddle
-een **echte devcontainer** op, exec't erin, en controleert dat de firewall, de
-docker-socket-gate en de huddle-self-traffic-regels daadwerkelijk afdwingen wat ze
-moeten. Dit is de geautomatiseerde versie van `SECURITY.md` T1–T11.
+This suite tests the real isolation end-to-end: through the running huddle it spins
+up a **real devcontainer**, execs into it, and verifies that the firewall, the
+docker-socket gate, and the huddle self-traffic rules actually enforce what they
+should. This is the automated version of `SECURITY.md` T1–T11.
 
-> Draait **niet** mee in `npm test` (de snelle unit-run). Je hebt Docker + een
-> draaiende huddle-stack nodig, dus het is opt-in.
+> Does **not** run as part of `npm test` (the fast unit run). You need Docker + a
+> running huddle stack, so it is opt-in.
 
-## Voorwaarden
+## Prerequisites
 
-- Docker (Docker Desktop) draait op de host.
-- De huddle-stack draait: `./huddle.ps1` (optie 4) → UI op `http://localhost:3000`.
-- Een base-image bestaat (bv. `base-devimage-vscode`). Zo niet, dan bouwt huddle hem
-  bij de eerste spawn — de eerste run duurt dan langer.
-- Egress: de huddle-host moet `example.com` kunnen bereiken voor de "allow → 200"-stap.
+- Docker (Docker Desktop) is running on the host.
+- The huddle stack is running: `./huddle.ps1` (option 4) → UI at `http://localhost:3000`.
+- A base image exists (e.g. `base-devimage-vscode`). If not, huddle builds it on
+  the first spawn — the first run then takes longer.
+- Egress: the huddle host must be able to reach `example.com` for the "allow → 200" step.
 
-## Draaien
+## Running
 
 ```powershell
 cd gateway
@@ -24,29 +24,29 @@ $env:HUDDLE_E2E = "1"
 npm run test:e2e
 ```
 
-Optionele overrides (env):
+Optional overrides (env):
 
-| Variabele | Default | Betekenis |
-|-----------|---------|-----------|
-| `HUDDLE_URL` | `http://localhost:3000` | admin-API van huddle |
-| `HUDDLE_E2E_IMAGE` | `base-devimage-vscode` | base-image voor de wegwerp-container |
-| `HUDDLE_E2E_IDE` | `vscode` | ide-type voor de spawn |
-| `HUDDLE_E2E_NAME` | `devcontainer-e2e-boundary` | naam van de wegwerp-container |
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `HUDDLE_URL` | `http://localhost:3000` | huddle's admin API |
+| `HUDDLE_E2E_IMAGE` | `base-devimage-vscode` | base image for the throwaway container |
+| `HUDDLE_E2E_IDE` | `vscode` | ide type for the spawn |
+| `HUDDLE_E2E_NAME` | `devcontainer-e2e-boundary` | name of the throwaway container |
 
-De suite ruimt de container + testregels achteraf op (`afterAll`).
+The suite cleans up the container + test rules afterwards (`afterAll`).
 
-## Wat wordt getest
+## What is tested
 
-| Test | Bewijst |
-|------|---------|
-| firewall: niet-toegestaan domein → 403 | proxy blokkeert niet-allowlisted domeinen |
-| firewall: na approval → 200 | een allow-regel opent het domein meteen |
-| verse container → `disabled` | secure by default: álle acties staan uit, ook read-only |
-| toggle aan → `docker ps` exit 0 | read-only ('always') werkt zonder timer zodra de toggle aan staat |
-| mutatie met toggle, zonder grant → `access timer` | tijdelijke acties vereisen daarnaast een actieve timer |
-| mutatie met toggle én grant → exit 0 | timer + toggle opent mutaties; eigen-volume delete bewijst labelinjectie |
-| `-v /:/host` → `not permitted` (T11) | HostConfig-escape (host-path bind) geweigerd |
-| `--privileged` → `not permitted` (T11) | privileged spawn geweigerd |
-| `docker inspect huddle` → geweigerd (T3) | inspect van vreemde container geweigerd |
-| `GET huddle:3000/api/rules` → 403 (T4) | management-API onbereikbaar vanuit container |
-| `POST huddle:3000/api/audit/sudo` → 200 (T5) | sudo-audit ingest wél bereikbaar |
+| Test | Proves |
+|------|--------|
+| firewall: disallowed domain → 403 | proxy blocks non-allowlisted domains |
+| firewall: after approval → 200 | an allow rule opens the domain immediately |
+| fresh container → `disabled` | secure by default: all actions are off, including read-only |
+| toggle on → `docker ps` exit 0 | read-only ('always') works without a timer once the toggle is on |
+| mutation with toggle, without grant → `access timer` | temporary actions additionally require an active timer |
+| mutation with toggle and grant → exit 0 | timer + toggle opens mutations; own-volume delete proves label injection |
+| `-v /:/host` → `not permitted` (T11) | HostConfig escape (host-path bind) rejected |
+| `--privileged` → `not permitted` (T11) | privileged spawn rejected |
+| `docker inspect huddle` → rejected (T3) | inspecting a foreign container rejected |
+| `GET huddle:3000/api/rules` → 403 (T4) | management API unreachable from the container |
+| `POST huddle:3000/api/audit/sudo` → 200 (T5) | sudo-audit ingest is reachable |

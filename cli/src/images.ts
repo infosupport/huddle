@@ -1,28 +1,28 @@
 import { activeExperiment, imageTag } from './config';
 
 /**
- * Kanaal-bewuste image-resolutie: bepaalt op basis van het actieve kanaal
- * (stable of experiment) welke gateway- en base-images init moet gebruiken.
- * init.ts blijft daardoor puur orkestratie van runtime en containers.
+ * Channel-aware image resolution: based on the active channel (stable or
+ * experiment), determines which gateway and base images init should use.
+ * That keeps init.ts pure orchestration of runtime and containers.
  */
 
 export interface BaseImage {
   image: string;
-  /** Env-var waarmee de gateway deze image kiest voor devcontainers. */
+  /** Env var by which the gateway picks this image for devcontainers. */
   gatewayEnv?: string;
 }
 
 export interface ResolvedImages {
-  /** Actief experiment-nummer, of undefined op stable. */
+  /** Active experiment number, or undefined on stable. */
   experiment?: number;
-  /** Image-tag die bij het kanaal hoort (`latest` of `experiment-<nr>`). */
+  /** Image tag that belongs to the channel (`latest` or `experiment-<nr>`). */
   tag: string;
-  /** Gateway-image. Overschrijfbaar via HUDDLE_IMAGE (zet dan ook HUDDLE_NO_PULL=1 voor een lokale build). */
+  /** Gateway image. Overridable via HUDDLE_IMAGE (then also set HUDDLE_NO_PULL=1 for a local build). */
   image: string;
   /**
-   * Devcontainer-base-images die de gateway gebruikt om workspaces te starten.
-   * De namen komen overeen met getBaseImageName() in de gateway; een override
-   * kan via BASE_IMAGE_<IDE>.
+   * Devcontainer base images the gateway uses to start workspaces.
+   * The names match getBaseImageName() in the gateway; an override is
+   * possible via BASE_IMAGE_<IDE>.
    */
   baseImages: BaseImage[];
 }
@@ -44,9 +44,9 @@ export function resolveImages(): ResolvedImages {
 }
 
 /**
- * `-e`-flags voor de gateway-container. Tijdens een experiment (of bij een
- * expliciete override) moet de gateway devcontainers starten van dezelfde
- * base-images als de CLI zojuist gepulld heeft.
+ * `-e` flags for the gateway container. During an experiment (or with an
+ * explicit override) the gateway must start devcontainers from the same
+ * base images the CLI just pulled.
  */
 export function gatewayEnvFlags(resolved: ResolvedImages): string {
   return resolved.baseImages

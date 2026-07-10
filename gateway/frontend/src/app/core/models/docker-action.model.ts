@@ -15,9 +15,9 @@ export interface DockerActionCatalog {
 }
 
 export interface DockerActionPolicies {
-  /** Effectieve togglestand per actie, inclusief defaults voor alle acties. */
+  /** Effective toggle state per action, including defaults for all actions. */
   policies: Record<string, boolean>;
-  /** Actieve grant-timer voor deze container, of null als er geen is. */
+  /** Active grant timer for this container, or null if there is none. */
   grant: { until: number } | null;
 }
 

@@ -1,12 +1,12 @@
 import { ErrorHandler, Injectable } from '@angular/core';
 
-// ── Frontend-fouten doorsturen naar de gateway (→ container logs) ────────────
-// Runtime-fouten in de browser zijn anders onzichtbaar bij het debuggen van een
-// draaiende huddle-container. Alles gaat via POST /api/client-log, dat ze op
-// stderr van de gateway zet (zichtbaar in `docker logs huddle`).
+// ── Forward frontend errors to the gateway (→ container logs) ────────────────
+// Runtime errors in the browser are otherwise invisible when debugging a
+// running huddle container. Everything goes through POST /api/client-log, which
+// puts them on the gateway's stderr (visible in `docker logs huddle`).
 
-// Zelfde melding max. 1× per 10s — voorkomt log-loops wanneer een fout in een
-// render- of change-detection-cyclus blijft terugkomen.
+// The same message at most once per 10s — prevents log loops when an error
+// keeps recurring in a render or change-detection cycle.
 const seen = new Map<string, number>();
 
 export function sendClientLog(level: 'error' | 'warn' | 'info', message: string, stack?: string): void {
@@ -25,21 +25,21 @@ export function sendClientLog(level: 'error' | 'warn' | 'info', message: string,
         stack: stack ? String(stack).slice(0, 6000) : undefined,
         url: location.href,
       }),
-    }).catch(() => { /* logging mag nooit zelf fouten veroorzaken */ });
-  } catch { /* idem */ }
+    }).catch(() => { /* logging must never cause errors itself */ });
+  } catch { /* same */ }
 }
 
 @Injectable()
 export class RemoteErrorHandler implements ErrorHandler {
   handleError(error: unknown): void {
-    // Altijd óók naar de browser-console (default-gedrag behouden).
+    // Always also to the browser console (keep the default behavior).
     console.error(error);
     const e = error as { message?: string; stack?: string } | null;
     sendClientLog('error', e?.message ?? String(error), e?.stack);
   }
 }
 
-// Vangt wat buiten Angular's ErrorHandler om gaat (script-fouten, promises).
+// Catches what bypasses Angular's ErrorHandler (script errors, promises).
 export function installGlobalClientLogging(): void {
   window.addEventListener('error', (ev) => {
     sendClientLog('error', ev.message || 'window.onerror', (ev.error as Error | undefined)?.stack);
