@@ -1,6 +1,6 @@
-export type DockerActionKind = 'temporary' | 'always';
+export type DockerActionKind = 'temporary' | 'always' | 'mount';
 
-export type DockerActionGroup = 'containers' | 'images' | 'volumes' | 'networks' | 'system';
+export type DockerActionGroup = 'containers' | 'images' | 'volumes' | 'networks' | 'system' | 'mounts';
 
 export interface DockerActionDef {
   action: string;

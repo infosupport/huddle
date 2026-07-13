@@ -104,6 +104,48 @@
   </div>
 </section>
 
+<!-- ── VOLUME MOUNTS ─────────────────────────────────────────────────────── -->
+<section class="da-section mounts">
+  <div class="da-section-head">
+    <div class="da-intro">
+      <div class="da-intro__badge"><svg class="da-ic"><use href="#da-db"/></svg></div>
+      <div>
+        <h2>VOLUME MOUNTS</h2>
+        <p>Which volume kinds a spawned container may mount. Enforced when the container is created — no timer needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="da-mount-grid">
+    @for (group of mountGroups(); track group.group) {
+      @for (a of group.actions; track a.action) {
+        <article class="da-card da-mount-card" [class.is-danger]="a.action === 'mount.bind'">
+          <div class="da-card__head">
+            <div [class]="'da-icon-circle ' + (a.action === 'mount.bind' ? 'ic-red' : group.colorClass)">
+              <svg class="da-ic"><use [attr.href]="'#da-' + actionIcon(a.action)"/></svg>
+            </div>
+            <div class="da-card__title">
+              <h3>{{ a.label }}</h3>
+              <p>{{ mountHint(a.action) }}</p>
+            </div>
+          </div>
+          <div class="da-row" [class.is-off]="!isEnabled(a)">
+            <span class="da-mount-card__state">{{ isEnabled(a) ? 'Allowed' : 'Blocked' }}</span>
+            <button class="da-toggle" type="button" [class.on]="isEnabled(a)"
+                    [attr.aria-pressed]="isEnabled(a)" [attr.aria-label]="a.label + (isEnabled(a) ? ' allowed' : ' blocked')"
+                    (click)="toggleAction(a)"></button>
+          </div>
+        </article>
+      }
+    }
+  </div>
+
+  <div class="da-notice">
+    <svg class="da-ic"><use href="#da-info"/></svg>
+    <span>Bind mounts expose the host filesystem and are the main sandbox-escape vector — keep them off unless a container genuinely needs host access. Named and anonymous volumes stay inside Docker and are labelled to this devcontainer. Volumes that bind-back a host path via an inline driver are always rejected, regardless of these toggles.</span>
+  </div>
+</section>
+
 <!-- ── ALWAYS-ALLOWED ACTIONS ────────────────────────────────────────────── -->
 <section class="da-section always">
   <div class="da-section-head">
@@ -201,8 +243,9 @@
         internet traffic also passes through the egress firewall.
       </li>
       <li>
-        Dangerous settings are rejected: privileged containers, bind mounts from the host,
-        host namespaces (PID/IPC/UTS/userns/cgroup), extra capabilities, and disabled seccomp or AppArmor.
+        Dangerous settings are rejected: privileged containers, host namespaces
+        (PID/IPC/UTS/userns/cgroup), extra capabilities, and disabled seccomp or AppArmor.
+        Volume mounts are gated per kind above — host-path binds are off by default.
         Binding host ports is only possible after approval in the port list.
       </li>
       <li>

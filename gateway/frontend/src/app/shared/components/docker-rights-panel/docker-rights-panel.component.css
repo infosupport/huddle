@@ -47,6 +47,22 @@
   --sec-wash: rgba(61, 139, 253, .07);
   --ring-empty: rgba(61, 139, 253, .22);
 }
+.da-section.mounts {
+  --sec: var(--da-violet, #8b5cf6); --sec-strong: var(--da-violet-strong, #7c3aed);
+  --sec-soft: rgba(139, 92, 246, .14); --sec-border: rgba(139, 92, 246, .40);
+  --sec-wash: rgba(139, 92, 246, .07); --ring-empty: rgba(139, 92, 246, .22);
+}
+
+/* ── Volume-mount kaarten (status-label + toggle i.p.v. icoon-rij) ────────── */
+.da-mount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.da-mount-card { min-height: 0; display: flex; flex-direction: column; }
+.da-mount-card .da-card__head { align-items: flex-start; }
+.da-mount-card .da-card__title p { font-weight: 500; font-size: 12px; }
+.da-mount-card.is-danger { border-color: var(--danger); }
+.da-mount-card .da-row { margin-top: auto; grid-template-columns: 1fr auto; height: 52px; }
+.da-mount-card__state { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--sec); }
+.da-row.is-off .da-mount-card__state { color: var(--text-dim); }
+.ic-red { --icon: var(--danger); --icon-bg: var(--danger-soft); }
 
 /* ── Hero (intro / timer / knoppen) ──────────────────────────────────────── */
 .da-hero {
@@ -214,6 +230,7 @@
 /* ── Responsief (op paneelbreedte, zie :host) ────────────────────────────── */
 @container (max-width: 1180px) {
   .da-cards { grid-template-columns: repeat(2, 1fr); }
+  .da-mount-grid { grid-template-columns: 1fr; }
   .da-hero { grid-template-columns: 1fr; }
   .da-hero .da-intro, .da-timer { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 20px; }
   .da-system-grid { grid-template-columns: 1fr; }
