@@ -264,9 +264,28 @@
   flex-shrink: 0;
 }
 
+.req-row__icon--path { background: var(--accent-soft); color: var(--accent); }
+
 .req-row__info {
   flex: 1;
   min-width: 0;
+}
+
+.req-row__host { color: var(--text-muted); }
+
+.req-row__tag {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 11px; color: var(--text-muted);
+  background: var(--surface-hover);
+  padding: 2px 8px; border-radius: 6px;
+  white-space: nowrap; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.req-row__tag--path { background: var(--accent-soft); color: var(--accent); }
+.req-row__sample {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 11.5px; color: var(--text-dim);
+  margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 .req-row__domain {

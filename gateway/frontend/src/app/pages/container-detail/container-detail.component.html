@@ -98,9 +98,10 @@
 
   <!-- ── Segmented tabs ── -->
   <div class="cd-tabs">
+    @let pendingCount = requested.length + pathRequests(d.rules, d.globalRules).length;
     <button [class.on]="activeTab === 'firewall'" (click)="setTab('firewall')">
       Firewall
-      @if (requested.length > 0) { <i>{{ requested.length }}</i> }
+      @if (pendingCount > 0) { <i>{{ pendingCount }}</i> }
     </button>
     <button [class.on]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
     <button [class.on]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
@@ -109,6 +110,7 @@
 
   <!-- ════════════════════════════════════════════ TAB: FIREWALL -->
   @if (activeTab === 'firewall') {
+    @let pathReq = pathRequests(d.rules, d.globalRules);
 
     <!-- Pending requests -->
     <section class="cd-sec">
@@ -117,7 +119,7 @@
         <p class="cd-sec__sub">— for this container</p>
       </div>
       <div class="card req-card">
-        @if (requested.length === 0) {
+        @if (requested.length === 0 && pathReq.length === 0) {
           <div class="fw-empty">
             <app-icon name="circle-check" [size]="24" />
             <span>No pending requests.</span>
@@ -137,6 +139,27 @@
               <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
             </div>
           }
+          <!-- Path sub-requests from path-mode domains -->
+          @for (row of pathReq; track row.rule.id) {
+            <div class="req-row">
+              <div class="req-row__icon req-row__icon--path"><app-icon name="file-text" [size]="17" /></div>
+              <div class="req-row__info">
+                <div class="req-row__domain">
+                  <span class="req-row__host">{{ row.domain }}</span>{{ row.path_pattern }}
+                </div>
+                <div class="req-row__meta">
+                  <span class="req-row__tag req-row__tag--path">path</span>
+                  <span><b>{{ row.rule.request_count }}</b> request{{ row.rule.request_count !== 1 ? 's' : '' }}</span>
+                  <span class="sep">·</span>
+                  <span>{{ row.rule.last_seen | relTime }}</span>
+                </div>
+                @if (row.last_path) {
+                  <div class="req-row__sample">{{ row.last_path }}</div>
+                }
+              </div>
+              <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+            </div>
+          }
         }
       </div>
     </section>
@@ -152,9 +175,9 @@
           <button [class.on]="rulesTab === 'deny'" (click)="rulesTab = 'deny'">
             Blocked <i>{{ deny.length }}</i>
           </button>
-          @if (cPathDomains.length > 0) {
+          @if (cPathDomains.length + gPathDomains.length > 0) {
             <button [class.on]="rulesTab === 'path'" (click)="rulesTab = 'path'">
-              Path mode <i>{{ cPathDomains.length }}</i>
+              Path mode <i>{{ cPathDomains.length + gPathDomains.length }}</i>
             </button>
           }
         </div>
@@ -189,6 +212,19 @@
             <div class="fw-empty"><span>No allowed domains.</span></div>
           }
         </div>
+        @if (gAllow.length > 0) {
+          <div class="cd-global-head"><app-icon name="globe" [size]="13" /> Global rules</div>
+          <div class="rule-list">
+            @for (r of gAllow; track r.id) {
+              <div class="rule-row rule-row--global">
+                <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
+                <span class="rule-row__domain">{{ r.domain }}</span>
+                <span class="scope-chip scope-chip--global">Global</span>
+                <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
+              </div>
+            }
+          </div>
+        }
       }
 
       @if (rulesTab === 'deny') {
@@ -207,37 +243,31 @@
             <div class="fw-empty"><span>No blocked domains.</span></div>
           }
         </div>
+        @if (gDeny.length > 0) {
+          <div class="cd-global-head"><app-icon name="globe" [size]="13" /> Global rules</div>
+          <div class="rule-list">
+            @for (r of gDeny; track r.id) {
+              <div class="rule-row rule-row--global">
+                <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="14" /></span>
+                <span class="rule-row__domain">{{ r.domain }}</span>
+                <span class="scope-chip scope-chip--global">Global</span>
+                <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
+              </div>
+            }
+          </div>
+        }
       }
 
       @if (rulesTab === 'path') {
-        <app-path-allowlist [domains]="cPathDomains" [now]="nowTs" (changed)="reload()" />
-      }
-
-      <!-- Global rules divider -->
-      @if (gAllow.length > 0 || gDeny.length > 0 || gPathDomains.length > 0) {
-        <div class="cd-global-head">
-          <app-icon name="globe" [size]="13" /> Global rules
-        </div>
-        <div class="rule-list">
-          @for (r of gAllow; track r.id) {
-            <div class="rule-row rule-row--global">
-              <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
-              <span class="rule-row__domain">{{ r.domain }}</span>
-              <span class="scope-chip scope-chip--global">Global</span>
-              <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-            </div>
-          }
-          @for (r of gDeny; track r.id) {
-            <div class="rule-row rule-row--global">
-              <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="14" /></span>
-              <span class="rule-row__domain">{{ r.domain }}</span>
-              <span class="scope-chip scope-chip--global">Global</span>
-              <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-            </div>
-          }
-        </div>
+        @if (cPathDomains.length > 0) {
+          <app-path-allowlist [domains]="cPathDomains" [now]="nowTs" (changed)="reload()" />
+        }
         @if (gPathDomains.length > 0) {
+          <div class="cd-global-head"><app-icon name="globe" [size]="13" /> Global rules</div>
           <app-path-allowlist [domains]="gPathDomains" [now]="nowTs" (changed)="reload()" />
+        }
+        @if (cPathDomains.length === 0 && gPathDomains.length === 0) {
+          <div class="fw-empty"><span>No path-mode domains.</span></div>
         }
       }
     </div>

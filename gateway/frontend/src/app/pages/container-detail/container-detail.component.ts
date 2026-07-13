@@ -27,6 +27,14 @@ interface DetailData {
 type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
 type RulesTab  = 'allow' | 'deny' | 'path';
 
+/** A path sub-request row for the pending inbox flat list */
+interface PathRequestRow {
+  rule: Rule;
+  domain: string;
+  path_pattern: string;
+  last_path: string | null;
+}
+
 @Component({
   selector: 'app-container-detail',
   standalone: true,
@@ -62,6 +70,62 @@ export class ContainerDetailComponent implements OnInit {
       { id: 'pathmode', label: 'Path allowlist', tone: 'neutral', icon: 'filter' },
     ],
   };
+
+  /** Pie for path sub-requests — same layout as the firewall inbox:
+   *  path-related actions on the left (0=top,1=right,2=bottom,3=left). */
+  readonly pieConfigPath: PieMenuConfig = {
+    families: [
+      { id: 'path-allow', label: 'Allow exact', tone: 'green', icon: 'approve' },
+      { id: 'path-later', label: 'Dismiss', tone: 'neutral', icon: 'later' },
+      { id: 'path-deny', label: 'Deny', tone: 'red', icon: 'deny' },
+      { id: 'path-prefix', label: 'Allow prefix/*', tone: 'blue', icon: 'filter' },
+    ],
+  };
+
+  /** Pending path sub-requests across this container's path-mode domains
+   *  (container-scoped + global markers), flattened for the inbox — mirrors
+   *  the firewall view's pathRequested list. */
+  pathRequests(rules: Rule[], globalRules: Rule[]): PathRequestRow[] {
+    const domains = [...buildPathDomains(rules), ...buildPathDomains(globalRules)];
+    return domains.flatMap(pd =>
+      pd.requested
+        .filter(r => !!r.path_pattern)
+        .map(r => ({
+          rule: r,
+          domain: pd.domain,
+          path_pattern: r.path_pattern!,
+          last_path: (r as any).last_path ?? null,
+        })),
+    );
+  }
+
+  onPathPieAction(actionId: string, row: PathRequestRow): void {
+    const { rule } = row;
+    switch (actionId) {
+      case 'path-allow':
+        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, row.path_pattern)
+          .subscribe(() => this.reload());
+        break;
+      case 'path-prefix': {
+        const prefix = this.toPrefix(row.path_pattern);
+        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, prefix)
+          .subscribe(() => this.reload());
+        break;
+      }
+      case 'path-deny':
+        this.api.resolveRule(rule.id, 'deny', 'rule', undefined, row.path_pattern)
+          .subscribe(() => this.reload());
+        break;
+      case 'path-later':
+        this.deleteRule(rule);
+        break;
+    }
+  }
+
+  private toPrefix(path: string): string {
+    const parts = path.replace(/\/+$/, '').split('/');
+    return parts.slice(0, -1).join('/') + '/*';
+  }
 
   onPieAction(actionId: string, rule: Rule): void {
     switch (actionId) {
