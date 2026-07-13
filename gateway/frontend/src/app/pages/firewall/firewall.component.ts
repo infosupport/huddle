@@ -61,13 +61,17 @@ export class FirewallComponent {
     ],
   };
 
-  /** Pie menu for path sub-requests in the inbox */
+  /** Pie menu for path sub-requests in the inbox.
+   *  Family order maps to fixed wheel positions (0=top, 1=right, 2=bottom,
+   *  3=left). Keep everything path-related on the LEFT — mirroring the
+   *  `pathmode` slot in the general pie config — so the path icon never jumps
+   *  sides just because a domain is already in path mode. Dismiss moves right. */
   readonly pieConfigPath: PieMenuConfig = {
     families: [
       { id: 'path-allow', label: 'Allow exact', tone: 'green', icon: 'approve' },
-      { id: 'path-prefix', label: 'Allow prefix/*', tone: 'blue', icon: 'filter' },
-      { id: 'path-deny', label: 'Deny', tone: 'red', icon: 'deny' },
       { id: 'path-later', label: 'Dismiss', tone: 'neutral', icon: 'later' },
+      { id: 'path-deny', label: 'Deny', tone: 'red', icon: 'deny' },
+      { id: 'path-prefix', label: 'Allow prefix/*', tone: 'blue', icon: 'filter' },
     ],
   };
 
