@@ -12,8 +12,12 @@
 
 import { getActionPolicy, getGrant } from './db';
 
-export type ActionKind = 'temporary' | 'always';
-export type ActionGroup = 'containers' | 'images' | 'volumes' | 'networks' | 'system';
+// 'mount' is a config-gate kind: unlike 'temporary'/'always' these actions are
+// not classified from a request path but consulted while validating a
+// container-create HostConfig (see validateHostConfig in socket-proxy.ts). They
+// gate which volume-mount shapes a devcontainer may use.
+export type ActionKind = 'temporary' | 'always' | 'mount';
+export type ActionGroup = 'containers' | 'images' | 'volumes' | 'networks' | 'system' | 'mounts';
 
 export interface DockerActionDef {
   action: string;
@@ -46,6 +50,14 @@ export const DOCKER_ACTIONS: DockerActionDef[] = [
   { action: 'network.remove',     kind: 'temporary', group: 'networks',   label: 'Remove',     defaultEnabled: false },
   { action: 'network.connect',    kind: 'temporary', group: 'networks',   label: 'Connect',    defaultEnabled: false },
   { action: 'network.disconnect', kind: 'temporary', group: 'networks',   label: 'Disconnect', defaultEnabled: false },
+  // Volume-mount gates for spawned containers (checked at container.create).
+  // Split by risk: a host-path bind can read/write the host fs and is the main
+  // sandbox-escape vector (off by default); a named volume is an isolated,
+  // huddle-labelled Docker volume (on); an anonymous volume is created fresh and
+  // never touches the host (on).
+  { action: 'mount.bind',         kind: 'mount',     group: 'mounts',     label: 'Bind mounts',       defaultEnabled: false },
+  { action: 'mount.named',        kind: 'mount',     group: 'mounts',     label: 'Named volumes',     defaultEnabled: true  },
+  { action: 'mount.anonymous',    kind: 'mount',     group: 'mounts',     label: 'Anonymous volumes', defaultEnabled: true  },
   // Altijd-toegestane (read-only) acties
   { action: 'container.list',     kind: 'always',    group: 'containers', label: 'List',       defaultEnabled: false },
   { action: 'container.inspect',  kind: 'always',    group: 'containers', label: 'Inspect',    defaultEnabled: false },
@@ -87,6 +99,22 @@ export function getEffectivePolicies(containerName: string): Record<string, bool
     out[def.action] = getActionPolicy(containerName, def.action) ?? def.defaultEnabled;
   }
   return out;
+}
+
+// Volume-mount gates for one devcontainer, resolved from the toggles (db
+// override else catalog default). Consumed by validateHostConfig.
+export interface MountPermissions {
+  bind: boolean;
+  named: boolean;
+  anonymous: boolean;
+}
+
+export function getMountPermissions(containerName: string): MountPermissions {
+  return {
+    bind: isActionEnabled(containerName, 'mount.bind'),
+    named: isActionEnabled(containerName, 'mount.named'),
+    anonymous: isActionEnabled(containerName, 'mount.anonymous'),
+  };
 }
 
 // Centrale autorisatie voor de socket-proxy. Retourneert een denial-reden of

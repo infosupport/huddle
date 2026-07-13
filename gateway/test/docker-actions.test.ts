@@ -155,14 +155,18 @@ describe('catalogus & effectieve policies', () => {
     const ids = DOCKER_ACTIONS.map(a => a.action);
     expect(new Set(ids).size).toBe(ids.length);
     for (const a of DOCKER_ACTIONS) {
-      expect(['temporary', 'always']).toContain(a.kind);
-      expect(['containers', 'images', 'volumes', 'networks', 'system']).toContain(a.group);
+      expect(['temporary', 'always', 'mount']).toContain(a.kind);
+      expect(['containers', 'images', 'volumes', 'networks', 'system', 'mounts']).toContain(a.group);
     }
   });
 
-  it('alle acties staan standaard uit (secure by default)', () => {
+  it('alle acties staan standaard uit (secure by default), op de veilige mount-defaults na', () => {
+    // Named + anonymous volumes zijn geïsoleerd/host-veilig en staan bewust aan;
+    // al het overige (incl. bind mounts) staat standaard uit.
+    const enabledByDefault = new Set(['mount.named', 'mount.anonymous']);
     for (const def of DOCKER_ACTIONS) {
-      expect(def.defaultEnabled, `actie ${def.action} moet standaard uit staan`).toBe(false);
+      expect(def.defaultEnabled, `actie ${def.action} onverwachte default`)
+        .toBe(enabledByDefault.has(def.action));
     }
   });
 
@@ -176,9 +180,11 @@ describe('catalogus & effectieve policies', () => {
     expect(eff['container.create']).toBe(false); // default
   });
 
-  it('elke catalogus-actie is bereikbaar via ten minste één API-pad', () => {
-    // Regressiewacht: een actie die classifyRequest nooit oplevert is dode
-    // configuratie in het portal.
+  it('elke request-actie is bereikbaar via ten minste één API-pad', () => {
+    // Regressiewacht: een request-geclassificeerde actie die classifyRequest
+    // nooit oplevert is dode configuratie in het portal. 'mount'-acties zijn
+    // config-gates (gecheckt in validateHostConfig, niet via classifyRequest)
+    // en horen hier dus niet bij.
     const reachable = new Set<string>();
     const samples: Array<[string, string]> = [
       ['GET', '/_ping'], ['GET', '/version'], ['GET', '/events'],
@@ -197,6 +203,7 @@ describe('catalogus & effectieve policies', () => {
       if (a) reachable.add(a);
     }
     for (const def of DOCKER_ACTIONS) {
+      if (def.kind === 'mount') continue;
       expect(reachable, `actie ${def.action} onbereikbaar`).toContain(def.action);
     }
   });

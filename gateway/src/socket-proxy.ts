@@ -3,7 +3,16 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { isHostPortApproved } from './db';
-import { authorizeAction, classifyRequest } from './docker-actions';
+import { authorizeAction, classifyRequest, getMountPermissions, MountPermissions } from './docker-actions';
+
+// Default mount policy when no per-container perms are supplied (e.g. unit
+// tests): bind mounts denied, named/anonymous volumes allowed. Mirrors the
+// catalog defaults in docker-actions.ts.
+const DEFAULT_MOUNT_PERMS: MountPermissions = { bind: false, named: true, anonymous: true };
+
+function mountDenied(kind: string): string {
+  return `${kind} mounts are disabled for this devcontainer. Enable them in the Huddle portal.`;
+}
 
 const DOCKER_SOCKET = '/var/run/docker.sock';
 const proxyServers = new Map<string, net.Server>();
@@ -160,7 +169,7 @@ function isMeaningfulValue(v: unknown): boolean {
 // Reject HostConfig shapes that would let a spawned container escape the
 // devcontainer sandbox (read host fs, see host PIDs/devices, talk to host
 // dockerd). Returns a denial reason, or null if the config is acceptable.
-export function validateHostConfig(hostConfig: any): string | null {
+export function validateHostConfig(hostConfig: any, perms: MountPermissions = DEFAULT_MOUNT_PERMS): string | null {
   if (!hostConfig || typeof hostConfig !== 'object') return null;
 
   // ── Hard-denies (altijd afgedwongen) ──────────────────────────────────────
@@ -209,26 +218,50 @@ export function validateHostConfig(hostConfig: any): string | null {
     }
   }
 
-  // Bind mounts from the host fs are the main escape vector
-  // (`-v /:/host`, `-v /var/run/docker.sock:/var/run/docker.sock`).
-  // Source paths starting with `/` are host paths; anything else is a named volume.
+  // Volume mounts, split by risk and gated per devcontainer (`perms`):
+  //   - bind      → host-path bind (`-v /:/host`, docker.sock); main escape
+  //                 vector, off by default.
+  //   - named     → an isolated, huddle-labelled Docker volume.
+  //   - anonymous → a volume created fresh with no source; never touches host.
+  // In `Binds` (`source:target[:opts]`) the shape is decided by the source:
+  // a `/`-prefixed source is a host bind, a named source is a named volume, and
+  // an entry with no source (`/container/path`, no colon) is anonymous.
   if (Array.isArray(hostConfig.Binds)) {
     for (const bind of hostConfig.Binds) {
       if (typeof bind !== 'string') continue;
-      const src = bind.split(':')[0] ?? '';
-      if (src.startsWith('/')) return `host-path bind not permitted: ${bind}`;
+      const parts = bind.split(':');
+      const src = parts[0] ?? '';
+      if (parts.length < 2 || src === '') {
+        if (!perms.anonymous) return mountDenied('anonymous volume');
+      } else if (src.startsWith('/')) {
+        if (!perms.bind) return `host-path bind not permitted: ${bind}`;
+      } else {
+        if (!perms.named) return mountDenied('named volume');
+      }
     }
   }
 
   if (Array.isArray(hostConfig.Mounts)) {
     for (const mount of hostConfig.Mounts) {
       if (!mount) continue;
-      if (mount.Type === 'bind') return 'bind-type mounts not permitted';
-      // Een `local`-volume met inline driver-config kan een willekeurig hostpad
-      // bind-backen (type=none, o=bind, device=/…) — net zo gevaarlijk als een
-      // host bind. Weiger elke volume-mount die zelf een driver meebrengt.
-      if (mount.Type === 'volume' && mount.VolumeOptions?.DriverConfig)
-        return 'volume DriverConfig not permitted';
+      if (mount.Type === 'bind') {
+        if (!perms.bind) return 'bind-type mounts not permitted';
+        continue;
+      }
+      if (mount.Type === 'volume') {
+        // Een `local`-volume met inline driver-config kan een willekeurig hostpad
+        // bind-backen (type=none, o=bind, device=/…) — net zo gevaarlijk als een
+        // host bind. Weiger elke volume-mount die zelf een driver meebrengt,
+        // ongeacht de mount-toggles.
+        if (mount.VolumeOptions?.DriverConfig) return 'volume DriverConfig not permitted';
+        const source = typeof mount.Source === 'string' ? mount.Source : '';
+        if (source === '') {
+          if (!perms.anonymous) return mountDenied('anonymous volume');
+        } else if (!perms.named) {
+          return mountDenied('named volume');
+        }
+      }
+      // tmpfs and any other type are in-memory / harmless — left untouched.
     }
   }
 
@@ -410,7 +443,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid container create body');
           return;
         }
-        const denial = validateHostConfig(body.HostConfig);
+        const denial = validateHostConfig(body.HostConfig, getMountPermissions(containerName));
         if (denial) {
           if (denial.startsWith('__PORT_CHECK__:')) {
             const [, portStr, proto] = denial.split(':');

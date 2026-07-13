@@ -100,6 +100,45 @@ describe('validateHostConfig', () => {
   });
 });
 
+describe('validateHostConfig — mount permissions', () => {
+  const allowAll = { bind: true, named: true, anonymous: true };
+  const denyAll  = { bind: false, named: false, anonymous: false };
+
+  it('defaults: bind denied, named + anonymous allowed', () => {
+    expect(validateHostConfig({ Binds: ['/host:/data'] })).toMatch(/host-path bind/i);
+    expect(validateHostConfig({ Binds: ['myvol:/data'] })).toBeNull();
+    expect(validateHostConfig({ Binds: ['/data'] })).toBeNull(); // anonymous (no source)
+    expect(validateHostConfig({ Mounts: [{ Type: 'volume', Target: '/x' }] })).toBeNull(); // anonymous
+  });
+
+  it('bind toggle gates host-path binds (both Binds and Mounts)', () => {
+    expect(validateHostConfig({ Binds: ['/host:/data'] }, allowAll)).toBeNull();
+    expect(validateHostConfig({ Mounts: [{ Type: 'bind', Source: '/', Target: '/host' }] }, allowAll)).toBeNull();
+    expect(validateHostConfig({ Binds: ['/host:/data'] }, denyAll)).toMatch(/host-path bind/i);
+    expect(validateHostConfig({ Mounts: [{ Type: 'bind', Source: '/', Target: '/host' }] }, denyAll)).toMatch(/bind-type/i);
+  });
+
+  it('named toggle gates named volumes', () => {
+    const perms = { bind: false, named: false, anonymous: true };
+    expect(validateHostConfig({ Binds: ['myvol:/data'] }, perms)).toMatch(/named volume/i);
+    expect(validateHostConfig({ Mounts: [{ Type: 'volume', Source: 'myvol', Target: '/x' }] }, perms)).toMatch(/named volume/i);
+  });
+
+  it('anonymous toggle gates source-less volumes', () => {
+    const perms = { bind: false, named: true, anonymous: false };
+    expect(validateHostConfig({ Binds: ['/data'] }, perms)).toMatch(/anonymous volume/i);
+    expect(validateHostConfig({ Mounts: [{ Type: 'volume', Target: '/x' }] }, perms)).toMatch(/anonymous volume/i);
+    // named still passes
+    expect(validateHostConfig({ Binds: ['myvol:/data'] }, perms)).toBeNull();
+  });
+
+  it('DriverConfig volumes are always denied, even with all mounts allowed', () => {
+    expect(validateHostConfig({
+      Mounts: [{ Type: 'volume', Target: '/host', VolumeOptions: { DriverConfig: { Name: 'local' } } }],
+    }, allowAll)).toMatch(/driverconfig not permitted/i);
+  });
+});
+
 describe('validateVolumeCreate', () => {
   it('staat een gewoon named volume toe', () => {
     expect(validateVolumeCreate({ Name: 'data' })).toBeNull();
