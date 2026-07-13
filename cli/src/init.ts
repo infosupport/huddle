@@ -103,10 +103,18 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   }
 
   console.log(dim(`Starting container`));
+  // Create on the default (non-internal) network first, WITH -p: Docker only
+  // sets up the host port-forward (iptables/docker-proxy) for the network a
+  // container is created with. `--network` here is `runtime.defaultNetwork`
+  // (not INTERNAL_NET) on purpose — INTERNAL_NET is `--internal`, and Docker
+  // silently skips publishing ports for a container whose network at
+  // creation time is internal (see moby/moby#36174). Attaching INTERNAL_NET
+  // afterwards via `network connect` does NOT retroactively fix this: the
+  // publish decision is made once, at `run`, not re-evaluated on connect.
   run(
     `${rt} run -d` +
     ` --name ${CONTAINER}` +
-    ` --network ${INTERNAL_NET}` +
+    ` --network ${runtime.defaultNetwork}` +
     ` -p ${HOST_PORT}:3000` +
     ` -v ${VOLUME}:/data` +
     ` -v ${runtime.socketPath}:/var/run/docker.sock` +
@@ -115,7 +123,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     ` ${IMAGE}`,
   );
 
-  runSilent(`${rt} network connect ${runtime.defaultNetwork} ${CONTAINER}`);
+  runSilent(`${rt} network connect ${INTERNAL_NET} ${CONTAINER}`);
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
