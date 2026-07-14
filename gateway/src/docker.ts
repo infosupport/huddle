@@ -683,6 +683,19 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const password = crypto.randomBytes(12).toString('base64url');
 
+  try {
+    const existing = await inspectContainer(containerName);
+    const existingIde = existing?.Config?.Labels?.['com.devcontainer.ide'] ?? ideFromContainerLabels(existing?.Config?.Labels);
+    throw new Error(
+      `Container '${containerName}' bestaat al${existingIde ? ` (${existingIde})` : ''}. ` +
+      `Verwijder die container eerst of kies een andere naam met --name.`
+    );
+  } catch (err: any) {
+    if (!String(err.message).includes(`Docker API GET /containers/${encodeURIComponent(containerName)}/json → 404:`)) {
+      throw err;
+    }
+  }
+
   const netName = `dc-net-${containerName}`;
   if (!(await networkExists(netName))) {
     await createNetwork(netName);
