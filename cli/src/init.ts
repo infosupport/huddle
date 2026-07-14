@@ -1,7 +1,9 @@
 import { execSync } from 'child_process';
+import crypto from 'crypto';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvFlags } from './images';
+import { readConfig, writeConfig } from './config';
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
@@ -117,6 +119,19 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // `--security-opt label=disable` on every devcontainer so it can reach the
   // SELinux-labeled proxy socket.
   const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
+
+  // Operator-token voor de control-plane-auth. Hergebruik het token uit de
+  // config (zodat een bestaande browser-sessie/CLI blijft werken over re-inits),
+  // anders genereer er één. We geven het aan de gateway mee via env én bewaren
+  // het lokaal zodat volgende `huddle`-commando's zich kunnen authenticeren.
+  const cfg = readConfig();
+  const operatorToken =
+    process.env.HUDDLE_OPERATOR_TOKEN?.trim() ||
+    (cfg.operatorToken && cfg.operatorToken.trim()) ||
+    crypto.randomBytes(32).toString('base64url');
+  if (cfg.operatorToken !== operatorToken) {
+    writeConfig({ ...cfg, operatorToken });
+  }
   // The container is created on the engine's default network first (with -p),
   // then joins devcontainer-net (--internal) afterwards. Docker needs this
   // ordering because it skips the host port-forward entirely when a container
@@ -131,6 +146,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     ` --network ${runtime.defaultNetwork}` +
     securityOptFlags +
     ` -e HUDDLE_RUNTIME=${runtime.name}` +
+    ` -e HUDDLE_OPERATOR_TOKEN=${operatorToken}` +
     ` -p ${HOST_PORT}:3000` +
     ` -v ${VOLUME}:/data` +
     ` -v ${runtime.socketPath}:/var/run/docker.sock` +
@@ -147,4 +163,8 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
+  console.log();
+  console.log(bold('Operator login token (needed for the portal):'));
+  console.log(`    ${operatorToken}`);
+  console.log(dim('  Saved to ~/.huddle/config.json for the CLI. Paste it once in the portal to log in.'));
 }

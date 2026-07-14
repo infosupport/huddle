@@ -1,3 +1,5 @@
+import { operatorToken } from './config';
+
 let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? 'http://localhost:3000');
 
 export class ApiError extends Error {
@@ -15,11 +17,18 @@ export function setBaseUrl(url: string): void {
 }
 
 export async function apiCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  // Operator-auth: stuur het token als Bearer mee zodat de CLI de control-plane
+  // -auth passeert. Zonder token krijgen we een 401 met een duidelijke hint.
+  const token = operatorToken();
+  if (token) headers['authorization'] = `Bearer ${token}`;
+
   let res: Response;
   try {
     res = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
@@ -31,6 +40,13 @@ export async function apiCall<T>(method: string, path: string, body?: unknown): 
   const payload = parsePayload(raw);
 
   if (!res.ok) {
+    if (res.status === 401) {
+      throw new ApiError(
+        `${method} ${path} -> 401: operator authentication required. ` +
+        `Set HUDDLE_OPERATOR_TOKEN (find it in the huddle container logs, or re-run \`huddle init\`).`,
+        401,
+      );
+    }
     const msg = errorMessage(payload) ?? res.statusText;
     throw new ApiError(`${method} ${path} -> ${res.status}: ${msg}`, res.status);
   }

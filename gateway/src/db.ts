@@ -430,9 +430,34 @@ export function createFolderMapping(m: Omit<FolderMapping, 'id'>): number {
   return Number(result.lastInsertRowid);
 }
 
+// De kolommen die via update gewijzigd mogen worden. De TS-`Partial<>` is enkel
+// een compile-time garantie — op runtime komt `m` rechtstreeks uit de request-
+// body. Zonder deze allowlist werden de JSON-sleutels ongefilterd als SQL-
+// identifiers geïnterpoleerd, wat SQL-injectie via een geprepareerde sleutel
+// mogelijk maakte (finding #9, bv. `container_path = (SELECT ...), name`).
+const FOLDER_MAPPING_COLUMNS: ReadonlyArray<keyof Omit<FolderMapping, 'id'>> = [
+  'name', 'host_path', 'volume_name', 'container_path', 'read_only', 'enabled', 'sort_order',
+];
+
+// Valideer de update-sleutels tegen de kolom-allowlist. Puur (geen DB) zodat de
+// SQL-injectie-afweer (finding #9) los testbaar is. Retourneert de toegestane
+// sleutels; gooit op elke onbekende sleutel (fail-closed).
+export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
+  const allowed = FOLDER_MAPPING_COLUMNS as ReadonlyArray<string>;
+  const unknown = Object.keys(m).filter(k => !allowed.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(`unknown folder-mapping field(s): ${unknown.join(', ')}`);
+  }
+  return Object.keys(m).filter((k): k is keyof Omit<FolderMapping, 'id'> => allowed.includes(k));
+}
+
 export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
-  const fields = Object.keys(m).map(k => `${k} = ?`).join(', ');
-  const values = [...Object.values(m), id];
+  // Alleen bekende kolommen accepteren; sleutels worden zo nooit uit caller-input
+  // in de SQL-tekst gezet.
+  const keys = validateFolderMappingKeys(m);
+  if (keys.length === 0) return;
+  const fields = keys.map(k => `${k} = ?`).join(', ');
+  const values = [...keys.map(k => (m as Record<string, unknown>)[k]), id];
   db.prepare(`UPDATE folder_mappings SET ${fields} WHERE id = ?`).run(...values);
 }
 

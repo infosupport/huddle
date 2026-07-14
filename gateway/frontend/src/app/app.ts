@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, OnInit } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { SidebarComponent } from './layout/sidebar/sidebar.component';
 import { TopbarComponent } from './layout/topbar/topbar.component';
@@ -6,17 +6,24 @@ import { SnapshotModalComponent } from './shared/modals/snapshot-modal/snapshot-
 import { StartContainerModalComponent } from './shared/modals/start-container-modal/start-container-modal.component';
 import { ConfirmModalComponent } from './shared/modals/confirm-modal/confirm-modal.component';
 import { BugButtonComponent } from './shared/components/bug-button/bug-button.component';
-import { ModalService } from './core/services/modal.service';
-import { StateService } from './core/services/state.service';
+import { LoginComponent } from './core/components/login.component';
+import { AuthService } from './core/services/auth.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, SidebarComponent, TopbarComponent, SnapshotModalComponent, StartContainerModalComponent, ConfirmModalComponent, BugButtonComponent],
+  imports: [RouterOutlet, SidebarComponent, TopbarComponent, SnapshotModalComponent, StartContainerModalComponent, ConfirmModalComponent, BugButtonComponent, LoginComponent],
   templateUrl: './app.html',
   styleUrl: './app.css'
 })
-export class App {
-  modalService = inject(ModalService);
-  stateService = inject(StateService);
+export class App implements OnInit {
+  auth = inject(AuthService);
+
+  // Bepaal de auth-status vóór de shell rendert. De shell-componenten
+  // (sidebar/topbar/router-outlet) injecteren StateService, die bij constructie
+  // meteen API-calls + WS opent; door de shell pas te tonen wanneer
+  // geauthenticeerd, doen we die calls niet vanaf het login-scherm.
+  ngOnInit(): void {
+    void this.auth.refresh();
+  }
 }

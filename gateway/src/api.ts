@@ -29,6 +29,14 @@ import {
   type IdeName,
 } from './docker';
 import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
+import {
+  getOperatorToken,
+  isAuthenticated,
+  timingSafeEqualStr,
+  isAllowedOrigin,
+  sessionCookie,
+  clearSessionCookie,
+} from './auth';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
@@ -107,14 +115,57 @@ export async function createApiServer(): Promise<FastifyInstance> {
     { method: 'POST', path: '/api/audit/sudo' },
     { method: 'GET',  path: '/api/tls/ca.crt' },
   ];
+  // Endpoints die de operator-browser/CLI zonder ingelogde sessie moet kunnen
+  // bereiken om überhaupt te kúnnen inloggen (en te zien dát login nodig is).
+  // De statische SPA-assets vallen hier ook onder (alles buiten /api/): het is
+  // enkel client-code, en de API zelf blijft achter auth.
+  const authPublicApi = new Set<string>(['/api/auth/login', '/api/auth/logout', '/api/auth/status']);
+
   app.addHook('onRequest', async (req, reply) => {
-    if (!isFromDevcontainer(req.socket.remoteAddress)) return;
-    const ok = devcontainerWhitelist.some(
-      w => w.method === req.method && w.path === req.url,
-    );
-    if (!ok) {
-      reply.code(403).send({ error: 'forbidden', reason: 'endpoint not allowed from devcontainer network' });
+    if (isFromDevcontainer(req.socket.remoteAddress)) {
+      // Devcontainer-callers: alleen de kleine whitelist, nooit het operator-
+      // token-pad (die endpoints zijn operator-only).
+      const ok = devcontainerWhitelist.some(
+        w => w.method === req.method && w.path === req.url,
+      );
+      if (!ok) {
+        reply.code(403).send({ error: 'forbidden', reason: 'endpoint not allowed from devcontainer network' });
+      }
+      return;
     }
+    // Operator-class caller (bridge-gateway/loopback/LAN — source-IP kan ze niet
+    // scheiden, zie auth.ts). Elke /api/*-route behalve de auth-bootstrap eist nu
+    // een geldig operator-token (Bearer of session-cookie). Findings #5/#10/#11.
+    const url = req.url ?? '';
+    const pathOnly = url.split('?')[0];
+    if (!pathOnly.startsWith('/api/')) return;      // statische SPA-assets vrij
+    if (authPublicApi.has(pathOnly)) return;         // login/logout/status vrij
+    if (!isAuthenticated(req.headers)) {
+      reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
+    }
+  });
+
+  // ── Auth-endpoints ─────────────────────────────────────────────────────────
+  // Login: token controleren (constant-tijd) en bij succes een httpOnly,
+  // SameSite=Strict session-cookie zetten. SameSite=Strict is meteen de
+  // CSRF/CSWSH-verdediging (finding #4): de browser stuurt de cookie niet mee op
+  // cross-site requests of WebSocket-handshakes.
+  app.post<{ Body: { token?: string } }>('/api/auth/login', async (req, reply) => {
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    if (!token || !timingSafeEqualStr(token, getOperatorToken())) {
+      return reply.code(401).send({ error: 'invalid_token' });
+    }
+    reply.header('set-cookie', sessionCookie(token));
+    return { ok: true };
+  });
+
+  app.post('/api/auth/logout', async (_req, reply) => {
+    reply.header('set-cookie', clearSessionCookie());
+    return { ok: true };
+  });
+
+  app.get('/api/auth/status', async (req) => {
+    return { authenticated: isAuthenticated(req.headers) };
   });
 
   // ── WebSocket push ────────────────────────────────────────────────────────
@@ -166,6 +217,21 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.server.on('upgrade', (req, socket, head) => {
     if (isFromDevcontainer((socket as net.Socket).remoteAddress)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    // Cross-Site WebSocket Hijacking (finding #4): een pagina die de operator
+    // bezoekt mag geen WS naar de portal openen. Twee onafhankelijke lagen:
+    // (1) Origin moet same-origin zijn; (2) een geldige operator-sessie (cookie/
+    // bearer) is vereist — en dankzij SameSite=Strict reist die cookie sowieso
+    // niet mee op een cross-site handshake.
+    if (!isAllowedOrigin(req.headers['origin'] as string | undefined, req.headers['host'])) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    if (!isAuthenticated(req.headers)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -886,10 +952,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.put<{ Params: { id: string }; Body: Partial<Omit<FolderMapping, 'id'>> }>(
     '/api/folder-mappings/:id',
-    async (req) => {
+    async (req, reply) => {
       const id = Number(req.params.id);
-      if (!getFolderMapping(id)) throw new Error('not found');
-      updateFolderMapping(id, req.body);
+      if (!getFolderMapping(id)) return reply.code(404).send({ error: 'not_found' });
+      try {
+        updateFolderMapping(id, req.body);
+      } catch (err: any) {
+        // Onbekende kolomsleutel (finding #9 fail-closed) → 400 i.p.v. 500.
+        return reply.code(400).send({ error: 'invalid_field', message: err.message });
+      }
       notifyStateChanged();
       return { ok: true };
     }
@@ -942,6 +1013,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // Vul de blocked-subnet cache vóór we verbindingen accepteren, zodat de
   // source-IP-gate meteen vanaf de eerste request werkt (geen fail-open venster).
   await refreshBlockedSubnets();
+
+  // Initialiseer (en log, indien gegenereerd) het operator-token vóór listen,
+  // zodat de operator meteen weet waarmee in te loggen.
+  getOperatorToken();
 
   const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
   console.log(`[api] listening on ${address}`);

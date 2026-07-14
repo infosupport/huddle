@@ -10,6 +10,10 @@ import path from 'path';
 export interface HuddleConfig {
   channel?: 'stable' | 'experiment';
   experiment?: number;
+  // Operator-token voor de control-plane-auth. Door `huddle init` gegenereerd en
+  // hier bewaard zodat volgende CLI-commando's zich als operator kunnen
+  // authenticeren (Authorization: Bearer). Env HUDDLE_OPERATOR_TOKEN wint.
+  operatorToken?: string;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), '.huddle');
@@ -30,6 +34,14 @@ export function readConfig(): HuddleConfig {
 export function writeConfig(config: HuddleConfig): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+/** Operator-token voor API-auth: env wint, anders uit de config. */
+export function operatorToken(): string | undefined {
+  const env = process.env.HUDDLE_OPERATOR_TOKEN?.trim();
+  if (env) return env;
+  const t = readConfig().operatorToken;
+  return t && t.trim() ? t.trim() : undefined;
 }
 
 /** Active experiment number, or undefined when running on stable. */
