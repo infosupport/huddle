@@ -92,7 +92,8 @@ async function doSanitize(): Promise<void> {
   let content: string;
   try {
     content = fs.readFileSync(RESOLV_CONF, 'utf8');
-  } catch {
+  } catch (err: any) {
+    console.warn('[dns-egress] kon resolv.conf niet lezen:', err.message);
     return;
   }
 
