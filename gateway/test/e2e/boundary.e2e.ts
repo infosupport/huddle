@@ -201,10 +201,13 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       await createRule('*.github.com', 'allow');
       await createRule('gist.github.com', 'deny');
       await sleep(1000);
-      // Exact (lowercase) → geblokkeerd.
-      expect(curlStatusIn(E2E_NAME, 'https://gist.github.com')).toBe('403');
-      // Zelfde host, ge-kapitaliseerd → mag NIET ineens door de wildcard-allow.
-      expect(curlStatusIn(E2E_NAME, 'https://GIST.GITHUB.COM')).toBe('403');
+      // Een host-level HTTPS-deny weigert de CONNECT-tunnel: curl krijgt géén
+      // HTTP-status (http_code '000'; de 403 zit in de CONNECT-respons, niet in
+      // http_code — anders dan het plain-HTTP-pad hierboven). Zou casing de deny
+      // omzeilen, dan matchte de host de wildcard-allow en wérd de CONNECT
+      // geaccepteerd (geen '000'). Zowel exact als ge-kapitaliseerd moet dus '000'.
+      expect(curlStatusIn(E2E_NAME, 'https://gist.github.com')).toBe('000');
+      expect(curlStatusIn(E2E_NAME, 'https://GIST.GITHUB.COM')).toBe('000');
     });
 
     // Finding #7 (MEDIUM) — pad-allowlist bypass via traversal. `--path-as-is`
