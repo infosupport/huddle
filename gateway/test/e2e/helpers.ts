@@ -79,7 +79,7 @@ export async function assertHuddleReachable(): Promise<void> {
   if (res.status === 401) {
     throw new Error(
       `huddle-API antwoordt maar weigert auth (401): zet HUDDLE_OPERATOR_TOKEN op het token ` +
-      `waarmee de gateway-onder-test gestart is (CI gebruikt e2e-operator-token).`,
+      `waarmee de gateway-onder-test gestart is (CI genereert er één in de Start Huddle-stap).`,
     );
   }
   if (!res.ok) {
