@@ -14,7 +14,7 @@ import { AuthService } from '../services/auth.service';
     <div class="login-backdrop">
       <form class="login-card" (ngSubmit)="submit()">
         <h1>Huddle</h1>
-        <p class="login-hint">Operator login required. Paste the token from the huddle container logs (or the <code>huddle init</code> output).</p>
+        <p class="login-hint">Operator login required. Use the auto-login link from the <code>huddle init</code> output, or paste the operator token below (also shown in the huddle container logs).</p>
         <input
           type="password"
           name="token"

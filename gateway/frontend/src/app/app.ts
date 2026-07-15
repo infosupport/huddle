@@ -23,7 +23,21 @@ export class App implements OnInit {
   // (sidebar/topbar/router-outlet) injecteren StateService, die bij constructie
   // meteen API-calls + WS opent; door de shell pas te tonen wanneer
   // geauthenticeerd, doen we die calls niet vanaf het login-scherm.
-  ngOnInit(): void {
-    void this.auth.refresh();
+  async ngOnInit(): Promise<void> {
+    // Auto-login via ?token=... in de URL (de link die `huddle init` logt), zodat
+    // de operator niets hoeft te plakken. Na gebruik strippen we het token uit de
+    // adresbalk zodat het niet in history/bookmarks blijft hangen.
+    const params = new URLSearchParams(location.search);
+    const urlToken = params.get('token');
+    if (urlToken) {
+      await this.auth.login(urlToken);
+      params.delete('token');
+      const qs = params.toString();
+      history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+    }
+    // Al ingelogd via het URL-token? Dan is de status al bekend; anders opvragen.
+    if (this.auth.authenticated() !== true) {
+      await this.auth.refresh();
+    }
   }
 }

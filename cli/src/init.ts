@@ -164,7 +164,13 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
   console.log();
-  console.log(bold('Operator login token (needed for the portal):'));
-  console.log(`    ${operatorToken}`);
-  console.log(dim('  Saved to ~/.huddle/config.json for the CLI. Paste it once in the portal to log in.'));
+  // Volledige auto-login-link: open deze en de portal logt je automatisch in met
+  // het operator-token (de frontend leest ?token=..., logt in en verwijdert het
+  // daarna uit de adresbalk). Zo hoef je niets te plakken.
+  const loginUrl = `http://localhost:${HOST_PORT}/?token=${encodeURIComponent(operatorToken)}`;
+  console.log(bold('Open the portal (auto-login link):'));
+  console.log(green(`    ${loginUrl}`));
+  console.log(dim('  Opens the portal and logs you in automatically.'));
+  console.log(dim(`  Manual token (if you prefer to paste it): ${operatorToken}`));
+  console.log(dim('  The token is also saved to ~/.huddle/config.json for the CLI.'));
 }
