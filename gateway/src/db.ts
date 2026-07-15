@@ -118,23 +118,33 @@ export function initDb(): void {
     db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
   }
 
+  // Domeinen worden voortaan canoniek (lowercase) opgeslagen zodat de exacte
+  // lookup en de wildcard-match op dezelfde vorm werken (finding #3). Migreer
+  // bestaande rijen idempotent naar lowercase VÓÓR de dedup hieronder, zodat
+  // case-varianten (`GIST.github.com` vs `gist.github.com`) samenvallen en de
+  // dedup ze tot één rij terugbrengt in plaats van op de unieke index te botsen.
+  db.exec('UPDATE rules SET domain = lower(domain) WHERE domain <> lower(domain)');
+
   // Uniciteit geldt nu op (domain, container, pad): meerdere padregels per
   // domein moeten naast elkaar kunnen bestaan. De oude domain+container index
   // wordt vervangen.
   // Opschonen voorkomt dat een migratie crasht wanneer oude data per ongeluk
-  // meerdere rijen met dezelfde unieke sleutel bevat.
+  // meerdere rijen met dezelfde unieke sleutel bevat. NOCASE in de GROUP BY
+  // zodat de dedup dezelfde hoofdletter-ongevoeligheid hanteert als de index.
   db.exec(`
     DELETE FROM rules
     WHERE id NOT IN (
       SELECT MAX(id)
       FROM rules
-      GROUP BY domain, COALESCE(container_id, ''), COALESCE(path_pattern, '')
+      GROUP BY domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, '')
     )
   `);
   db.exec('DROP INDEX IF EXISTS idx_rules_domain_container');
+  // De oude index kon nog zonder NOCASE bestaan; herbouw hem case-insensitief.
+  db.exec('DROP INDEX IF EXISTS idx_rules_domain_container_path');
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_domain_container_path
-       ON rules (domain, COALESCE(container_id, ''), COALESCE(path_pattern, ''))`
+       ON rules (domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, ''))`
   );
 
   // Seed the global allow rule for huddle's own domain so the sudo-audit

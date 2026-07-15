@@ -5,7 +5,7 @@ import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
 import { URL } from 'url';
-import { checkRule, isPathMode } from './rules';
+import { checkRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
 import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
@@ -123,14 +123,20 @@ function handleTokenExchangeResponse(
       const rawBody = decodeBody(chunks, upstreamRes.headers);
       const json = rawBody ? JSON.parse(rawBody) : null;
       if (json?.access_token) {
-        const placeholder = storeTokenExchange(containerId ?? 'unknown', json.access_token as string);
+        // Bind de placeholder aan de aanvragende container (finding #12); geen
+        // 'unknown'-fallback meer. Een null container levert een niet-inwissel-
+        // bare placeholder op (fail-closed).
+        const placeholder = storeTokenExchange(containerId, json.access_token as string);
         json.access_token = placeholder;
         console.log(`[token-exchange] placeholder issued voor container ${containerId}`);
         outBuf = Buffer.from(JSON.stringify(json));
         delete outHeaders['content-encoding'];
         delete outHeaders['transfer-encoding'];
         outHeaders['content-length'] = String(outBuf.length);
-        auditResBody = cap(JSON.stringify(json));
+        // De placeholder is zelf een inwisselbare bearer-credential: redact hem
+        // uit de audit-body (finding #12) — de audit toont dat er een exchange
+        // was, niet de bruikbare waarde.
+        auditResBody = cap(JSON.stringify({ ...json, access_token: '<redacted-placeholder>' }));
       } else {
         outBuf = Buffer.concat(chunks);
         outHeaders['content-length'] = String(outBuf.length);
@@ -169,11 +175,34 @@ export function createProxyServer(): http.Server {
       return;
     }
 
+    // Canoniseer de host één keer aan de rand naar de vorm waarop we matchen,
+    // loggen én dialen — zodat de gecontroleerde en de verstuurde host niet
+    // kunnen divergeren (parser-differential, finding #3 + staart).
+    const host = canonicalizeHost(target.hostname);
+    if (host === null) {
+      send502(res, 'invalid target host');
+      return;
+    }
+
+    // Normaliseer het pad naar de vorm die de upstream zal interpreteren en
+    // forward exact dat pad. `new URL` heeft `../` al weggevouwen; normalizePathname
+    // dekt daarnaast `%2f`-getruceerde traversal (finding #7) en weigert fail-closed.
+    const normPath = normalizePathname(target.pathname);
+    if (normPath === null) {
+      logAudit({
+        containerId, domain: host, action: 'deny', ruleId: null,
+        method: req.method ?? null, path: `${target.pathname}${target.search}`, resStatus: 403,
+      });
+      send403(res, host, 'deny', containerId);
+      return;
+    }
+    const forwardPath = `${normPath}${target.search}`;
+
     let ruleId: number | null;
-    if (target.hostname === 'huddle') {
+    if (host === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
       const allowed =
-        (target.port === '3000' && req.method === 'POST' && target.pathname === '/api/audit/sudo');
+        (target.port === '3000' && req.method === 'POST' && normPath === '/api/audit/sudo');
       if (!allowed) {
         logAudit({
           containerId,
@@ -181,7 +210,7 @@ export function createProxyServer(): http.Server {
           action: 'deny',
           ruleId: null,
           method: req.method ?? null,
-          path: `${target.pathname}${target.search}`,
+          path: forwardPath,
           resStatus: 403,
         });
         send403(res, 'huddle', 'deny', containerId);
@@ -189,18 +218,18 @@ export function createProxyServer(): http.Server {
       }
       ruleId = null;
     } else {
-      const result = checkRule(target.hostname, containerId, target.pathname);
+      const result = checkRule(host, containerId, normPath);
       if (result.status !== 'allow') {
         logAudit({
           containerId,
-          domain: target.hostname,
+          domain: host,
           action: result.status,
           ruleId: null,
           method: req.method ?? null,
-          path: `${target.pathname}${target.search}`,
+          path: forwardPath,
           resStatus: 403,
         });
-        send403(res, target.hostname, result.status, containerId);
+        send403(res, host, result.status, containerId);
         return;
       }
       ruleId = result.ruleId;
@@ -218,11 +247,11 @@ export function createProxyServer(): http.Server {
     // response (en de volledige req_body) bij zodra upstream afrondt.
     const auditId = logAudit({
       containerId,
-      domain: target.hostname,
+      domain: host,
       action: 'allow',
       ruleId,
       method: req.method ?? null,
-      path: `${target.pathname}${target.search}`,
+      path: forwardPath,
       reqHeaders: headersToJson(req.headers),
     });
     let completed = false;
@@ -243,10 +272,10 @@ export function createProxyServer(): http.Server {
 
     const upstream = http.request(
       {
-        hostname: target.hostname,
+        hostname: host,
         port: upstreamPort,
         method: req.method,
-        path: `${target.pathname}${target.search}`,
+        path: forwardPath,
         headers: outgoingHeaders,
       },
       (upstreamRes) => {
@@ -283,9 +312,15 @@ export function createProxyServer(): http.Server {
     const containerId = await resolveContainerByIp(
       (clientSocket as net.Socket).remoteAddress ?? ''
     );
-    const [hostname, portStr] = (req.url || '').split(':');
+    const [rawHostname, portStr] = (req.url || '').split(':');
     const port = Number(portStr) || 443;
 
+    // Canoniseer de CONNECT-host op dezelfde manier als het plain-HTTP-pad
+    // (`new URL().hostname`) zodat beide paden op één canonieke vorm matchen,
+    // loggen, het cert genereren en dialen. Zonder dit omzeilde een
+    // ge-kapitaliseerde host (`GIST.GITHUB.COM`) een exacte deny-regel terwijl
+    // de wildcard-allow wél matchte (finding #3).
+    const hostname = canonicalizeHost(rawHostname);
     if (!hostname) {
       rejectSocket(clientSocket, 400, 'deny', '', null);
       return;
@@ -399,7 +434,21 @@ export function createProxyServer(): http.Server {
     innerHttp.on('request', (innerReq, innerRes) => {
       // De CONNECT stond de host al toe (pad was toen versleuteld). Nu de TLS
       // getermineerd is kennen we het pad: pas padbeleid alsnog toe per request.
-      const pathResult = checkRule(hostname, containerId, innerReq.url ?? null);
+      //
+      // Normaliseer het pad één keer naar de vorm die de upstream zal
+      // interpreteren en forward EXACT dat pad — zo kunnen de gecontroleerde en
+      // de verstuurde bytes niet divergeren (finding #7). Traversal (`../`,
+      // `..%2f`) of kapotte encoding → fail closed (403), nooit doorsturen.
+      const rawUrl = innerReq.url ?? '/';
+      const qi = rawUrl.indexOf('?');
+      const rawPathPart = qi === -1 ? rawUrl : rawUrl.slice(0, qi);
+      const query = qi === -1 ? '' : rawUrl.slice(qi);
+      const normPath = normalizePathname(rawPathPart);
+      const forwardUrl = normPath === null ? null : `${normPath}${query}`;
+
+      const pathResult = normPath === null
+        ? { status: 'deny' as const, ruleId: null }
+        : checkRule(hostname, containerId, forwardUrl);
       // Alles behalve 'allow' blokkeren: een 'deny'-padregel, maar ook een nog
       // niet beoordeeld subpad ('requested') van een pad-allowlist-domein —
       // fail-closed tot de operator het pad expliciet toestaat.
@@ -442,12 +491,13 @@ export function createProxyServer(): http.Server {
       if (hostname === 'api.anthropic.com') {
         const authVal = upstreamHeaders['authorization'] as string | undefined;
         if (authVal?.startsWith('Bearer ') && isPlaceholderToken(authVal.slice(7))) {
-          const real = resolveToken(authVal.slice(7));
+          // Alleen inwisselen als deze container de placeholder ook kreeg (#12).
+          const real = resolveToken(authVal.slice(7), containerId);
           if (real) upstreamHeaders['authorization'] = `Bearer ${real}`;
         }
         const apiKey = upstreamHeaders['x-api-key'] as string | undefined;
         if (apiKey && isPlaceholderToken(apiKey)) {
-          const real = resolveToken(apiKey);
+          const real = resolveToken(apiKey, containerId);
           if (real) upstreamHeaders['x-api-key'] = real;
         }
       }
@@ -498,7 +548,9 @@ export function createProxyServer(): http.Server {
           hostname,
           port,
           method: innerReq.method,
-          path: innerReq.url,
+          // Forward het genormaliseerde pad dat we ook gecontroleerd hebben, niet
+          // de rauwe (mogelijk traversal-getruceerde) innerReq.url (finding #7).
+          path: forwardUrl ?? innerReq.url,
           headers: upstreamHeaders,
           servername: hostname,
         },

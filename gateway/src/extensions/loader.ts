@@ -2,6 +2,7 @@ import AdmZip from 'adm-zip';
 import path from 'path';
 import fs from 'fs';
 import net from 'net';
+import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
 import { stateEvents } from '../events';
@@ -149,9 +150,44 @@ function parseManifest(raw: string): ExtensionManifest {
   return manifest;
 }
 
+// ── Extensie-integriteit (finding #11) ──────────────────────────────────────
+// Een geüploade extensie draait IN-PROCESS in de gateway (await import → raw
+// docker.sock) = host-root-equivalent. Sinds de operator-auth zit de upload
+// achter authenticatie, maar dat beschermt niet tegen een operator die een
+// gemanipuleerde/kwaadaardige bundel uploadt. Daarom: bereken de SHA-256 van de
+// bundel en toets die tegen een pinned allowlist. Consistent met het Phase 0-
+// patroon (HUDDLE_HOSTCONFIG_ENFORCE): standaard LOG-ONLY (logt de hash zodat de
+// operator hem kan pinnen); zet HUDDLE_EXTENSION_SHA256_ALLOWLIST (komma-
+// gescheiden hashes) om alleen die bundels toe te laten en de rest te weigeren.
+export function bundleSha256(zipBuffer: Buffer): string {
+  return crypto.createHash('sha256').update(zipBuffer).digest('hex');
+}
+
+// Retourneert een weigeringsreden, of null wanneer de bundel is toegestaan.
+export function checkExtensionIntegrity(zipBuffer: Buffer): string | null {
+  const hash = bundleSha256(zipBuffer);
+  const raw = process.env.HUDDLE_EXTENSION_SHA256_ALLOWLIST?.trim();
+  if (!raw) {
+    console.warn(
+      `[ext] integriteit (log-only): bundel sha256=${hash}. ` +
+      `Zet HUDDLE_EXTENSION_SHA256_ALLOWLIST=${hash}[,…] om uploads tot vertrouwde bundels te beperken.`,
+    );
+    return null;
+  }
+  const allow = new Set(raw.split(',').map(h => h.trim().toLowerCase()).filter(Boolean));
+  if (!allow.has(hash.toLowerCase())) {
+    return `extension bundle sha256 ${hash} is not on HUDDLE_EXTENSION_SHA256_ALLOWLIST`;
+  }
+  return null;
+}
+
 export async function installExtension(
   zipBuffer: Buffer,
 ): Promise<{ id: string; name: string; restartRequired: boolean }> {
+  // Integriteit vóór we ook maar iets uitpakken of laden (fail-closed).
+  const integrityError = checkExtensionIntegrity(zipBuffer);
+  if (integrityError) throw new Error(integrityError);
+
   const zip = new AdmZip(zipBuffer);
 
   const manifestEntry = zip.getEntry('manifest.json');

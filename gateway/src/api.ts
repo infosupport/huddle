@@ -390,10 +390,13 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.post<{
     Body: { domain: string; container_id?: string | null; status: RuleStatus; expires_at?: number | null; path_pattern?: string | null };
   }>('/api/rules', async (req, reply) => {
-    const { domain, container_id = null, status, expires_at = null, path_pattern = null } = req.body;
-    if (!domain || !['requested', 'allow', 'deny'].includes(status)) {
+    const { domain: rawDomain, container_id = null, status, expires_at = null, path_pattern = null } = req.body;
+    if (!rawDomain || !['requested', 'allow', 'deny'].includes(status)) {
       return reply.code(400).send({ error: 'invalid payload' });
     }
+    // Domeinen canoniek (lowercase) opslaan zodat de rule-engine hoofdletter-
+    // ongevoelig matcht (finding #3). Wildcards (`*.example.com`) blijven intact.
+    const domain = rawDomain.toLowerCase();
     try {
       const info = db
         .prepare(

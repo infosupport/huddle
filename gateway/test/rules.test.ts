@@ -31,6 +31,8 @@ let matchDomain: typeof import('../src/rules').matchDomain;
 let matchPath: typeof import('../src/rules').matchPath;
 let firstSegmentPattern: typeof import('../src/rules').firstSegmentPattern;
 let isPathMode: typeof import('../src/rules').isPathMode;
+let canonicalizeHost: typeof import('../src/rules').canonicalizeHost;
+let normalizePathname: typeof import('../src/rules').normalizePathname;
 
 const CID = 'container-abc';
 
@@ -58,6 +60,8 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     matchPath = rulesMod.matchPath;
     firstSegmentPattern = rulesMod.firstSegmentPattern;
     isPathMode = rulesMod.isPathMode;
+    canonicalizeHost = rulesMod.canonicalizeHost;
+    normalizePathname = rulesMod.normalizePathname;
     dbMod.initDb();
   });
   beforeEach(() => { db.exec('DELETE FROM rules'); db.exec('DELETE FROM containers'); });
@@ -292,6 +296,116 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     it('host-only allow matcht ongeacht het pad', () => {
       setRule('hostonly.test', CID, 'allow');
       expect(checkRule('hostonly.test', CID, '/any/path').status).toBe('allow');
+    });
+  });
+
+  // ── Finding #3 — hoofdletter-bypass van exacte deny-regels ─────────────────
+  // De klassieke broad-allow/specific-deny vorm: `*.github.com` allow +
+  // `gist.github.com` deny. Een ge-kapitaliseerde host mocht de deny NIET
+  // omzeilen (was een reliable firewall-bypass via CONNECT GIST.GITHUB.COM).
+  describe('regressie #3: casing omzeilt geen exacte deny', () => {
+    it('exacte deny wint van wildcard allow, ongeacht de host-casing', () => {
+      setRule('*.github.com', null, 'allow');
+      setRule('gist.github.com', null, 'deny');
+      expect(checkRule('gist.github.com', CID).status).toBe('deny');
+      // Zelfde host, ge-kapitaliseerd — checkRule lowercase't het domein-argument
+      // en de exacte SQL-lookup is COLLATE NOCASE.
+      expect(checkRule('GIST.GITHUB.COM', CID).status).toBe('deny');
+      expect(checkRule('Gist.GitHub.Com', CID).status).toBe('deny');
+    });
+    it('een deny-regel die zelf ge-kapitaliseerd is opgeslagen matcht ook', () => {
+      // Simuleer een oude, niet-gemigreerde rij (mixed case) — COLLATE NOCASE
+      // op de index/lookup vangt hem alsnog.
+      db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('EVIL.TEST', NULL, 'deny')`).run();
+      expect(checkRule('evil.test', CID).status).toBe('deny');
+    });
+  });
+
+  // ── Finding #7 — pad-traversal door een pad-allowlist ──────────────────────
+  describe('regressie #7: pad-normalisatie blokkeert traversal', () => {
+    it('`/foo/../secret` matcht niet langer een `/foo/*` allow', () => {
+      setRule('example.com', CID, 'deny', null, null, 1);          // path-mode marker
+      setRule('example.com', CID, 'allow', null, '/foo/*');        // alleen /foo/* toegestaan
+      expect(checkRule('example.com', CID, '/foo/bar').status).toBe('allow');
+      // Traversal → normaliseert weg van /foo/ → niet meer 'allow'.
+      expect(checkRule('example.com', CID, '/foo/../secret').status).not.toBe('allow');
+      expect(checkRule('example.com', CID, '/foo/..%2f..%2fadmin').status).not.toBe('allow');
+      expect(checkRule('example.com', CID, '/foo/../').status).not.toBe('allow');
+    });
+  });
+
+  describe('canonicalizeHost (pure helper)', () => {
+    it('lowercase + trailing dot strippen', () => {
+      expect(canonicalizeHost('GIST.GITHUB.COM')).toBe('gist.github.com');
+      expect(canonicalizeHost('example.com.')).toBe('example.com');
+      expect(canonicalizeHost('Example.COM.')).toBe('example.com');
+    });
+    it('IDN → punycode (de vorm die DNS/SNI zien)', () => {
+      // bücher.example → xn--bcher-kva.example
+      expect(canonicalizeHost('bücher.example')).toBe('xn--bcher-kva.example');
+    });
+    it('weigert control chars, whitespace en lege host', () => {
+      expect(canonicalizeHost('')).toBeNull();
+      expect(canonicalizeHost('  ')).toBeNull();
+      expect(canonicalizeHost('evil.com\r\nHost: x')).toBeNull();
+      expect(canonicalizeHost('a b.com')).toBeNull();
+    });
+    it('is idempotent op een al-canonieke host', () => {
+      expect(canonicalizeHost('gist.github.com')).toBe('gist.github.com');
+    });
+  });
+
+  describe('normalizePathname (pure helper)', () => {
+    it('laat een normaal pad ongemoeid (incl. trailing slash)', () => {
+      expect(normalizePathname('/api/v1/foo')).toBe('/api/v1/foo');
+      expect(normalizePathname('/api/v1/')).toBe('/api/v1/');
+      expect(normalizePathname('/')).toBe('/');
+    });
+    it('strip query en fragment', () => {
+      expect(normalizePathname('/foo?x=1')).toBe('/foo');
+      expect(normalizePathname('/foo#frag')).toBe('/foo');
+    });
+    it('vouwt `.`-segmenten weg', () => {
+      expect(normalizePathname('/foo/./bar')).toBe('/foo/bar');
+    });
+    it('fail-closed op `..`-traversal (plain, %-encoded, dubbel-slash)', () => {
+      expect(normalizePathname('/foo/../secret')).toBeNull();
+      expect(normalizePathname('/foo/..%2f..%2fadmin')).toBeNull();
+      expect(normalizePathname('/foo/../')).toBeNull();
+      expect(normalizePathname('/..')).toBeNull();
+    });
+    it('fail-closed op kapotte percent-encoding', () => {
+      expect(normalizePathname('/foo/%zz')).toBeNull();
+      expect(normalizePathname('/foo/%2')).toBeNull();
+    });
+    it('behandelt dubbel-encoded `..` als een letterlijk segment (single decode)', () => {
+      // %252e%252e → één decode → %2e%2e (geen `..`-segment) → géén traversal.
+      expect(normalizePathname('/foo/%252e%252e/x')).toBe('/foo/%2e%2e/x');
+    });
+    it('behoudt legitieme %-encoded tekens (geen verminking van de beslissing)', () => {
+      // %2e%2e = `..` → traversal → fail closed.
+      expect(normalizePathname('/foo/%2e%2e/x')).toBeNull();
+      // een gewoon encoded teken (spatie) in een segment blijft een geldig pad.
+      expect(normalizePathname('/a%20b/c')).toBe('/a b/c');
+    });
+  });
+
+  describe('matchPath: segment-grens (regressie #7 tail)', () => {
+    it('`*`-suffix matcht alleen op een segment-grens', () => {
+      expect(matchPath('/safe*', '/safe')).toBe(true);
+      expect(matchPath('/safe*', '/safe/x')).toBe(true);
+      expect(matchPath('/safe*', '/safe-danger')).toBe(false);
+    });
+    it('`/foo/*` matcht subpaden maar niet na traversal', () => {
+      expect(matchPath('/foo/*', '/foo/bar')).toBe(true);
+      expect(matchPath('/foo/*', '/foo/../secret')).toBe(false);
+      expect(matchPath('/foo/*', '/foo/..%2fsecret')).toBe(false);
+    });
+    it('null/leeg patroon (host-only) matcht elk pad, ook traversal', () => {
+      // Host-only regels handhaven geen pad; traversal-bescherming zit in de
+      // pad-regels zelf.
+      expect(matchPath(null, '/foo/../secret')).toBe(true);
+      expect(matchPath('', '/whatever')).toBe(true);
     });
   });
 });
