@@ -40,10 +40,16 @@ export function containerRunning(name: string): boolean {
 }
 
 // ── Huddle management API (admin, vanaf de host op :3000) ────────────────────
+// De API eist een operator-token (auth.ts); geef de gateway-onder-test hetzelfde
+// token via HUDDLE_OPERATOR_TOKEN, dan authenticeren de helpers daarmee.
 async function api(method: string, path: string, body?: unknown): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  const token = process.env.HUDDLE_OPERATOR_TOKEN?.trim();
+  if (token) headers['authorization'] = `Bearer ${token}`;
   const res = await fetch(`${HUDDLE_URL}${path}`, {
     method,
-    headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();

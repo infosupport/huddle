@@ -15,7 +15,7 @@ interface RuleRow {
 
 // ── Pure match-helpers (geen DB) ─────────────────────────────────────────────
 // Bewust los van de DB zodat ze deterministisch testbaar zijn zonder draaiende
-// SQLite-binding, analoog aan de helpers in net-gate.ts.
+// SQLite-binding.
 
 // Matcht een domein-patroon tegen een host. Exacte gelijkheid, of een wildcard
 // `*.example.com` die elke subdomein-host matcht (maar NIET kaal `example.com`).

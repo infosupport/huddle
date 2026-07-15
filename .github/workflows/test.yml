@@ -58,6 +58,7 @@ jobs:
             --name huddle \
             --network devcontainer-net \
             -p 3000:3000 \
+            -e HUDDLE_OPERATOR_TOKEN=e2e-operator-token \
             -v huddle-data:/data \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v /tmp/dc-sockets:/tmp/dc-sockets \
@@ -67,7 +68,7 @@ jobs:
       - name: Wait for Huddle
         run: |
           for i in $(seq 1 20); do
-            curl -sf http://localhost:3000/api/rules && break
+            curl -sf -H "Authorization: Bearer e2e-operator-token" http://localhost:3000/api/rules && break
             sleep 2
           done
 
@@ -113,3 +114,4 @@ jobs:
         working-directory: gateway
         env:
           HUDDLE_E2E: "1"
+          HUDDLE_OPERATOR_TOKEN: e2e-operator-token

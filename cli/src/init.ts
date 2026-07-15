@@ -133,13 +133,11 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     writeConfig({ ...cfg, operatorToken });
   }
   // The container is created on the engine's default network first (with -p),
-  // then joins devcontainer-net (--internal) afterwards. Docker needs this
-  // ordering because it skips the host port-forward entirely when a container
-  // is created directly on an --internal network (moby/moby#36174). Rootless
-  // Podman needs the same ordering for a different reason: its pasta port-
-  // forwarder delivers host traffic in via the PRIMARY network interface, so if
-  // devcontainer-net were primary the operator's browser would appear to come
-  // from the devcontainer subnet and get blocked by the source-IP gate (api.ts).
+  // then joins devcontainer-net (--internal) afterwards: Docker skips the host
+  // port-forward entirely when a container is created directly on an --internal
+  // network (moby/moby#36174). Which source IP the gateway sees for forwarded
+  // traffic no longer matters — the control plane authenticates with the
+  // operator token instead of source-IP filtering.
   run(
     `${rt} run -d` +
     ` --name ${CONTAINER}` +

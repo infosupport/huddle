@@ -149,9 +149,9 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   // ── Huddle self-traffic via de proxy ──────────────────────────────────────
   // Read-only, geen gedeelde state — beide tests draaien concurrent.
   describe.concurrent('huddle self-traffic', () => {
-    it('management-API is onbereikbaar vanuit de devcontainer (→ 403)', () => {
+    it('management-API is onbereikbaar zonder operator-token (→ 401)', () => {
       const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules');
-      expect(code).toBe('403');
+      expect(code).toBe('401');
     });
 
     it('sudo-audit ingest is wél bereikbaar (→ 200)', () => {

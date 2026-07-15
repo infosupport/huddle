@@ -1,7 +1,6 @@
 import path from 'path';
 import fs from 'fs';
 import http from 'http';
-import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
@@ -21,14 +20,12 @@ import {
   forceDeleteContainer,
   startExistingContainer,
   cleanupContainerNetwork,
-  listNetworks,
   resolveContainerByIp,
   isIdeName,
   execContainerOutput,
   type StartParams,
   type IdeName,
 } from './docker';
-import { cidrToRange, isDevcontainerSource, type IpRange } from './net-gate';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -69,49 +66,21 @@ interface Rule {
   request_count: number;
 }
 
-// ── Source-IP gate: deny management-API access from devcontainer networks ──
-// The API listens on 0.0.0.0 so the host port forward (-p 3000:3000) works,
-// but Huddle is also attached to devcontainer-net and every dc-net-* — without
-// this filter, any container on those networks can reach unauth'd /api/* routes.
-// Pure IPv4/CIDR-logica zit in net-gate.ts (los testbaar). Hier alleen de live
-// cache + Docker-refresh eromheen.
-let blockedSubnets: IpRange[] = [];
-
-async function refreshBlockedSubnets(): Promise<void> {
-  try {
-    const nets = await listNetworks();
-    const next: IpRange[] = [];
-    for (const n of nets) {
-      const name: string = n.Name ?? '';
-      if (name !== 'devcontainer-net' && !/^dc-net-/.test(name)) continue;
-      for (const cfg of (n.IPAM?.Config ?? [])) {
-        const range = cidrToRange(cfg.Subnet);
-        if (range) next.push(range);
-      }
-    }
-    blockedSubnets = next;
-  } catch (e) {
-    console.error('[api] failed to refresh blocked subnets:', (e as Error).message);
-  }
-}
-
-function isFromDevcontainer(remoteAddr: string | null | undefined): boolean {
-  return isDevcontainerSource(remoteAddr, blockedSubnets);
-}
-
 export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
-  // Build the blocked-subnet cache and refresh it periodically so new
-  // dc-net-* networks (created when a devcontainer starts) get picked up. De
-  // eerste vulling wordt vóór app.listen() afgewacht (zie onderaan), zodat er
-  // geen opstart-venster is waarin een devcontainer de gate omzeilt doordat de
-  // cache nog leeg is.
-  setInterval(refreshBlockedSubnets, 5000).unref();
-
-  // Devcontainers may only reach a tiny whitelist of endpoints (currently just
-  // the sudo audit ingest). Everything else on the API is admin-only.
-  const devcontainerWhitelist: Array<{ method: string; path: string }> = [
+  // Eén toegangsmodel voor de hele management-API: het operator-token (auth.ts).
+  // Source-IP zegt hier niets betrouwbaars — Docker's proxy en Podman's
+  // rootlessport herschrijven de bron naar een bridge-gateway-IP, en onder
+  // rootless Podman wisselt zelfs wélk netwerk dat is per restart/disconnect
+  // (GetRootlessPortChildIP itereert een map). Devcontainers, LAN en operator
+  // zijn dus alleen met het token te scheiden; de vroegere subnet-gate is
+  // daarom vervangen door auth op elke /api/*-route.
+  //
+  // Endpoints die devcontainers zónder token moeten kunnen bereiken (sudo-audit
+  // ingest en de proxy-CA). Bewust minimaal houden: alles hier is voor iedereen
+  // op het netwerk aanroepbaar.
+  const devcontainerPublicApi: Array<{ method: string; path: string }> = [
     { method: 'POST', path: '/api/audit/sudo' },
     { method: 'GET',  path: '/api/tls/ca.crt' },
   ];
@@ -122,24 +91,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
   const authPublicApi = new Set<string>(['/api/auth/login', '/api/auth/logout', '/api/auth/status']);
 
   app.addHook('onRequest', async (req, reply) => {
-    if (isFromDevcontainer(req.socket.remoteAddress)) {
-      // Devcontainer-callers: alleen de kleine whitelist, nooit het operator-
-      // token-pad (die endpoints zijn operator-only).
-      const ok = devcontainerWhitelist.some(
-        w => w.method === req.method && w.path === req.url,
-      );
-      if (!ok) {
-        reply.code(403).send({ error: 'forbidden', reason: 'endpoint not allowed from devcontainer network' });
-      }
-      return;
-    }
-    // Operator-class caller (bridge-gateway/loopback/LAN — source-IP kan ze niet
-    // scheiden, zie auth.ts). Elke /api/*-route behalve de auth-bootstrap eist nu
-    // een geldig operator-token (Bearer of session-cookie). Findings #5/#10/#11.
     const url = req.url ?? '';
     const pathOnly = url.split('?')[0];
     if (!pathOnly.startsWith('/api/')) return;      // statische SPA-assets vrij
     if (authPublicApi.has(pathOnly)) return;         // login/logout/status vrij
+    if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
     if (!isAuthenticated(req.headers)) {
       reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
     }
@@ -215,11 +171,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
   stateEvents.on('changed', broadcast);
 
   app.server.on('upgrade', (req, socket, head) => {
-    if (isFromDevcontainer((socket as net.Socket).remoteAddress)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
     // Cross-Site WebSocket Hijacking (finding #4): een pagina die de operator
     // bezoekt mag geen WS naar de portal openen. Twee onafhankelijke lagen:
     // (1) Origin moet same-origin zijn; (2) een geldige operator-sessie (cookie/
@@ -1009,10 +960,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
       reply.code(500).send({ error: err.message });
     }
   });
-
-  // Vul de blocked-subnet cache vóór we verbindingen accepteren, zodat de
-  // source-IP-gate meteen vanaf de eerste request werkt (geen fail-open venster).
-  await refreshBlockedSubnets();
 
   // Initialiseer (en log, indien gegenereerd) het operator-token vóór listen,
   // zodat de operator meteen weet waarmee in te loggen.
