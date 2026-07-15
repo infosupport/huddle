@@ -61,8 +61,34 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
   return parsed;
 }
 
+// Pre-flight voor de e2e-suite. Gooit met een gerichte melding zodat een
+// misconfiguratie niet verdwijnt achter een generiek "niet bereikbaar":
+//   - stack down / verkeerde URL  → "niet bereikbaar"
+//   - token ontbreekt of fout     → "401 … zet HUDDLE_OPERATOR_TOKEN"
+export async function assertHuddleReachable(): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${HUDDLE_URL}/api/rules`, {
+      headers: process.env.HUDDLE_OPERATOR_TOKEN?.trim()
+        ? { authorization: `Bearer ${process.env.HUDDLE_OPERATOR_TOKEN.trim()}` }
+        : {},
+    });
+  } catch (err) {
+    throw new Error(`huddle-API niet bereikbaar op ${HUDDLE_URL} — draait de stack? (${(err as Error).message})`);
+  }
+  if (res.status === 401) {
+    throw new Error(
+      `huddle-API antwoordt maar weigert auth (401): zet HUDDLE_OPERATOR_TOKEN op het token ` +
+      `waarmee de gateway-onder-test gestart is (CI gebruikt e2e-operator-token).`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(`huddle-API pre-flight faalde: GET /api/rules → ${res.status}`);
+  }
+}
+
 export async function huddleReachable(): Promise<boolean> {
-  try { await api('GET', '/api/rules'); return true; } catch { return false; }
+  try { await assertHuddleReachable(); return true; } catch { return false; }
 }
 
 export interface Rule { id: number; domain: string; container_id: string | null; status: string; }

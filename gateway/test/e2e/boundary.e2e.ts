@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   E2E_ENABLED, E2E_NAME, E2E_IMAGE,
-  dockerAvailable, huddleReachable,
+  dockerAvailable, assertHuddleReachable,
   spawnDevcontainer, removeDevcontainer,
   execIn, curlStatusIn,
   clearRulesForDomain, allowDomain, setGrant, revokeGrant, setActionPolicy, sleep,
@@ -26,7 +26,7 @@ const TEST_DOMAIN = 'example.com';
 describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   beforeAll(async () => {
     if (!dockerAvailable()) throw new Error('docker CLI niet beschikbaar op deze host');
-    if (!(await huddleReachable())) throw new Error('huddle-API niet bereikbaar op de HUDDLE_URL — draait de stack?');
+    await assertHuddleReachable();
     await removeDevcontainer();
     await spawnDevcontainer();
   });
