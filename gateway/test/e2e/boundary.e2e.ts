@@ -149,8 +149,19 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   // ── Huddle self-traffic via de proxy ──────────────────────────────────────
   // Read-only, geen gedeelde state — beide tests draaien concurrent.
   describe.concurrent('huddle self-traffic', () => {
-    it('management-API is onbereikbaar zonder operator-token (→ 401)', () => {
+    // Devcontainer → management-API kent twee paden, elk met een eigen slot:
+    //   1. via de egress-proxy (default: curlrc/http_proxy wijst naar huddle:80)
+    //      → de self-traffic-gate van de proxy weigert alles behalve de
+    //        audit-ingest met 403, de request bereikt de API nooit;
+    //   2. direct naar :3000 (iptables staat al het TCP-verkeer naar het
+    //      huddle-IP toe) → daar is het operator-token de barrière: 401.
+    it('proxy blokkeert self-traffic naar de management-API (→ 403)', () => {
       const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules');
+      expect(code).toBe('403');
+    });
+
+    it('directe management-API-call zonder operator-token krijgt 401', () => {
+      const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules', `--noproxy '*'`);
       expect(code).toBe('401');
     });
 
