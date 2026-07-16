@@ -17,6 +17,74 @@ interface RuleRow {
 // Bewust los van de DB zodat ze deterministisch testbaar zijn zonder draaiende
 // SQLite-binding.
 
+// Canoniseer een host naar precies de vorm waarop de downstream (OS-resolver,
+// SNI, upstream-server) hem zal interpreteren, zodat de proxy op één plek — aan
+// de grens — normaliseert en daarna zowel matcht als forward't op diezelfde
+// waarde. Voorkomt de parser-differential-klasse (finding #3 en de staart:
+// hoofdletters, IDN/punycode, trailing dot, control chars).
+//
+// Retourneert de canonieke host (lowercase, punycode, zonder trailing dot) of
+// null wanneer de host ongeldig/verdacht is (control chars, whitespace, lege of
+// onparseerbare host) — de caller moet dan fail-closed weigeren.
+export function canonicalizeHost(raw: string): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  // Control chars en whitespace horen nooit in een host (request-smuggling /
+  // log-injectie) — weiger ze expliciet vóór het parsen.
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\u0000-\u001f\u007f]/.test(trimmed)) return null;
+  let host: string;
+  try {
+    // De WHATWG-URL-parser doet precies de canonicalisatie die de downstream
+    // ook doet: lowercasen, IDNA/punycode toepassen, de host valideren en
+    // bracketed IPv6 normaliseren. We voeren enkel de authority in.
+    host = new URL(`http://${trimmed}`).hostname;
+  } catch {
+    return null;
+  }
+  if (!host) return null;
+  // Eén trailing dot (FQDN-root) strippen: `a.b.` en `a.b` zijn dezelfde host
+  // voor DNS/SNI. Een dubbele punt aan het eind is ongeldig → laten vallen.
+  if (host.endsWith('.') && !host.endsWith('..')) host = host.slice(0, -1);
+  return host.toLowerCase();
+}
+
+// Normaliseer een request-pad naar de vorm waarop de upstream het zal
+// interpreteren, zodat pad-allowlist-matching niet te omzeilen is met traversal
+// (finding #7). Strategie: query/fragment eraf, één keer percent-decoden, en
+// fail-closed weigeren (null) zodra er een `..`-segment overblijft of de
+// encoding kapot is. `.`-segmenten worden weggevouwen. Bewust NIET verder
+// canonicaliseren dan dat: het pad dat we forwarden blijft de originele
+// (encoded) bytes, zodat legitieme %-encoded tekens niet verminkt worden — we
+// beslissen op de gedecodeerde vorm, maar traversal wordt altijd geblokkeerd,
+// dus er worden nooit `..`-bytes doorgestuurd.
+export function normalizePathname(raw: string | null): string | null {
+  const input = raw ?? '';
+  // Query en fragment horen niet bij het pad; strip ze vóór het decoden.
+  let p = input.split('#')[0].split('?')[0];
+  if (p === '') p = '/';
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(p);
+  } catch {
+    // Kapotte percent-encoding (bv. `%zz`, `%2`) → fail closed.
+    return null;
+  }
+  const segs = decoded.split('/');
+  // Elk `..`-segment na één decode is traversal — legitieme flows hebben het
+  // niet nodig. Fail closed i.p.v. proberen te resolven (dat opent double-decode
+  // en clamp-tot-root varianten).
+  if (segs.some(s => s === '..')) return null;
+  // `.`-segmenten (huidige map) zijn onschuldig maar vervuilen de match; vouw ze
+  // weg. Lege segmenten (`//`, leidende `/`) blijven staan zodat een trailing
+  // slash behouden blijft.
+  const out = segs.filter(s => s !== '.');
+  let result = out.join('/');
+  if (!result.startsWith('/')) result = '/' + result;
+  return result;
+}
+
 // Matcht een domein-patroon tegen een host. Exacte gelijkheid, of een wildcard
 // `*.example.com` die elke subdomein-host matcht (maar NIET kaal `example.com`).
 // Bewust strikt: split op punten en vergelijk segment-voor-segment, zodat
@@ -37,13 +105,27 @@ export function matchDomain(pattern: string, host: string): boolean {
 }
 
 // Matcht een padpatroon tegen een pad. Een null/leeg patroon is een host-only
-// regel en matcht elk pad. `*` aan het eind is een prefix-match
-// (`/api/v1/*` matcht `/api/v1/foo`); anders exacte gelijkheid.
+// regel en matcht elk pad. `*` aan het eind is een prefix-match op
+// SEGMENT-grens (`/api/v1/*` matcht `/api/v1/foo` maar `/safe*` matcht NIET
+// `/safe-danger`); anders exacte gelijkheid.
+//
+// Het pad wordt eerst genormaliseerd (query eraf, één decode, `..` fail-closed)
+// zodat traversal-trucs (`/foo/../secret`, `/foo/..%2fsecret`) niet door een
+// `/foo/*`-allow glippen (finding #7). Een pad dat niet veilig normaliseert
+// matcht nooit.
 export function matchPath(pattern: string | null, path: string | null): boolean {
   if (pattern === null || pattern === '') return true;
-  const reqPath = path ?? '';
+  const reqPath = normalizePathname(path);
+  if (reqPath === null) return false; // traversal / kapotte encoding → fail closed
   if (pattern.endsWith('*')) {
-    return reqPath.startsWith(pattern.slice(0, -1));
+    const prefix = pattern.slice(0, -1);
+    if (!reqPath.startsWith(prefix)) return false;
+    // Prefix die al op een segment-grens eindigt (`/foo/`) — of leeg is —
+    // matcht direct. Anders moet het volgende teken een `/` zijn (of het eind),
+    // zodat `/safe*` niet `/safe-danger` vangt.
+    if (prefix === '' || prefix.endsWith('/')) return true;
+    const rest = reqPath.slice(prefix.length);
+    return rest === '' || rest.startsWith('/');
   }
   return reqPath === pattern;
 }
@@ -63,11 +145,16 @@ let stmts: ReturnType<typeof prepareStmts> | null = null;
 
 function prepareStmts() {
   return {
+    // COLLATE NOCASE: de exacte-host lookup moet hoofdletter-ongevoelig zijn,
+    // net als matchDomain (dat beide kanten lowercase't). Zonder dit werd een
+    // exacte deny-regel omzeild door de host anders te kapitaliseren (finding
+    // #3). Domeinen worden bovendien lowercase opgeslagen (zie checkRule +
+    // db.ts-migratie) — dit is de belt-and-suspenders SQL-kant.
     selectPerContainer: db.prepare<[string, string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? AND container_id = ?`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND container_id = ?`
     ),
     selectGlobal: db.prepare<[string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? AND container_id IS NULL`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND container_id IS NULL`
     ),
     selectWildcardPerContainer: db.prepare<[string]>(
       `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain LIKE '*.%' AND container_id = ?`
@@ -111,10 +198,15 @@ function specificity(c: Candidate): number {
 }
 
 export function checkRule(
-  domain: string,
+  rawDomain: string,
   containerId: string | null,
   path: string | null = null,
 ): { status: RuleStatus; ruleId: number | null } {
+  // Canoniseer de host één keer aan de rand: lowercase zodat exacte lookups en
+  // wildcard-matching op dezelfde vorm werken (finding #3). De proxy voert al de
+  // volledige punycode/trailing-dot-canonicalisatie uit via canonicalizeHost;
+  // hier lowercasen we defensief voor directe callers/tests.
+  const domain = rawDomain.toLowerCase();
   const {
     selectPerContainer, selectGlobal, selectWildcardPerContainer, selectWildcardGlobal,
     touchRule, setLastPath, insertRequested, insertRequestedPath, resetExpired,

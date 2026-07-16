@@ -103,12 +103,67 @@ function rewriteFirstLine(headerPart: string, newUrl: string): string {
 // per-actie-autorisatie: classifyRequest bepaalt de actie, authorizeAction
 // (docker-actions.ts) combineert de toggle-stand met de grant-timer.
 
+// ── HostConfig-policy: allowlist i.p.v. denylist ────────────────────────────
+// Root-cause van findings #1 (VolumesFrom) en #2 (DeviceCgroupRules): de oude
+// validatie was een DENYLIST over een spec die Huddle niet bezit — elk veld dat
+// Docker toevoegt (of dat we vergaten) glipte er ongezien doorheen. De nieuwe
+// aanpak:
+//   1. Value-specifieke HARD-DENIES voor de bevestigde escape-vectoren en de
+//      klassiekers — altijd afgedwongen, ongeacht de mode. Dit sluit #1/#2/etc.
+//   2. Een generieke ALLOWLIST-sweep over de overige sleutels: een sleutel die
+//      we niet kennen én die een niet-lege waarde draagt is verdacht. Dit vangt
+//      elk TOEKOMSTIG veld zonder dat we het hoeven te kennen.
+//
+// De Docker-CLI/compose stuurt vrijwel de hele HostConfig-struct mee, meestal
+// met nul-/lege waarden. Daarom flag't de sweep alleen NIET-lege waarden op
+// onbekende sleutels. Omdat de exacte set "genuinely-needed" velden alleen
+// empirisch (tegen echte dev-flows) vast te stellen is, draait de sweep default
+// in LOG-ONLY modus (waarschuwt, weigert niet). Zet HUDDLE_HOSTCONFIG_ENFORCE=1
+// om te handhaven zodra de allowlist tegen echt verkeer gevalideerd is. De
+// hard-denies staan hier los van en zijn altijd actief.
+
+// Sleutels die een gespawnde sandbox-container legitiem met een betekenisvolle
+// waarde mag zetten (resource-limieten, lifecycle, logging, poorten, named
+// volumes). Bewust géén host-/device-/privilege-velden.
+const ALLOWED_HOSTCONFIG_KEYS = new Set<string>([
+  'NetworkMode',
+  'Memory', 'MemoryReservation', 'MemorySwap', 'MemorySwappiness', 'KernelMemory',
+  'NanoCpus', 'CpuShares', 'CpuQuota', 'CpuPeriod', 'CpuRealtimePeriod',
+  'CpuRealtimeRuntime', 'CpusetCpus', 'CpusetMems', 'CpuCount', 'CpuPercent',
+  'BlkioWeight', 'PidsLimit', 'OomKillDisable', 'OomScoreAdj', 'ShmSize',
+  'RestartPolicy', 'AutoRemove', 'LogConfig', 'Init',
+  'Binds', 'Mounts', 'VolumeDriver',
+  'PortBindings', 'PublishAllPorts',
+  'Ulimits', 'Dns', 'DnsOptions', 'DnsSearch', 'ExtraHosts', 'GroupAdd',
+  'CapDrop', 'ReadonlyRootfs', 'Isolation', 'ConsoleSize', 'Annotations',
+  'MaskedPaths', 'ReadonlyPaths',
+]);
+
+// Sleutels met een eigen value-specifieke hard-deny hieronder. Ze zijn "bekend"
+// voor de sweep (hun gevaarlijke waarde is al eerder geweigerd; een onschuldige
+// waarde — bv. Privileged:false, IpcMode:'private' — mag door).
+const HARD_CHECKED_HOSTCONFIG_KEYS = new Set<string>([
+  'Privileged', 'PidMode', 'IpcMode', 'UsernsMode', 'CgroupnsMode', 'UTSMode',
+  'CgroupParent', 'CapAdd', 'Devices', 'Sysctls', 'SecurityOpt',
+  'VolumesFrom', 'DeviceCgroupRules', 'DeviceRequests',
+  'BlkioDeviceReadBps', 'BlkioDeviceWriteBps', 'BlkioDeviceReadIOps', 'BlkioDeviceWriteIOps',
+]);
+
+// Draagt een HostConfig-waarde een betekenisvolle (niet-default) instelling?
+function isMeaningfulValue(v: unknown): boolean {
+  if (v === undefined || v === null || v === false || v === 0 || v === '') return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === 'object') return Object.keys(v as object).length > 0;
+  return true;
+}
+
 // Reject HostConfig shapes that would let a spawned container escape the
-// devcontainer sandbox (read host fs, see host PIDs, talk to host dockerd).
-// Returns a denial reason, or null if the config is safe.
+// devcontainer sandbox (read host fs, see host PIDs/devices, talk to host
+// dockerd). Returns a denial reason, or null if the config is acceptable.
 export function validateHostConfig(hostConfig: any): string | null {
   if (!hostConfig || typeof hostConfig !== 'object') return null;
 
+  // ── Hard-denies (altijd afgedwongen) ──────────────────────────────────────
   if (hostConfig.Privileged === true) return 'Privileged containers not permitted';
   if (hostConfig.PidMode && hostConfig.PidMode !== '') return 'PidMode not permitted';
   if (hostConfig.IpcMode === 'host') return 'IpcMode=host not permitted';
@@ -121,6 +176,21 @@ export function validateHostConfig(hostConfig: any): string | null {
     return 'CapAdd not permitted';
   if (Array.isArray(hostConfig.Devices) && hostConfig.Devices.length > 0)
     return 'Devices not permitted';
+
+  // Finding #1: VolumesFrom laat de nieuwe container de mounts (incl. huddle's
+  // echte docker.sock + CA-key + DB) van een andere container erven → host-takeover.
+  if (Array.isArray(hostConfig.VolumesFrom) && hostConfig.VolumesFrom.length > 0)
+    return 'VolumesFrom not permitted';
+
+  // Finding #2 + device-familie: cgroup/whitelist- en device-request-velden
+  // geven toegang tot host block-/char-devices (raw-disk via default CAP_MKNOD).
+  if (Array.isArray(hostConfig.DeviceCgroupRules) && hostConfig.DeviceCgroupRules.length > 0)
+    return 'DeviceCgroupRules not permitted';
+  if (Array.isArray(hostConfig.DeviceRequests) && hostConfig.DeviceRequests.length > 0)
+    return 'DeviceRequests not permitted';
+  for (const k of ['BlkioDeviceReadBps', 'BlkioDeviceWriteBps', 'BlkioDeviceReadIOps', 'BlkioDeviceWriteIOps'] as const) {
+    if (Array.isArray(hostConfig[k]) && hostConfig[k].length > 0) return `${k} not permitted`;
+  }
 
   const sys = hostConfig.Sysctls;
   if (sys && typeof sys === 'object' && Object.keys(sys).length > 0)
@@ -162,6 +232,24 @@ export function validateHostConfig(hostConfig: any): string | null {
     }
   }
 
+  // ── Generieke allowlist-sweep (log-only default, enforce via env) ──────────
+  // Elke sleutel die we niet herkennen én die een betekenisvolle waarde draagt
+  // is verdacht — dit vangt toekomstige/onbekende velden zonder ze te kennen.
+  const unknown: string[] = [];
+  for (const key of Object.keys(hostConfig)) {
+    if (ALLOWED_HOSTCONFIG_KEYS.has(key) || HARD_CHECKED_HOSTCONFIG_KEYS.has(key)) continue;
+    if (isMeaningfulValue(hostConfig[key])) unknown.push(key);
+  }
+  if (unknown.length > 0) {
+    if (process.env.HUDDLE_HOSTCONFIG_ENFORCE === '1') {
+      return `HostConfig field(s) not permitted: ${unknown.join(', ')}`;
+    }
+    console.warn(
+      `[socket-proxy] HostConfig allowlist (log-only): would reject non-empty field(s): ${unknown.join(', ')}. ` +
+      `Set HUDDLE_HOSTCONFIG_ENFORCE=1 to enforce once validated against real workflows.`
+    );
+  }
+
   if (hostConfig.PortBindings && typeof hostConfig.PortBindings === 'object') {
     for (const [containerPortProto, bindings] of Object.entries(hostConfig.PortBindings)) {
       if (!Array.isArray(bindings)) continue;
@@ -196,6 +284,27 @@ export function validateVolumeCreate(body: any): string | null {
   if (norm.device || (norm.o ?? '').includes('bind') || norm.type === 'none')
     return 'local bind-backed volumes not permitted';
   return null;
+}
+
+// Verzamel de named-volume bronnen uit een HostConfig (Binds + Mounts). Host-
+// path binds en bind-type mounts zijn al door validateHostConfig geweigerd;
+// anonieme volumes (geen Source) worden overgeslagen. Wordt gebruikt voor de
+// ownership-check bij container-create (finding #8).
+function namedVolumeSources(hostConfig: any): string[] {
+  const out: string[] = [];
+  if (Array.isArray(hostConfig?.Binds)) {
+    for (const bind of hostConfig.Binds) {
+      if (typeof bind !== 'string') continue;
+      const src = bind.split(':')[0] ?? '';
+      if (src && !src.startsWith('/') && !src.startsWith('.')) out.push(src);
+    }
+  }
+  if (Array.isArray(hostConfig?.Mounts)) {
+    for (const m of hostConfig.Mounts) {
+      if (m && m.Type === 'volume' && typeof m.Source === 'string' && m.Source) out.push(m.Source);
+    }
+  }
+  return out;
 }
 
 function deny403(client: net.Socket, msg: string): void {
@@ -290,7 +399,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         openUpstream(Buffer.concat([Buffer.from(newHeader), remainder]));
       }
 
-      function processInjectedBody(): void {
+      async function processInjectedBody(): Promise<void> {
         const bodyBytes = bodyBuf.slice(0, bodyContentLength);
         const rest = bodyBuf.slice(bodyContentLength);
         let body: any;
@@ -312,6 +421,19 @@ export async function createContainerProxy(containerName: string, socketDir: str
             }
           } else {
             deny403(client, denial);
+            return;
+          }
+        }
+        // Finding #8: named-volume ownership. Een devcontainer mag alleen zijn
+        // eigen (huddle.parent) of ongelabelde/operator-volumes mounten — nooit
+        // een volume dat aan een ANDERE devcontainer toebehoort (cross-container
+        // diefstal van source-/credential-volumes). Zelfde semantiek als de
+        // delete/prune-paden. Ongelabelde (pre-bestaande) volumes blijven toe-
+        // gestaan; een nog niet bestaand named volume (404) telt als ongelabeld.
+        for (const src of namedVolumeSources(body.HostConfig)) {
+          const { parent } = await lookupParentLabel('volume', src);
+          if (parent && parent !== containerName) {
+            deny403(client, `cannot mount volume owned by another devcontainer: ${src}`);
             return;
           }
         }
@@ -530,8 +652,15 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Volume listing and inspect — needed for docker compose named volumes
-          if (p === '/volumes' || /^\/volumes\/[^/]+$/.test(p)) {
+          // Volume listing — filter tot eigen volumes zodat peer-volumenamen
+          // niet enumereerbaar zijn (finding #8), consistent met de container-
+          // en netwerk-listings hierboven.
+          if (p === '/volumes') {
+            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+            return;
+          }
+          // Volume inspect — nodig voor docker compose named volumes.
+          if (/^\/volumes\/[^/]+$/.test(p)) {
             openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             return;
           }

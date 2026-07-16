@@ -1,6 +1,6 @@
 {
   "name": "@infosupport/huddle-cli",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Huddle CLI — start devcontainers and manage firewall rules",
   "license": "GPL-3.0-or-later",
   "author": "Info Support B.V.",

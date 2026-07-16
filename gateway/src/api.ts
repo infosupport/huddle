@@ -391,9 +391,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
     Body: { domain: string; container_id?: string | null; status: RuleStatus; expires_at?: number | null; path_pattern?: string | null };
   }>('/api/rules', async (req, reply) => {
     const { domain, container_id = null, status, expires_at = null, path_pattern = null } = req.body;
-    if (!domain || !['requested', 'allow', 'deny'].includes(status)) {
+    // Eis expliciet een non-lege string: een truthy niet-string domain (bv. een
+    // getal/object in de JSON) zou anders verderop klappen met een 500 i.p.v.
+    // deze nette 400.
+    if (typeof domain !== 'string' || !domain || !['requested', 'allow', 'deny'].includes(status)) {
       return reply.code(400).send({ error: 'invalid payload' });
     }
+    // Domein opslaan zoals aangeleverd — géén casing-mutatie. De rule-engine
+    // matcht al hoofdletter-ongevoelig (COLLATE NOCASE in db.ts + canonicalizeHost/
+    // matchDomain, finding #3), dus lowercasen is overbodig en zou de echo-back
+    // naar clients veranderen.
     try {
       const info = db
         .prepare(
@@ -402,9 +409,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         .run(domain, container_id, status, expires_at, path_pattern);
       const inserted = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(info.lastInsertRowid) as Rule;
       // Ruim alleen de host-only requested-rij op; padregels per domein blijven
-      // staan zodat fijnmazig beleid naast elkaar kan bestaan.
+      // staan zodat fijnmazig beleid naast elkaar kan bestaan. COLLATE NOCASE:
+      // requested-rijen worden lowercase aangemaakt (proxy/canonicalizeHost), dus
+      // matchen ook als de operator hier mixed-case aanlevert.
       if (container_id === null && path_pattern === null && (status === 'allow' || status === 'deny')) {
-        db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(domain);
+        db.prepare(`DELETE FROM rules WHERE domain = ? COLLATE NOCASE AND status = 'requested' AND path_pattern IS NULL`).run(domain);
       }
       logAudit({ containerId: container_id, domain, action: `admin:rule-${status}`, ruleId: Number(info.lastInsertRowid) });
       notifyStateChanged();

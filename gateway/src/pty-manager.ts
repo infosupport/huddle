@@ -46,8 +46,19 @@ class PtyManager {
     }
 
     const active = session;
+    // Finding #13: een tweede client die op een bestaande sessie aanhaakt deelt
+    // dezelfde shell (leest alle I/O, kan toetsaanslagen injecteren). We kunnen
+    // in het single-operator-token-model geen per-operator identiteit afdwingen,
+    // maar we maken de join expliciet zichtbaar: log 'attach:join' met het aantal
+    // clients zodat een stille overname niet meer mogelijk is (operators zien 'm
+    // in de audit-log). De eerste client is de eigenaar ('attach:owner').
+    const isJoin = active.clients.size > 0;
     active.clients.add(ws);
-    logAudit({ containerId: containerName, domain: 'terminal', action: 'attach' });
+    logAudit({
+      containerId: containerName,
+      domain: 'terminal',
+      action: isJoin ? `attach:join(${active.clients.size} clients)` : 'attach:owner',
+    });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {

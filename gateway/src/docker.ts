@@ -430,6 +430,62 @@ const DOCKER_SOCK_SYMLINK = `# Docker-toegang loopt via de socket in de gemounte
 # (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
+// Finding #15 (IDE-kanaal, VS Code Remote + JetBrains Gateway): het attach-kanaal
+// loopt over `docker exec`/stdio en wordt door NOCH de egress-proxy NOCH de
+// socket-proxy gezien. Het echte host-token komt NOOIT als bestand binnen; VS
+// Code laat de container het on-demand ophalen. De werkelijke route (bevestigd
+// live) is een git `credential.helper` die bij attach in ZOWEL /etc/gitconfig ALS
+// de van de host gekopieerde ~/.gitconfig wordt gezet:
+//     helper = !… node /tmp/vscode-remote-containers-<id>.js git-credential-helper …
+// die via de algemene remote-containers IPC-socket de host-credential-helper
+// aanroept. (Oudere VS Code gebruikte GIT_ASKPASS + /tmp/vscode-git-*.sock; die
+// dekken we ook nog af.) We knippen het op drie niveaus:
+//   1. env-scrub voor ELKE shell — /etc/profile.d (login) én /etc/bash.bashrc
+//      (interactive non-login; wat de VS Code-terminal standaard sourcet). Dekt
+//      de GIT_ASKPASS-variant.
+//   2. de git `credential.helper` die naar de remote-containers-helper wijst
+//      strippen uit /etc/gitconfig én ~/.gitconfig — dít is de daadwerkelijke
+//      route. Value-regex 'vscode-remote-containers' zodat een door de gebruiker
+//      zélf gezette helper blijft staan.
+//   3. de doorgestuurde GPG-agent-socket(s) (~/.gnupg/S.gpg-agent*) weghalen —
+//      daarmee vervalt commit-signing met de host-GPG-key.
+//   4. de oude askpass-sockets opruimen (voor VS Code-versies die die nog maken).
+// De remote-containers IPC-socket zelf NIET verwijderen: die is multiplexed met
+// de hele Remote-sessie; strippen we de helper, dan heeft git er toch geen route
+// meer naartoe. Een guard draait de hele container-levensduur, want de helper/
+// sockets verschijnen pas bij attach (ná dit script) en keren terug bij reconnect.
+const IDE_CRED_SCRUB = `# Finding #15: ontneem de untrusted container de door de IDE doorgestuurde
+# host-credentials (git-token via credential.helper/askpass, SSH-agent, GPG).
+SCRUB_VARS='GIT_ASKPASS SSH_AUTH_SOCK SSH_AGENT_PID GPG_AGENT_INFO GPG_TTY VSCODE_GIT_ASKPASS_NODE VSCODE_GIT_ASKPASS_MAIN VSCODE_GIT_ASKPASS_EXTRA_ARGS VSCODE_GIT_IPC_HANDLE'
+SCRUB_LINE="unset \$SCRUB_VARS"
+printf '%s\\n' "\$SCRUB_LINE" > /etc/profile.d/99-huddle-scrub-ide-creds.sh
+chmod 644 /etc/profile.d/99-huddle-scrub-ide-creds.sh
+# Interactive non-login shells (o.a. de VS Code-terminal) lezen /etc/profile.d
+# NIET; /etc/bash.bashrc is daar de plek.
+grep -qF "\$SCRUB_LINE" /etc/bash.bashrc 2>/dev/null || printf '%s\\n' "\$SCRUB_LINE" >> /etc/bash.bashrc
+# ~/.gnupg moet bestaan (mode 700) zodat de inotify-watch erop kan starten, ook
+# als de IDE de GPG-socket pas later neerzet.
+install -d -m 700 -o vscode -g vscode /home/vscode/.gnupg 2>/dev/null || true
+# Credential-guard: strip de doorgestuurde git-credential-helper + ruim de
+# GPG-agent- en oude askpass-sockets op. Idempotent, zodat een herhaalde run
+# niets herschrijft.
+_huddle_cred_guard() {
+  for cfg in /etc/gitconfig /home/vscode/.gitconfig; do
+    [ -f "\$cfg" ] && git config --file "\$cfg" --unset-all credential.helper 'vscode-remote-containers' 2>/dev/null || true
+  done
+  rm -f /home/vscode/.gnupg/S.gpg-agent /home/vscode/.gnupg/S.gpg-agent.* 2>/dev/null || true
+  find /tmp -maxdepth 1 \\( -name 'vscode-git-*.sock' -o -name 'vscode-ssh-auth-*.sock' \\) -delete 2>/dev/null || true
+}
+_huddle_cred_guard   # ruim op wat er bij attach al stond
+if command -v inotifywait >/dev/null 2>&1; then
+  # Reageer meteen als de IDE de helper/sockets (opnieuw) neerzet (race ~sub-ms).
+  ( inotifywait -q -m -e create -e modify -e moved_to --format '%f' /tmp /etc /home/vscode /home/vscode/.gnupg 2>/dev/null | while IFS= read -r f; do
+      case "\$f" in gitconfig|.gitconfig|S.gpg-agent|S.gpg-agent.*|vscode-git-*.sock|vscode-ssh-auth-*.sock) _huddle_cred_guard ;; esac
+    done ) &
+else
+  ( while true; do _huddle_cred_guard; sleep 1; done ) &
+fi`;
+
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
 function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
@@ -494,6 +550,8 @@ command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/de
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
 
+${IDE_CRED_SCRUB}
+
 # De JetBrains-IDE (IntelliJ/Rider) draait op de JBR, een eigen JVM die TLS niet
 # tegen de system store of NODE_EXTRA_CA_CERTS valideert maar tegen z'n eigen
 # cacerts-keystore. Zonder import hieronder weigert de IDE het MITM-leaf-cert en
@@ -556,8 +614,47 @@ fi
 // Zelfde firewall/sudo/audit-setup als de JB-flow, maar zónder JB host-config en
 // zónder remote-dev-server: VS Code installeert zijn eigen backend (VS Code Server)
 // bij het attachen. Houd dit in sync met de vscode-branch in huddle.ps1.
+// Machine-level VS Code Remote-instellingen die het IDE-kanaal hardenen
+// (finding #15). Het VS Code-Remote-kanaal loopt over `docker exec`/stdio en
+// wordt NOCH door de egress-proxy NOCH door de socket-proxy gezien — het is een
+// derde brug tussen host en (untrusted) container. Zonder deze policy erft een
+// in-container terminal (waar een AI-agent draait) de door VS Code doorgestuurde
+// host-credentials, en draait een aanvaller-gecontroleerde `tasks.json`
+// automatisch bij het openen van de map. Deze settings sluiten dat:
+//   - terminal.integrated.env.linux → null de doorgestuurde credential-env, zodat
+//     terminals/agents GIT_ASKPASS / SSH_AUTH_SOCK / GPG e.d. niet meer zien
+//     (VS Code's eigen git-integratie via de extension-host blijft werken).
+//   - task.allowAutomaticTasks=off → geen folderOpen-autorun.
+//   - security.workspace.trust.* → open mappen starten in Restricted Mode.
+//   - terminal.integrated.allowLocalTerminal=false → blokkeer het openen van een
+//     HOST-terminal vanuit het remote-venster (newLocal).
+// Volledig dichttimmeren vereist dat Huddle de attach zelf beheert (managed
+// devcontainer.json met copyGitConfig:false); dit is de container-side laag.
+export function buildVscodeMachineSettings(): Record<string, unknown> {
+  return {
+    'security.workspace.trust.enabled': true,
+    'security.workspace.trust.startupPrompt': 'always',
+    'security.workspace.trust.banner': 'always',
+    'security.workspace.trust.emptyWindow': false,
+    'task.allowAutomaticTasks': 'off',
+    'terminal.integrated.allowLocalTerminal': false,
+    // null verwijdert de variabele uit de terminal-omgeving.
+    'terminal.integrated.env.linux': {
+      GIT_ASKPASS: null,
+      VSCODE_GIT_ASKPASS_NODE: null,
+      VSCODE_GIT_ASKPASS_MAIN: null,
+      VSCODE_GIT_ASKPASS_EXTRA_ARGS: null,
+      VSCODE_GIT_IPC_HANDLE: null,
+      SSH_AUTH_SOCK: null,
+      GPG_AGENT_INFO: null,
+      GPG_TTY: null,
+    },
+  };
+}
+
 function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
+  const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
@@ -580,6 +677,8 @@ command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/de
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
 
+${IDE_CRED_SCRUB}
+
 # Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
 export DEBIAN_FRONTEND=noninteractive
 command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
@@ -593,6 +692,15 @@ chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
 ${seedScript}
+
+# Finding #15: harden het VS Code Remote IDE-kanaal met machine-level settings.
+# Attach-to-running-container leest deze uit ~/.vscode-server/data/Machine/ (en
+# de insiders-variant). We schrijven ze voor de attach zodat ze meteen gelden.
+for VSCODE_HOME in /home/vscode/.vscode-server /home/vscode/.vscode-server-insiders; do
+  mkdir -p "$VSCODE_HOME/data/Machine"
+  echo '${settingsB64}' | base64 -d > "$VSCODE_HOME/data/Machine/settings.json"
+done
+chown -R vscode:vscode /home/vscode/.vscode-server /home/vscode/.vscode-server-insiders 2>/dev/null || true
 
 # Configure sudo audit logging
 mkdir -p /etc/sudoers.d
