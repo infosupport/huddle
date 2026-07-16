@@ -402,16 +402,16 @@
     <div class="modal-backdrop" id="ws-modal">
       <div class="modal">
         <div class="modal__head">
-          <h2 id="ws-modal-title">Workspace toevoegen</h2>
+          <h2 id="ws-modal-title">Add workspace</h2>
           <button class="modal__close" data-close="ws-modal">×</button>
         </div>
         <div class="modal__body">
           <div class="field"><label>Naam *</label><input id="f-name" placeholder="mijn-workspace" /></div>
           <div class="field"><label>Env prefix *</label><input id="f-prefix" placeholder="AIKIDO_WGK" /></div>
-          <div class="field"><label>Repo pad *</label><input id="f-path" placeholder="/workspaces/project" /></div>
+          <div class="field"><label>Repository path *</label><input id="f-path" placeholder="/workspaces/project" /></div>
           <div class="field"><label>Workspace ID *</label><input id="f-wsid" placeholder="ws-abc123" /></div>
           <div class="field">
-            <label>Taal *</label>
+            <label>Language *</label>
             <select id="f-lang">
               <option value="java">Java</option>
               <option value="typescript">TypeScript</option>
@@ -421,12 +421,12 @@
               <option value="go">Go</option>
             </select>
           </div>
-          <div class="field"><label>Repository naam</label><input id="f-repo" placeholder="org/repo (optioneel)" /></div>
+          <div class="field"><label>Repository name</label><input id="f-repo" placeholder="org/repo (optional)" /></div>
           <div id="ws-msg"></div>
         </div>
         <div class="modal__foot">
-          <button class="btn btn--ghost" data-close="ws-modal">Annuleer</button>
-          <button class="btn btn--primary" id="ws-save">Opslaan</button>
+          <button class="btn btn--ghost" data-close="ws-modal">Cancel</button>
+          <button class="btn btn--primary" id="ws-save">Save</button>
         </div>
       </div>
     </div>
@@ -439,13 +439,13 @@
           <button class="modal__close" data-close="apikey-modal">×</button>
         </div>
         <div class="modal__body">
-          <div class="alert info">Persoonlijke toegangstoken uit Aikido via <b>Instellingen → Integraties → IDE → MCP</b>. Geldt voor alle workspaces.</div>
-          <div class="field"><label>API Key</label><input id="ak-key" type="password" placeholder="Laat leeg om ongewijzigd te laten" /></div>
+          <div class="alert info">Personal access token from Aikido via <b>Settings → Integrations → IDE → MCP</b>. Applies to all workspaces.</div>
+          <div class="field"><label>API Key</label><input id="ak-key" type="password" placeholder="Leave blank to keep unchanged" /></div>
           <div id="apikey-msg"></div>
         </div>
         <div class="modal__foot">
-          <button class="btn btn--ghost" data-close="apikey-modal">Annuleer</button>
-          <button class="btn btn--primary" id="apikey-save">Opslaan</button>
+          <button class="btn btn--ghost" data-close="apikey-modal">Cancel</button>
+          <button class="btn btn--primary" id="apikey-save">Save</button>
         </div>
       </div>
     </div>
@@ -458,15 +458,15 @@
           <button class="modal__close" data-close="cred-modal">×</button>
         </div>
         <div class="modal__body">
-          <div class="alert info">Maak een OAuth2-app aan in Aikido via <b>Instellingen → API</b>.</div>
+          <div class="alert info">Create an OAuth2 app in Aikido via <b>Settings → API</b>.</div>
           <div class="field"><label>Client ID</label><input id="c-id" placeholder="aikido_…" /></div>
           <div class="field"><label>Client Secret</label><input id="c-secret" type="password" placeholder="••••••••" /></div>
           <div id="cred-msg"></div>
         </div>
         <div class="modal__foot">
-          <button class="btn btn--danger btn--sm" id="cred-del">Verwijder</button>
-          <button class="btn btn--ghost" data-close="cred-modal">Annuleer</button>
-          <button class="btn btn--primary" id="cred-save">Opslaan &amp; valideren</button>
+          <button class="btn btn--danger btn--sm" id="cred-del">Delete</button>
+          <button class="btn btn--ghost" data-close="cred-modal">Cancel</button>
+          <button class="btn btn--primary" id="cred-save">Save &amp; validate</button>
         </div>
       </div>
     </div>
@@ -570,11 +570,11 @@
             this._renderView();
             setTimeout(() => this._openCreds(), 100);
           } else {
-            this._renderMain(`<div style="padding:24px;color:var(--danger)">Fout: ${this.esc(e.message)}</div>`);
+            this._renderMain(`<div style="padding:24px;color:var(--danger)">Error: ${this.esc(e.message)}</div>`);
           }
         }
       } else {
-        this._renderMain('<div class="loading"><div class="spinner"></div>Repositories laden…</div>');
+        this._renderMain('<div class="loading"><div class="spinner"></div>Loading repositories…</div>');
         try {
           s.workspaces = await this.api('GET', '/workspaces');
           this._renderView();
@@ -748,12 +748,12 @@
           ${repoHeader}
           <div class="issues-toolbar">
             <div class="sev-filter">
-              <button class="sev-btn all ${!sevFilter ? 'active' : ''}" data-sev="">alle <b>${s.issues.length}</b></button>
+              <button class="sev-btn all ${!sevFilter ? 'active' : ''}" data-sev="">all <b>${s.issues.length}</b></button>
               ${sevBtns}
             </div>
             <div class="search-box">
               <span style="color:var(--text-dim)">⌕</span>
-              <input id="search-inp" placeholder="Zoek op titel of CVE…" value="${this.esc(search)}" />
+              <input id="search-inp" placeholder="Search by title or CVE…" value="${this.esc(search)}" />
             </div>
           </div>
           ${batchBar}
@@ -762,7 +762,7 @@
               <thead><tr>
                 <th class="col-check"><input type="checkbox" id="chk-all" /></th>
                 <th data-sort="severity">Severity${arrow('severity')}</th>
-                <th data-sort="title">Titel${arrow('title')}</th>
+                <th data-sort="title">Title${arrow('title')}</th>
                 <th>CVE</th>
                 <th class="col-score" data-sort="severity_score">Score${arrow('severity_score')}</th>
                 <th class="col-act"></th>
@@ -817,8 +817,8 @@
         <tr><td colspan="6">
           <div class="empty-state" style="padding:40px 20px">
             <div class="empty-state__icon">✅</div>
-            <h3>Geen issues gevonden</h3>
-            <p>Geen security-issues${sevFilter || search ? ' voor dit filter' : ''}.</p>
+            <h3>No issues found</h3>
+            <p>No security issues${sevFilter || search ? ' for this filter' : ''}.</p>
           </div>
         </td></tr>`;
 
@@ -836,9 +836,9 @@
       let footer = this.$('.table-footer');
       if (hasPrev || hasMore) {
         const footerHtml = `
-          <button class="btn btn--sm btn--ghost" id="pg-prev" ${hasPrev ? '' : 'disabled'}>← Vorige</button>
-          <span>Pagina ${page + 1} · ${Math.min(start + perPage, filteredTotal)} van ${filteredTotal}</span>
-          <button class="btn btn--sm btn--ghost" id="pg-next" ${hasMore ? '' : 'disabled'}>Volgende →</button>`;
+          <button class="btn btn--sm btn--ghost" id="pg-prev" ${hasPrev ? '' : 'disabled'}>← Previous</button>
+          <span>Page ${page + 1} · ${Math.min(start + perPage, filteredTotal)} of ${filteredTotal}</span>
+          <button class="btn btn--sm btn--ghost" id="pg-next" ${hasMore ? '' : 'disabled'}>Next →</button>`;
         if (!footer) {
           footer = document.createElement('div');
           footer.className = 'table-footer';
@@ -1002,40 +1002,40 @@
       const isRunning = existing?.status?.startsWith('Up');
 
       if (existing && isRunning) {
-        setMsg(spinner(`Injecteren in bestaande container <b>${containerName}</b>…`));
+        setMsg(spinner(`Injecting into existing container <b>${containerName}</b>…`));
         await this.api('POST', `/workspaces/${encodeURIComponent(ws)}/inject`, {
           container_name: containerName, issues: toFix,
         });
-        setMsg(`<div class="alert ok">✓ Geïnjecteerd in bestaande container <b>${containerName}</b>. Voer <code>aikido-fix</code> uit in de container.</div>`);
+        setMsg(`<div class="alert ok">✓ Injected into existing container <b>${containerName}</b>. Run <code>aikido-fix</code> in the container.</div>`);
 
       } else if (existing && !isRunning) {
-        setMsg(spinner(`Container <b>${containerName}</b> hervatten…`));
+        setMsg(spinner(`Resuming container <b>${containerName}</b>…`));
         await fetch(`/api/docker/containers/${encodeURIComponent(containerName)}/start`, { method: 'POST' })
           .then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
-        setMsg(spinner(`Container geherstart, injecteren…`));
+        setMsg(spinner(`Container restarted, injecting…`));
         await new Promise(r => setTimeout(r, 1500));
         await this.api('POST', `/workspaces/${encodeURIComponent(ws)}/inject`, {
           container_name: containerName, issues: toFix,
         });
-        setMsg(`<div class="alert ok">✓ Container <b>${containerName}</b> hervat en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
+        setMsg(`<div class="alert ok">✓ Container <b>${containerName}</b> resumed and injected. Run <code>aikido-fix</code> in the container.</div>`);
 
       } else {
         const wsObj  = this._s.workspaces.find(w => w.name === ws);
         const wsPath = wsObj?.repo_path;
         if (!wsPath) throw new Error('Geen repo-pad bekend voor deze workspace. Stel het in via de workspace-instellingen.');
-        setMsg(spinner(`Container <b>${containerName}</b> aanmaken…`));
+        setMsg(spinner(`Creating container <b>${containerName}</b>…`));
         await fetch('/api/docker/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ imageName: image, containerName, presentableName: `Aikido ${ws}`, workspaceDir: wsPath }),
         }).then(async r => { if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); } });
-        setMsg(spinner(`Container gestart, injecteren…`));
+        setMsg(spinner(`Container started, injecting…`));
         await new Promise(r => setTimeout(r, 2000));
         await this.api('POST', `/workspaces/${encodeURIComponent(ws)}/inject`, {
           container_name: containerName, issues: toFix,
         });
         await this._loadContainers();
-        setMsg(`<div class="alert ok">✓ Container <b>${containerName}</b> aangemaakt en geïnjecteerd. Voer <code>aikido-fix</code> uit in de container.</div>`);
+        setMsg(`<div class="alert ok">✓ Container <b>${containerName}</b> created and injected. Run <code>aikido-fix</code> in the container.</div>`);
       }
     }
 

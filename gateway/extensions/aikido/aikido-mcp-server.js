@@ -237,7 +237,7 @@ async function handleMessage(msg) {
       const result = await tool.handler(args || {});
       send({ jsonrpc: "2.0", id, result });
     } catch (err) {
-      send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: `Fout: ${err.message}` }], isError: true } });
+      send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true } });
     }
     return;
   }

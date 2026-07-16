@@ -431,15 +431,15 @@
       <button class="modal__close" onclick="closeCredModal()">×</button>
     </div>
     <div class="modal__body">
-      <div class="alert info">Maak een OAuth2-app aan in Aikido via <strong>Instellingen → API</strong> om Client ID en Secret te verkrijgen.</div>
+      <div class="alert info">Create an OAuth2 app in Aikido via <strong>Settings → API</strong> to get Client ID and Secret.</div>
       <div class="field"><label>Client ID</label><input id="cred-id" placeholder="aikido_..." /></div>
       <div class="field"><label>Client Secret</label><input id="cred-secret" type="password" placeholder="••••••••••••" /></div>
       <div id="cred-modal-msg"></div>
     </div>
     <div class="modal__footer">
-      <button class="btn btn--ghost btn--danger" onclick="deleteCreds()">Verwijder</button>
-      <button class="btn btn--ghost" onclick="closeCredModal()">Annuleer</button>
-      <button class="btn btn--primary" onclick="saveCredentials()">Opslaan &amp; valideren</button>
+      <button class="btn btn--ghost btn--danger" onclick="deleteCreds()">Delete</button>
+      <button class="btn btn--ghost" onclick="closeCredModal()">Cancel</button>
+      <button class="btn btn--primary" onclick="saveCredentials()">Save &amp; validate</button>
     </div>
   </div>
 </div>
@@ -509,9 +509,9 @@ function renderTopbarActions() {
     el.innerHTML = `<button class="btn btn--sm" onclick="openAddWorkspace()">+ Workspace</button>`;
   } else {
     el.innerHTML = `
-      <button class="btn btn--sm btn--ghost" onclick="refreshIssues()">↻ Vernieuwen</button>
+      <button class="btn btn--sm btn--ghost" onclick="refreshIssues()">↻ Refresh</button>
       <button class="btn btn--sm" onclick="openManageCredentials()">Credentials</button>
-      <button class="btn btn--sm btn--ghost" onclick="backToWorkspaces()">← Terug</button>`;
+      <button class="btn btn--sm btn--ghost" onclick="backToWorkspaces()">← Back</button>`;
   }
 }
 
@@ -521,7 +521,7 @@ function renderWorkspaces() {
   document.getElementById('detail-panel').classList.remove('open');
 
   if (state.loading) {
-    main.innerHTML = `<div class="loading"><div class="spinner"></div>Workspaces laden…</div>`;
+    main.innerHTML = `<div class="loading"><div class="spinner"></div>Loading workspaces…</div>`;
     return;
   }
 
@@ -530,9 +530,9 @@ function renderWorkspaces() {
       <div class="ws-view">
         <div class="empty-state">
           <div class="empty-state__icon">🔒</div>
-          <h3>Geen workspaces</h3>
-          <p style="margin-bottom:16px">Voeg een workspace toe om security-issues te bekijken.</p>
-          <button class="btn btn--primary" onclick="openAddWorkspace()">+ Workspace toevoegen</button>
+          <h3>No workspaces</h3>
+          <p style="margin-bottom:16px">Add a workspace to view security issues.</p>
+          <button class="btn btn--primary" onclick="openAddWorkspace()">+ Add workspace</button>
         </div>
       </div>`;
     return;
@@ -544,7 +544,7 @@ function renderWorkspaces() {
     const hasHigh = s && s.high > 0;
     const cls = hasCrit ? 'has-critical' : hasHigh ? 'has-high' : '';
     const credCls = ws.hasCredentials ? 'ok' : 'missing';
-    const credLabel = ws.hasCredentials ? '✓ credentials' : '✗ geen credentials';
+    const credLabel = ws.hasCredentials ? '✓ credentials' : '✗ no credentials';
     return `
       <button class="ws-card ${cls}" onclick="selectWorkspace('${esc(ws.name)}')">
         <span class="ws-card__name">${esc(ws.name)}</span>
@@ -576,17 +576,17 @@ function renderIssues() {
   const main = document.getElementById('main');
 
   if (state.issueLoading) {
-    main.innerHTML = `<div class="loading"><div class="spinner"></div>Issues laden…</div>`;
+    main.innerHTML = `<div class="loading"><div class="spinner"></div>Loading issues…</div>`;
     return;
   }
 
   const selCount = state.selected.size;
   const batchBar = selCount > 0 ? `
     <div class="batch-bar">
-      <span class="batch-bar__count">${selCount} issue${selCount > 1 ? 's' : ''} geselecteerd</span>
+      <span class="batch-bar__count">${selCount} issue${selCount > 1 ? 's' : ''} selected</span>
       <div class="batch-bar__spacer"></div>
-      <button class="btn btn--sm btn--ghost" onclick="clearSelection()">Deselecteer</button>
-      <button class="btn btn--sm btn--primary" onclick="openInjectForSelected()">▶ Fix selectie</button>
+      <button class="btn btn--sm btn--ghost" onclick="clearSelection()">Deselect</button>
+      <button class="btn btn--sm btn--primary" onclick="openInjectForSelected()">▶ Fix selected</button>
     </div>` : '';
 
   const issues = getDisplayIssues();
@@ -626,12 +626,12 @@ function renderIssues() {
     <div class="issues-view">
       <div class="issues-toolbar">
         <div class="sev-filter">
-          <button class="sev-btn ${!state.severityFilter ? 'active' : ''}" onclick="setSeverity(null)" style="border-color:var(--border)">alle ${ft}</button>
+          <button class="sev-btn ${!state.severityFilter ? 'active' : ''}" onclick="setSeverity(null)" style="border-color:var(--border)">all ${ft}</button>
           ${sevBtns}
         </div>
         <div class="search-box">
           <span style="color:var(--muted)">⌕</span>
-          <input placeholder="Zoek op titel of CVE…" value="${esc(state.search)}" oninput="setSearch(this.value)" />
+          <input placeholder="Search by title or CVE…" value="${esc(state.search)}" oninput="setSearch(this.value)" />
         </div>
       </div>
       ${batchBar}
@@ -641,7 +641,7 @@ function renderIssues() {
             <tr>
               <th class="col-check"><input type="checkbox" onchange="toggleSelectAll(this.checked)" ${state.selected.size && issues.every(i => state.selected.has(String(i.id))) ? 'checked' : ''} /></th>
               <th onclick="setSort('severity')">Severity ${sortArrow('severity')}</th>
-              <th onclick="setSort('title')">Titel ${sortArrow('title')}</th>
+              <th onclick="setSort('title')">Title ${sortArrow('title')}</th>
               <th>CVE</th>
               <th class="col-score" onclick="setSort('severity_score')">Score ${sortArrow('severity_score')}</th>
               <th class="col-actions"></th>
@@ -652,9 +652,9 @@ function renderIssues() {
       </div>
       ${(hasPrev || hasMore) ? `
       <div class="table-footer">
-        <button class="btn btn--sm btn--ghost" ${hasPrev ? '' : 'disabled'} onclick="changePage(-1)">← Vorige</button>
-        <span>Pagina ${state.page + 1} · ${showing} van ${ft}</span>
-        <button class="btn btn--sm btn--ghost" ${hasMore ? '' : 'disabled'} onclick="changePage(1)">Volgende →</button>
+        <button class="btn btn--sm btn--ghost" ${hasPrev ? '' : 'disabled'} onclick="changePage(-1)">← Previous</button>
+        <span>Page ${state.page + 1} · ${showing} of ${ft}</span>
+        <button class="btn btn--sm btn--ghost" ${hasMore ? '' : 'disabled'} onclick="changePage(1)">Next →</button>
       </div>` : ''}
     </div>`;
 }
@@ -714,7 +714,7 @@ function renderDetail() {
       <div class="detail-row"><span class="detail-label">Container</span></div>
       <div class="container-select-row">
         <select onchange="state.selectedContainer = this.value">
-          <option value="">Selecteer container…</option>
+          <option value="">Select container…</option>
           ${containerOptions}
         </select>
         <button class="btn btn--sm" onclick="loadContainers()">↻</button>
@@ -737,7 +737,7 @@ async function loadWorkspaces() {
     // Load overview in background
     api('GET', '/overview').then(ov => { state.overview = ov; render(); }).catch(() => {});
   } catch (e) {
-    alert('Fout bij laden workspaces: ' + e.message);
+    alert('Error loading workspaces: ' + e.message);
   } finally {
     state.loading = false; render();
   }
@@ -774,7 +774,7 @@ async function loadIssues() {
       setTimeout(() => openManageCredentials(), 100);
       return;
     }
-    alert('Fout bij laden issues: ' + e.message);
+    alert('Error loading issues: ' + e.message);
   } finally {
     state.issueLoading = false; render();
   }
@@ -886,22 +886,22 @@ function openInjectForSelected() {
 
 async function doInject(issues, containerName) {
   const msgEl = document.getElementById('inject-msg');
-  if (msgEl) msgEl.innerHTML = `<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>Bezig met injecteren…</div></div>`;
+  if (msgEl) msgEl.innerHTML = `<div class="alert info"><div style="display:flex;gap:8px;align-items:center"><div class="spinner"></div>Injecting…</div></div>`;
   try {
     await api('POST', `/workspaces/${encodeURIComponent(state.selectedWs)}/inject`, {
       container_name: containerName,
       issues,
     });
-    if (msgEl) msgEl.innerHTML = `<div class="alert success">✓ Context geïnjecteerd in <strong>${esc(containerName)}</strong>. Voer <code>aikido-fix</code> uit in de container.</div>`;
+    if (msgEl) msgEl.innerHTML = `<div class="alert success">✓ Context injected into <strong>${esc(containerName)}</strong>. Run <code>aikido-fix</code> in the container.</div>`;
   } catch (e) {
-    if (msgEl) msgEl.innerHTML = `<div class="alert error">Fout: ${esc(e.message)}</div>`;
+    if (msgEl) msgEl.innerHTML = `<div class="alert error">Error: ${esc(e.message)}</div>`;
   }
 }
 
 // ── Workspace modal ────────────────────────────────────────────────────────
 function openAddWorkspace() {
   state.editingWs = null;
-  document.getElementById('ws-modal-title').textContent = 'Workspace toevoegen';
+  document.getElementById('ws-modal-title').textContent = 'Add workspace';
   document.getElementById('ws-name').value = '';
   document.getElementById('ws-prefix').value = '';
   document.getElementById('ws-path').value = '';
@@ -917,7 +917,7 @@ function openEditWorkspace(name) {
   const ws = state.workspaces.find(w => w.name === name);
   if (!ws) return;
   state.editingWs = ws;
-  document.getElementById('ws-modal-title').textContent = `Workspace bewerken — ${name}`;
+  document.getElementById('ws-modal-title').textContent = `Edit workspace — ${name}`;
   document.getElementById('ws-name').value = ws.name;
   document.getElementById('ws-name').disabled = true;
   document.getElementById('ws-prefix').value = ws.aikido_env_prefix;
@@ -941,7 +941,7 @@ async function saveWorkspace() {
   const msg    = document.getElementById('ws-modal-msg');
 
   if (!name || !prefix || !rpath || !wsid || !lang) {
-    msg.innerHTML = `<div class="alert error">Alle verplichte velden zijn vereist.</div>`; return;
+    msg.innerHTML = `<div class="alert error">All required fields are required.</div>`; return;
   }
 
   const body = { name, aikido_env_prefix: prefix, repo_path: rpath, workspace_id: wsid, language: lang, code_repo_name: repo || undefined };
@@ -986,14 +986,14 @@ async function saveCredentials() {
   const clientSecret = document.getElementById('cred-secret').value;
   const msg          = document.getElementById('cred-modal-msg');
   if (!clientId || !clientSecret) {
-    msg.innerHTML = `<div class="alert error">Client ID en Secret zijn verplicht.</div>`; return;
+    msg.innerHTML = `<div class="alert error">Client ID and Secret are required.</div>`; return;
   }
   try {
     const res = await api('POST', `/credentials/${encodeURIComponent(state.credPrefix)}`, { client_id: clientId, client_secret: clientSecret });
     if (res.validated) {
-      msg.innerHTML = `<div class="alert success">✓ Credentials opgeslagen en gevalideerd.</div>`;
+      msg.innerHTML = `<div class="alert success">✓ Credentials saved and validated.</div>`;
     } else {
-      msg.innerHTML = `<div class="alert error">Opgeslagen, maar validatie mislukt: ${esc(res.validation_error || 'onbekend')}</div>`;
+      msg.innerHTML = `<div class="alert error">Saved, but validation failed: ${esc(res.validation_error || 'unknown')}</div>`;
     }
     await loadWorkspaces();
   } catch (e) {
@@ -1002,7 +1002,7 @@ async function saveCredentials() {
 }
 
 async function deleteCreds() {
-  if (!confirm('Credentials verwijderen?')) return;
+  if (!confirm('Delete credentials?')) return;
   try {
     await api('DELETE', `/credentials/${encodeURIComponent(state.credPrefix)}`);
     closeCredModal();

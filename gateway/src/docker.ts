@@ -464,8 +464,8 @@ else
           "$INST_PATH/jbr/bin/keytool" -importcert -noprompt -trustcacerts -alias huddle-ca \\
             -file /usr/local/share/ca-certificates/huddle-ca.crt \\
             -keystore "$INST_PATH/jbr/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 \\
-            && echo "[jb-config] huddle CA in JBR-keystore geimporteerd (na deploy)" \\
-            || echo "[jb-config] WAARSCHUWING: JBR-keystore import faalde (na deploy)"
+            && echo "[jb-config] huddle CA imported in JBR-keystore (after deploy)" \\
+            || echo "[jb-config] WARNING: JBR-keystore import failed (after deploy)"
         fi
         break
       fi
@@ -509,10 +509,10 @@ if [ -x "$JBR_KEYTOOL" ] && [ -f "$JBR_CACERTS" ]; then
   "$JBR_KEYTOOL" -importcert -noprompt -trustcacerts -alias huddle-ca \\
     -file /usr/local/share/ca-certificates/huddle-ca.crt \\
     -keystore "$JBR_CACERTS" -storepass changeit >/dev/null 2>&1 \\
-    && echo "[jb-config] huddle CA in JBR-keystore geimporteerd" \\
-    || echo "[jb-config] WAARSCHUWING: JBR-keystore import faalde"
+    && echo "[jb-config] huddle CA imported in JBR-keystore" \\
+    || echo "[jb-config] WARNING: JBR-keystore import failed"
 else
-  echo "[jb-config] WAARSCHUWING: JBR keytool/cacerts niet gevonden op $IDEA_PATH/jbr"
+  echo "[jb-config] WARNING: JBR keytool/cacerts not found at $IDEA_PATH/jbr"
 fi
 fi
 
@@ -687,8 +687,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     const existing = await inspectContainer(containerName);
     const existingIde = existing?.Config?.Labels?.['com.devcontainer.ide'] ?? ideFromContainerLabels(existing?.Config?.Labels);
     throw new Error(
-      `Container '${containerName}' bestaat al${existingIde ? ` (${existingIde})` : ''}. ` +
-      `Verwijder die container eerst of kies een andere naam met --name.`
+      `Container '${containerName}' already exists${existingIde ? ` (${existingIde})` : ''}. ` +
+      `Remove that container first or choose a different name with --name.`
     );
   } catch (err: any) {
     if (!String(err.message).includes(`Docker API GET /containers/${encodeURIComponent(containerName)}/json → 404:`)) {

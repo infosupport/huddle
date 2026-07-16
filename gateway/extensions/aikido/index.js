@@ -52,36 +52,36 @@ function generateClaudePrompt(issues, ws) {
   const repoName = ws.code_repo_name || ws.name;
   let issueSection;
   if (issues.length === 1) {
-    issueSection = `Kwetsbaarheid:\n${JSON.stringify(issues[0], null, 2)}`;
+    issueSection = `Vulnerability:\n${JSON.stringify(issues[0], null, 2)}`;
   } else {
-    issueSection = `Er zijn ${issues.length} kwetsbaarheden:\n\n` +
+    issueSection = `There are ${issues.length} vulnerabilities:\n\n` +
       issues.map((i, n) => `### Issue ${n + 1}\n${JSON.stringify(i, null, 2)}`).join('\n\n');
   }
-  return `Je bent een senior security engineer gespecialiseerd in ${language.toUpperCase()} applicaties.
+  return `You are a senior security engineer specializing in ${language.toUpperCase()} applications.
 
-Fix de volgende ${issues.length === 1 ? 'kwetsbaarheid' : `${issues.length} kwetsbaarheden`} in deze codebase:
+Fix the following ${issues.length === 1 ? 'vulnerability' : `${issues.length} vulnerabilities`} in this codebase:
 
-## Beschikbare MCP Tools
+## Available MCP Tools
 
-| Tool | Beschrijving |
+| Tool | Description |
 |------|-------------|
-| \`aikido_issues_list\` | Open issues ophalen (filter met \`repo_name: "${repoName}"\`) |
-| \`aikido_issue_details\` | Details van een specifiek issue |
-| \`aikido_scan_repo\` | Scan triggeren na een fix |
-| \`aikido_list_repos\` | Repositories ophalen |
-| \`aikido_ignore_issue\` | Issue negeren als false positive |
-| \`aikido_add_note\` | Notitie toevoegen aan een issue |
+| \`aikido_issues_list\` | Get open issues (filter with \`repo_name: "${repoName}"\`) |
+| \`aikido_issue_details\` | Get details of a specific issue |
+| \`aikido_scan_repo\` | Trigger scan after fix |
+| \`aikido_list_repos\` | List repositories |
+| \`aikido_ignore_issue\` | Mark issue as false positive |
+| \`aikido_add_note\` | Add note to issue |
 
-## Stappen
+## Steps
 
-1. **Analyseer** — Zoek de root cause in de code.
-2. **Fix** — Pas de code aan om de kwetsbaarheid op te lossen.
-3. **Verificeer** — Gebruik \`aikido_list_repos\` → \`aikido_scan_repo\` → \`aikido_issues_list\` om te controleren.
-4. **Documenteer** — \`aikido_add_note\` + schrijf \`aikido/SECURITY_FIX.md\`.
+1. **Analyze** — Find the root cause in the code.
+2. **Fix** — Modify the code to resolve the vulnerability.
+3. **Verify** — Use \`aikido_list_repos\` → \`aikido_scan_repo\` → \`aikido_issues_list\` to verify.
+4. **Document** — \`aikido_add_note\` + write \`aikido/SECURITY_FIX.md\`.
 
 ${issueSection}
 
-Belangrijk: geen git commits, alleen noodzakelijke wijzigingen.`;
+Important: no git commits, only necessary changes.`;
 }
 
 function generateIssueContext(issues, ws) {
@@ -89,10 +89,10 @@ function generateIssueContext(issues, ws) {
   for (let n = 0; n < issues.length; n++) {
     const i = issues[n];
     const prefix = issues.length > 1 ? `### ${n + 1}. ` : '## ';
-    content += `${prefix}${i.title || 'Onbekend'}\n`;
-    content += `- **Severity**: ${i.severity || '?'} (score: ${i.severity_score ?? 'n.v.t.'})\n`;
-    content += `- **Type**: ${i.type || 'n.v.t.'}\n`;
-    content += `- **Package**: ${i.affected_package || 'n.v.t.'}\n\n`;
+    content += `${prefix}${i.title || 'Unknown'}\n`;
+    content += `- **Severity**: ${i.severity || '?'} (score: ${i.severity_score ?? 'n/a'})\n`;
+    content += `- **Type**: ${i.type || 'n/a'}\n`;
+    content += `- **Package**: ${i.affected_package || 'n/a'}\n\n`;
   }
   return content;
 }
@@ -129,7 +129,7 @@ module.exports.register = async function register(ctx) {
       return reply.code(400).send({ error: 'Verplichte velden: name, aikido_env_prefix, repo_path, workspace_id, language' });
     }
     const existing = getWorkspace(db, name);
-    if (existing) return reply.code(409).send({ error: `Workspace "${name}" bestaat al` });
+    if (existing) return reply.code(409).send({ error: `Workspace "${name}" already exists` });
     db.prepare('INSERT INTO aikido_workspaces (name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name) VALUES (?, ?, ?, ?, ?, ?)')
       .run(name, aikido_env_prefix, repo_path.replace(/\\/g, '/'), workspace_id, language, code_repo_name || null);
     return { ok: true };
@@ -141,7 +141,7 @@ module.exports.register = async function register(ctx) {
     if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" niet gevonden` });
     const { name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name } = req.body;
     if (name && name !== req.params.name && getWorkspace(db, name)) {
-      return reply.code(409).send({ error: `Workspace "${name}" bestaat al` });
+      return reply.code(409).send({ error: `Workspace "${name}" already exists` });
     }
     db.prepare(`UPDATE aikido_workspaces SET
       name = COALESCE(?, name),
@@ -175,7 +175,7 @@ module.exports.register = async function register(ctx) {
     const ws = getWorkspace(db, req.params.name);
     if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" niet gevonden` });
     const creds = resolveCreds(ws.aikido_env_prefix);
-    if (!creds) return reply.code(401).send({ error: 'no_credentials', message: 'Geen Aikido credentials geconfigureerd' });
+    if (!creds) return reply.code(401).send({ error: 'no_credentials', message: 'No Aikido credentials configured' });
 
     const page    = parseInt(req.query?.page    || '0', 10);
     const perPage = parseInt(req.query?.per_page || '20', 10);
