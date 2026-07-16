@@ -40,6 +40,64 @@ describe('validateHostConfig', () => {
     });
     expect(denial).toMatch(/driverconfig not permitted/i);
   });
+
+  // ── Findings #1 / #2 — bevestigde escape-vectoren (hard-deny) ──────────────
+  it('weigert HostConfig.VolumesFrom (finding #1 — erven van huddle-mounts)', () => {
+    expect(validateHostConfig({ VolumesFrom: ['huddle'] })).toMatch(/volumesfrom not permitted/i);
+    // Lege VolumesFrom (wat de CLI standaard meestuurt) is ONSCHULDIG.
+    expect(validateHostConfig({ VolumesFrom: [] })).toBeNull();
+  });
+  it('weigert HostConfig.DeviceCgroupRules (finding #2 — host raw-disk)', () => {
+    expect(validateHostConfig({ DeviceCgroupRules: ['b 8:0 rwm'] })).toMatch(/devicecgrouprules not permitted/i);
+    expect(validateHostConfig({ DeviceCgroupRules: [] })).toBeNull();
+  });
+  it('weigert de rest van de device-familie (DeviceRequests, Blkio device-limieten)', () => {
+    expect(validateHostConfig({ DeviceRequests: [{ Driver: 'nvidia', Count: -1 }] })).toMatch(/devicerequests not permitted/i);
+    expect(validateHostConfig({ BlkioDeviceReadBps: [{ Path: '/dev/sda', Rate: 1 }] })).toMatch(/blkiodevicereadbps not permitted/i);
+    expect(validateHostConfig({ BlkioDeviceWriteIOps: [{ Path: '/dev/sda', Rate: 1 }] })).toMatch(/blkiodevicewriteiops not permitted/i);
+  });
+
+  // ── Generieke allowlist-sweep over onbekende velden ────────────────────────
+  it('staat de nul-/lege waarden toe die de Docker-CLI standaard meestuurt', () => {
+    // Een representatieve `docker run`-achtige HostConfig met veel default-velden.
+    const denial = validateHostConfig({
+      NetworkMode: 'bridge',
+      Memory: 0, CpuShares: 0, NanoCpus: 0,
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      LogConfig: { Type: 'json-file', Config: {} },
+      Binds: null, VolumesFrom: [], CapAdd: [], CapDrop: [], Devices: [],
+      DeviceCgroupRules: [], Privileged: false, IpcMode: 'private',
+      MaskedPaths: ['/proc/kcore'], ReadonlyPaths: ['/proc/sysrq-trigger'],
+      Ulimits: [{ Name: 'nofile', Soft: 1024, Hard: 2048 }],
+      AutoRemove: true,
+    });
+    expect(denial).toBeNull();
+  });
+  it('log-only default: een onbekend niet-leeg veld wordt NIET geweigerd', () => {
+    delete process.env.HUDDLE_HOSTCONFIG_ENFORCE;
+    expect(validateHostConfig({ SomeFutureField: { danger: true } })).toBeNull();
+  });
+  it('enforce-mode: een onbekend niet-leeg veld wordt geweigerd', () => {
+    process.env.HUDDLE_HOSTCONFIG_ENFORCE = '1';
+    try {
+      expect(validateHostConfig({ SomeFutureField: { danger: true } })).toMatch(/not permitted: SomeFutureField/);
+      // Een onbekend veld met een lege waarde blijft toegestaan, ook in enforce.
+      expect(validateHostConfig({ SomeFutureField: [] })).toBeNull();
+    } finally {
+      delete process.env.HUDDLE_HOSTCONFIG_ENFORCE;
+    }
+  });
+  it('enforce-mode breekt de legitieme create-body niet', () => {
+    process.env.HUDDLE_HOSTCONFIG_ENFORCE = '1';
+    try {
+      expect(validateHostConfig({
+        NetworkMode: 'bridge', Memory: 536870912, CpuQuota: 200000, CpuPeriod: 100000,
+        RestartPolicy: { Name: 'unless-stopped' }, Mounts: [{ Type: 'volume', Source: 'data', Target: '/data' }],
+      })).toBeNull();
+    } finally {
+      delete process.env.HUDDLE_HOSTCONFIG_ENFORCE;
+    }
+  });
 });
 
 describe('validateVolumeCreate', () => {

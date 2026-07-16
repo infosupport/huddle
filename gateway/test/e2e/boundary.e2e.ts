@@ -3,8 +3,9 @@ import {
   E2E_ENABLED, E2E_NAME, E2E_IMAGE,
   dockerAvailable, assertHuddleReachable,
   spawnDevcontainer, removeDevcontainer,
-  execIn, curlStatusIn,
-  clearRulesForDomain, allowDomain, setGrant, revokeGrant, setActionPolicy, sleep,
+  execIn, curlStatusIn, run,
+  clearRulesForDomain, allowDomain, createRule, enablePathMode,
+  setGrant, revokeGrant, setActionPolicy, sleep,
 } from './helpers';
 
 // ── LIVE security-boundary suite (T1–T11 stijl) ─────────────────────────────
@@ -143,6 +144,85 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
         expect(r.status).not.toBe(0);
         expect(`${r.stdout}${r.stderr}`).toMatch(/not owned|not permitted/i);
       });
+
+      // Finding #1 (CRITICAL) — VolumesFrom erft huddle's echte docker.sock +
+      // CA-key + DB → host/daemon-takeover. Moet nu door de allowlist sneuvelen.
+      it('weigert HostConfig.VolumesFrom (finding #1)', async () => {
+        const r = execIn(E2E_NAME, `docker create --name e2e-pwned --volumes-from huddle ${E2E_IMAGE} true`);
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/volumesfrom not permitted/i);
+        execIn(E2E_NAME, 'docker rm -f e2e-pwned 2>/dev/null || true');
+      });
+
+      // Finding #2 (HIGH) — DeviceCgroupRules whitelist't host block-devices;
+      // met default CAP_MKNOD → raw-disk toegang. --privileged wordt al geweigerd;
+      // deze variant mag óók niet meer door.
+      it('weigert HostConfig.DeviceCgroupRules (finding #2)', async () => {
+        const r = execIn(E2E_NAME, `docker create --name e2e-dcr --device-cgroup-rule "b 8:0 rwm" ${E2E_IMAGE} true`);
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/devicecgrouprules not permitted/i);
+        execIn(E2E_NAME, 'docker rm -f e2e-dcr 2>/dev/null || true');
+      });
+
+      // Finding #8 (MEDIUM) — cross-container volume-diefstal: een volume dat aan
+      // een ANDERE devcontainer toebehoort mag niet gemount worden.
+      it('weigert het mounten van andermans named volume (finding #8)', async () => {
+        // Operator/host maakt een volume dat aan een peer-devcontainer toebehoort.
+        run('docker', ['volume', 'rm', '-f', 'e2e-victimvol']);
+        run('docker', ['volume', 'create', '--label', 'huddle.parent=devcontainer-victim', 'e2e-victimvol']);
+        run('docker', ['run', '--rm', '-v', 'e2e-victimvol:/v', E2E_IMAGE, 'sh', '-c', 'echo victim-secret-XYZ > /v/s.txt']);
+        try {
+          const r = execIn(E2E_NAME, `docker create --name e2e-steal -v e2e-victimvol:/loot ${E2E_IMAGE} cat /loot/s.txt`);
+          expect(r.status).not.toBe(0);
+          expect(`${r.stdout}${r.stderr}`).toMatch(/owned by another devcontainer/i);
+          execIn(E2E_NAME, 'docker rm -f e2e-steal 2>/dev/null || true');
+        } finally {
+          run('docker', ['volume', 'rm', '-f', 'e2e-victimvol']);
+        }
+      });
+    });
+  });
+
+  // ── Firewall parser-differential regressies (#3, #7) ──────────────────────
+  // Eigen domeinen (github.com / example.org) zodat deze concurrent naast de
+  // example.com-firewalltest kan draaien zonder state-botsing.
+  describe('firewall parser-differential', () => {
+    afterAll(async () => {
+      await clearRulesForDomain('*.github.com');
+      await clearRulesForDomain('gist.github.com');
+      await clearRulesForDomain('example.org');
+    });
+
+    // Finding #3 (HIGH) — de broad-allow/specific-deny vorm mag niet met casing
+    // te omzeilen zijn.
+    it('CONNECT casing omzeilt een exacte deny niet (finding #3)', async () => {
+      await clearRulesForDomain('*.github.com');
+      await clearRulesForDomain('gist.github.com');
+      await createRule('*.github.com', 'allow');
+      await createRule('gist.github.com', 'deny');
+      await sleep(1000);
+      // Een host-level HTTPS-deny weigert de CONNECT-tunnel: curl krijgt géén
+      // HTTP-status (http_code '000'; de 403 zit in de CONNECT-respons, niet in
+      // http_code — anders dan het plain-HTTP-pad hierboven). Zou casing de deny
+      // omzeilen, dan matchte de host de wildcard-allow en wérd de CONNECT
+      // geaccepteerd (geen '000'). Zowel exact als ge-kapitaliseerd moet dus '000'.
+      expect(curlStatusIn(E2E_NAME, 'https://gist.github.com')).toBe('000');
+      expect(curlStatusIn(E2E_NAME, 'https://GIST.GITHUB.COM')).toBe('000');
+    });
+
+    // Finding #7 (MEDIUM) — pad-allowlist bypass via traversal. `--path-as-is`
+    // bootst een aanvaller-client na die het pad niet client-side normaliseert.
+    it('pad-traversal glipt niet door een /foo/* allowlist (finding #7)', async () => {
+      await clearRulesForDomain('example.org');
+      const denyId = await createRule('example.org', 'deny');
+      await enablePathMode(denyId);
+      await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
+      await sleep(1000);
+      // Legitiem subpad mag (bereikt upstream — 2xx/3xx/4xx, in elk geval geen 403).
+      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is')).not.toBe('403');
+      // Traversal buiten /foo/ → door Huddle geblokkeerd (403), niet doorgestuurd.
+      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/../secret', '--path-as-is')).toBe('403');
+      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/..%2f..%2fadmin', '--path-as-is')).toBe('403');
     });
   });
 

@@ -117,6 +117,26 @@ export async function allowDomain(domain: string, container: string): Promise<vo
   }
 }
 
+// Maak een verse rule aan (globaal tenzij container gegeven) en geef het id terug.
+export async function createRule(
+  domain: string,
+  status: 'allow' | 'deny' | 'requested',
+  opts: { container?: string | null; path_pattern?: string | null } = {},
+): Promise<number> {
+  const r = await api('POST', '/api/rules', {
+    domain, status,
+    container_id: opts.container ?? null,
+    path_pattern: opts.path_pattern ?? null,
+  });
+  return r.id as number;
+}
+
+// Zet een host-only regel in pad-allowlist modus (kaal domein dicht, subpaden
+// afzonderlijk goed te keuren).
+export async function enablePathMode(ruleId: number): Promise<void> {
+  await api('POST', `/api/rules/${ruleId}/path-mode`, { enabled: true });
+}
+
 export async function setGrant(container: string, minutes: number): Promise<void> {
   await api('PUT', `/api/authz/grants/${encodeURIComponent(container)}`, { minutes });
 }
