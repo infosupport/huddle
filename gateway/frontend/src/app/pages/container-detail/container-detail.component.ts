@@ -1,4 +1,5 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, signal, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { AsyncPipe, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -46,7 +47,18 @@ export class ContainerDetailComponent implements OnInit {
   private route = inject(ActivatedRoute);
   private api = inject(ApiService);
   private state = inject(StateService);
+  private destroyRef = inject(DestroyRef);
   modal = inject(ModalService);
+
+  constructor() {
+    // De gedeelde "For everyone"-bevestigingsmodal ververst alleen state.rules$,
+    // maar deze pagina toont zijn eigen detail$ (getContainerDetail). Herlaad die
+    // lokaal zodra een globale allow/deny is doorgevoerd, anders bleef de
+    // afgehandelde regel staan tot een handmatige refresh.
+    this.modal.confirmResolved$
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(() => this.load());
+  }
 
   get nowTs(): number { return Math.floor(Date.now() / 1000); }
 

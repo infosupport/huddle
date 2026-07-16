@@ -30,6 +30,9 @@ export class ConfirmModalComponent {
     this.api.resolveRule(rule.id, status, 'global').subscribe(() => {
       this.modalService.closeConfirm();
       this.state.loadAll();
+      // Laat pagina's met eigen lokale data (container-detail) hun view herladen;
+      // state.loadAll() ververst alleen de gedeelde rules$-stroom.
+      this.modalService.notifyConfirmResolved();
     });
   }
 
