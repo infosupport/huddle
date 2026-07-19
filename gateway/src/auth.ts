@@ -55,12 +55,12 @@ export function getOperatorToken(): string {
   try {
     fs.writeFileSync(file, generated, { mode: 0o600 });
   } catch (err) {
-    console.warn(`[auth] kon operator-token niet persisteren naar ${file}: ${(err as Error).message}`);
+    console.warn(`[auth] could not persist operator token to ${file}: ${(err as Error).message}`);
   }
   cachedToken = generated;
   console.log(
-    `\n[auth] Operator-token gegenereerd. Log in op de portal (http://localhost:3000) met:\n\n    ${generated}\n\n` +
-    `Zet HUDDLE_OPERATOR_TOKEN om een vast token te kiezen.\n`
+    `\n[auth] Operator token generated. Log in to the portal (http://localhost:3000) with:\n\n    ${generated}\n\n` +
+    `Set HUDDLE_OPERATOR_TOKEN to choose a fixed token.\n`
   );
   return generated;
 }

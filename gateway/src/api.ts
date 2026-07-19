@@ -742,7 +742,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // VS Code installeert zijn eigen backend bij het attachen en schrijft geen
       // jetbrains-gateway://-link; een deep-link bestaat hier niet.
       if (ide === 'vscode') {
-        return reply.code(404).send({ error: 'VS Code gebruikt geen JetBrains deep-link' });
+        return reply.code(404).send({ error: 'VS Code does not use a JetBrains deep-link' });
       }
       // Rider en IntelliJ draaien beide remote-dev-server.sh, dat de gateway-link
       // naar <workspace>/rider-client-diagnose.log schrijft.
@@ -752,7 +752,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${logFile}" 2>/dev/null | tail -1`,
       ]);
       const links = output.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('jetbrains-gateway://'));
-      if (links.length === 0) return reply.code(404).send({ error: 'IDE backend nog niet gestart — even geduld en probeer opnieuw' });
+      if (links.length === 0) return reply.code(404).send({ error: 'IDE backend not started yet — please wait and try again' });
       return { link: links[links.length - 1] };
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
@@ -821,7 +821,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
           if (match) { req.params = { ...req.params, ...params }; handler = h; break; }
         }
       }
-      if (!handler) return reply.code(404).send({ error: `Geen handler voor ${req.method} ${fullPath}` });
+      if (!handler) return reply.code(404).send({ error: `No handler for ${req.method} ${fullPath}` });
       return handler(req, reply);
     },
   });
@@ -830,7 +830,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.post('/api/extensions/upload', async (req, reply) => {
     const data = await req.file();
-    if (!data) return reply.code(400).send({ error: 'Geen bestand' });
+    if (!data) return reply.code(400).send({ error: 'No file' });
     const buffer = await data.toBuffer();
     try {
       const result = await installExtension(buffer);
@@ -843,7 +843,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.delete<{ Params: { id: string } }>('/api/extensions/:id', async (req, reply) => {
     if (!/^[a-z0-9-]+$/.test(req.params.id)) {
-      return reply.code(400).send({ error: 'ongeldige id' });
+      return reply.code(400).send({ error: 'invalid id' });
     }
     removeExtension(req.params.id);
     notifyStateChanged();
@@ -859,15 +859,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // anders is het een traversal-poging (bv. ../../).
   app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
     const { id } = req.params;
-    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('ongeldige id');
+    if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('invalid id');
     const subPath = req.params['*'] || 'index.html';
     const baseDir = path.join(EXT_DIR, id, 'frontend');
     const filePath = path.join(baseDir, subPath);
     if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
-      return reply.code(403).send('verboden');
+      return reply.code(403).send('forbidden');
     }
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-      return reply.code(404).send('Niet gevonden');
+      return reply.code(404).send('Not found');
     }
     return reply.send(fs.createReadStream(filePath));
   });

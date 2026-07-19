@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="nl">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -392,16 +392,16 @@
 <div class="modal-backdrop" id="ws-modal">
   <div class="modal">
     <div class="modal__header">
-      <h2 id="ws-modal-title">Workspace toevoegen</h2>
+      <h2 id="ws-modal-title">Add workspace</h2>
       <button class="modal__close" onclick="closeWsModal()">×</button>
     </div>
     <div class="modal__body">
-      <div class="field"><label>Naam</label><input id="ws-name" placeholder="mijn-workspace" /></div>
+      <div class="field"><label>Name</label><input id="ws-name" placeholder="my-workspace" /></div>
       <div class="field"><label>Env prefix</label><input id="ws-prefix" placeholder="AIKIDO_WGK" /></div>
-      <div class="field"><label>Repo pad</label><input id="ws-path" placeholder="/workspaces/mijn-project" /></div>
+      <div class="field"><label>Repo path</label><input id="ws-path" placeholder="/workspaces/my-project" /></div>
       <div class="field"><label>Workspace ID</label><input id="ws-id" placeholder="ws-abc123" /></div>
       <div class="field">
-        <label>Taal</label>
+        <label>Language</label>
         <select id="ws-lang">
           <option value="java">Java</option>
           <option value="typescript">TypeScript</option>
@@ -413,12 +413,12 @@
           <option value="ruby">Ruby</option>
         </select>
       </div>
-      <div class="field"><label>Repository naam (optioneel)</label><input id="ws-repo" placeholder="mijn-org/mijn-repo" /></div>
+      <div class="field"><label>Repository name (optional)</label><input id="ws-repo" placeholder="my-org/my-repo" /></div>
       <div id="ws-modal-msg"></div>
     </div>
     <div class="modal__footer">
-      <button class="btn btn--ghost" onclick="closeWsModal()">Annuleer</button>
-      <button class="btn btn--primary" id="ws-modal-save" onclick="saveWorkspace()">Opslaan</button>
+      <button class="btn btn--ghost" onclick="closeWsModal()">Cancel</button>
+      <button class="btn btn--primary" id="ws-modal-save" onclick="saveWorkspace()">Save</button>
     </div>
   </div>
 </div>
@@ -557,7 +557,7 @@ function renderWorkspaces() {
         </div>` : ws.hasCredentials ? `<div style="margin-top:10px"><div class="spinner" style="width:12px;height:12px;"></div></div>` : ''}
         <div class="ws-card__footer">
           <span class="ws-card__cred ${credCls}">${credLabel}</span>
-          <button class="ws-card__edit-btn" title="Bewerken" onclick="event.stopPropagation();openEditWorkspace('${esc(ws.name)}')">⋯</button>
+          <button class="ws-card__edit-btn" title="Edit" onclick="event.stopPropagation();openEditWorkspace('${esc(ws.name)}')">⋯</button>
         </div>
       </button>`;
   }).join('');
@@ -613,7 +613,7 @@ function renderIssues() {
       </tr>`;
   }).join('');
 
-  const emptyRow = !issues.length ? `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">Geen issues gevonden</td></tr>` : '';
+  const emptyRow = !issues.length ? `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">No issues found</td></tr>` : '';
 
   const sevBtns = ['critical','high','medium','low'].map(s =>
     `<button class="sev-btn ${s} ${state.severityFilter === s ? 'active' : ''}" onclick="setSeverity('${s}')">${s} ${allSevs[s]}</button>`
@@ -703,12 +703,12 @@ function renderDetail() {
       </div>
       ${i.type ? `<div class="detail-row"><span class="detail-label">Type</span><span class="detail-val">${esc(i.type)}</span></div>` : ''}
       ${i.affected_package ? `<div class="detail-row"><span class="detail-label">Package</span><span class="detail-val mono">${esc(i.affected_package)}</span></div>` : ''}
-      ${i.affected_file ? `<div class="detail-row"><span class="detail-label">Bestand</span><span class="detail-val mono">${esc(i.affected_file)}</span></div>` : ''}
+      ${i.affected_file ? `<div class="detail-row"><span class="detail-label">File</span><span class="detail-val mono">${esc(i.affected_file)}</span></div>` : ''}
       <div class="detail-row"><span class="detail-label">CVE</span><span class="detail-val mono">${esc(cves)}</span></div>
-      ${locs !== '–' ? `<div class="detail-row"><span class="detail-label">Locaties</span><span class="detail-val">${esc(locs)}</span></div>` : ''}
+      ${locs !== '–' ? `<div class="detail-row"><span class="detail-label">Locations</span><span class="detail-val">${esc(locs)}</span></div>` : ''}
       ${i.exploitability ? `<div class="detail-row"><span class="detail-label">Exploitability</span><span class="detail-val">${esc(i.exploitability)}</span></div>` : ''}
       ${i.how_to_fix ? `<div class="detail-row"><span class="detail-label">Hoe te fixen</span><span class="detail-val">${esc(i.how_to_fix)}</span></div>` : ''}
-      ${i.first_detected_at ? `<div class="detail-row"><span class="detail-label">Eerste detectie</span><span class="detail-val mono">${esc(i.first_detected_at)}</span></div>` : ''}
+      ${i.first_detected_at ? `<div class="detail-row"><span class="detail-label">First detected</span><span class="detail-val mono">${esc(i.first_detected_at)}</span></div>` : ''}
     </div>
     <div class="detail-actions">
       <div class="detail-row"><span class="detail-label">Container</span></div>

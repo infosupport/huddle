@@ -143,7 +143,7 @@ async function dockerExecSimple(containerName: string, command: string): Promise
 
 function parseManifest(raw: string): ExtensionManifest {
   const manifest = JSON.parse(raw) as ExtensionManifest;
-  if (!manifest.id || !manifest.name) throw new Error('manifest.json vereist id en name');
+  if (!manifest.id || !manifest.name) throw new Error('manifest.json requires id and name');
   if (!/^[a-z0-9-]+$/.test(manifest.id)) {
     throw new Error('manifest.id mag alleen a-z, 0-9 en - bevatten');
   }
@@ -191,10 +191,10 @@ export async function installExtension(
   const zip = new AdmZip(zipBuffer);
 
   const manifestEntry = zip.getEntry('manifest.json');
-  if (!manifestEntry) throw new Error('manifest.json ontbreekt in zip');
+  if (!manifestEntry) throw new Error('manifest.json missing in zip');
   const manifest = parseManifest(manifestEntry.getData().toString('utf8'));
 
-  if (!zip.getEntry('index.js')) throw new Error('index.js ontbreekt in zip');
+  if (!zip.getEntry('index.js')) throw new Error('index.js missing in zip');
 
   // Fastify staat geen route-verwijdering of -herdeclaratie toe op een draaiende
   // instantie. Een al-geladen extensie kunnen we daarom niet live herladen: we
@@ -229,7 +229,7 @@ export async function loadExtension(id: string): Promise<void> {
   const manifestPath = path.join(dir, 'manifest.json');
   const indexPath = path.join(dir, 'index.js');
   if (!fs.existsSync(manifestPath) || !fs.existsSync(indexPath)) {
-    throw new Error(`Extensie '${id}' niet gevonden in ${EXT_DIR}`);
+    throw new Error(`Extension '${id}' not found in ${EXT_DIR}`);
   }
 
   const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf8'));
@@ -238,12 +238,12 @@ export async function loadExtension(id: string): Promise<void> {
   const mod = await import(indexPath);
   const registerFn = mod.register ?? mod.default?.register;
   if (typeof registerFn !== 'function') {
-    throw new Error('index.js exporteert geen register functie');
+    throw new Error('index.js does not export a register function');
   }
 
   await registerFn(buildContext(id));
   loaded.set(id, { manifest, enabled: true });
-  console.log(`[ext] geladen: ${id} v${manifest.version ?? '?'}`);
+  console.log(`[ext] loaded: ${id} v${manifest.version ?? '?'}`);
 }
 
 export async function loadAllExtensions(): Promise<void> {
@@ -253,7 +253,7 @@ export async function loadAllExtensions(): Promise<void> {
     try {
       await loadExtension(entry.name);
     } catch (err: any) {
-      console.error(`[ext:${entry.name}] laden mislukt:`, err.message);
+      console.error(`[ext:${entry.name}] loading failed:`, err.message);
     }
   }
 }

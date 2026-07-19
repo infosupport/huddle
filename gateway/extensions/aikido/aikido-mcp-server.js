@@ -104,35 +104,35 @@ async function fetchIssues(repoName) {
 
 const tools = {
   aikido_issues_list: {
-    description: "Haal open Aikido issues op, optioneel gefilterd op repository-naam.",
+    description: "Fetch open Aikido issues, optionally filtered by repository name.",
     inputSchema: {
       type: "object",
       properties: {
-        repo_name: { type: "string", description: "Filter op repository-naam (code_repo_name)" },
+        repo_name: { type: "string", description: "Filter by repository name (code_repo_name)" },
       },
     },
     async handler({ repo_name }) {
       const issues = await fetchIssues(repo_name);
-      return { content: [{ type: "text", text: issues.length ? JSON.stringify(issues, null, 2) : "Geen open issues gevonden." }] };
+      return { content: [{ type: "text", text: issues.length ? JSON.stringify(issues, null, 2) : "No open issues found." }] };
     },
   },
 
   aikido_issue_details: {
-    description: "Haal details van één Aikido issue op via het ID.",
+    description: "Fetch details of a single Aikido issue by ID.",
     inputSchema: {
       type: "object",
-      properties: { issue_id: { type: "string", description: "Het issue-ID" } },
+      properties: { issue_id: { type: "string", description: "The issue ID" } },
       required: ["issue_id"],
     },
     async handler({ issue_id }) {
       const all = await fetchIssues();
       const issue = all.find(i => i.id === String(issue_id));
-      return { content: [{ type: "text", text: issue ? JSON.stringify(issue, null, 2) : `Issue ${issue_id} niet gevonden.` }] };
+      return { content: [{ type: "text", text: issue ? JSON.stringify(issue, null, 2) : `Issue ${issue_id} not found.` }] };
     },
   },
 
   aikido_list_repos: {
-    description: "Haal beschikbare code-repositories op uit Aikido.",
+    description: "Fetch available code repositories from Aikido.",
     inputSchema: { type: "object", properties: {} },
     async handler() {
       const data = await aikidoRequest("GET", "/repositories");
@@ -141,10 +141,10 @@ const tools = {
   },
 
   aikido_scan_repo: {
-    description: "Trigger een nieuwe scan voor een repository.",
+    description: "Trigger a new scan for a repository.",
     inputSchema: {
       type: "object",
-      properties: { repo_id: { type: "number", description: "Het numerieke repository-ID" } },
+      properties: { repo_id: { type: "number", description: "The numeric repository ID" } },
       required: ["repo_id"],
     },
     async handler({ repo_id }) {
@@ -154,12 +154,12 @@ const tools = {
   },
 
   aikido_ignore_issue: {
-    description: "Negeer een Aikido issue (bijv. false positive of accepted risk).",
+    description: "Ignore an Aikido issue (e.g. false positive or accepted risk).",
     inputSchema: {
       type: "object",
       properties: {
         issue_id: { type: "string" },
-        reason: { type: "string", description: "Reden voor negering" },
+        reason: { type: "string", description: "Reason for ignoring" },
       },
       required: ["issue_id", "reason"],
     },
@@ -170,12 +170,12 @@ const tools = {
   },
 
   aikido_add_note: {
-    description: "Voeg een notitie toe aan een Aikido issue group.",
+    description: "Add a note to an Aikido issue group.",
     inputSchema: {
       type: "object",
       properties: {
         issue_id: { type: "string" },
-        note: { type: "string", description: "De notitie-tekst" },
+        note: { type: "string", description: "The note text" },
       },
       required: ["issue_id", "note"],
     },
@@ -230,7 +230,7 @@ async function handleMessage(msg) {
     const { name, arguments: args } = params;
     const tool = tools[name];
     if (!tool) {
-      send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Tool niet gevonden: ${name}` } });
+      send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Tool not found: ${name}` } });
       return;
     }
     try {
@@ -243,7 +243,7 @@ async function handleMessage(msg) {
   }
 
   if (id !== undefined) {
-    send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Methode niet gevonden: ${method}` } });
+    send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } });
   }
 }
 

@@ -103,7 +103,7 @@ module.exports.register = async function register(ctx) {
   const { app, db, log, getSetting, setSetting } = ctx;
 
   ensureSchema(db);
-  log('Aikido extensie geladen');
+  log('Aikido extension loaded');
 
   // Bind decrypt in resolveCredentials via een wrapper zodat db.js crypto-vrij blijft
   const resolveCreds = (envPrefix) => resolveCredentials(db, envPrefix, decrypt);
@@ -126,7 +126,7 @@ module.exports.register = async function register(ctx) {
   app.post('/api/ext/aikido/workspaces', async (req, reply) => {
     const { name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name } = req.body;
     if (!name || !aikido_env_prefix || !repo_path || !workspace_id || !language) {
-      return reply.code(400).send({ error: 'Verplichte velden: name, aikido_env_prefix, repo_path, workspace_id, language' });
+      return reply.code(400).send({ error: 'Required fields: name, aikido_env_prefix, repo_path, workspace_id, language' });
     }
     const existing = getWorkspace(db, name);
     if (existing) return reply.code(409).send({ error: `Workspace "${name}" already exists` });
@@ -138,7 +138,7 @@ module.exports.register = async function register(ctx) {
   // Workspaces - update
   app.put('/api/ext/aikido/workspaces/:name', async (req, reply) => {
     const ws = getWorkspace(db, req.params.name);
-    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" niet gevonden` });
+    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" not found` });
     const { name, aikido_env_prefix, repo_path, workspace_id, language, code_repo_name } = req.body;
     if (name && name !== req.params.name && getWorkspace(db, name)) {
       return reply.code(409).send({ error: `Workspace "${name}" already exists` });
@@ -165,7 +165,7 @@ module.exports.register = async function register(ctx) {
   // Workspaces - delete
   app.delete('/api/ext/aikido/workspaces/:name', async (req, reply) => {
     const ws = getWorkspace(db, req.params.name);
-    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" niet gevonden` });
+    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" not found` });
     db.prepare('DELETE FROM aikido_workspaces WHERE name = ?').run(req.params.name);
     return { ok: true };
   });
@@ -173,7 +173,7 @@ module.exports.register = async function register(ctx) {
   // Issues per workspace
   app.get('/api/ext/aikido/workspaces/:name/issues', async (req, reply) => {
     const ws = getWorkspace(db, req.params.name);
-    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" niet gevonden` });
+    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" not found` });
     const creds = resolveCreds(ws.aikido_env_prefix);
     if (!creds) return reply.code(401).send({ error: 'no_credentials', message: 'No Aikido credentials configured' });
 
@@ -231,7 +231,7 @@ module.exports.register = async function register(ctx) {
   // Credentials - upsert
   app.post('/api/ext/aikido/credentials/:envPrefix', async (req, reply) => {
     const { client_id, client_secret, api_key } = req.body || {};
-    if (!client_id || !client_secret) return reply.code(400).send({ error: 'client_id en client_secret zijn verplicht' });
+    if (!client_id || !client_secret) return reply.code(400).send({ error: 'client_id and client_secret are required' });
     const enc    = encrypt(client_secret);
     const apiEnc = api_key ? encrypt(api_key) : null;
     saveCredentials(db, req.params.envPrefix, client_id, enc, apiEnc);
@@ -253,7 +253,7 @@ module.exports.register = async function register(ctx) {
 
   app.post('/api/ext/aikido/settings/mcp-api-key', async (req, reply) => {
     const { api_key } = req.body || {};
-    if (!api_key) return reply.code(400).send({ error: 'api_key is verplicht' });
+    if (!api_key) return reply.code(400).send({ error: 'api_key is required' });
     setSetting('mcp_api_key', encrypt(api_key));
     return { ok: true };
   });
@@ -266,11 +266,11 @@ module.exports.register = async function register(ctx) {
   // Inject: schrijf context + MCP server naar een devcontainer
   app.post('/api/ext/aikido/workspaces/:name/inject', async (req, reply) => {
     const ws = getWorkspace(db, req.params.name);
-    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" niet gevonden` });
+    if (!ws) return reply.code(404).send({ error: `Workspace "${req.params.name}" not found` });
 
     const body          = req.body || {};
     const containerName = body.container_name;
-    if (!containerName) return reply.code(400).send({ error: 'container_name is verplicht' });
+    if (!containerName) return reply.code(400).send({ error: 'container_name is required' });
 
     let issues = body.issues || [];
     if (!issues.length && Array.isArray(body.issue_ids) && body.issue_ids.length) {
@@ -286,7 +286,7 @@ module.exports.register = async function register(ctx) {
         issues = cached.issues.filter(i => idSet.has(String(i.id)));
       }
     }
-    if (!Array.isArray(issues) || !issues.length) return reply.code(400).send({ error: 'issues of issue_ids vereist' });
+    if (!Array.isArray(issues) || !issues.length) return reply.code(400).send({ error: 'issues or issue_ids required' });
 
     try {
       const info      = await dockerRequest('GET', `/containers/${encodeURIComponent(containerName)}/json`);
