@@ -224,6 +224,30 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/../secret', '--path-as-is')).toBe('403');
       expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/..%2f..%2fadmin', '--path-as-is')).toBe('403');
     });
+
+    // Regressie op de finding #7-fix: de beslissing valt op de gedecodeerde
+    // vorm, maar geforward worden de originele encoded bytes. Werd de
+    // gedecodeerde vorm geforward, dan gooide http(s).request synchroon
+    // ERR_UNESCAPED_CHARACTERS op de rauwe spatie (bv. een Azure DevOps-
+    // projectnaam met %20) en ging het hele gateway-proces neer.
+    it('%-encoded pad (%20) wordt geforward en crasht de gateway niet', async () => {
+      await clearRulesForDomain('example.org');
+      const denyId = await createRule('example.org', 'deny');
+      await enablePathMode(denyId);
+      await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
+      await sleep(1000);
+      // MITM-pad (https): matcht /foo/* op de gedecodeerde vorm, bereikt
+      // upstream ('000' zou een neergegane gateway of geweigerde CONNECT zijn).
+      const mitm = curlStatusIn(E2E_NAME, 'https://example.org/foo/a%20b', '--path-as-is');
+      expect(mitm).not.toBe('403');
+      expect(mitm).not.toBe('000');
+      // Plain-HTTP-pad: zelfde invariant.
+      const plain = curlStatusIn(E2E_NAME, 'http://example.org/foo/a%20b', '--path-as-is');
+      expect(plain).not.toBe('403');
+      expect(plain).not.toBe('000');
+      // De gateway leeft nog na beide requests.
+      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is')).not.toBe('000');
+    });
   });
 
   // ── Huddle self-traffic via de proxy ──────────────────────────────────────

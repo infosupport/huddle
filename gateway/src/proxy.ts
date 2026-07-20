@@ -4,12 +4,12 @@ import net from 'net';
 import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
-import { URL } from 'url';
-import { checkRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
-import { resolveContainerByIp } from './docker';
-import { logAudit, updateAuditResponse } from './db';
-import { signLeafCert } from './tls-ca';
-import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
+import {URL} from 'url';
+import {canonicalizeHost, checkRule, isPathMode, normalizePathname} from './rules';
+import {resolveContainerByIp} from './docker';
+import {logAudit, updateAuditResponse} from './db';
+import {signLeafCert} from './tls-ca';
+import {isPlaceholderToken, resolveToken, storeTokenExchange} from './token-exchange';
 
 const PROXY_PORT = 80;
 
@@ -126,8 +126,7 @@ function handleTokenExchangeResponse(
         // Bind de placeholder aan de aanvragende container (finding #12); geen
         // 'unknown'-fallback meer. Een null container levert een niet-inwissel-
         // bare placeholder op (fail-closed).
-        const placeholder = storeTokenExchange(containerId, json.access_token as string);
-        json.access_token = placeholder;
+        json.access_token = storeTokenExchange(containerId, json.access_token as string);
         console.log(`[token-exchange] placeholder issued voor container ${containerId}`);
         outBuf = Buffer.from(JSON.stringify(json));
         delete outHeaders['content-encoding'];
@@ -184,9 +183,14 @@ export function createProxyServer(): http.Server {
       return;
     }
 
-    // Normaliseer het pad naar de vorm die de upstream zal interpreteren en
-    // forward exact dat pad. `new URL` heeft `../` al weggevouwen; normalizePathname
-    // dekt daarnaast `%2f`-getruceerde traversal (finding #7) en weigert fail-closed.
+    // Beslis op de gedecodeerde vorm (normalizePathname, finding #7) maar
+    // forward de originele encoded bytes van de URL-parser. De gedecodeerde
+    // vorm is geen geldige request-target: rauwe spaties/UTF-8 laten
+    // http.request synchroon gooien (ERR_UNESCAPED_CHARACTERS → proces-crash),
+    // en de upstream zou hem een twééde keer decoden (double-decode-
+    // differential; verminkt bovendien legitieme %2F/%20). `new URL` heeft
+    // `../` al weggevouwen; normalizePathname dekt `%2f`-getruceerde traversal
+    // en weigert fail-closed — er bereiken dus nooit `..`-bytes de upstream.
     const normPath = normalizePathname(target.pathname);
     if (normPath === null) {
       logAudit({
@@ -196,7 +200,7 @@ export function createProxyServer(): http.Server {
       send403(res, host, 'deny', containerId);
       return;
     }
-    const forwardPath = `${normPath}${target.search}`;
+    const forwardPath = `${target.pathname}${target.search}`;
 
     let ruleId: number | null;
     if (host === 'huddle') {
@@ -270,7 +274,13 @@ export function createProxyServer(): http.Server {
     // MCP-verkeer naar huddle altijd via de API-poort (3000), niet de proxypoort (80).
     const upstreamPort = target.port || 80;
 
-    const upstream = http.request(
+    // Node valideert request-opties synchroon in de ClientRequest-constructor
+    // (bv. ERR_UNESCAPED_CHARACTERS bij een ongeldige request-target). Zo'n
+    // throw belandt anders in de uncaughtException-handler die het hele proces
+    // — en dus élke huddle — neerhaalt. Fail per request, niet per proces.
+    let upstream: http.ClientRequest;
+    try {
+      upstream = http.request(
       {
         hostname: host,
         port: upstreamPort,
@@ -293,7 +303,14 @@ export function createProxyServer(): http.Server {
           complete(0, upstreamRes.headers);
         });
       }
-    );
+      );
+    } catch (err: any) {
+      const body = JSON.stringify({ error: 'bad_request', message: `cannot forward request: ${err.message}` });
+      res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+      res.end(body);
+      complete(400);
+      return;
+    }
 
     upstream.on('error', (err) => {
       if (!res.headersSent) send502(res, err.message);
@@ -435,20 +452,24 @@ export function createProxyServer(): http.Server {
       // De CONNECT stond de host al toe (pad was toen versleuteld). Nu de TLS
       // getermineerd is kennen we het pad: pas padbeleid alsnog toe per request.
       //
-      // Normaliseer het pad één keer naar de vorm die de upstream zal
-      // interpreteren en forward EXACT dat pad — zo kunnen de gecontroleerde en
-      // de verstuurde bytes niet divergeren (finding #7). Traversal (`../`,
-      // `..%2f`) of kapotte encoding → fail closed (403), nooit doorsturen.
+      // Beslis op de gedecodeerde vorm (finding #7): traversal (`../`, `..%2f`)
+      // of kapotte encoding → fail closed (403), nooit doorsturen. Geforward
+      // worden daarna de originele encoded bytes (zie rules.ts): de gedecodeerde
+      // vorm is geen geldige request-target — rauwe spaties/UTF-8 (bv. een
+      // `%20` in een Azure DevOps-projectnaam) laten https.request synchroon
+      // gooien (ERR_UNESCAPED_CHARACTERS → proces-crash) — en de upstream zou
+      // hem een twééde keer decoden, waarmee `%252e%252e` alsnog tot `..`
+      // vervalt en legitieme %2F/%20 verminkt raken.
       const rawUrl = innerReq.url ?? '/';
       const qi = rawUrl.indexOf('?');
       const rawPathPart = qi === -1 ? rawUrl : rawUrl.slice(0, qi);
       const query = qi === -1 ? '' : rawUrl.slice(qi);
       const normPath = normalizePathname(rawPathPart);
-      const forwardUrl = normPath === null ? null : `${normPath}${query}`;
+      const checkUrl = normPath === null ? null : `${normPath}${query}`;
 
       const pathResult = normPath === null
         ? { status: 'deny' as const, ruleId: null }
-        : checkRule(hostname, containerId, forwardUrl);
+        : checkRule(hostname, containerId, checkUrl);
       // Alles behalve 'allow' blokkeren: een 'deny'-padregel, maar ook een nog
       // niet beoordeeld subpad ('requested') van een pad-allowlist-domein —
       // fail-closed tot de operator het pad expliciet toestaat.
@@ -543,14 +564,18 @@ export function createProxyServer(): http.Server {
         });
       };
 
-      const upstreamReq = https.request(
+      // Zelfde vangnet als het plain-HTTP-pad: een synchrone constructor-throw
+      // mag nooit via de uncaughtException-handler het hele proces neerhalen.
+      let upstreamReq: http.ClientRequest;
+      try {
+        upstreamReq = https.request(
         {
           hostname,
           port,
           method: innerReq.method,
-          // Forward het genormaliseerde pad dat we ook gecontroleerd hebben, niet
-          // de rauwe (mogelijk traversal-getruceerde) innerReq.url (finding #7).
-          path: forwardUrl ?? innerReq.url,
+          // De originele encoded bytes; de gedecodeerde checkUrl is alleen de
+          // beslisvorm. Traversal is hierboven al fail-closed geweigerd.
+          path: rawUrl,
           headers: upstreamHeaders,
           servername: hostname,
         },
@@ -573,7 +598,14 @@ export function createProxyServer(): http.Server {
             });
           }
         },
-      );
+        );
+      } catch (err: any) {
+        const body = JSON.stringify({ error: 'bad_request', message: `cannot forward request: ${err.message}` });
+        innerRes.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+        innerRes.end(body);
+        complete(400);
+        return;
+      }
 
       upstreamReq.on('error', (err) => {
         if (!innerRes.headersSent) {
