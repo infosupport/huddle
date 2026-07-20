@@ -103,6 +103,26 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
   socket.end();
 }
 
+// Node valideert request-opties synchroon in de ClientRequest-constructor
+// (bv. ERR_UNESCAPED_CHARACTERS bij een ongeldige request-target). Zo'n throw
+// belandt anders in de uncaughtException-handler die het hele proces — en dus
+// élke huddle — neerhaalt. Fail per request (400), niet per proces.
+function tryCreateUpstreamRequest(
+  create: () => http.ClientRequest,
+  res: http.ServerResponse,
+  complete: (resStatus: number | null) => void,
+): http.ClientRequest | null {
+  try {
+    return create();
+  } catch (err: any) {
+    const body = JSON.stringify({ error: 'bad_request', message: `cannot forward request: ${err.message}` });
+    res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+    complete(400);
+    return null;
+  }
+}
+
 // Buffers en scrubt de OAuth token-exchange response zodat het echte access_token
 // nooit in de audit-log terechtkomt. Stuurt de gescrubde response naar innerRes
 // en roept complete aan met de veilige audit-body als derde argument.
@@ -274,13 +294,7 @@ export function createProxyServer(): http.Server {
     // MCP-verkeer naar huddle altijd via de API-poort (3000), niet de proxypoort (80).
     const upstreamPort = target.port || 80;
 
-    // Node valideert request-opties synchroon in de ClientRequest-constructor
-    // (bv. ERR_UNESCAPED_CHARACTERS bij een ongeldige request-target). Zo'n
-    // throw belandt anders in de uncaughtException-handler die het hele proces
-    // — en dus élke huddle — neerhaalt. Fail per request, niet per proces.
-    let upstream: http.ClientRequest;
-    try {
-      upstream = http.request(
+    const upstream = tryCreateUpstreamRequest(() => http.request(
       {
         hostname: host,
         port: upstreamPort,
@@ -303,14 +317,8 @@ export function createProxyServer(): http.Server {
           complete(0, upstreamRes.headers);
         });
       }
-      );
-    } catch (err: any) {
-      const body = JSON.stringify({ error: 'bad_request', message: `cannot forward request: ${err.message}` });
-      res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-      res.end(body);
-      complete(400);
-      return;
-    }
+    ), res, complete);
+    if (!upstream) return;
 
     upstream.on('error', (err) => {
       if (!res.headersSent) send502(res, err.message);
@@ -564,11 +572,7 @@ export function createProxyServer(): http.Server {
         });
       };
 
-      // Zelfde vangnet als het plain-HTTP-pad: een synchrone constructor-throw
-      // mag nooit via de uncaughtException-handler het hele proces neerhalen.
-      let upstreamReq: http.ClientRequest;
-      try {
-        upstreamReq = https.request(
+      const upstreamReq = tryCreateUpstreamRequest(() => https.request(
         {
           hostname,
           port,
@@ -598,14 +602,8 @@ export function createProxyServer(): http.Server {
             });
           }
         },
-        );
-      } catch (err: any) {
-        const body = JSON.stringify({ error: 'bad_request', message: `cannot forward request: ${err.message}` });
-        innerRes.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-        innerRes.end(body);
-        complete(400);
-        return;
-      }
+      ), innerRes, complete);
+      if (!upstreamReq) return;
 
       upstreamReq.on('error', (err) => {
         if (!innerRes.headersSent) {
