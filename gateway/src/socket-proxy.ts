@@ -6,9 +6,9 @@ import { isHostPortApproved } from './db';
 import { authorizeAction, classifyRequest, getMountPermissions, MountPermissions } from './docker-actions';
 
 // Default mount policy when no per-container perms are supplied (e.g. unit
-// tests): bind mounts denied, named/anonymous volumes allowed. Mirrors the
-// catalog defaults in docker-actions.ts.
-const DEFAULT_MOUNT_PERMS: MountPermissions = { bind: false, named: true, anonymous: true };
+// tests): all mount kinds denied. Mirrors the secure-by-default catalog in
+// docker-actions.ts; the runtime always passes explicit per-container perms.
+const DEFAULT_MOUNT_PERMS: MountPermissions = { bind: false, named: false, anonymous: false };
 
 function mountDenied(kind: string): string {
   return `${kind} mounts are disabled for this devcontainer. Enable them in the Huddle portal.`;
@@ -166,6 +166,35 @@ function isMeaningfulValue(v: unknown): boolean {
   return true;
 }
 
+// Classify one `Binds` entry (`source:target[:opts]`) by its source and gate it
+// against `perms`. A `/`-prefixed source is a host bind, a named source is a
+// named volume, and an entry with no source (`/container/path`, no colon) is
+// anonymous. Returns a denial reason, or null when allowed.
+function validateBind(bind: unknown, perms: MountPermissions): string | null {
+  if (typeof bind !== 'string') return null;
+  const parts = bind.split(':');
+  const src = parts[0] ?? '';
+  if (parts.length < 2 || src === '') return perms.anonymous ? null : mountDenied('anonymous volume');
+  if (src.startsWith('/')) return perms.bind ? null : `host-path bind not permitted: ${bind}`;
+  return perms.named ? null : mountDenied('named volume');
+}
+
+// Gate one structured `Mounts[]` entry against `perms`. tmpfs and any other type
+// are in-memory / harmless and pass through. Returns a denial reason, or null.
+function validateMount(mount: any, perms: MountPermissions): string | null {
+  if (!mount) return null;
+  if (mount.Type === 'bind') return perms.bind ? null : 'bind-type mounts not permitted';
+  if (mount.Type !== 'volume') return null;
+  // Een `local`-volume met inline driver-config kan een willekeurig hostpad
+  // bind-backen (type=none, o=bind, device=/…) — net zo gevaarlijk als een host
+  // bind. Weiger elke volume-mount die zelf een driver meebrengt, ongeacht de
+  // mount-toggles.
+  if (mount.VolumeOptions?.DriverConfig) return 'volume DriverConfig not permitted';
+  const source = typeof mount.Source === 'string' ? mount.Source : '';
+  if (source === '') return perms.anonymous ? null : mountDenied('anonymous volume');
+  return perms.named ? null : mountDenied('named volume');
+}
+
 // Reject HostConfig shapes that would let a spawned container escape the
 // devcontainer sandbox (read host fs, see host PIDs/devices, talk to host
 // dockerd). Returns a denial reason, or null if the config is acceptable.
@@ -218,50 +247,20 @@ export function validateHostConfig(hostConfig: any, perms: MountPermissions = DE
     }
   }
 
-  // Volume mounts, split by risk and gated per devcontainer (`perms`):
-  //   - bind      → host-path bind (`-v /:/host`, docker.sock); main escape
-  //                 vector, off by default.
-  //   - named     → an isolated, huddle-labelled Docker volume.
-  //   - anonymous → a volume created fresh with no source; never touches host.
-  // In `Binds` (`source:target[:opts]`) the shape is decided by the source:
-  // a `/`-prefixed source is a host bind, a named source is a named volume, and
-  // an entry with no source (`/container/path`, no colon) is anonymous.
+  // Volume mounts, split by risk and gated per devcontainer (`perms`): a bind is
+  // a host-path escape vector, named is an isolated huddle volume, anonymous is
+  // a fresh source-less volume. Shape classification lives in the helpers below.
   if (Array.isArray(hostConfig.Binds)) {
     for (const bind of hostConfig.Binds) {
-      if (typeof bind !== 'string') continue;
-      const parts = bind.split(':');
-      const src = parts[0] ?? '';
-      if (parts.length < 2 || src === '') {
-        if (!perms.anonymous) return mountDenied('anonymous volume');
-      } else if (src.startsWith('/')) {
-        if (!perms.bind) return `host-path bind not permitted: ${bind}`;
-      } else {
-        if (!perms.named) return mountDenied('named volume');
-      }
+      const denial = validateBind(bind, perms);
+      if (denial) return denial;
     }
   }
 
   if (Array.isArray(hostConfig.Mounts)) {
     for (const mount of hostConfig.Mounts) {
-      if (!mount) continue;
-      if (mount.Type === 'bind') {
-        if (!perms.bind) return 'bind-type mounts not permitted';
-        continue;
-      }
-      if (mount.Type === 'volume') {
-        // Een `local`-volume met inline driver-config kan een willekeurig hostpad
-        // bind-backen (type=none, o=bind, device=/…) — net zo gevaarlijk als een
-        // host bind. Weiger elke volume-mount die zelf een driver meebrengt,
-        // ongeacht de mount-toggles.
-        if (mount.VolumeOptions?.DriverConfig) return 'volume DriverConfig not permitted';
-        const source = typeof mount.Source === 'string' ? mount.Source : '';
-        if (source === '') {
-          if (!perms.anonymous) return mountDenied('anonymous volume');
-        } else if (!perms.named) {
-          return mountDenied('named volume');
-        }
-      }
-      // tmpfs and any other type are in-memory / harmless — left untouched.
+      const denial = validateMount(mount, perms);
+      if (denial) return denial;
     }
   }
 

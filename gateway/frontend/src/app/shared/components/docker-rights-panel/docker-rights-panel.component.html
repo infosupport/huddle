@@ -245,7 +245,8 @@
       <li>
         Dangerous settings are rejected: privileged containers, host namespaces
         (PID/IPC/UTS/userns/cgroup), extra capabilities, and disabled seccomp or AppArmor.
-        Volume mounts are gated per kind above — host-path binds are off by default.
+        Volume mounts are gated per kind above and off by default — host-path binds are the
+        main escape vector, but named and anonymous volumes stay off until you enable them too.
         Binding host ports is only possible after approval in the port list.
       </li>
       <li>

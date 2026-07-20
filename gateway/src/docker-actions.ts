@@ -51,13 +51,14 @@ export const DOCKER_ACTIONS: DockerActionDef[] = [
   { action: 'network.connect',    kind: 'temporary', group: 'networks',   label: 'Connect',    defaultEnabled: false },
   { action: 'network.disconnect', kind: 'temporary', group: 'networks',   label: 'Disconnect', defaultEnabled: false },
   // Volume-mount gates for spawned containers (checked at container.create).
-  // Split by risk: a host-path bind can read/write the host fs and is the main
-  // sandbox-escape vector (off by default); a named volume is an isolated,
-  // huddle-labelled Docker volume (on); an anonymous volume is created fresh and
-  // never touches the host (on).
+  // Split by risk so the operator can enable only what a devcontainer needs:
+  // a host-path bind can read/write the host fs and is the main sandbox-escape
+  // vector; a named volume is an isolated, huddle-labelled Docker volume; an
+  // anonymous volume is created fresh and never touches the host. Secure by
+  // default like every other action: all three start off.
   { action: 'mount.bind',         kind: 'mount',     group: 'mounts',     label: 'Bind mounts',       defaultEnabled: false },
-  { action: 'mount.named',        kind: 'mount',     group: 'mounts',     label: 'Named volumes',     defaultEnabled: true  },
-  { action: 'mount.anonymous',    kind: 'mount',     group: 'mounts',     label: 'Anonymous volumes', defaultEnabled: true  },
+  { action: 'mount.named',        kind: 'mount',     group: 'mounts',     label: 'Named volumes',     defaultEnabled: false },
+  { action: 'mount.anonymous',    kind: 'mount',     group: 'mounts',     label: 'Anonymous volumes', defaultEnabled: false },
   // Altijd-toegestane (read-only) acties
   { action: 'container.list',     kind: 'always',    group: 'containers', label: 'List',       defaultEnabled: false },
   { action: 'container.inspect',  kind: 'always',    group: 'containers', label: 'Inspect',    defaultEnabled: false },

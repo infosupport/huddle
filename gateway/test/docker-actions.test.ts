@@ -160,13 +160,11 @@ describe('catalogus & effectieve policies', () => {
     }
   });
 
-  it('alle acties staan standaard uit (secure by default), op de veilige mount-defaults na', () => {
-    // Named + anonymous volumes zijn geïsoleerd/host-veilig en staan bewust aan;
-    // al het overige (incl. bind mounts) staat standaard uit.
-    const enabledByDefault = new Set(['mount.named', 'mount.anonymous']);
+  it('alle acties staan standaard uit (secure by default)', () => {
+    // Elke actie — inclusief de mount-gates — start uit; de operator zet per
+    // devcontainer expliciet aan wat mag.
     for (const def of DOCKER_ACTIONS) {
-      expect(def.defaultEnabled, `actie ${def.action} onverwachte default`)
-        .toBe(enabledByDefault.has(def.action));
+      expect(def.defaultEnabled, `actie ${def.action} onverwachte default`).toBe(false);
     }
   });
 
