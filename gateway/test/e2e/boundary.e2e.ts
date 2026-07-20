@@ -103,8 +103,11 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     describe.concurrent('escape-pogingen met actieve grant', () => {
       beforeAll(async () => {
         // Toggles aan die de escape-pogingen nodig hebben om überhaupt bij de
-        // harde security-checks (HostConfig/ownership) aan te komen.
-        for (const action of ['system.ping', 'container.create', 'container.start', 'container.inspect', 'volume.create']) {
+        // harde security-checks (HostConfig/ownership) aan te komen. 'mount.named'
+        // hoort erbij: mount-soorten staan secure-by-default uit, dus zonder deze
+        // toggle weigert validateHostConfig een named-volume-mount al vóór de
+        // ownership-check en test #8 (andermans volume) haalt die check nooit.
+        for (const action of ['system.ping', 'container.create', 'container.start', 'container.inspect', 'volume.create', 'mount.named']) {
           await setActionPolicy(E2E_NAME, action, true);
         }
         await setGrant(E2E_NAME, 15);
