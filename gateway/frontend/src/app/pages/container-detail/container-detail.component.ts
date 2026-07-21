@@ -15,7 +15,7 @@ import { buildPathDomains, excludePathModeRules } from '../../shared/components/
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, skip } from 'rxjs';
 
 interface DetailData {
   inspect: any;
@@ -184,6 +184,16 @@ export class ContainerDetailComponent implements OnInit {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
     this.load();
     this.loadPorts();
+    // Deze pagina toont zijn eigen detail$ (getContainerDetail), los van de
+    // globale state.rules$. Zonder deze koppeling verscheen een nieuw firewall-
+    // request pas na een handmatige refresh. rules$ wordt door de WS én de
+    // voorgrond-poll (StateService) ververst; herlaad het lokale detail mee.
+    // skip(1): de BehaviorSubject vuurt meteen bij subscribe — die eerste emit
+    // dekt de load() hierboven al, dus alleen latere wijzigingen triggeren een
+    // herlaad.
+    this.state.rules$
+      .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
+      .subscribe(() => { if (this.name) this.load(); });
     this.api.getContainerCredentials(this.name).subscribe({
       next: (c) => this.credentials = c,
       error: () => this.credentials = null,
