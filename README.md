@@ -391,6 +391,35 @@ npm --prefix gateway test          # unit + e2e tests (vitest)
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow, branching
 strategy, commit conventions, and coding standards.
 
+### Experimental builds
+
+An experimental build publishes a full Huddle release (CLI + all Docker images)
+under the tag `experiment-<nr>`, so anyone can try it with:
+
+```bash
+huddle experiment use <nr>     # switch to the experimental build
+huddle experiment status       # show the active channel
+huddle experiment reset        # back to the stable release
+```
+
+There are two ways an `experiment-<nr>` build gets published:
+
+- **Automatically** — pushing to an `experiment/<issuenr>-<description>` branch
+  in this repo publishes `experiment-<issuenr>` (see `publish-experiment.yml`).
+- **On demand by a maintainer** — for a **fork PR** or any ad-hoc branch that
+  never triggers the automatic flow. A maintainer runs:
+
+  ```bash
+  gh workflow run experiment-publish.yml -f pr=68        # keyed on the PR number
+  gh workflow run experiment-publish.yml -f ref=my-branch -f key=123
+  ```
+
+  This is a `workflow_dispatch`, so only users with write access can start it —
+  fork code is only ever built on an explicit maintainer action, never
+  automatically. Once the run finishes, `huddle experiment use 68` works for
+  everyone. Because GitHub issues and PRs share one number space, a PR-based
+  key never collides with an issue-based one.
+
 ---
 
 ## Troubleshooting

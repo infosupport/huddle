@@ -1,0 +1,215 @@
+name: Publish experiment (maintainer)
+
+# Maintainer-getriggerde experiment-build van een WILLEKEURIGE PR of ref -
+# inclusief fork-PR's - onder de tag experiment-<key>. Dit vult het gat dat
+# publish-experiment.yml laat: die draait alleen op push naar experiment/**
+# branches in de trusted repo en dus nooit voor een fork of een ad-hoc branch.
+#
+# Beveiliging: workflow_dispatch kan alleen gestart worden door iemand met
+# write-access -> inherente maintainer-gate. We gebruiken bewust GEEN
+# pull_request_target, dus fork-code draait nooit automatisch met basis-repo-
+# credentials; alleen op expliciete maintainer-actie. De head-SHA wordt
+# geresolved en geechood zodat exact zichtbaar is wat gebouwd wordt.
+#
+# Gebruik:
+#   gh workflow run experiment-publish.yml -f pr=68
+#   # of een losse branch/sha (dan is key verplicht):
+#   gh workflow run experiment-publish.yml -f ref=feat/iets -f key=123
+# Daarna: huddle experiment use <key>
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR-nummer (fork of eigen). Default-key = dit nummer.
+        required: false
+        type: string
+      ref:
+        description: Branch of SHA i.p.v. een PR. Vereist dan ook `key`.
+        required: false
+        type: string
+      key:
+        description: Experiment-nummer/-tag. Default = het PR-nummer.
+        required: false
+        type: string
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      key: ${{ steps.resolve.outputs.key }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha-tag: ${{ steps.resolve.outputs.sha_tag }}
+    steps:
+      - name: Resolve ref en key
+        id: pick
+        env:
+          PR: ${{ inputs.pr }}
+          REF: ${{ inputs.ref }}
+          KEY: ${{ inputs.key }}
+        run: |
+          if [ -n "$PR" ]; then
+            CHECKOUT_REF="refs/pull/${PR}/head"
+            KEY="${KEY:-$PR}"
+          elif [ -n "$REF" ]; then
+            CHECKOUT_REF="$REF"
+            if [ -z "$KEY" ]; then
+              echo "::error::Bij ref is key verplicht (bv. -f key=123)."
+              exit 1
+            fi
+          else
+            echo "::error::Geef pr op (bv. -f pr=68) of ref + key."
+            exit 1
+          fi
+          # Alleen cijfers als key: de CLI leidt het experiment-nummer af uit
+          # experiment-<key> (regex -experiment-(\d+)\.), dus niet-numeriek zou
+          # nooit ge-use-t kunnen worden.
+          if ! echo "$KEY" | grep -qE '^[0-9]+$'; then
+            echo "::error::key '$KEY' is niet numeriek; gebruik het issue-/PR-nummer."
+            exit 1
+          fi
+          # Leading zeros strippen zodat de tag matcht met wat de CLI afleidt.
+          KEY=$((10#$KEY))
+          {
+            echo "checkout_ref=$CHECKOUT_REF"
+            echo "key=$KEY"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ steps.pick.outputs.checkout_ref }}
+
+      - name: Head-SHA en tags bepalen
+        id: resolve
+        env:
+          KEY: ${{ steps.pick.outputs.key }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(echo "$SHA" | cut -c1-7)
+          {
+            echo "sha=$SHA"
+            echo "key=$KEY"
+            echo "tag=experiment-$KEY"
+            echo "sha_tag=experiment-$KEY-$SHORT_SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "Experiment-tag: experiment-$KEY (ref ${{ steps.pick.outputs.checkout_ref }}, commit $SHORT_SHA)"
+
+  docker:
+    needs: meta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.meta.outputs.sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./gateway
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/infosupport/huddle:${{ needs.meta.outputs.tag }}
+            ghcr.io/infosupport/huddle:${{ needs.meta.outputs.sha-tag }}
+
+  base-images:
+    needs: meta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.meta.outputs.sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base-devimage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/infosupport/base-devimage:${{ needs.meta.outputs.tag }}
+            ghcr.io/infosupport/base-devimage:${{ needs.meta.outputs.sha-tag }}
+
+      - name: Build and push base-devimage-vscode
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage-vscode/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/infosupport/base-devimage-vscode:${{ needs.meta.outputs.tag }}
+            ghcr.io/infosupport/base-devimage-vscode:${{ needs.meta.outputs.sha-tag }}
+
+      - name: Build and push base-devimage-intellij
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage-intellij/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/infosupport/base-devimage-intellij:${{ needs.meta.outputs.tag }}
+            ghcr.io/infosupport/base-devimage-intellij:${{ needs.meta.outputs.sha-tag }}
+
+      - name: Build and push base-devimage-rider
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: base-devimage-rider/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/infosupport/base-devimage-rider:${{ needs.meta.outputs.tag }}
+            ghcr.io/infosupport/base-devimage-rider:${{ needs.meta.outputs.sha-tag }}
+
+  # De npm-publish van de CLI moet uit publish-npm.yml komen (npm trusted
+  # publishing staat maar één trusted-publisher-workflowbestand per package
+  # toe). We roepen die daarom aan als reusable workflow.
+  npm:
+    needs: meta
+    uses: ./.github/workflows/publish-npm.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      ref: ${{ needs.meta.outputs.sha }}
+      key: ${{ needs.meta.outputs.key }}

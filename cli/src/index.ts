@@ -104,7 +104,7 @@ Usage:
                                      start them via Docker or Podman
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
-  huddle experiment use <nr>         Activate the experimental build of issue <nr>
+  huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
   huddle experiment status           Show the active channel and CLI version
@@ -112,7 +112,7 @@ Usage:
 Init options:
   --runtime <docker|podman>          Container runtime (default: auto-detected;
                                      also via the HUDDLE_RUNTIME env var)
-  --experiment <nr>                  Use the experimental build of issue <nr>
+  --experiment <nr>                  Use the experimental build of issue/PR <nr>
                                      (same as "huddle experiment use <nr>")
 
 Start options:
