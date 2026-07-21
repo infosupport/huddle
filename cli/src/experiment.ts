@@ -17,7 +17,7 @@ export function cliExperiment(): number | undefined {
 export function parseIssueNumber(raw: string | undefined): number {
   const issue = Number(raw);
   if (!raw || !Number.isInteger(issue) || issue <= 0) {
-    throw new Error(`Invalid issue number: ${raw ?? '(empty)'}. Use e.g. "huddle experiment use 123".`);
+    throw new Error(`Invalid issue/PR number: ${raw ?? '(empty)'}. Use e.g. "huddle experiment use 123".`);
   }
   return issue;
 }

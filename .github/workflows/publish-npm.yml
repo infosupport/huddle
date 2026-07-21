@@ -2,16 +2,31 @@ name: Publish npm
 
 # Eén workflow voor álle npm-publishes van de CLI (stable én experiment).
 # npm trusted publishing staat maar één trusted publisher (= één workflow-
-# bestand) per package toe; daarom leven beide publish-jobs hier en niet in
+# bestand) per package toe; daarom leven alle publish-jobs hier en niet in
 # publish-image.yml / publish-experiment.yml. Op npmjs.com configureer je als
 # trusted publisher: org infosupport, repo huddle, workflow publish-npm.yml.
+#
+# De `dispatch`-job wordt aangeroepen als reusable workflow vanuit
+# experiment-publish.yml, zodat een maintainer een experiment-build van een
+# willekeurige (fork-)PR kan publiceren zónder de trusted-publisher-regel te
+# breken: de publish blijft uit dít bestand komen.
 on:
   push:
     branches: [main, release/*, experiment/**]
+  workflow_call:
+    inputs:
+      ref:
+        description: Head-SHA of ref om de CLI van te bouwen.
+        required: true
+        type: string
+      key:
+        description: Experiment-nummer/-tag (bv. het PR-nummer).
+        required: true
+        type: string
 
 jobs:
   stable:
-    if: ${{ !startsWith(github.ref_name, 'experiment/') }}
+    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,7 +77,7 @@ jobs:
         run: cd cli && npm publish --provenance --access public
 
   experiment:
-    if: ${{ startsWith(github.ref_name, 'experiment/') }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'experiment/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -115,3 +130,53 @@ jobs:
         # dist-tag experiment-<nr> zodat gebruikers installeren met
         # @infosupport/huddle-cli@experiment-<nr>; `latest` blijft onaangeroerd.
         run: cd cli && npm publish --provenance --access public --tag ${{ steps.meta.outputs.tag }}
+
+  # Maintainer-getriggerde experiment-publish (reusable, aangeroepen door
+  # experiment-publish.yml). Publiceert de CLI van een willekeurige ref -
+  # inclusief een fork-PR - onder de tag experiment-<key>. Identiek aan de
+  # `experiment`-job hierboven, maar de key komt uit de input i.p.v. de
+  # branchnaam en de checkout gebeurt op de expliciet geresolvede head-SHA.
+  dispatch:
+    if: ${{ github.event_name == 'workflow_call' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted publishing: npm verifieert een kortlevend OIDC-token van deze
+      # workflow i.p.v. een opgeslagen npm-token (zie npmjs.com package settings).
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Head-SHA van de (fork-)PR; staat in de object-store van de basis-repo.
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 levert npm >= 11.5.1, vereist voor trusted publishing
+          # (npm 10.x faalt met een misleidende 404).
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Set experiment version
+        # De versie bevat de experiment-tag zodat de CLI zelf kan bepalen bij
+        # welk experiment hij hoort (zie cliExperiment() in de CLI). Run-nummer
+        # en -attempt maken elke publish uniek.
+        env:
+          KEY: ${{ inputs.key }}
+        run: |
+          cd cli
+          VERSION="0.0.0-experiment-${KEY}.${{ github.run_number }}.${{ github.run_attempt }}"
+          echo "Experiment-versie: $VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install & build
+        run: cd cli && npm install && npm run build
+
+      - name: Publish
+        # dist-tag experiment-<key> zodat gebruikers installeren met
+        # @infosupport/huddle-cli@experiment-<key>; `latest` blijft onaangeroerd.
+        env:
+          KEY: ${{ inputs.key }}
+        run: cd cli && npm publish --provenance --access public --tag "experiment-${KEY}"
