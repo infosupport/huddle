@@ -137,7 +137,11 @@ jobs:
   # `experiment`-job hierboven, maar de key komt uit de input i.p.v. de
   # branchnaam en de checkout gebeurt op de expliciet geresolvede head-SHA.
   dispatch:
-    if: ${{ github.event_name == 'workflow_call' }}
+    # Bij een reusable workflow is de github-context die van de caller, dus
+    # github.event_name is hier 'workflow_dispatch' (van experiment-publish.yml)
+    # en NOOIT 'workflow_call'. Detecteer de reusable-call daarom via de
+    # verplichte workflow_call-input: bij een push is inputs.key leeg/null.
+    if: ${{ inputs.key != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
