@@ -145,7 +145,8 @@ export class DockerRightsPanelComponent implements OnInit {
   temporaryGroups = computed(() => this.buildGroups('temporary'));
   alwaysGroups = computed(() => this.buildGroups('always').filter(g => g.group !== 'system'));
   systemGroup = computed(() => this.buildGroups('always').find(g => g.group === 'system') ?? null);
-  mountGroups = computed(() => this.buildGroups('mount'));
+  /** Mount-kind gates, rendered as a sub-group inside the always-allowed Volumes card. */
+  mountActions = computed(() => this.catalog().filter(a => a.kind === 'mount'));
 
   constructor() {
     if (isPlatformBrowser(this.platformId)) {
@@ -253,9 +254,9 @@ export class DockerRightsPanelComponent implements OnInit {
   }
 
   private readonly mountHints: Record<string, string> = {
-    'mount.bind': 'Host-path binds (-v /path:…). Can read and write the host filesystem — the main sandbox-escape vector.',
-    'mount.named': 'Named Docker volumes. Isolated storage, labelled to this devcontainer.',
-    'mount.anonymous': 'Source-less volumes created fresh at start. Never touch the host.',
+    'mount.bind': 'Host-path binds — can read/write the host. Main escape vector.',
+    'mount.named': 'Isolated Docker volumes, labelled to this devcontainer.',
+    'mount.anonymous': 'Fresh source-less volumes. Never touch the host.',
   };
 
   mountHint(action: string): string {

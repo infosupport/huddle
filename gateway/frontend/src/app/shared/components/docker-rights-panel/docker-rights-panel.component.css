@@ -47,22 +47,33 @@
   --sec-wash: rgba(61, 139, 253, .07);
   --ring-empty: rgba(61, 139, 253, .22);
 }
-.da-section.mounts {
-  --sec: var(--da-violet, #8b5cf6); --sec-strong: var(--da-violet-strong, #7c3aed);
-  --sec-soft: rgba(139, 92, 246, .14); --sec-border: rgba(139, 92, 246, .40);
-  --sec-wash: rgba(139, 92, 246, .07); --ring-empty: rgba(139, 92, 246, .22);
+/* ── Volume-mount subgroep (binnen de Volumes-kaart, altijd-sectie) ───────── */
+/* Scheidingskopje boven de mount-toggles, visueel losgetrokken van de
+   read-only volume-rijen erboven. */
+.da-mounts-head {
+  border-top: 1px solid var(--border);
+  padding: 12px 18px 4px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--sec-wash);
 }
+.da-mounts-head > span { font-size: 12px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--sec); }
+.da-mounts-head > small { font-size: 11px; font-weight: 600; color: var(--text-muted); line-height: 1.35; }
 
-/* ── Volume-mount kaarten (status-label + toggle i.p.v. icoon-rij) ────────── */
-.da-mount-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.da-mount-card { min-height: 0; display: flex; flex-direction: column; }
-.da-mount-card .da-card__head { align-items: flex-start; }
-.da-mount-card .da-card__title p { font-weight: 500; font-size: 12px; }
-.da-mount-card.is-danger { border-color: var(--danger); }
-.da-mount-card .da-row { margin-top: auto; grid-template-columns: 1fr auto; height: 52px; }
-.da-mount-card__state { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--sec); }
-.da-row.is-off .da-mount-card__state { color: var(--text-dim); }
-.ic-red { --icon: var(--danger); --icon-bg: var(--danger-soft); }
+/* Twee-regelige mount-rij: icoon + (label boven, hint eronder) + toggle. */
+.da-mrow {
+  height: auto; padding: 12px 18px;
+  grid-template-columns: 30px 1fr 42px; align-items: start;
+  background: var(--sec-wash);
+}
+.da-mrow .da-ic { margin-top: 2px; }
+.da-mrow__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.da-mrow__label { font-weight: 700; font-size: 13.5px; }
+.da-mrow__text small { font-weight: 600; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.da-mrow .da-toggle { margin-top: 2px; }
+/* Bind-mount is de gevaarlijke: markeer het icoon en label rood. */
+.da-mrow.is-danger .da-ic { color: var(--danger); }
+.da-mrow.is-danger .da-mrow__label { color: var(--danger); }
+.da-row.is-off.da-mrow .da-mrow__label { color: var(--text-dim); }
 
 /* ── Hero (intro / timer / knoppen) ──────────────────────────────────────── */
 .da-hero {
@@ -110,6 +121,9 @@
 
 /* ── Kaart-grid ──────────────────────────────────────────────────────────── */
 .da-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+/* De Volumes-kaart draagt de mount-subgroep en wordt daardoor hoger dan de rest;
+   met align-items:start houdt elke kaart z'n eigen hoogte i.p.v. mee te rekken. */
+.da-section.always .da-cards { align-items: start; }
 .da-card {
   background: var(--surface);
   border: 1px solid var(--sec-border);
@@ -230,7 +244,6 @@
 /* ── Responsief (op paneelbreedte, zie :host) ────────────────────────────── */
 @container (max-width: 1180px) {
   .da-cards { grid-template-columns: repeat(2, 1fr); }
-  .da-mount-grid { grid-template-columns: 1fr; }
   .da-hero { grid-template-columns: 1fr; }
   .da-hero .da-intro, .da-timer { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 20px; }
   .da-system-grid { grid-template-columns: 1fr; }
