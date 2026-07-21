@@ -229,24 +229,35 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     // vorm, maar geforward worden de originele encoded bytes. Werd de
     // gedecodeerde vorm geforward, dan gooide http(s).request synchroon
     // ERR_UNESCAPED_CHARACTERS op de rauwe spatie (bv. een Azure DevOps-
-    // projectnaam met %20) en ging het hele gateway-proces neer.
+    // projectnaam met %20). De fix heeft een herkenbare handtekening: een
+    // wélgevormde upstream-status die géén '000', '403' of '400' is —
+    //   • '000'  = de gateway ging neer óf de CONNECT werd geweigerd (pre-fix
+    //              crash, vóór de 400-guard bestond),
+    //   • '403'  = door Huddle's pad-policy geblokkeerd (mag hier niet: /foo/*
+    //              matcht op de gedecodeerde vorm),
+    //   • '400'  = de bad_request-guard vuurt — precies wat er gebeurt als de
+    //              gedecodeerde (rauwe-spatie) vorm wél geforward zou worden en
+    //              http(s).request synchroon gooit.
+    // Zo pinnen we de fix vast zonder afhankelijk te zijn van de exacte
+    // upstream-status van example.org (die mag 2xx/3xx/4xx zijn).
+    const forwardedOk = (status: string) => {
+      expect(status).toMatch(/^[1-5]\d\d$/); // een echte upstream-HTTP-status, geen '000'
+      expect(status).not.toBe('403'); // niet door Huddle geblokkeerd
+      expect(status).not.toBe('400'); // niet de forward-guard: encoded bytes gooien nooit
+    };
     it('%-encoded pad (%20) wordt geforward en crasht de gateway niet', async () => {
       await clearRulesForDomain('example.org');
       const denyId = await createRule('example.org', 'deny');
       await enablePathMode(denyId);
       await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
       await sleep(1000);
-      // MITM-pad (https): matcht /foo/* op de gedecodeerde vorm, bereikt
-      // upstream ('000' zou een neergegane gateway of geweigerde CONNECT zijn).
-      const mitm = curlStatusIn(E2E_NAME, 'https://example.org/foo/a%20b', '--path-as-is');
-      expect(mitm).not.toBe('403');
-      expect(mitm).not.toBe('000');
+      // MITM-pad (https): matcht /foo/* op de gedecodeerde vorm, bereikt upstream.
+      forwardedOk(curlStatusIn(E2E_NAME, 'https://example.org/foo/a%20b', '--path-as-is'));
       // Plain-HTTP-pad: zelfde invariant.
-      const plain = curlStatusIn(E2E_NAME, 'http://example.org/foo/a%20b', '--path-as-is');
-      expect(plain).not.toBe('403');
-      expect(plain).not.toBe('000');
-      // De gateway leeft nog na beide requests.
-      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is')).not.toBe('000');
+      forwardedOk(curlStatusIn(E2E_NAME, 'http://example.org/foo/a%20b', '--path-as-is'));
+      // De gateway leeft nog: een gewoon toegestaan subpad krijgt weer een
+      // wélgevormde upstream-status (geen '000').
+      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is')).toMatch(/^[1-5]\d\d$/);
     });
   });
 

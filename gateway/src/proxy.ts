@@ -4,12 +4,12 @@ import net from 'net';
 import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
-import {URL} from 'url';
-import {canonicalizeHost, checkRule, isPathMode, normalizePathname} from './rules';
-import {resolveContainerByIp} from './docker';
-import {logAudit, updateAuditResponse} from './db';
-import {signLeafCert} from './tls-ca';
-import {isPlaceholderToken, resolveToken, storeTokenExchange} from './token-exchange';
+import { URL } from 'url';
+import { checkRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
+import { resolveContainerByIp } from './docker';
+import { logAudit, updateAuditResponse } from './db';
+import { signLeafCert } from './tls-ca';
+import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
 
 const PROXY_PORT = 80;
 
@@ -175,7 +175,9 @@ function handleTokenExchangeResponse(
   });
 }
 
-export function createProxyServer(): http.Server {
+// `port` is standaard de vaste proxypoort; tests binden op 0 (een vrije
+// efemere poort) zodat het pad-forwardgedrag hermetisch getest kan worden.
+export function createProxyServer(port: number = PROXY_PORT): http.Server {
   const server = http.createServer();
 
   server.on('request', async (req, res) => {
@@ -629,8 +631,8 @@ export function createProxyServer(): http.Server {
     clientSocket.on('close', () => { try { innerTls.destroy(); } catch {} });
   });
 
-  server.listen(PROXY_PORT, () => {
-    console.log(`[proxy] listening on :${PROXY_PORT}`);
+  server.listen(port, () => {
+    console.log(`[proxy] listening on :${port}`);
   });
 
   return server;
