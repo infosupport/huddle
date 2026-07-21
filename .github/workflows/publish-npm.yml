@@ -6,14 +6,17 @@ name: Publish npm
 # publish-image.yml / publish-experiment.yml. Op npmjs.com configureer je als
 # trusted publisher: org infosupport, repo huddle, workflow publish-npm.yml.
 #
-# De `dispatch`-job wordt aangeroepen als reusable workflow vanuit
-# experiment-publish.yml, zodat een maintainer een experiment-build van een
-# willekeurige (fork-)PR kan publiceren zónder de trusted-publisher-regel te
-# breken: de publish blijft uit dít bestand komen.
+# BELANGRIJK: npm matcht het OIDC-token op de ENTRY-workflow (workflow_ref),
+# niet op de workflow die het `npm publish`-commando bevat (job_workflow_ref).
+# Als reusable workflow (uses:) aangeroepen worden, blijft de caller de entry-
+# workflow -> npm ziet dan experiment-publish.yml i.p.v. publish-npm.yml, wijst
+# de trusted-publish af en valt terug op het (lege) token -> E404. Daarom wordt
+# de experiment-publish via workflow_dispatch getriggerd i.p.v. workflow_call:
+# zo is DÍT bestand altijd zelf de entry-workflow en klopt de identiteit.
 on:
   push:
     branches: [main, release/*, experiment/**]
-  workflow_call:
+  workflow_dispatch:
     inputs:
       ref:
         description: Head-SHA of ref om de CLI van te bouwen.
@@ -131,16 +134,16 @@ jobs:
         # @infosupport/huddle-cli@experiment-<nr>; `latest` blijft onaangeroerd.
         run: cd cli && npm publish --provenance --access public --tag ${{ steps.meta.outputs.tag }}
 
-  # Maintainer-getriggerde experiment-publish (reusable, aangeroepen door
-  # experiment-publish.yml). Publiceert de CLI van een willekeurige ref -
-  # inclusief een fork-PR - onder de tag experiment-<key>. Identiek aan de
-  # `experiment`-job hierboven, maar de key komt uit de input i.p.v. de
-  # branchnaam en de checkout gebeurt op de expliciet geresolvede head-SHA.
+  # Maintainer-getriggerde experiment-publish, via workflow_dispatch getriggerd
+  # door experiment-publish.yml (zie de comment bovenaan: als entry-workflow
+  # klopt de OIDC-identiteit voor trusted publishing). Publiceert de CLI van een
+  # willekeurige ref - inclusief een fork-PR - onder de tag experiment-<key>.
+  # Identiek aan de `experiment`-job hierboven, maar de key komt uit de input
+  # i.p.v. de branchnaam en de checkout gebeurt op de geresolvede head-SHA.
   dispatch:
-    # Bij een reusable workflow is de github-context die van de caller, dus
-    # github.event_name is hier 'workflow_dispatch' (van experiment-publish.yml)
-    # en NOOIT 'workflow_call'. Detecteer de reusable-call daarom via de
-    # verplichte workflow_call-input: bij een push is inputs.key leeg/null.
+    # Draait alleen bij een workflow_dispatch met inputs (experiment-publish.yml
+    # geeft altijd een key mee); bij een push is inputs.key leeg/null -> skip,
+    # dan draaien stable/experiment o.b.v. github.event_name == 'push'.
     if: ${{ inputs.key != '' }}
     runs-on: ubuntu-latest
     permissions:

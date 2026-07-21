@@ -203,13 +203,25 @@ jobs:
 
   # De npm-publish van de CLI moet uit publish-npm.yml komen (npm trusted
   # publishing staat maar één trusted-publisher-workflowbestand per package
-  # toe). We roepen die daarom aan als reusable workflow.
+  # toe). npm matcht het OIDC-token bovendien op de ENTRY-workflow, dus een
+  # reusable call (uses:) faalt: de entry blijft dan dit bestand en npm wijst de
+  # trusted-publish af (E404). Daarom triggeren we publish-npm.yml via
+  # workflow_dispatch, zodat DÍT niet de entry is maar publish-npm.yml zelf.
+  # GITHUB_TOKEN mag workflow_dispatch triggeren (expliciete uitzondering op de
+  # recursie-preventie); daarvoor is alleen actions: write nodig.
   npm:
     needs: meta
-    uses: ./.github/workflows/publish-npm.yml
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write
-    with:
-      ref: ${{ needs.meta.outputs.sha }}
-      key: ${{ needs.meta.outputs.key }}
+      actions: write
+    steps:
+      - name: Dispatch publish-npm.yml (CLI publish als eigen entry-workflow)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run publish-npm.yml \
+            --repo "${{ github.repository }}" \
+            -f ref="${{ needs.meta.outputs.sha }}" \
+            -f key="${{ needs.meta.outputs.key }}"
+          echo "publish-npm.yml gedispatcht voor experiment-${{ needs.meta.outputs.key }} (ref ${{ needs.meta.outputs.sha }})."
+          echo "Volg de run: https://github.com/${{ github.repository }}/actions/workflows/publish-npm.yml"
