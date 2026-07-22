@@ -50,16 +50,6 @@ export class ContainerDetailComponent implements OnInit {
   private destroyRef = inject(DestroyRef);
   modal = inject(ModalService);
 
-  constructor() {
-    // De gedeelde "For everyone"-bevestigingsmodal ververst alleen state.rules$,
-    // maar deze pagina toont zijn eigen detail$ (getContainerDetail). Herlaad die
-    // lokaal zodra een globale allow/deny is doorgevoerd, anders bleef de
-    // afgehandelde regel staan tot een handmatige refresh.
-    this.modal.confirmResolved$
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe(() => this.load());
-  }
-
   get nowTs(): number { return Math.floor(Date.now() / 1000); }
 
   readonly pieConfig: PieMenuConfig = {
@@ -186,8 +176,10 @@ export class ContainerDetailComponent implements OnInit {
     this.loadPorts();
     // Deze pagina toont zijn eigen detail$ (getContainerDetail), los van de
     // globale state.rules$. Zonder deze koppeling verscheen een nieuw firewall-
-    // request pas na een handmatige refresh. rules$ wordt door de WS én de
-    // voorgrond-poll (StateService) ververst; herlaad het lokale detail mee.
+    // request pas na een handmatige refresh. rules$ wordt door de WS, de
+    // voorgrond-poll (StateService) én elke allow/deny (incl. de gedeelde "For
+    // everyone"-bevestigingsmodal, die state.loadAll() aanroept) ververst;
+    // herlaad het lokale detail daarop mee.
     // skip(1): de BehaviorSubject vuurt meteen bij subscribe — die eerste emit
     // dekt de load() hierboven al, dus alleen latere wijzigingen triggeren een
     // herlaad.
