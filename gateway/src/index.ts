@@ -3,6 +3,7 @@ import { createProxyServer } from './proxy';
 import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
 import { createContainerProxy } from './socket-proxy';
+import { initPortRelays } from './port-relay';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 
@@ -70,6 +71,8 @@ initContainerProxies();
 // internal-net aardvark-DNS erin); sanitize erna zodat egress-DNS blijft werken,
 // óók als er (nog) geen devcontainers zijn. De settling-runs vangen bovendien de
 // devcontainer-net-connect op die `huddle init` pas ná de start uitvoert.
-initContainerNetworks().finally(() => { void sanitizeResolvConf(); });
+// Port-relays herstellen ná de netwerk-reconnects: de relay bereikt de
+// workload-containers via het dc-net waar huddle (weer) aan moet hangen.
+initContainerNetworks().finally(() => { void sanitizeResolvConf(); void initPortRelays(); });
 scheduleSettlingSanitize();
 initContainerIptables();

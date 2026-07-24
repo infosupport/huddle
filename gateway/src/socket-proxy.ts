@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { isHostPortApproved } from './db';
 import { authorizeAction, classifyRequest, getMountPermissions, MountPermissions } from './docker-actions';
+import { syncContainerRelays, teardownContainerRelays } from './port-relay';
 
 // Default mount policy when no per-container perms are supplied (e.g. unit
 // tests): all mount kinds denied. Mirrors the secure-by-default catalog in
@@ -142,6 +143,13 @@ export function withLabelFilter(rawUrl: string, label: string): string {
   filters.label = [...(filters.label ?? []), label];
   params.set('filters', JSON.stringify(filters));
   return `${base}?${params.toString()}`;
+}
+
+// Statuscode uit een gebufferde HTTP-respons ("HTTP/1.1 204 …"). 0 bij een
+// onherkenbaar antwoord, zodat post-response hooks dan niets doen.
+export function parseHttpStatus(resp: Buffer): number {
+  const m = /^HTTP\/1\.[01] (\d{3})/.exec(resp.toString('latin1', 0, 16));
+  return m ? parseInt(m[1], 10) : 0;
 }
 
 function rewriteFirstLine(headerPart: string, newUrl: string): string {
@@ -455,6 +463,24 @@ export async function createContainerProxy(containerName: string, socketDir: str
       client.on('error', () => upstream?.destroy());
       client.on('end', () => upstream?.end());
 
+      // Force Connection: close so docker CLI cannot reuse this TCP socket
+      // for a second request — every request must reopen and re-enter our
+      // header parser (otherwise we'd tunnel subsequent requests raw and
+      // bypass /containers/json filtering).
+      function writeRequestConnectionClose(sock: net.Socket, firstData: Buffer): void {
+        const sep = firstData.indexOf('\r\n\r\n');
+        if (sep === -1) { sock.write(firstData); return; }
+        const headerStr = firstData.slice(0, sep).toString();
+        const tail = firstData.slice(sep + 4);
+        const lines = headerStr.split('\r\n');
+        const fixed = [
+          lines[0],
+          'Connection: close',
+          ...lines.slice(1).filter(l => !/^connection:\s*/i.test(l)),
+        ].join('\r\n');
+        sock.write(Buffer.concat([Buffer.from(fixed + '\r\n\r\n'), tail]));
+      }
+
       function openUpstream(firstData: Buffer): void {
         phase = 'tunnel';
         upstream = net.createConnection(DOCKER_SOCKET);
@@ -465,22 +491,34 @@ export async function createContainerProxy(containerName: string, socketDir: str
         });
         upstream.on('end', () => client.end());
         upstream.pipe(client);
+        writeRequestConnectionClose(upstream, firstData);
+      }
 
-        // Force Connection: close so docker CLI cannot reuse this TCP socket
-        // for a second request — every request must reopen and re-enter our
-        // header parser (otherwise we'd tunnel subsequent requests raw and
-        // bypass /containers/json filtering).
-        const sep = firstData.indexOf('\r\n\r\n');
-        if (sep === -1) { upstream.write(firstData); return; }
-        const headerStr = firstData.slice(0, sep).toString();
-        const tail = firstData.slice(sep + 4);
-        const lines = headerStr.split('\r\n');
-        const fixed = [
-          lines[0],
-          'Connection: close',
-          ...lines.slice(1).filter(l => !/^connection:\s*/i.test(l)),
-        ].join('\r\n');
-        upstream.write(Buffer.concat([Buffer.from(fixed + '\r\n\r\n'), tail]));
+      // Als openUpstream, maar buffert de volledige upstream-respons en stelt
+      // het terugschrijven naar de client uit tot `onDone` klaar is. Nodig voor
+      // de port-relays: DCP/Testcontainers doen direct ná een geslaagde start
+      // een inspect + connect naar de gepubliceerde poort, dus de relay moet er
+      // ZIJN voordat de start-respons de client bereikt (anders racen eerste
+      // connecties op een dynamische poort in "connection refused"). Docker's
+      // respons op start/stop/kill/remove is klein (204/304 of een JSON-fout),
+      // dus bufferen is veilig.
+      function openUpstreamBuffered(firstData: Buffer, onDone: (status: number) => Promise<void>): void {
+        phase = 'tunnel';
+        upstream = net.createConnection(DOCKER_SOCKET);
+        const chunks: Buffer[] = [];
+        upstream.on('error', (err) => {
+          if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET')
+            console.error(`[socket-proxy] upstream error for ${containerName}:`, err.message);
+          client.destroy();
+        });
+        upstream.on('data', (d: Buffer) => { chunks.push(d); });
+        upstream.on('end', () => {
+          const resp = Buffer.concat(chunks);
+          onDone(parseHttpStatus(resp))
+            .catch((err: any) => console.warn(`[socket-proxy] post-response hook failed for ${containerName}:`, err?.message ?? err))
+            .then(() => { client.write(resp); client.end(); });
+        });
+        writeRequestConnectionClose(upstream, firstData);
       }
 
       function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
@@ -703,10 +741,17 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
           client.pause();
           hasOwnLabel(type, targetId, containerName).then(ok => {
-            if (ok) {
-              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            } else {
+            if (!ok) {
               deny403(client, `cannot delete ${type} not created by this container`);
+            } else if (type === 'container') {
+              // Ruim de port-relays op zodra de remove slaagde (of de container
+              // al weg bleek). Een 409 (nog draaiend, zonder force) laat de
+              // relays juist staan.
+              openUpstreamBuffered(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), async (status) => {
+                if ((status > 0 && status < 400) || status === 404) await teardownContainerRelays(targetId);
+              });
+            } else {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             }
             client.resume();
           });
@@ -857,18 +902,38 @@ export async function createContainerProxy(containerName: string, socketDir: str
           }
 
           // Container management: only for own spawned containers, never devcontainers
-          const ctId = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait|update)$/)?.[1];
+          const ctVerbMatch = p.match(/^\/containers\/([^/]+)\/(exec|start|stop|restart|kill|wait|update)$/);
+          const ctId = ctVerbMatch?.[1];
           if (ctId) {
+            const ctVerb = ctVerbMatch![2];
             if (devcontainerIds.has(ctId)) {
               deny403(client, 'operation on devcontainer not permitted');
               return;
             }
             client.pause();
             hasOwnLabel('container', ctId, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              } else {
+              if (!ok) {
                 deny403(client, 'container was not created by this devcontainer');
+                client.resume();
+                return;
+              }
+              const reqBuf = Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]);
+              if (ctVerb === 'start' || ctVerb === 'restart') {
+                // Relays opzetten vóórdat de respons teruggaat: clients
+                // inspecteren en connecten direct na een geslaagde start.
+                // 304 (already started) telt ook — de relay kan na een
+                // gateway-herstart ontbreken terwijl de container al draait.
+                openUpstreamBuffered(reqBuf, async (status) => {
+                  if (status > 0 && status < 400) await syncContainerRelays(containerName, ctId);
+                });
+              } else if (ctVerb === 'stop' || ctVerb === 'kill') {
+                openUpstreamBuffered(reqBuf, async (status) => {
+                  // 304 = al gestopt, 404 = weg (bv. AutoRemove) — in alle
+                  // gevallen is de relay stale.
+                  if ((status > 0 && status < 400) || status === 404) await teardownContainerRelays(ctId);
+                });
+              } else {
+                openUpstream(reqBuf);
               }
               client.resume();
             });

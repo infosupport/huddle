@@ -205,6 +205,24 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
+    // Default-deny voor onbekende bronnen. Client-identiteit is bron-IP →
+    // containermap (kinderen erven hun parent-devcontainer, zie docker.ts); een
+    // IP dat na een geforceerde refresh nog steeds niet naar een huddle-beheerde
+    // container herleidt (host-verkeer, een vreemde container op een netwerk
+    // waar de gateway voor de port-relay bij zit) krijgt GEEN globale-regel-
+    // fallback en maakt ook geen requested-regel aan. Zonder deze guard was elke
+    // globale allow-regel bruikbaar voor iedereen die de proxy kan bereiken —
+    // een stille bypass van "no direct internet".
+    if (!extHeader && containerId === null) {
+      console.warn(`[proxy] denied request from unknown source ${req.socket.remoteAddress ?? '?'} for ${host}`);
+      logAudit({
+        containerId: null, domain: host, action: 'deny', ruleId: null,
+        method: req.method ?? null, path: `${target.pathname}${target.search}`, resStatus: 403,
+      });
+      send403(res, host, 'deny', null);
+      return;
+    }
+
     // Beslis op de gedecodeerde vorm (normalizePathname, finding #7) maar
     // forward de originele encoded bytes van de URL-parser. De gedecodeerde
     // vorm is geen geldige request-target: rauwe spaties/UTF-8 laten
@@ -350,6 +368,18 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const hostname = canonicalizeHost(rawHostname);
     if (!hostname) {
       rejectSocket(clientSocket, 400, 'deny', '', null);
+      return;
+    }
+
+    // Default-deny voor onbekende bronnen — zelfde guard en rationale als op
+    // het plain-HTTP-pad hierboven.
+    if (containerId === null) {
+      console.warn(`[proxy] denied CONNECT from unknown source ${(clientSocket as net.Socket).remoteAddress ?? '?'} for ${hostname}`);
+      logAudit({
+        containerId: null, domain: hostname, port, action: 'deny', ruleId: null,
+        method: 'CONNECT', resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, 'deny', hostname, null);
       return;
     }
 

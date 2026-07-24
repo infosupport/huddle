@@ -34,6 +34,7 @@ import {
   sessionCookie,
   clearSessionCookie,
 } from './auth';
+import { ensurePortForwarder, isRelayNetworkIp } from './port-relay';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
@@ -525,6 +526,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       if (inspect.State?.Running) return { ok: true };
       await startExistingContainer(inspect.Id);
+      // De forwarder (port-relay.ts) leeft in de devcontainer en sterft met een
+      // stop; na een start opnieuw opzetten.
+      await ensurePortForwarder(name, inspect.Id);
       logAudit({ containerId: name, domain: 'docker', action: 'container:start' });
       notifyStateChanged();
       return { ok: true };
@@ -975,6 +979,20 @@ export async function createApiServer(): Promise<FastifyInstance> {
   getOperatorToken();
 
   const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
+  // :3000 moet op 0.0.0.0 blijven (de host bereikt het portal via de published
+  // port, die op het container-IP uitkomt — loopback-binden kan dus niet). Maar
+  // netwerken die de gateway alleen voor de port-relay joinde dragen puur
+  // workload-verkeer: verbindingen daarvandaan worden op TCP-niveau geweigerd
+  // (dekt HTTP én WebSocket-upgrades), zodat een netwerk-join geen nieuw
+  // API-oppervlak oplevert. dc-net-verkeer (devcontainers, o.a. de
+  // sudo-audit-ingest) blijft ongemoeid.
+  app.server.on('connection', (sock) => {
+    const ip = sock.remoteAddress ?? '';
+    if (ip && isRelayNetworkIp(ip)) {
+      console.warn(`[api] denied connection from relay-joined network: ${ip}`);
+      sock.destroy();
+    }
+  });
   console.log(`[api] listening on ${address}`);
 
   return app;

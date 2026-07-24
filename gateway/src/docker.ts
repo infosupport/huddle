@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
+import { ensurePortForwarder } from './port-relay';
 import { saveCredentials, getSetting, listFolderMappings } from './db';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
@@ -72,6 +73,11 @@ async function fetchContainerMap(): Promise<Map<string, string>> {
   return map;
 }
 
+// Bij een cache-miss maximaal 1×/s een geforceerde refresh: sinds de proxy
+// onbekende bronnen hard weigert (default-deny) mag een net gestarte container
+// binnen de cache-TTL geen onterechte 403 krijgen.
+let lastMissRefresh = 0;
+
 export async function resolveContainerByIp(rawIp: string): Promise<string | null> {
   const ip = rawIp.replace(/^::ffff:/, '');
   const now = Date.now();
@@ -82,6 +88,15 @@ export async function resolveContainerByIp(rawIp: string): Promise<string | null
     } catch {
       cacheExpiry = now + 2_000;
     }
+  }
+  const hit = ipToName.get(ip);
+  if (hit) return hit;
+  if (now - lastMissRefresh > 1_000) {
+    lastMissRefresh = now;
+    try {
+      ipToName = await fetchContainerMap();
+      cacheExpiry = now + CACHE_TTL_MS;
+    } catch {}
   }
   return ipToName.get(ip) ?? null;
 }
@@ -940,6 +955,10 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     Cmd: ['sh', '-c', script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
+
+  // Port-relay-forwarder: spiegelt gepubliceerde poorten van owned containers
+  // op de loopback van de devcontainer (zie port-relay.ts).
+  await ensurePortForwarder(containerName, id);
 
   saveCredentials(containerName, password);
 

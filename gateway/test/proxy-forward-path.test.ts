@@ -62,10 +62,11 @@ describe.skipIf(!sqliteAvailable)('proxy forwards the original encoded request-p
     db = dbMod.db;
     dbMod.initDb();
 
-    // Geen Docker in de unit-omgeving: de client-IP hoeft niet naar een
-    // container te resolven — een globale allow-regel volstaat.
+    // Geen Docker in de unit-omgeving: resolve het client-IP naar een vaste
+    // containernaam. (null kan niet meer: onbekende bronnen zijn sinds de
+    // port-relay-netwerkjoins default-deny — zie proxy-unknown-source.test.ts.)
     const dockerMod = await import('../src/docker');
-    vi.spyOn(dockerMod, 'resolveContainerByIp').mockResolvedValue(null);
+    vi.spyOn(dockerMod, 'resolveContainerByIp').mockResolvedValue('dc-test');
 
     upstream = http.createServer((req, res) => {
       lastUpstreamUrl = req.url ?? null;
