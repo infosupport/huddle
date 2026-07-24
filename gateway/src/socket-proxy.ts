@@ -43,6 +43,50 @@ function dockerGet(urlPath: string): Promise<any> {
   });
 }
 
+// Zoals dockerGet, maar geeft óók de HTTP-status terug. dockerGet parse't het
+// body ongeacht de status, zodat een 404 (`{"message":"No such container"}`) niet
+// van een echte 200-inspect te onderscheiden is. Voor de ownership-check moeten we
+// "bestaat niet" (404) juist wél kunnen scheiden van "bestaat, maar niet van mij".
+function dockerGetStatus(urlPath: string): Promise<{ status: number; data: any }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { socketPath: DOCKER_SOCKET, path: urlPath, method: 'GET' },
+      (res) => {
+        let body = '';
+        res.on('data', (d: Buffer) => { body += d.toString(); });
+        res.on('end', () => {
+          let data: any = null;
+          try { data = body ? JSON.parse(body) : null; } catch { data = null; }
+          resolve({ status: res.statusCode ?? 0, data });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+export type ContainerOwnership = 'own' | 'foreign' | 'missing';
+
+// Classificeer een container-inspect-respons: van ons (huddle.parent-label komt
+// overeen), van een andere devcontainer, of niet-bestaand (404). Puur zodat de
+// beslissing zonder live Docker-socket te unit-testen valt.
+export function ownershipFromInspect(status: number, data: any, containerName: string): ContainerOwnership {
+  if (status === 404) return 'missing';
+  // Onbekende/onverwachte fout of onleesbaar body → veilig als 'foreign' behandelen
+  // (weigeren), nooit per ongeluk als 'missing' doorlaten.
+  if (status >= 400 || !data || typeof data !== 'object') return 'foreign';
+  const labels: Record<string, string> = data.Config?.Labels ?? {};
+  return labels['huddle.parent'] === containerName ? 'own' : 'foreign';
+}
+
+async function classifyContainerOwnership(targetId: string, containerName: string): Promise<ContainerOwnership> {
+  try {
+    const { status, data } = await dockerGetStatus(`/containers/${encodeURIComponent(targetId)}/json`);
+    return ownershipFromInspect(status, data, containerName);
+  } catch { return 'foreign'; }
+}
+
 async function hasOwnLabel(type: 'container' | 'image', targetId: string, containerName: string): Promise<boolean> {
   try {
     const urlPath = type === 'container'
@@ -342,6 +386,19 @@ function namedVolumeSources(hostConfig: any): string[] {
 function deny403(client: net.Socket, msg: string): void {
   const body = JSON.stringify({ message: msg });
   client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
+  client.end();
+}
+
+// Synthetiseer Docker's eigen "No such container"-404. Gebruikt op de
+// lees-/inspect-tak voor élke container die deze devcontainer niet bezit, zodat
+// een vreemde en een niet-bestaande container niet te onderscheiden zijn (geen
+// bestaans-oracle) en tools als Aspire's DCP een nog-niet-aangemaakte persistent
+// container als afwezig zien en 'm aanmaken (#61). Body byte-lengte i.p.v.
+// string-lengte: containernamen zijn ASCII, maar zo blijft het correct als daar
+// ooit iets anders in zou vloeien.
+function denyNotFound(client: net.Socket, name: string): void {
+  const body = JSON.stringify({ message: `No such container: ${name}` });
+  client.write(`HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
   client.end();
 }
 
@@ -707,16 +764,30 @@ export async function createContainerProxy(containerName: string, socketDir: str
           // containers labeled by this devcontainer
           const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
           if (inspectCt) {
-            if (devcontainerIds.has(inspectCt)) {
-              deny403(client, 'inspect of devcontainer not permitted');
-              return;
-            }
             client.pause();
-            hasOwnLabel('container', inspectCt, containerName).then(ok => {
-              if (ok) {
+            classifyContainerOwnership(inspectCt, containerName).then(ownership => {
+              if (ownership === 'own') {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else {
-                deny403(client, 'container not owned by this devcontainer');
+                // Alles wat deze devcontainer NIET zelf heeft aangemaakt — een
+                // vreemde container, een peer-devcontainer, of iets dat niet
+                // bestaat — krijgt Docker's eigen 404. Zo:
+                //  1. lijkt de sandbox leeg van andermans containers: 'foreign'
+                //     en 'missing' zijn niet te onderscheiden, dus geen
+                //     bestaans-oracle waarmee je containernamen kunt aftasten;
+                //  2. behandelt Aspire's DCP een nog-niet-bestaande persistent
+                //     container als afwezig en maakt 'm aan (#61);
+                //  3. forwarden we niets door na de check → geen TOCTOU-venster
+                //     waarin een net-aangemaakte vreemde container alsnog
+                //     geïnspecteerd zou kunnen worden.
+                // Een devcontainer heeft geen huddle.parent-label en valt dus
+                // vanzelf onder 'foreign'; de expliciete devcontainer-guard is
+                // daarom overbodig op deze lees-tak (en 404 verraadt ook niet
+                // langer dát het een devcontainer is).
+                if (ownership === 'foreign') {
+                  console.warn(`[socket-proxy] denied inspect of foreign container ${inspectCt} (container: ${containerName})`);
+                }
+                denyNotFound(client, inspectCt);
               }
               client.resume();
             });
