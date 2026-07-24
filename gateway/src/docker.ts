@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { saveCredentials, getSetting, listFolderMappings } from './db';
+import { getSetting, listFolderMappings } from './db';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
@@ -180,6 +180,43 @@ export function getBaseImageName(ide: IdeName): string {
 
 export async function inspectContainer(name: string): Promise<any> {
   return dockerRequest('GET', `/containers/${encodeURIComponent(name)}/json`);
+}
+
+// ── Root grant: passwordless sudo voor de default `vscode`-user ───────────────
+// Vervangt de aparte `noot`-user + wachtwoord. Een portal-grant schrijft een
+// sudoers-drop-in; revoke haalt hem weg. Idempotent. Uitgevoerd als root in de
+// draaiende devcontainer.
+const ROOT_SUDOERS = '/etc/sudoers.d/99-huddle-root';
+
+async function execAsRoot(containerName: string, script: string): Promise<void> {
+  const exec = await dockerRequest('POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
+    User: 'root', Cmd: ['sh', '-c', script], AttachStdout: false, AttachStderr: false,
+  });
+  await dockerRequest('POST', `/exec/${exec.Id}/start`, { Detach: true });
+}
+
+export async function grantVscodeRoot(containerName: string): Promise<void> {
+  const script = `set -e
+export DEBIAN_FRONTEND=noninteractive
+command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo; }
+printf 'vscode ALL=(ALL) NOPASSWD:ALL\\n' > ${ROOT_SUDOERS}
+chmod 440 ${ROOT_SUDOERS}
+usermod -aG sudo vscode 2>/dev/null || usermod -aG wheel vscode 2>/dev/null || true`;
+  await execAsRoot(containerName, script);
+  console.log(`[root-grant] vscode root enabled in ${containerName}`);
+}
+
+export async function revokeVscodeRoot(containerName: string): Promise<void> {
+  const script = `rm -f ${ROOT_SUDOERS} 2>/dev/null || true
+gpasswd -d vscode sudo 2>/dev/null || deluser vscode sudo 2>/dev/null || true
+gpasswd -d vscode wheel 2>/dev/null || true`;
+  try {
+    await execAsRoot(containerName, script);
+    console.log(`[root-grant] vscode root revoked in ${containerName}`);
+  } catch (err: any) {
+    // Container kan al weg zijn; dan is er niets te revoken.
+    console.warn(`[root-grant] revoke in ${containerName} skipped:`, err.message);
+  }
 }
 
 export interface SnapshotImage {
@@ -488,7 +525,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -574,12 +611,12 @@ else
 fi
 fi
 
-# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
+# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists).
+# De aparte 'noot'-user is vervangen door de on-demand root-grant (root-grant.ts):
+# die geeft de DEFAULT 'vscode'-user tijdelijk passwordless sudo vanuit het portal,
+# zonder aparte user of wachtwoord-dans. sudo/passwd blijven nodig voor die grant.
 export DEBIAN_FRONTEND=noninteractive
 command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:${password}" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
 
 # Fix workspace permissions
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
@@ -592,6 +629,11 @@ ${seedScript}
 mkdir -p /etc/sudoers.d
 printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
 chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+# sudo reset standaard de omgeving (env_reset), waardoor \`sudo apt-get\`/pip/enz.
+# de Huddle proxy- en CA-env verliezen en geen netwerk hebben. Bewaar die vars zodat
+# root-commando's via de proxy blijven werken (relevant met de root-grant).
+printf 'Defaults env_keep += "http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS SSL_CERT_FILE REQUESTS_CA_BUNDLE"\\n' > /etc/sudoers.d/99-huddle-env
+chmod 440 /etc/sudoers.d/99-huddle-env 2>/dev/null || true
 
 # Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
@@ -652,7 +694,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string): string {
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -679,12 +721,12 @@ chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 ${IDE_CRED_SCRUB}
 
-# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
+# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists).
+# De aparte 'noot'-user is vervangen door de on-demand root-grant (root-grant.ts):
+# die geeft de DEFAULT 'vscode'-user tijdelijk passwordless sudo vanuit het portal,
+# zonder aparte user of wachtwoord-dans. sudo/passwd blijven nodig voor die grant.
 export DEBIAN_FRONTEND=noninteractive
 command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:${password}" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
 
 # Fix workspace permissions
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
@@ -706,6 +748,11 @@ chown -R vscode:vscode /home/vscode/.vscode-server /home/vscode/.vscode-server-i
 mkdir -p /etc/sudoers.d
 printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
 chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+# sudo reset standaard de omgeving (env_reset), waardoor \`sudo apt-get\`/pip/enz.
+# de Huddle proxy- en CA-env verliezen en geen netwerk hebben. Bewaar die vars zodat
+# root-commando's via de proxy blijven werken (relevant met de root-grant).
+printf 'Defaults env_keep += "http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS SSL_CERT_FILE REQUESTS_CA_BUNDLE"\\n' > /etc/sudoers.d/99-huddle-env
+chmod 440 /etc/sudoers.d/99-huddle-env 2>/dev/null || true
 
 # Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
@@ -788,8 +835,6 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const backend = ideName === 'rider' ? 'Rider' : isVscode ? 'VSCode' : 'IntelliJ';
   const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
-
-  const password = crypto.randomBytes(12).toString('base64url');
 
   try {
     const existing = await inspectContainer(containerName);
@@ -933,15 +978,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   // Run config script via exec — VS Code-variant zonder JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), seedScript)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), seedScript);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
-
-  saveCredentials(containerName, password);
 
   return id;
 }

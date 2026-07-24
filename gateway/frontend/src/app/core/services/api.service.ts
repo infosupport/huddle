@@ -4,7 +4,7 @@ import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { Container, ContainerDetail, DockerImage } from '../models/container.model';
 import { Rule, RuleStatus } from '../models/rule.model';
-import { Grant, GrantMap } from '../models/grant.model';
+import { Grant, GrantMap, RootGrant } from '../models/grant.model';
 import { DockerActionCatalog, DockerActionPolicies, DockerActionPolicyResult } from '../models/docker-action.model';
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
@@ -98,10 +98,6 @@ export class ApiService {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
-  getContainerCredentials(name: string): Observable<{ password: string; createdAt: number }> {
-    return this.handle(this.http.get<{ password: string; createdAt: number }>(`/api/docker/containers/${name}/credentials`));
-  }
-
   snapshotContainer(name: string, imageName: string): Observable<{ imageId: string }> {
     return this.handle(this.http.post<{ imageId: string }>(`/api/docker/containers/${name}/snapshot`, { imageName }));
   }
@@ -135,6 +131,19 @@ export class ApiService {
 
   deleteGrant(container: string): Observable<void> {
     return this.handle(this.http.delete<void>(`/api/authz/grants/${container}`));
+  }
+
+  // ── Root grant: tijdgebonden passwordless sudo voor de vscode-user ──────────
+  getRootGrant(container: string): Observable<RootGrant> {
+    return this.handle(this.http.get<RootGrant>(`/api/authz/root-grants/${encodeURIComponent(container)}`));
+  }
+
+  setRootGrant(container: string, minutes: number): Observable<{ container: string; until: number }> {
+    return this.handle(this.http.put<{ container: string; until: number }>(`/api/authz/root-grants/${encodeURIComponent(container)}`, { minutes }));
+  }
+
+  deleteRootGrant(container: string): Observable<void> {
+    return this.handle(this.http.delete<void>(`/api/authz/root-grants/${encodeURIComponent(container)}`));
   }
 
   // ── Docker action policies (fine-grained Docker permissions) ───────────────

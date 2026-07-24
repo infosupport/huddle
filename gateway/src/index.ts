@@ -1,6 +1,7 @@
 import { initDb } from './db';
 import { createProxyServer } from './proxy';
 import { createApiServer } from './api';
+import { initRootGrants } from './root-grant';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
@@ -73,3 +74,7 @@ initContainerProxies();
 initContainerNetworks().finally(() => { void sanitizeResolvConf(); });
 scheduleSettlingSanitize();
 initContainerIptables();
+
+// Reconcile root grants after restart: revoke expired ones, re-apply + re-arm
+// the timers for still-active grants (the container may have been rebuilt).
+initRootGrants().catch(err => console.error('[root-grant] init failed:', err.message));

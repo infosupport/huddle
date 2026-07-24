@@ -21,6 +21,10 @@ export function initDb(): void {
       container_id TEXT PRIMARY KEY,
       until INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS root_grants (
+      container_id TEXT PRIMARY KEY,
+      until INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS docker_action_policies (
       container_id TEXT NOT NULL,
       action TEXT NOT NULL,
@@ -45,11 +49,6 @@ export function initDb(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
     CREATE INDEX IF NOT EXISTS idx_audit_container ON audit_log(container_id);
-    CREATE TABLE IF NOT EXISTS container_credentials (
-      container_id TEXT PRIMARY KEY,
-      password TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -216,6 +215,33 @@ export function getAllGrants(): Record<string, { until: number }> {
   return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
 }
 
+// ── Root grants (root voor de default vscode-user) ───────────────────────────
+// Vervangt de aparte `noot`-user + wachtwoord: een tijdgebonden grant geeft de
+// standaard `vscode`-user passwordless sudo. Anders dan de docker-grant is dit
+// STATEFUL in de container (sudoers-bestand), dus verlopen vereist een actieve
+// revoke — root-grant.ts plant die (setTimeout).
+
+export function setRootGrant(containerId: string, until: number): void {
+  db.prepare(`INSERT INTO root_grants (container_id, until) VALUES (?, ?)
+              ON CONFLICT(container_id) DO UPDATE SET until = excluded.until`)
+    .run(containerId, until);
+}
+
+export function getRootGrant(containerId: string): { until: number } | undefined {
+  return db.prepare(`SELECT until FROM root_grants WHERE container_id = ?`)
+    .get(containerId) as { until: number } | undefined;
+}
+
+export function deleteRootGrant(containerId: string): void {
+  db.prepare(`DELETE FROM root_grants WHERE container_id = ?`).run(containerId);
+}
+
+export function getAllRootGrants(): Record<string, { until: number }> {
+  const rows = db.prepare(`SELECT container_id, until FROM root_grants`).all() as
+    { container_id: string; until: number }[];
+  return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
+}
+
 // ── Docker action policies (fijnmazige rechten per actie) ────────────────────
 // Alleen expliciete overrides staan in de db; ontbreekt een rij, dan geldt de
 // default uit de actie-catalogus (docker-actions.ts).
@@ -315,20 +341,6 @@ export function updateAuditResponse(id: number, r: AuditResponse): void {
       id,
     );
   } catch (err) { console.error('[audit] update failed:', err); }
-}
-
-// ── Container credentials ────────────────────────────────────────────────────
-
-export function saveCredentials(containerName: string, password: string): void {
-  db.prepare(
-    `INSERT OR REPLACE INTO container_credentials (container_id, password) VALUES (?, ?)`
-  ).run(containerName, password);
-}
-
-export function getCredentials(containerName: string): { password: string; created_at: number } | undefined {
-  return db.prepare(
-    `SELECT password, created_at FROM container_credentials WHERE container_id = ?`
-  ).get(containerName) as { password: string; created_at: number } | undefined;
 }
 
 // ── Extension key-value store ────────────────────────────────────────────────

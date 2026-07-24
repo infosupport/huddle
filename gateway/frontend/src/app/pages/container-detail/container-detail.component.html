@@ -104,7 +104,7 @@
       @if (pendingCount > 0) { <i>{{ pendingCount }}</i> }
     </button>
     <button [class.on]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
-    <button [class.on]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
+    <button [class.on]="activeTab === 'sudo'"     (click)="setTab('sudo')">Sudo</button>
     <button [class.on]="activeTab === 'terminal'" (click)="setTab('terminal')">Terminal</button>
   </div>
 
@@ -311,54 +311,45 @@
     </div>
   }
 
-  <!-- ════════════════════════════════════════════ TAB: NOOT -->
-  @if (activeTab === 'noot') {
+  <!-- ════════════════════════════════════════════ TAB: SUDO -->
+  @if (activeTab === 'sudo') {
     <div class="card">
-      <div class="card__head"><h2 class="card__title">Noot user</h2></div>
-      <p class="noot-info">
-        The container has two users:
-        <code>vscode</code> (your work user, <b>without sudo</b>) and
-        <code>noot</code> (administrator <b>with sudo</b>).
-        Switch to <code>noot</code> only when you need to run something as root —
-        all actions are tracked in the network log.
+      <div class="card__head"><h2 class="card__title">Passwordless sudo</h2></div>
+      <p class="sudo-info">
+        Grant the default <code>vscode</code> user <b>passwordless sudo</b> for a
+        limited time. No separate user or password — just run <code>sudo …</code>
+        while the grant is active. It revokes itself automatically when the timer
+        runs out, and every sudo action is tracked in the network log.
       </p>
 
-      @if (credentials) {
-        <div class="noot-cred">
-          <span class="noot-cred__label">Password</span>
-          <span class="noot-cred__pass">{{ passwordVisible ? credentials.password : '•••••••••••••••••' }}</span>
-          <div class="noot-cred__actions">
-            <button class="btn btn-ghost btn-sm" (click)="passwordVisible = !passwordVisible">
-              {{ passwordVisible ? 'Hide' : 'Show' }}
-            </button>
-            <button class="btn btn-ghost btn-sm" (click)="copyPassword()">
-              <app-icon [name]="copied ? 'check' : 'copy'" [size]="14" />
-              {{ copied ? 'Copied' : 'Copy' }}
-            </button>
-          </div>
-        </div>
-      } @else {
-        <p style="font-size:13px;color:var(--text-muted);margin:0 0 18px">
-          Password not available (container created before this version).
-        </p>
-      }
+      <div class="sudo-timer" [class.on]="rootActive()">
+        <span class="sudo-timer__label">Status</span>
+        @if (rootActive()) {
+          <span class="sudo-timer__pill on">active</span>
+          <span class="sudo-timer__count">{{ rootRemainingLabel() }} left</span>
+        } @else {
+          <span class="sudo-timer__pill">off</span>
+        }
+      </div>
 
-      <div class="noot-cmd">
-        <h4>How do you switch users?</h4>
-        <pre><code># Switch to noot (has sudo rights)
-su - noot
+      <div class="sudo-controls">
+        <button class="btn btn-sm" [disabled]="sudoBusy()" (click)="grantSudo(15)">15 min</button>
+        <button class="btn btn-sm" [disabled]="sudoBusy()" (click)="grantSudo(30)">30 min</button>
+        <button class="btn btn-sm" [disabled]="sudoBusy()" (click)="grantSudo(60)">60 min</button>
+        <button class="btn btn-delete btn-sm" [disabled]="sudoBusy() || !rootActive()" (click)="revokeSudo()">Revoke</button>
+      </div>
+      @if (sudoError()) { <p class="sudo-error">{{ sudoError() }}</p> }
 
-# Run commands as root
+      <div class="sudo-cmd">
+        <h4>How do you use it?</h4>
+        <pre><code># While the grant is active, run commands as root
 sudo apt install &lt;package&gt;
 sudo systemctl restart &lt;service&gt;
-
-# Switch back to vscode
-exit
 
 # Check recent sudo actions
 sudo cat /tmp/sudo-audit.log</code></pre>
       </div>
-      <p class="noot-cmd-note">
+      <p class="sudo-cmd-note">
         All sudo actions also appear on the <a routerLink="/network-log">Network log</a> page.
       </p>
     </div>

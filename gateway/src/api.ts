@@ -5,7 +5,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, getAllRootGrants, setActionPolicy, logAudit, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { applyRootGrant, revokeRootGrant, rootGrantStatus } from './root-grant';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import {
   listDevcontainers,
@@ -632,6 +633,46 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
+  // ── Root grant: tijdgebonden passwordless sudo voor de default vscode-user ──
+  // (vervangt de noot-flow). STATEFUL in de container, dus applyRootGrant plant
+  // een revoke-timer op de vervaltijd — zie root-grant.ts.
+  app.get('/api/authz/root-grants', async () => getAllRootGrants());
+
+  app.get<{ Params: { container: string } }>(
+    '/api/authz/root-grants/:container',
+    async (req) => rootGrantStatus(req.params.container) ?? { until: 0 },
+  );
+
+  app.put<{ Params: { container: string }; Body: { minutes?: number } }>(
+    '/api/authz/root-grants/:container',
+    async (req, reply) => {
+      const { container } = req.params;
+      const { minutes } = req.body ?? {};
+      if (!minutes || minutes < 1 || minutes > 120) {
+        return reply.code(400).send({ error: 'minutes must be 1-120' });
+      }
+      try {
+        const until = await applyRootGrant(container, minutes);
+        logAudit({ containerId: container, domain: 'docker-access', action: `admin:root-grant-${minutes}m` });
+        notifyStateChanged();
+        return { container, until };
+      } catch (err: any) {
+        return reply.code(502).send({ error: `could not apply root grant: ${err.message}` });
+      }
+    }
+  );
+
+  app.delete<{ Params: { container: string } }>(
+    '/api/authz/root-grants/:container',
+    async (req) => {
+      const { container } = req.params;
+      await revokeRootGrant(container);
+      logAudit({ containerId: container, domain: 'docker-access', action: 'admin:root-grant-revoke' });
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
   // ── Fijnmazige Docker-actie-rechten ───────────────────────────────────────
 
   app.get('/api/authz/docker-actions', async () => ({ actions: DOCKER_ACTIONS }));
@@ -722,13 +763,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const after = (db.prepare('SELECT COUNT(*) as n FROM audit_log').get() as { n: number }).n;
     const last5 = db.prepare('SELECT id, ts, container_id, domain, action FROM audit_log ORDER BY ts DESC LIMIT 5').all();
     return { dbPath, rowsBefore: before, rowsAfter: after, insertedId, insertError, last5 };
-  });
-
-  // ── Container credentials ─────────────────────────────────────────────────
-  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/credentials', async (req, reply) => {
-    const creds = getCredentials(req.params.name);
-    if (!creds) return reply.code(404).send({ error: 'not_found' });
-    return { password: creds.password, createdAt: creds.created_at };
   });
 
   // ── IDE gateway link ─────────────────────────────────────────────────────

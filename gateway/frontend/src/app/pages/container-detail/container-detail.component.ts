@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, signal, DestroyRef } from '@angular/core';
+import { Component, computed, inject, OnInit, signal, DestroyRef } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { AsyncPipe, DatePipe } from '@angular/common';
@@ -25,7 +25,7 @@ interface DetailData {
   airlocked?: boolean;
 }
 
-type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
+type DetailTab = 'firewall' | 'docker' | 'sudo' | 'terminal';
 type RulesTab  = 'allow' | 'deny' | 'path';
 
 /** A path sub-request row for the pending inbox flat list */
@@ -155,9 +155,6 @@ export class ContainerDetailComponent implements OnInit {
 
   detail$ = new BehaviorSubject<DetailData | null>(null);
   error$ = new BehaviorSubject<string | null>(null);
-  credentials: { password: string; createdAt: number } | null = null;
-  passwordVisible = false;
-  copied = false;
   activeTab: DetailTab = 'firewall';
   rulesTab: RulesTab = 'allow';
   reconnectStatus = '';
@@ -169,6 +166,30 @@ export class ContainerDetailComponent implements OnInit {
   newPortContainer = '';
   newPortProto = 'tcp';
   newPortDesc = '';
+
+  // ── Sudo (root) grant ──────────────────────────────────────────────────────
+  // rootUntil is the unix-seconds expiry (null = no grant). nowSec ticks every
+  // second so the countdown re-renders; both feed the computed status below.
+  rootUntil = signal<number | null>(null);
+  private nowSec = signal(Math.floor(Date.now() / 1000));
+  sudoBusy = signal(false);
+  sudoError = signal<string | null>(null);
+
+  rootActive = computed(() => {
+    const until = this.rootUntil();
+    return until !== null && until > this.nowSec();
+  });
+  rootRemaining = computed(() => {
+    const until = this.rootUntil();
+    if (until === null) return 0;
+    return Math.max(0, until - this.nowSec());
+  });
+  rootRemainingLabel = computed(() => {
+    const s = this.rootRemaining();
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  });
 
   ngOnInit(): void {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
@@ -186,9 +207,35 @@ export class ContainerDetailComponent implements OnInit {
     this.state.rules$
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
-    this.api.getContainerCredentials(this.name).subscribe({
-      next: (c) => this.credentials = c,
-      error: () => this.credentials = null,
+    this.loadRootGrant();
+    // Countdown tick voor de sudo-timer; DestroyRef ruimt hem op (zelfde
+    // teardown-idioom als de rules$-subscription hierboven).
+    const tick = setInterval(() => this.nowSec.set(Math.floor(Date.now() / 1000)), 1000);
+    this.destroyRef.onDestroy(() => clearInterval(tick));
+  }
+
+  loadRootGrant(): void {
+    this.api.getRootGrant(this.name).subscribe({
+      next: (g) => this.rootUntil.set(g.until > 0 ? g.until : null),
+      error: () => this.rootUntil.set(null),
+    });
+  }
+
+  grantSudo(minutes: number): void {
+    this.sudoBusy.set(true);
+    this.sudoError.set(null);
+    this.api.setRootGrant(this.name, minutes).subscribe({
+      next: (g) => { this.rootUntil.set(g.until); this.sudoBusy.set(false); },
+      error: (err) => { this.sudoError.set(err.message); this.sudoBusy.set(false); },
+    });
+  }
+
+  revokeSudo(): void {
+    this.sudoBusy.set(true);
+    this.sudoError.set(null);
+    this.api.deleteRootGrant(this.name).subscribe({
+      next: () => { this.rootUntil.set(null); this.sudoBusy.set(false); },
+      error: (err) => { this.sudoError.set(err.message); this.sudoBusy.set(false); },
     });
   }
 
@@ -246,14 +293,6 @@ export class ContainerDetailComponent implements OnInit {
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
     this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
-  }
-
-  copyPassword(): void {
-    if (!this.credentials) return;
-    navigator.clipboard.writeText(this.credentials.password).then(() => {
-      this.copied = true;
-      setTimeout(() => { this.copied = false; }, 2000);
-    });
   }
 
   setTab(t: DetailTab): void { this.activeTab = t; }
