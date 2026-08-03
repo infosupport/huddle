@@ -103,6 +103,75 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
   socket.end();
 }
 
+// Forward een HTTP Upgrade-handshake (WebSocket `ws://`/`wss://`, maar ook elke
+// andere Upgrade) naar upstream en pipe daarna de rauwe bytes in beide
+// richtingen. `secure` kiest tussen http.request (plain, ná plain-HTTP-pad) en
+// https.request (TLS, ná MITM-terminatie). We gebruiken bewust de laagste laag:
+// Node emit't 'upgrade' op de ClientRequest zodra upstream met 101 antwoordt;
+// dan reconstrueren we de handshake-response byte-voor-byte terug naar de client
+// (rawHeaders behoudt exacte casing + volgorde van Sec-WebSocket-Accept e.d.) en
+// verbinden we beide sockets. Elke Upgrade wordt zo transparant doorgezet.
+function forwardUpgrade(
+  secure: boolean,
+  options: https.RequestOptions,
+  clientSocket: stream.Duplex,
+  clientHead: Buffer,
+): void {
+  let upstreamReq: http.ClientRequest;
+  try {
+    // Zelfde synchrone-throw-risico als tryCreateUpstreamRequest (bv.
+    // ERR_UNESCAPED_CHARACTERS): fail per handshake, niet per proces.
+    upstreamReq = secure ? https.request(options) : http.request(options);
+  } catch {
+    try { clientSocket.destroy(); } catch {}
+    return;
+  }
+
+  upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+    // Reconstrueer de 101-handshake byte-voor-byte terug naar de client.
+    const lines = [`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}`];
+    for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
+      lines.push(`${upstreamRes.rawHeaders[i]}: ${upstreamRes.rawHeaders[i + 1]}`);
+    }
+    try {
+      clientSocket.write(lines.join('\r\n') + '\r\n\r\n');
+      if (upstreamHead && upstreamHead.length) clientSocket.write(upstreamHead);
+    } catch {
+      try { upstreamSocket.destroy(); } catch {}
+      return;
+    }
+    // Bytes die de client al ná zijn handshake stuurde eerst doorzetten, dán pipen.
+    if (clientHead && clientHead.length) upstreamSocket.write(clientHead);
+    upstreamSocket.pipe(clientSocket);
+    clientSocket.pipe(upstreamSocket);
+    const teardown = () => {
+      try { upstreamSocket.destroy(); } catch {}
+      try { clientSocket.destroy(); } catch {}
+    };
+    upstreamSocket.on('error', teardown);
+    clientSocket.on('error', teardown);
+    upstreamSocket.on('close', () => { try { clientSocket.destroy(); } catch {} });
+    clientSocket.on('close', () => { try { upstreamSocket.destroy(); } catch {} });
+  });
+
+  // Upstream honoreerde de upgrade niet (geen 101): relay de gewone response
+  // terug naar de client en sluit — fail-closed t.o.v. de tunnel.
+  upstreamReq.on('response', (upstreamRes) => {
+    const lines = [`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}`];
+    for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
+      lines.push(`${upstreamRes.rawHeaders[i]}: ${upstreamRes.rawHeaders[i + 1]}`);
+    }
+    try { clientSocket.write(lines.join('\r\n') + '\r\n\r\n'); } catch {}
+    upstreamRes.on('data', (c: Buffer) => { try { clientSocket.write(c); } catch {} });
+    upstreamRes.on('end', () => { try { clientSocket.end(); } catch {} });
+    upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch {} });
+  });
+
+  upstreamReq.on('error', () => { try { clientSocket.destroy(); } catch {} });
+  clientSocket.on('error', () => { try { upstreamReq.destroy(); } catch {} });
+  upstreamReq.end();
+}
+
 // Node valideert request-opties synchroon in de ClientRequest-constructor
 // (bv. ERR_UNESCAPED_CHARACTERS bij een ongeldige request-target). Zo'n throw
 // belandt anders in de uncaughtException-handler die het hele proces — en dus
@@ -333,6 +402,80 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       if (reqBytes < CAP) { reqChunks.push(chunk); reqBytes += chunk.length; }
     });
     req.on('end', () => upstream.end());
+  });
+
+  // WebSocket (`ws://`) over het plain-HTTP-pad: een forward-proxy-client stuurt
+  // de upgrade-handshake in absolute vorm (`GET http://host/pad`) met
+  // `Upgrade: websocket`. Node emit't die als 'upgrade' (niet 'request'); zonder
+  // deze handler zou Node de socket sluiten en de handshake time-outen. Zelfde
+  // firewall-handhaving als het request-pad: canoniseer de host, beslis op het
+  // genormaliseerde pad, forward de originele encoded bytes.
+  server.on('upgrade', async (req, clientSocket, head) => {
+    const extHeader = req.headers['x-huddle-ext'];
+    const containerId = extHeader
+      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
+      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    const rawUrl = req.url || '';
+
+    let target: URL;
+    try {
+      target = new URL(rawUrl);
+    } catch {
+      rejectSocket(clientSocket, 400, 'deny', '', containerId);
+      return;
+    }
+
+    const host = canonicalizeHost(target.hostname);
+    if (host === null) {
+      rejectSocket(clientSocket, 400, 'deny', '', containerId);
+      return;
+    }
+
+    const normPath = normalizePathname(target.pathname);
+    if (normPath === null) {
+      logAudit({
+        containerId, domain: host, action: 'deny', ruleId: null,
+        method: req.method ?? null, path: `${target.pathname}${target.search}`, resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, 'deny', host, containerId);
+      return;
+    }
+    const forwardPath = `${target.pathname}${target.search}`;
+
+    // Geen legitiem WebSocket-endpoint op huddle zelf → altijd fail-closed.
+    if (host === 'huddle') {
+      logAudit({
+        containerId, domain: 'huddle', action: 'deny', ruleId: null,
+        method: req.method ?? null, path: forwardPath, resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, 'deny', 'huddle', containerId);
+      return;
+    }
+
+    const result = checkRule(host, containerId, normPath);
+    if (result.status !== 'allow') {
+      logAudit({
+        containerId, domain: host, action: result.status, ruleId: null,
+        method: req.method ?? null, path: forwardPath, resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, result.status, host, containerId);
+      return;
+    }
+
+    logAudit({
+      containerId, domain: host, action: 'allow', ruleId: result.ruleId,
+      method: req.method ?? null, path: forwardPath, reqHeaders: headersToJson(req.headers),
+    });
+
+    const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
+    delete outgoingHeaders['proxy-connection'];
+    const upstreamPort = target.port || 80;
+    forwardUpgrade(
+      false,
+      { hostname: host, port: upstreamPort, method: req.method, path: forwardPath, headers: outgoingHeaders },
+      clientSocket,
+      head,
+    );
   });
 
   server.on('connect', async (req, clientSocket, head) => {
@@ -623,6 +766,67 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       });
       innerReq.on('end', () => upstreamReq.end());
       innerReq.on('error', () => upstreamReq.destroy());
+    });
+    // WebSocket (`wss://`) ná TLS-terminatie: de client stuurt de upgrade-
+    // handshake over de gewrapte TLS-socket. Node emit't die als een SEPARAAT
+    // 'upgrade'-event (niet 'request'); zonder deze handler sluit Node de socket
+    // en time-out de handshake — precies de Codex-CLI-vertraging uit #74. Zelfde
+    // padhandhaving als de request-handler hierboven: beslis op de gedecodeerde
+    // vorm, forward de originele encoded bytes.
+    innerHttp.on('upgrade', (innerReq, innerSocket, innerHead) => {
+      const rawUrl = innerReq.url ?? '/';
+      const qi = rawUrl.indexOf('?');
+      const rawPathPart = qi === -1 ? rawUrl : rawUrl.slice(0, qi);
+      const query = qi === -1 ? '' : rawUrl.slice(qi);
+      const normPath = normalizePathname(rawPathPart);
+      const checkUrl = normPath === null ? null : `${normPath}${query}`;
+
+      const pathResult = normPath === null
+        ? { status: 'deny' as const, ruleId: null }
+        : checkRule(hostname, containerId, checkUrl);
+      if (pathResult.status !== 'allow') {
+        logAudit({
+          containerId,
+          domain: hostname,
+          port,
+          action: pathResult.status,
+          ruleId: pathResult.ruleId,
+          method: innerReq.method ?? null,
+          path: innerReq.url ?? null,
+          reqHeaders: headersToJson(innerReq.headers),
+          resStatus: 403,
+        });
+        rejectSocket(innerSocket, 403, pathResult.status, hostname, containerId);
+        return;
+      }
+
+      logAudit({
+        containerId,
+        domain: hostname,
+        port,
+        action: 'allow',
+        ruleId: pathResult.ruleId,
+        method: innerReq.method ?? null,
+        path: innerReq.url ?? null,
+        reqHeaders: headersToJson(innerReq.headers),
+      });
+
+      const upstreamHeaders = { ...innerReq.headers };
+      delete upstreamHeaders['proxy-connection'];
+      forwardUpgrade(
+        true,
+        {
+          hostname,
+          port,
+          method: innerReq.method,
+          // Originele encoded bytes; checkUrl was alleen de beslisvorm.
+          path: rawUrl,
+          headers: upstreamHeaders,
+          servername: hostname,
+        },
+        innerSocket,
+        innerHead,
+      );
     });
     innerHttp.on('clientError', (_err, sock) => { try { sock.destroy(); } catch {} });
 
