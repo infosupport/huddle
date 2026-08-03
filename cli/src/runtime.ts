@@ -66,6 +66,45 @@ function dockerSocketPath(): string {
   return process.platform === 'win32' ? '//var/run/docker.sock' : '/var/run/docker.sock';
 }
 
+/**
+ * Haalt het unix-socketpad uit de JSON van `docker context inspect`. De actieve
+ * context bepaalt naar welke engine het `docker`-commando praat; Rancher Desktop
+ * (dockerd/moby-modus) zet een `rancher-desktop`-context waarvan
+ * `Endpoints.docker.Host` naar `unix:///<home>/.rd/docker.sock` wijst i.p.v. de
+ * standaard `/var/run/docker.sock`.
+ *
+ * Pure functie zodat we het parsen los kunnen testen. Geeft `null` terug bij
+ * niet-parsebare invoer of een niet-unix endpoint (npipe:// op Windows,
+ * tcp:// / ssh:// remote), want die zijn niet als bestandspad te bind-mounten.
+ */
+export function parseDockerContextSocket(json: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  // `docker context inspect` levert een array; één context is één element.
+  const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+  const host = (entry as { Endpoints?: { docker?: { Host?: unknown } } } | null | undefined)
+    ?.Endpoints?.docker?.Host;
+  if (typeof host !== 'string' || !host.startsWith('unix://')) return null;
+  const path = host.slice('unix://'.length);
+  return path.startsWith('/') ? path : null;
+}
+
+/** Herkent het socketpad van Rancher Desktop (dockerd/moby-modus): `~/.rd/docker.sock`. */
+export function isRancherDesktopSocket(socketPath: string | null | undefined): boolean {
+  return typeof socketPath === 'string' && /(^|\/)\.rd\/docker\.sock$/.test(socketPath);
+}
+
+/** Socketpad van de actieve docker-context, of undefined als het niet op te vragen is. */
+function dockerContextSocket(): string | undefined {
+  const json = commandOutput('docker context inspect');
+  if (!json) return undefined;
+  return parseDockerContextSocket(json) ?? undefined;
+}
+
 function podmanIsRemote(): boolean {
   // Op macOS/Windows draait Podman altijd in een `podman machine`-VM; ook op
   // Linux kan de client op een remote socket wijzen. `ServiceIsRemote` is de
@@ -83,12 +122,21 @@ function buildRuntime(name: RuntimeName): ContainerRuntime {
       securityOpts: ['label=disable'],
     };
   }
+  // Rancher Desktop (dockerd/moby-modus) ziet er als een gewone Docker-engine
+  // uit, maar de socket zit niet op /var/run/docker.sock: de actieve
+  // docker-context wijst naar `~/.rd/docker.sock`. Volg die context zodat we de
+  // juiste socket bind-mounten; anders vallen we terug op de standaardlocatie
+  // (echte native Docker, Docker Desktop). Rancher Desktop draait de engine op
+  // ELK platform in een VM (Lima/WSL), dus is hij altijd 'remote'.
+  const contextSocket = dockerContextSocket();
+  const isRancher = isRancherDesktopSocket(contextSocket);
   return {
     name,
-    socketPath: dockerSocketPath(),
+    socketPath: isRancher ? contextSocket! : dockerSocketPath(),
     defaultNetwork: 'bridge',
-    // Docker Desktop (macOS/Windows) draait in een VM; native Docker op Linux niet.
-    isRemote: process.platform !== 'linux',
+    // Docker Desktop (macOS/Windows) en Rancher Desktop draaien in een VM;
+    // native Docker op Linux niet.
+    isRemote: isRancher || process.platform !== 'linux',
     securityOpts: [],
   };
 }
