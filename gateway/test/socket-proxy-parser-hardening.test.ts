@@ -163,6 +163,36 @@ describe('validateVolumeCreate — bind-backed volume, casing-agnostisch', () =>
   });
 });
 
+describe('diepte-limiet tegen stack-overflow-DoS (CWE-674)', () => {
+  // Regressie: V8's JSON.parse accepteert extreem diep geneste bodies, maar de
+  // recursieve helpers liepen dan de call-stack over → RangeError → crash van de
+  // gedeelde gateway. Een enkele diep-geneste create/exec/volume-body volstond.
+  // De helpers moeten nu fail-closed weigeren i.p.v. gooien.
+  const deep = (n: number): any => {
+    let o: any = { x: 1 };
+    for (let i = 0; i < n; i++) o = { a: o };
+    return o;
+  };
+  it('findAmbiguousKey gooit niet maar faalt gesloten op extreem diepe nesting', () => {
+    expect(() => findAmbiguousKey(deep(50000))).not.toThrow();
+    expect(findAmbiguousKey(deep(50000))).not.toBeNull();
+  });
+  it('deepLowerKeys gooit niet op extreem diepe nesting', () => {
+    expect(() => deepLowerKeys(deep(50000))).not.toThrow();
+  });
+  it('validators weigeren een diep-geneste body i.p.v. te crashen', () => {
+    expect(validateHostConfig(deep(50000))).toMatch(/ambiguous|depth/);
+    expect(validateExecConfig(deep(50000))).toMatch(/ambiguous|depth/);
+    expect(validateVolumeCreate(deep(50000))).toMatch(/ambiguous|depth/);
+  });
+  it('normaal-diepe (legitieme) nesting blijft gewoon passeren', () => {
+    // Een realistische docker create nest ~4-6 niveaus; ruim binnen de limiet.
+    expect(validateHostConfig({
+      Mounts: [{ Type: 'volume', Source: 'v', VolumeOptions: { Labels: { a: 'b' } } }],
+    }, OPEN)).toBeNull();
+  });
+});
+
 describe('findAmbiguousKey', () => {
   it('detecteert een case-insensitieve botsing op één niveau', () => {
     expect(findAmbiguousKey({ HostConfig: {}, hostconfig: {} })).toBe('hostconfig');

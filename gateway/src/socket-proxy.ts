@@ -175,12 +175,23 @@ const HARD_CHECKED_HOSTCONFIG_KEYS = new Set<string>([
 //      (HostConfig/Labels/Env/NetworkingConfig/NetworkMode) zodat een lowercase
 //      variant niet als tweede, door de daemon gemergde, sleutel blijft staan.
 
+// Diepte-limiet tegen stack-overflow-DoS (CWE-674). V8's JSON.parse is iteratief
+// en accepteert extreem diep geneste bodies, maar de recursieve helpers hieronder
+// lopen dan de call-stack over → RangeError → unhandled rejection die de gedeelde
+// gateway laat crashen (een enkele kwaadaardige create/exec/volume-body volstaat).
+// Geen enkele legitieme Docker-body nest ook maar in de buurt van deze grens, dus
+// weiger dieper: findAmbiguousKey draait als éérste in elke validator/proxy-pad en
+// faalt gesloten (retourneert een pseudo-ambigue sleutel → deny), zodat deepLowerKeys
+// nooit op te diepe input draait.
+const MAX_KEY_DEPTH = 200;
+
 // Loopt de hele waarde recursief af en geeft de eerste sleutel terug die op één
 // object-niveau case-insensitief botst met een andere (bv. `HostConfig` naast
 // `hostconfig`), of null als alles eenduidig is.
-export function findAmbiguousKey(value: unknown): string | null {
+export function findAmbiguousKey(value: unknown, depth = 0): string | null {
+  if (depth > MAX_KEY_DEPTH) return '__depth_exceeded__';
   if (Array.isArray(value)) {
-    for (const el of value) { const r = findAmbiguousKey(el); if (r) return r; }
+    for (const el of value) { const r = findAmbiguousKey(el, depth + 1); if (r) return r; }
     return null;
   }
   if (value && typeof value === 'object') {
@@ -190,7 +201,7 @@ export function findAmbiguousKey(value: unknown): string | null {
       if (seen.has(lk)) return lk;
       seen.add(lk);
     }
-    for (const v of Object.values(value)) { const r = findAmbiguousKey(v); if (r) return r; }
+    for (const v of Object.values(value)) { const r = findAmbiguousKey(v, depth + 1); if (r) return r; }
     return null;
   }
   return null;
@@ -199,11 +210,14 @@ export function findAmbiguousKey(value: unknown): string | null {
 // Diepe kopie met alle object-sleutels lowercase. Veronderstelt dat er géén
 // case-insensitieve dubbele sleutels zijn (findAmbiguousKey dekt dat af), zodat
 // het lowercasen verliesvrij is. Arrays/primitives blijven qua waarde intact.
-export function deepLowerKeys(value: any): any {
-  if (Array.isArray(value)) return value.map(deepLowerKeys);
+// De diepte-guard is defensief: elke call-site draait findAmbiguousKey (met
+// dezelfde limiet) eerst, dus over-diepe input is hier al geweigerd.
+export function deepLowerKeys(value: any, depth = 0): any {
+  if (depth > MAX_KEY_DEPTH) return value;
+  if (Array.isArray(value)) return value.map(el => deepLowerKeys(el, depth + 1));
   if (value && typeof value === 'object') {
     const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(value)) out[k.toLowerCase()] = deepLowerKeys(v);
+    for (const [k, v] of Object.entries(value)) out[k.toLowerCase()] = deepLowerKeys(v, depth + 1);
     return out;
   }
   return value;
