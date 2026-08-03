@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { bold, green, cyan, dim, yellow } from './utils';
@@ -531,7 +531,9 @@ export function resolveComposeFile(target?: string): string {
 function huddleNetworkExists(internalNet: string, runtime?: string): boolean | undefined {
   try {
     const rt = resolveRuntime(runtime);
-    execSync(`${rt.name} network inspect ${internalNet}`, { stdio: 'ignore' });
+    // execFileSync (arg-array, geen shell) i.p.v. execSync: er komt geen shell aan
+    // te pas, dus geen command-injection-oppervlak via de runtime-/netwerknaam.
+    execFileSync(rt.name, ['network', 'inspect', internalNet], { stdio: 'ignore' });
     return true;
   } catch {
     return undefined; // runtime unavailable or network missing — don't block.
