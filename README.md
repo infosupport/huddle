@@ -241,6 +241,22 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 
 ---
 
+## Migrating an existing Dev Container / Compose project
+
+Already have a `docker-compose.yml` + `devcontainer.json` and want to keep it while routing it
+through Huddle? Mark the network your services share with `huddle.network: "true"` and run:
+
+```bash
+huddle migrate
+```
+
+This generates a `docker-compose.huddle.yml` override that attaches your services to Huddle's
+internal network and injects the proxy env vars and CA path — your own files stay untouched.
+See [docs/migrate-devcontainers.md](docs/migrate-devcontainers.md) for the convention, an
+example, and the exact steps.
+
+---
+
 ## Managing the firewall
 
 Blocked requests are visible in the web UI under **Firewall**. Via the CLI:
