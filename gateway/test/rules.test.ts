@@ -237,6 +237,25 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
       expect(matchPath('/a.b/*', '/aXb/c')).toBe(false);
       expect(matchPath('/a.b/*', '/a.b/c')).toBe(true);
     });
+    it('ReDoS-hard: veel wildcards op een lang segment blijven snel (geen backtracking-explosie)', () => {
+      // Een patroon met veel wildcards + een lang, attacker-gestuurd segment
+      // dat NIET matcht liet de oude RegExp-aanpak (`[^/]*a[^/]*a…X$`)
+      // catastrofaal backtracken en hing de event-loop. De lineaire matcher is
+      // O(n·m): dit moet ruim binnen een paar milliseconden falen.
+      const evil = '/' + 'a*'.repeat(50) + 'X';
+      const longSegment = '/' + 'a'.repeat(5000); // één segment, geen `/`, geen `X`
+      const t0 = performance.now();
+      const result = matchPath(evil, longSegment);
+      const elapsed = performance.now() - t0;
+      expect(result).toBe(false);
+      expect(elapsed).toBeLessThan(100);
+    });
+    it('opeenvolgende `*` worden samengetrokken (`**` ≡ `*`)', () => {
+      // `**` is één wildcard: dezelfde segment-grens-semantiek als één `*`.
+      expect(matchPath('/safe**', '/safe')).toBe(true);
+      expect(matchPath('/safe**', '/safe/x')).toBe(true);
+      expect(matchPath('/safe**', '/safe-danger')).toBe(false);
+    });
   });
 
   describe('padgebaseerde regels', () => {
