@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
-import { runFirewallList } from './firewall';
+import { runFirewallList, runFirewallAdd } from './firewall';
 import { runInit } from './init';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
@@ -22,8 +22,8 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -104,6 +104,8 @@ Usage:
                                      start them via Docker or Podman
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
+  huddle firewall add <domain>       Add a custom firewall rule (wildcards
+                                     supported: *.example.com and /path/*)
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -123,9 +125,15 @@ Start options:
   --empty                            Empty container without a workspace
 
 Firewall options:
-  -i, --interactive                  Interactively approve/deny
-  --container <name>                 Filter by container
+  -i, --interactive                  Interactively approve/deny (list)
+  --container <name>                 Filter by (list) / scope to (add) a container
   --status <requested|allow|deny>    Filter by status (default: requested)
+
+Firewall add options:
+  --path <pattern>                   Path pattern; * matches within a segment,
+                                     a trailing * spans deeper segments
+                                     (e.g. /_packaging/*/nuget/v3/*)
+  --deny                             Create a block rule (default: allow)
 
 Global options:
   --url <url>                        Huddle URL (default: http://localhost:3000)
@@ -216,15 +224,23 @@ async function main(): Promise<void> {
 
   if (cmd === 'firewall' || cmd === 'fw') {
     const subCmd = sub ?? 'list';
-    if (subCmd !== 'list') {
+    if (subCmd === 'list') {
+      await runFirewallList({
+        interactive: flagBool(flags, 'i', 'interactive'),
+        container: flagString(flags, 'container'),
+        status: flagString(flags, 'status'),
+      });
+    } else if (subCmd === 'add') {
+      await runFirewallAdd({
+        domain: positional[2],
+        path: flagString(flags, 'path'),
+        deny: flagBool(flags, 'deny'),
+        container: flagString(flags, 'container'),
+      });
+    } else {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
       process.exit(1);
     }
-    await runFirewallList({
-      interactive: flagBool(flags, 'i', 'interactive'),
-      container: flagString(flags, 'container'),
-      status: flagString(flags, 'status'),
-    });
     return;
   }
 

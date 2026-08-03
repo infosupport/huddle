@@ -174,6 +174,14 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     it('is hoofdletter-ongevoelig', () => {
       expect(matchDomain('*.NPMJS.org', 'Registry.npmjs.ORG')).toBe(true);
     });
+    it('handmatig geschreven Azure-DevOps wildcard-domein matcht de feed-hosts', () => {
+      expect(matchDomain('*.pkgs.dev.azure.com', 'myorg.pkgs.dev.azure.com')).toBe(true);
+      expect(matchDomain('*.pkgs.dev.azure.com', 'other.pkgs.dev.azure.com')).toBe(true);
+      // Kale host zonder subdomein matcht niet.
+      expect(matchDomain('*.pkgs.dev.azure.com', 'pkgs.dev.azure.com')).toBe(false);
+      // Geen substring-truc naar een aanvaller-domein.
+      expect(matchDomain('*.pkgs.dev.azure.com', 'myorg.pkgs.dev.azure.com.evil.test')).toBe(false);
+    });
   });
 
   describe('matchPath (pure helper)', () => {
@@ -190,6 +198,44 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     it('exacte match zonder wildcard', () => {
       expect(matchPath('/exact', '/exact')).toBe(true);
       expect(matchPath('/exact', '/exact/more')).toBe(false);
+    });
+    it('wildcard midden in het pad matcht binnen één segment', () => {
+      expect(matchPath('/foo/*/bar', '/foo/xyz/bar')).toBe(true);
+      expect(matchPath('/foo/*/bar', '/foo/123/bar')).toBe(true);
+      // `*` kruist geen `/`: een extra segment mag niet.
+      expect(matchPath('/foo/*/bar', '/foo/a/b/bar')).toBe(false);
+      // De letterlijke delen moeten kloppen.
+      expect(matchPath('/foo/*/bar', '/foo/x/baz')).toBe(false);
+    });
+    it('meerdere wildcards in één patroon', () => {
+      expect(matchPath('/a/*/b/*/c', '/a/1/b/2/c')).toBe(true);
+      expect(matchPath('/a/*/b/*/c', '/a/1/b/2/3/c')).toBe(false);
+    });
+    it('wildcard binnen een segment (niet op een grens)', () => {
+      expect(matchPath('/pkg-*.nupkg', '/pkg-abc.nupkg')).toBe(true);
+      expect(matchPath('/pkg-*.nupkg', '/pkg-a/b.nupkg')).toBe(false);
+    });
+    it('Azure DevOps NuGet-feed: random segment in het midden', () => {
+      // De feed-GUID wisselt per request, de rest van het endpoint is stabiel.
+      const pat = '/_packaging/*/nuget/v3/*';
+      expect(matchPath(pat, '/_packaging/1a2b3c/nuget/v3/index.json')).toBe(true);
+      // Trailing `*` mag diepere segmenten kruisen (flat2/registrations2/…).
+      expect(matchPath(pat, '/_packaging/1a2b3c/nuget/v3/flat2/newtonsoft.json/index.json')).toBe(true);
+      // Het random GUID-segment mag zelf geen `/` bevatten.
+      expect(matchPath(pat, '/_packaging/a/b/nuget/v3/index.json')).toBe(false);
+      // Een ander endpoint valt buiten het patroon.
+      expect(matchPath(pat, '/_packaging/1a2b3c/npm/registry')).toBe(false);
+    });
+    it('mid-wildcard laat traversal nog steeds fail-closed', () => {
+      // Normalisatie draait vóór de match: `..` → null → nooit een match.
+      expect(matchPath('/foo/*/bar', '/foo/../bar')).toBe(false);
+      expect(matchPath('/_packaging/*/nuget/v3/*', '/_packaging/x/..%2f..%2fadmin')).toBe(false);
+    });
+    it('regex-metatekens in het patroon zijn letterlijk', () => {
+      // De `.` mag geen "elk teken" worden.
+      expect(matchPath('/v3/index.json', '/v3/indexXjson')).toBe(false);
+      expect(matchPath('/a.b/*', '/aXb/c')).toBe(false);
+      expect(matchPath('/a.b/*', '/a.b/c')).toBe(true);
     });
   });
 

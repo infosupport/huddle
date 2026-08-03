@@ -87,6 +87,42 @@ async function resolveRule(rule: Rule, status: 'allow' | 'deny', scope: 'rule' |
   await post<Rule>(`/api/rules/${rule.id}/resolve`, { status, scope });
 }
 
+export interface FirewallAddOptions {
+  domain?: string;
+  path?: string;
+  deny: boolean;
+  container?: string;
+}
+
+// Maakt een eigen firewall-regel aan. Ondersteunt wildcards: `*.` in het domein
+// (bv. `*.pkgs.dev.azure.com`) en `*` in het padpatroon (bv.
+// `/_packaging/*/nuget/v3/*` voor een Azure-DevOps-feed met een wisselende
+// GUID). Standaard 'allow'; met --deny een block-regel. Zonder --container is
+// de regel globaal.
+export async function runFirewallAdd(opts: FirewallAddOptions): Promise<void> {
+  const domain = (opts.domain ?? '').trim();
+  if (!domain) {
+    throw new Error(
+      'Usage: huddle firewall add <domain> [--path <pattern>] [--deny] [--container <id>]'
+    );
+  }
+  const status: 'allow' | 'deny' = opts.deny ? 'deny' : 'allow';
+  const path = opts.path?.trim();
+
+  const body: Record<string, unknown> = {
+    domain,
+    container_id: opts.container ?? null,
+    status,
+  };
+  if (path) body.path_pattern = path;
+
+  const rule = await post<Rule>('/api/rules', body);
+  const target = formatTarget(rule);
+  const scope = rule.container_id ? `container: ${rule.container_id}` : 'global';
+  const verb = status === 'deny' ? red('Denied') : green('Allowed');
+  console.log(`${verb} ${bold(cyan(target))} ${dim(`(${scope})`)}`);
+}
+
 function printRulesTable(rules: Rule[]): void {
   const headers = ['ID', 'Status', 'Domain/path', 'Container', 'Requests', 'Seen'];
   const rows = rules.map((r) => [
