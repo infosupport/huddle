@@ -161,6 +161,29 @@ After that, you start devcontainers directly from a project directory:
 huddle
 ```
 
+### Rancher Desktop
+
+Huddle works with [Rancher Desktop](https://rancherdesktop.io/) as long as it runs
+in **dockerd (moby)** mode — the `containerd`/`nerdctl` backend is *not* supported,
+because it does not expose a Docker-compatible engine or socket. Switch the container
+engine to `dockerd (moby)` under **Preferences → Container Engine**.
+
+In dockerd mode Rancher Desktop looks like a normal Docker engine, so `huddle init`
+auto-detects it (`--runtime docker`, which is also the default). The one difference
+is the socket location: Rancher Desktop puts its Docker socket at `~/.rd/docker.sock`
+instead of `/var/run/docker.sock`. Huddle reads the active `docker context` and
+mounts that socket automatically — no extra configuration needed. Rancher Desktop
+runs the engine inside a VM on every OS, so Huddle treats it as a remote engine (as
+it does Docker Desktop).
+
+If auto-detection ever fails, make sure the `rancher-desktop` context is active
+(`docker context use rancher-desktop`) and that `docker info` works, then re-run
+`huddle init --runtime docker`.
+
+> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used for
+> the per-container proxy sockets) into its VM. The defaults cover this, but if you
+> customized the VM's mounts you may need to add those paths back.
+
 ---
 
 ## Building base images (optional)
@@ -533,6 +556,7 @@ There are two ways an `experiment-<nr>` build gets published:
 |---------|----------|
 | `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)). |
 | `huddle init` finds no runtime | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`. |
+| Rancher Desktop not detected | Use **dockerd (moby)** mode (not `containerd`), activate the context with `docker context use rancher-desktop`, verify `docker info` works, then re-run `huddle init --runtime docker`. |
 | Web UI not reachable at `http://localhost:3000` | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host. |
 | Devcontainer can't reach a domain | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`. |
 | JetBrains Gateway doesn't see the container right away | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready. |
@@ -554,6 +578,11 @@ network infrastructure.
 **Does Huddle work with Podman?**
 Yes. `huddle init` automatically detects Docker or Podman; you can force it with
 `--runtime` or the `HUDDLE_RUNTIME` env var.
+
+**Does Huddle work with Rancher Desktop?**
+Yes, in **dockerd (moby)** mode (not `containerd`/`nerdctl`). Huddle auto-detects it
+as Docker and reads the `~/.rd/docker.sock` socket from the active docker context.
+See [Rancher Desktop](#rancher-desktop) under Getting Started.
 
 **Does Huddle intercept HTTPS traffic?**
 HTTP requests are logged in full. HTTPS is tunneled through `CONNECT`; its
