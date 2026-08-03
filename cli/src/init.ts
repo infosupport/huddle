@@ -8,7 +8,20 @@ import fs from 'fs';
 
 const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
-const INTERNAL_NET = 'devcontainer-net';
+/**
+ * The shared, internal network that `huddle init` creates (`--internal`, so it
+ * has no route to the internet of its own). Devcontainers attach to it to reach
+ * the Huddle proxy — it is the only way out. Exported so `huddle migrate` can
+ * point an existing Compose project at the exact same network.
+ */
+export const INTERNAL_NET = 'devcontainer-net';
+/**
+ * Directory on the Docker ENGINE host where the gateway serves each
+ * devcontainer's filtered Docker socket (`<HOST_SOCKET_DIR>/<container_name>`).
+ * Kept in sync with SOCKET_DIR in gateway/src/docker.ts. Exported so
+ * `huddle migrate` can generate the matching bind mount.
+ */
+export const HOST_SOCKET_DIR = '/tmp/dc-sockets';
 const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
 
 export interface InitOptions {
@@ -91,7 +104,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // /tmp/dc-sockets on the engine host; mounting a Windows temp dir splits
   // gateway and devcontainers across two filesystems, and Unix sockets are
   // unreliable on such a drvfs/9p mount anyway.
-  const hostTmpSockets = '/tmp/dc-sockets';
+  const hostTmpSockets = HOST_SOCKET_DIR;
   if (runtime.isRemote) {
     if (runtime.name === 'podman') {
       // Podman does NOT create a missing bind source itself (unlike Docker

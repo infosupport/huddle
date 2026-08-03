@@ -6,6 +6,7 @@ import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList, runFirewallAdd, runFirewallExport, runFirewallImport } from './firewall';
 import { runInit } from './init';
+import { runMigrate } from './migrate';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -22,9 +23,9 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'out']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'replace']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'out', 'ca-path', 'output']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'replace', 'docker-socket', 'force']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'migrate', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -102,6 +103,8 @@ Usage:
   huddle start [options] [folder]    Explicitly start a devcontainer
   huddle init [options]              Pull the Huddle + devcontainer base images and
                                      start them via Docker or Podman
+  huddle migrate [folder]            Wire an existing docker-compose devcontainer
+                                     behind Huddle by generating an override file
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
@@ -125,6 +128,15 @@ Start options:
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
+
+Migrate options:
+  --ca-path <path>                   Where the Huddle CA lands in the container
+                                     (NODE_EXTRA_CA_CERTS; default /home/vscode/.huddle-ca.crt)
+  --docker-socket                    Also wire the filtered Docker socket + DOCKER_HOST
+                                     (requires gateway socket pre-provisioning; see docs)
+  --output <path>                    Override file to write
+                                     (default: docker-compose.huddle.yml next to the source)
+  --force                            Overwrite an existing override file
 
 Firewall options:
   -i, --interactive                  Interactively approve/deny (list)
@@ -266,6 +278,18 @@ async function main(): Promise<void> {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
       process.exit(1);
     }
+    return;
+  }
+
+  if (cmd === 'migrate') {
+    await runMigrate({
+      path: positional[1],
+      caPath: flagString(flags, 'ca-path'),
+      dockerSocket: flagBool(flags, 'docker-socket'),
+      output: flagString(flags, 'output'),
+      force: flagBool(flags, 'force'),
+      runtime: flagString(flags, 'runtime'),
+    });
     return;
   }
 
