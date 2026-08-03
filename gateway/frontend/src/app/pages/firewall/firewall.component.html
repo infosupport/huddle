@@ -97,6 +97,15 @@
     <div class="card">
       <div class="card__head">
         <h2 class="card__title">Rules</h2>
+        <div class="seg" style="margin-left:auto">
+          <button type="button" title="Export rules as JSON" (click)="exportRules()">
+            <app-icon name="download" [size]="15" /> Export
+          </button>
+          <button type="button" title="Import rules from JSON" (click)="importInput.click()">
+            <app-icon name="upload" [size]="15" /> Import
+          </button>
+          <input #importInput type="file" accept="application/json,.json" hidden (change)="onImportFile($event)" />
+        </div>
         <div class="seg">
           <button [class.on]="activeTab === 'allow'" (click)="activeTab = 'allow'">
             Allowed <i>{{ vm.allow.length }}</i>

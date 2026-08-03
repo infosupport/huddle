@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { get, post } from './api';
 import { bold, dim, green, red, cyan, promptKey, formatTime, printTable } from './utils';
 
@@ -138,4 +139,69 @@ function printRulesTable(rules: Rule[]): void {
 
 function formatTarget(rule: Rule): string {
   return rule.path_pattern ? `${rule.domain}${rule.path_pattern}` : rule.domain;
+}
+
+// ── Export / import (delen van rulesets, #69) ────────────────────────────────
+
+interface RulesEnvelope {
+  version: number;
+  exported_at: number;
+  rules: unknown[];
+}
+
+interface ImportSummary {
+  imported: number;
+  updated: number;
+  skipped: number;
+}
+
+export interface FirewallExportOptions {
+  container?: string;
+  out?: string;
+}
+
+export async function runFirewallExport(opts: FirewallExportOptions): Promise<void> {
+  const qs = new URLSearchParams();
+  if (opts.container) qs.set('container', opts.container);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  const doc = await get<RulesEnvelope>(`/api/rules/export${suffix}`);
+  const json = JSON.stringify(doc, null, 2);
+  if (opts.out) {
+    fs.writeFileSync(opts.out, `${json}\n`);
+    // Voortgang naar stderr zodat een pure `--out` run niets naar stdout lekt.
+    console.error(green(`[OK] Exported ${doc.rules.length} rule(s) to ${opts.out}`));
+  } else {
+    console.log(json);
+  }
+}
+
+export interface FirewallImportOptions {
+  file: string;
+  replace?: boolean;
+  container?: string;
+}
+
+export async function runFirewallImport(opts: FirewallImportOptions): Promise<void> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(opts.file, 'utf8');
+  } catch {
+    throw new Error(`Cannot read ${opts.file}`);
+  }
+  let doc: { rules?: unknown };
+  try {
+    doc = JSON.parse(raw) as { rules?: unknown };
+  } catch {
+    throw new Error(`${opts.file} is not valid JSON`);
+  }
+
+  const mode = opts.replace ? 'replace' : 'merge';
+  const qs = new URLSearchParams();
+  if (opts.container) qs.set('container', opts.container);
+  const suffix = qs.toString() ? `?${qs}` : '';
+
+  const res = await post<ImportSummary>(`/api/rules/import${suffix}`, { mode, rules: doc.rules });
+  console.error(
+    green(`[OK] Imported (${mode}): ${res.imported} added, ${res.updated} updated, ${res.skipped} skipped`)
+  );
 }
