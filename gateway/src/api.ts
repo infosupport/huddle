@@ -69,6 +69,17 @@ interface Rule {
   request_count: number;
 }
 
+// De deelbare subset van een regel (export/import, #69). Bewust zonder de
+// volatiele kolommen (id/last_seen/request_count/created_at/updated_at).
+interface ShareableRule {
+  domain: string;
+  container_id: string | null;
+  status: RuleStatus;
+  path_pattern: string | null;
+  path_mode: number;
+  expires_at: number | null;
+}
+
 export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
@@ -429,6 +440,150 @@ export async function createApiServer(): Promise<FastifyInstance> {
     } catch (err: any) {
       return reply.code(409).send({ error: 'duplicate', message: err.message });
     }
+  });
+
+  // ── Rules export / import (delen van rulesets, #69) ────────────────────────
+  // Alleen de deelbare velden reizen mee; volatiele kolommen (id/last_seen/
+  // request_count/created_at) blijven lokaal. `container` filtert net als
+  // GET /api/rules op scope (één container of '__global__').
+  const RULE_IMPORT_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'expires_at']);
+
+  // Valideer één inkomende regel fail-closed: onbekende sleutel → afkeuren, en
+  // elk veld op type controleren. Retourneert een genormaliseerde ShareableRule;
+  // gooit een Error met een bruikbare boodschap bij ongeldige invoer.
+  function validateImportRule(raw: unknown): ShareableRule {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('rule must be an object');
+    }
+    const r = raw as Record<string, unknown>;
+    const unknown = Object.keys(r).filter((k) => !RULE_IMPORT_FIELDS.has(k));
+    if (unknown.length > 0) throw new Error(`unknown field(s): ${unknown.join(', ')}`);
+    if (typeof r.domain !== 'string' || !r.domain) throw new Error('domain must be a non-empty string');
+    if (r.status !== 'requested' && r.status !== 'allow' && r.status !== 'deny') {
+      throw new Error(`invalid status: ${String(r.status)}`);
+    }
+    const container_id = r.container_id === undefined || r.container_id === null ? null : r.container_id;
+    if (container_id !== null && typeof container_id !== 'string') throw new Error('container_id must be a string or null');
+    const path_pattern = r.path_pattern === undefined || r.path_pattern === null ? null : r.path_pattern;
+    if (path_pattern !== null && typeof path_pattern !== 'string') throw new Error('path_pattern must be a string or null');
+    const path_mode = r.path_mode === undefined || r.path_mode === null ? 0 : r.path_mode;
+    if (path_mode !== 0 && path_mode !== 1) throw new Error('path_mode must be 0 or 1');
+    const expires_at = r.expires_at === undefined || r.expires_at === null ? null : r.expires_at;
+    if (expires_at !== null && (typeof expires_at !== 'number' || !Number.isFinite(expires_at))) {
+      throw new Error('expires_at must be a number or null');
+    }
+    return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, expires_at };
+  }
+
+  app.get<{ Querystring: { container?: string } }>('/api/rules/export', async (req) => {
+    const { container } = req.query;
+    const where: string[] = [];
+    const params: any[] = [];
+    if (container) {
+      if (container === '__global__') {
+        where.push('container_id IS NULL');
+      } else {
+        where.push('container_id = ?');
+        params.push(container);
+      }
+    }
+    const sql =
+      `SELECT domain, container_id, status, path_pattern, path_mode, expires_at FROM rules` +
+      (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
+      ` ORDER BY domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, '')`;
+    const rules = db.prepare(sql).all(...params) as ShareableRule[];
+    return { version: 1, exported_at: Math.floor(Date.now() / 1000), rules };
+  });
+
+  app.post<{
+    Querystring: { container?: string };
+    Body: { mode?: string; rules?: unknown; version?: number; exported_at?: number };
+  }>('/api/rules/import', async (req, reply) => {
+    const body = req.body ?? {};
+    const mode = body.mode ?? 'merge';
+    if (mode !== 'merge' && mode !== 'replace') {
+      return reply.code(400).send({ error: 'mode must be "merge" or "replace"' });
+    }
+    if (!Array.isArray(body.rules)) {
+      return reply.code(400).send({ error: 'rules must be an array' });
+    }
+
+    // Optionele scope-override: alle geïmporteerde regels naar deze container
+    // remappen ('__global__' → globaal). Ontbreekt de param, dan houdt elke
+    // regel zijn eigen container_id uit het document.
+    const { container } = req.query;
+    const scopeOverride =
+      container === undefined ? undefined : container === '__global__' ? null : container;
+
+    let parsed: ShareableRule[];
+    try {
+      parsed = body.rules.map(validateImportRule);
+    } catch (err: any) {
+      return reply.code(400).send({ error: 'invalid rule', message: err.message });
+    }
+    const effective =
+      scopeOverride === undefined ? parsed : parsed.map((r) => ({ ...r, container_id: scopeOverride }));
+
+    const findExisting = db.prepare(
+      `SELECT id FROM rules
+       WHERE domain = ? COLLATE NOCASE
+         AND COALESCE(container_id, '') = COALESCE(?, '')
+         AND COALESCE(path_pattern, '') = COALESCE(?, '')`
+    );
+    const insertRule = db.prepare(
+      `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode) VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    const updateRule = db.prepare(
+      `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, updated_at = unixepoch() WHERE id = ?`
+    );
+
+    let imported = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    const runImport = db.transaction(() => {
+      if (mode === 'replace') {
+        // 'replace' vervangt exact de scopes die we importeren (globaal en/of
+        // specifieke containers), niet de hele tabel.
+        const scopes = new Set(effective.map((r) => r.container_id));
+        for (const s of scopes) {
+          if (s === null) db.prepare(`DELETE FROM rules WHERE container_id IS NULL`).run();
+          else db.prepare(`DELETE FROM rules WHERE container_id = ?`).run(s);
+        }
+      }
+      // Binnen-batch dedupe op de unieke sleutel (domein NOCASE/container/pad):
+      // een tweede voorkomen in hetzelfde document telt als 'skipped'.
+      const seen = new Set<string>();
+      for (const r of effective) {
+        const key = `${r.domain.toLowerCase()} ${r.container_id ?? ''} ${r.path_pattern ?? ''}`;
+        if (seen.has(key)) { skipped++; continue; }
+        seen.add(key);
+
+        const existing = findExisting.get(r.domain, r.container_id, r.path_pattern) as { id: number } | undefined;
+        if (existing) {
+          updateRule.run(r.status, r.expires_at, r.path_mode, existing.id);
+          updated++;
+        } else {
+          insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode);
+          imported++;
+        }
+      }
+    });
+
+    try {
+      runImport();
+    } catch (err: any) {
+      return reply.code(409).send({ error: 'import failed', message: err.message });
+    }
+
+    logAudit({
+      containerId: scopeOverride ?? null,
+      domain: 'firewall',
+      action: `admin:rules-import-${mode}`,
+      path: `imported=${imported} updated=${updated} skipped=${skipped}`,
+    });
+    notifyStateChanged();
+    return { imported, updated, skipped };
   });
 
   app.get('/api/containers', async () => {

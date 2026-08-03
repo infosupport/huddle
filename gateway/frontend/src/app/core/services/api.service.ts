@@ -94,6 +94,19 @@ export class ApiService {
     return this.handle(this.http.post<Rule>('/api/rules', body));
   }
 
+  // ── Rules export / import (#69) ────────────────────────────────────────────
+  exportRules(container?: string): Observable<unknown> {
+    const params: Record<string, string> = {};
+    if (container) params['container'] = container;
+    return this.handle(this.http.get('/api/rules/export', { params }));
+  }
+
+  importRules(body: unknown): Observable<{ imported: number; updated: number; skipped: number }> {
+    return this.handle(
+      this.http.post<{ imported: number; updated: number; skipped: number }>('/api/rules/import', body),
+    );
+  }
+
   getContainerDetail(name: string): Observable<ContainerDetail> {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }

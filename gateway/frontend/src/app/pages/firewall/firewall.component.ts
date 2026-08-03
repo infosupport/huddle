@@ -228,6 +228,48 @@ export class FirewallComponent {
     });
   }
 
+  // ── Export / import (#69) ──────────────────────────────────────────────────
+  exportRules(): void {
+    this.api.exportRules().subscribe({
+      next: (doc) => {
+        const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `huddle-firewall-rules-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.pushToast('Firewall rules', 'Exported to JSON', 'allow');
+      },
+      error: (err) => this.pushToast('Export failed', err.message ?? 'Error', 'deny'),
+    });
+  }
+
+  onImportFile(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ''; // sta toe hetzelfde bestand opnieuw te kiezen
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let doc: Record<string, unknown>;
+      try {
+        doc = JSON.parse(String(reader.result)) as Record<string, unknown>;
+      } catch {
+        this.pushToast('Import failed', 'Not valid JSON', 'deny');
+        return;
+      }
+      this.api.importRules({ ...doc, mode: 'merge' }).subscribe({
+        next: (res) => {
+          this.pushToast('Firewall rules', `Imported: ${res.imported} added, ${res.updated} updated`, 'allow');
+          this.state.loadAll();
+        },
+        error: (err) => this.pushToast('Import failed', err.message ?? 'Error', 'deny'),
+      });
+    };
+    reader.readAsText(file);
+  }
+
   enablePathMode(rule: Rule): void { this.api.setPathMode(rule.id, true).subscribe(() => this.state.loadAll()); }
   allowRule(rule: Rule): void      { this.api.resolveRule(rule.id, 'allow').subscribe(() => this.state.loadAll()); }
   denyRule(rule: Rule): void       { this.api.resolveRule(rule.id, 'deny').subscribe(() => this.state.loadAll()); }
