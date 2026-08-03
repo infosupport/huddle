@@ -187,7 +187,9 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
           `GET http://127.0.0.1:${stallPort}/echo HTTP/1.1\r\n` +
           `Host: 127.0.0.1:${stallPort}\r\n` +
           `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
-          `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`
+          // Willekeurige dummy handshake-key (16 nul-bytes, base64) — geen secret;
+          // de stall-upstream antwoordt toch nooit, dus de waarde doet niet ter zake.
+          `Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\nSec-WebSocket-Version: 13\r\n\r\n`
         );
       });
       const done = () => { clearTimeout(guard); resolve(Date.now() - start); };

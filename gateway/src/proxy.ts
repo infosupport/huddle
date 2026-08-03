@@ -151,7 +151,7 @@ function forwardUpgrade(
     destroyUpstream();
     try { clientSocket.destroy(); } catch {}
   }, timeoutMs);
-  if (typeof handshakeTimer.unref === 'function') handshakeTimer.unref();
+  handshakeTimer.unref?.();
   const clearHandshakeTimer = () => { settled = true; clearTimeout(handshakeTimer); };
 
   upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
