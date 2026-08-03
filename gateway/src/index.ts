@@ -1,7 +1,8 @@
 import { initDb } from './db';
 import { createProxyServer } from './proxy';
 import { createApiServer } from './api';
-import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
+import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
+import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
@@ -64,6 +65,22 @@ async function initContainerIptables(): Promise<void> {
     console.error('[iptables] init failed:', err.message);
   }
 }
+
+// Ephemere sudo-grants moeten INTERN in de container gelockt worden zodra ze
+// verlopen — verval is dus niet passief. Deze actieve sweeper lockt periodiek de
+// 'noot'-gebruiker in elke container met een verlopen grant en ruimt de rij op.
+// Best-effort per container (een verdwenen container laat de rest ongemoeid).
+const SUDO_SWEEP_INTERVAL_MS = 30_000;
+async function sweepSudoGrants(): Promise<void> {
+  try {
+    const locked = await sweepExpiredSudoGrants(execInContainer);
+    if (locked.length) console.log(`[sudo-grant] noot gelockt in ${locked.length} verlopen container(s)`);
+  } catch (err: any) {
+    console.error('[sudo-grant] sweep failed:', err.message);
+  }
+}
+setInterval(() => { void sweepSudoGrants(); }, SUDO_SWEEP_INTERVAL_MS);
+void sweepSudoGrants();
 
 initContainerProxies();
 // Reconnecten aan de devcontainer-netwerken vervuilt resolv.conf (Podman zet de

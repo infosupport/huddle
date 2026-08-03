@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getCredentials, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import {
   listDevcontainers,
@@ -23,9 +23,11 @@ import {
   resolveContainerByIp,
   isIdeName,
   execContainerOutput,
+  execInContainer,
   type StartParams,
   type IdeName,
 } from './docker';
+import { grantSudo, revokeSudo } from './sudo-grant';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -724,12 +726,56 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { dbPath, rowsBefore: before, rowsAfter: after, insertedId, insertError, last5 };
   });
 
-  // ── Container credentials ─────────────────────────────────────────────────
-  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/credentials', async (req, reply) => {
-    const creds = getCredentials(req.params.name);
-    if (!creds) return reply.code(404).send({ error: 'not_found' });
-    return { password: creds.password, createdAt: creds.created_at };
+  // ── Ephemere sudo-grant (admin-toegang tot 'noot') ────────────────────────
+  // De 'noot'-admingebruiker start GELOCKED zonder wachtwoord. Admin-toegang is
+  // voortaan tijdelijk: een grant zet een VERS wachtwoord in de container, unlockt
+  // het account voor `minutes` minuten, en geeft het wachtwoord PRECIES ÉÉN KEER
+  // terug. Bij verval (sweeper) of intrekken wordt het account weer gelockt. Er
+  // wordt geen (plaintext of gehasht) wachtwoord bewaard (finding #10).
+
+  // Status: is er een actieve grant en tot wanneer? Geeft NOOIT een (herbruikbaar)
+  // wachtwoord terug — vervangt het oude /credentials-endpoint.
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/sudo-grant', async (req) => {
+    const grant = getSudoGrant(req.params.name);
+    const now = Math.floor(Date.now() / 1000);
+    const active = !!grant && grant.until > now;
+    return { active, until: active ? grant!.until : null };
   });
+
+  // Verleen admin-toegang: genereer wachtwoord, zet+unlock in de container, sla de
+  // grant op en geef het wachtwoord één keer terug. Fail closed: mislukt de exec,
+  // dan wordt er geen grant opgeslagen en volgt een 500.
+  app.post<{ Params: { name: string }; Body: { minutes: number } }>(
+    '/api/docker/containers/:name/sudo-grant',
+    async (req, reply) => {
+      const { name } = req.params;
+      const { minutes } = req.body ?? {};
+      if (!minutes || minutes < 1 || minutes > 120) {
+        return reply.code(400).send({ error: 'minutes must be 1-120' });
+      }
+      try {
+        const { password, until } = await grantSudo(name, minutes, execInContainer);
+        // Audit ZONDER het wachtwoord — nooit plaintext in de log.
+        logAudit({ containerId: name, domain: 'sudo', action: `admin:sudo-grant-${minutes}m` });
+        notifyStateChanged();
+        return { password, until };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    }
+  );
+
+  // Trek admin-toegang direct in: lock 'noot' en verwijder de grant.
+  app.delete<{ Params: { name: string } }>(
+    '/api/docker/containers/:name/sudo-grant',
+    async (req) => {
+      const { name } = req.params;
+      await revokeSudo(name, execInContainer);
+      logAudit({ containerId: name, domain: 'sudo', action: 'admin:sudo-grant-revoke' });
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
 
   // ── IDE gateway link ─────────────────────────────────────────────────────
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ide-link', async (req, reply) => {

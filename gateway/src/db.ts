@@ -21,6 +21,16 @@ export function initDb(): void {
       container_id TEXT PRIMARY KEY,
       until INTEGER NOT NULL
     );
+    -- Ephemere sudo-grants: per container onthouden we ALLEEN wanneer de admin-
+    -- toegang tot 'noot' verloopt (until, unix-seconden). Bewust GEEN wachtwoord
+    -- (ook geen hash) — het verse wachtwoord wordt precies één keer aan de UI
+    -- getoond en daarna nergens bewaard (finding #10). De sweeper gebruikt deze
+    -- rij om het account bij verval weer te locken.
+    CREATE TABLE IF NOT EXISTS sudo_grants (
+      container_id TEXT PRIMARY KEY,
+      until INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
     CREATE TABLE IF NOT EXISTS docker_action_policies (
       container_id TEXT NOT NULL,
       action TEXT NOT NULL,
@@ -214,6 +224,40 @@ export function getAllGrants(): Record<string, { until: number }> {
   const rows = db.prepare(`SELECT container_id, until FROM docker_grants`).all() as
     { container_id: string; until: number }[];
   return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
+}
+
+// ── Ephemere sudo-grants ─────────────────────────────────────────────────────
+// Spiegelt de docker_grants-helpers, maar los ervan: een sudo-grant regelt het
+// tijdelijke admin-wachtwoord op de 'noot'-gebruiker binnen de container, niet de
+// socket-proxy. Er wordt nooit een (plaintext of gehasht) wachtwoord bewaard.
+
+export function setSudoGrant(containerId: string, until: number): void {
+  db.prepare(`INSERT INTO sudo_grants (container_id, until) VALUES (?, ?)
+              ON CONFLICT(container_id) DO UPDATE SET until = excluded.until`)
+    .run(containerId, until);
+}
+
+export function getSudoGrant(containerId: string): { until: number } | undefined {
+  return db.prepare(`SELECT until FROM sudo_grants WHERE container_id = ?`)
+    .get(containerId) as { until: number } | undefined;
+}
+
+export function deleteSudoGrant(containerId: string): void {
+  db.prepare(`DELETE FROM sudo_grants WHERE container_id = ?`).run(containerId);
+}
+
+export function getAllSudoGrants(): Record<string, { until: number }> {
+  const rows = db.prepare(`SELECT container_id, until FROM sudo_grants`).all() as
+    { container_id: string; until: number }[];
+  return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
+}
+
+// Alle grants waarvan de until op of vóór `nowSec` ligt — de sweeper lockt deze
+// containers en ruimt de rij op.
+export function getExpiredSudoGrants(nowSec: number): string[] {
+  const rows = db.prepare(`SELECT container_id FROM sudo_grants WHERE until <= ?`)
+    .all(nowSec) as { container_id: string }[];
+  return rows.map((r) => r.container_id);
 }
 
 // ── Docker action policies (fijnmazige rechten per actie) ────────────────────

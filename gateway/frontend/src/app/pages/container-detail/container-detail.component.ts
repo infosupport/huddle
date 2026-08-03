@@ -155,7 +155,14 @@ export class ContainerDetailComponent implements OnInit {
 
   detail$ = new BehaviorSubject<DetailData | null>(null);
   error$ = new BehaviorSubject<string | null>(null);
-  credentials: { password: string; createdAt: number } | null = null;
+  // Ephemere sudo-grant. `sudoUntil` = unix-seconden waarop de grant verloopt
+  // (null = geen actieve grant). `sudoPassword` wordt alleen direct na een grant
+  // gezet — het komt maar één keer van de server en wordt nooit opnieuw opgehaald.
+  sudoUntil: number | null = null;
+  sudoPassword: string | null = null;
+  sudoMinutes = 15;
+  sudoBusy = false;
+  sudoError = '';
   passwordVisible = false;
   copied = false;
   activeTab: DetailTab = 'firewall';
@@ -186,9 +193,39 @@ export class ContainerDetailComponent implements OnInit {
     this.state.rules$
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
-    this.api.getContainerCredentials(this.name).subscribe({
-      next: (c) => this.credentials = c,
-      error: () => this.credentials = null,
+    this.loadSudoGrant();
+  }
+
+  get sudoActive(): boolean { return this.sudoUntil != null && this.sudoUntil > this.nowTs; }
+
+  loadSudoGrant(): void {
+    this.api.getSudoGrant(this.name).subscribe({
+      next: (g) => { this.sudoUntil = g.active ? g.until : null; },
+      error: () => { this.sudoUntil = null; },
+    });
+  }
+
+  grantSudo(): void {
+    this.sudoBusy = true;
+    this.sudoError = '';
+    this.sudoPassword = null;
+    this.api.grantSudo(this.name, this.sudoMinutes).subscribe({
+      next: (r) => {
+        this.sudoBusy = false;
+        this.sudoUntil = r.until;
+        this.sudoPassword = r.password; // eenmalig tonen
+        this.passwordVisible = true;
+      },
+      error: (err) => { this.sudoBusy = false; this.sudoError = err.message; },
+    });
+  }
+
+  revokeSudo(): void {
+    this.sudoBusy = true;
+    this.sudoError = '';
+    this.api.revokeSudo(this.name).subscribe({
+      next: () => { this.sudoBusy = false; this.sudoUntil = null; this.sudoPassword = null; },
+      error: (err) => { this.sudoBusy = false; this.sudoError = err.message; },
     });
   }
 
@@ -249,8 +286,8 @@ export class ContainerDetailComponent implements OnInit {
   }
 
   copyPassword(): void {
-    if (!this.credentials) return;
-    navigator.clipboard.writeText(this.credentials.password).then(() => {
+    if (!this.sudoPassword) return;
+    navigator.clipboard.writeText(this.sudoPassword).then(() => {
       this.copied = true;
       setTimeout(() => { this.copied = false; }, 2000);
     });
