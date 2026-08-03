@@ -96,8 +96,19 @@ function wsExpectRejected(path: string): Promise<string> {
   });
 }
 
+// Upstream die de TCP-verbinding accepteert maar de handshake NOOIT afrondt.
+// Bewijst de socket-leak-backstop: zonder handshake-timeout blijft zo'n
+// half-open upgrade beide sockets onbeperkt vasthouden (FD-exhaustion DoS).
+let stallUpstream: net.Server;
+let stallPort = 0;
+let stallAccepted = 0;
+const stallSockets: net.Socket[] = [];
+
 describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
   beforeAll(async () => {
+    // Korte handshake-timeout zodat de leak-regressietest snel is; productie
+    // valt terug op de 30s-default.
+    process.env.WS_UPGRADE_TIMEOUT_MS = '800';
     const dbMod = await import('../src/db');
     db = dbMod.db;
     dbMod.initDb();
@@ -115,6 +126,14 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     await new Promise<void>((r) => upstream.once('listening', () => r()));
     upstreamPort = (upstream.address() as AddressInfo).port;
 
+    // Stalled upstream: accepteert TCP, antwoordt nooit.
+    stallUpstream = net.createServer((s) => {
+      stallAccepted++;
+      stallSockets.push(s);
+    });
+    await new Promise<void>((r) => stallUpstream.listen(0, '127.0.0.1', () => r()));
+    stallPort = (stallUpstream.address() as AddressInfo).port;
+
     const { createProxyServer } = await import('../src/proxy');
     proxy = createProxyServer(0);
     await new Promise<void>((r) => proxy.once('listening', () => r()));
@@ -122,8 +141,14 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
   });
 
   afterAll(async () => {
+    // Force-close eventuele resterende sockets (bv. de proxy→stall-upstream
+    // verbinding) zodat server.close() niet blijft hangen op de teardown.
+    (proxy as any)?.closeAllConnections?.();
+    for (const s of stallSockets) { try { s.destroy(); } catch {} }
     await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()));
     await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
+    await new Promise<void>((r) => (stallUpstream ? stallUpstream.close(() => r()) : r()));
+    delete process.env.WS_UPGRADE_TIMEOUT_MS;
   });
 
   beforeEach(() => {
@@ -142,4 +167,37 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     const result = await wsExpectRejected('/echo');
     expect(result).toBe('http:403');
   });
+
+  it('kapt een stalled upstream-handshake af (geen socket-leak DoS)', async () => {
+    // Host toegestaan, maar upstream rondt de handshake nooit af. Zonder de
+    // handshake-timeout blijft de client-socket onbeperkt open (Node's server-
+    // timeouts gelden niet op een ge-hijackte upgrade-socket). Verwacht: de
+    // proxy dialt upstream (allow) én sluit daarna de client-socket zelf.
+    db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    const before = stallAccepted;
+    // Meet hoe lang de client-socket open blijft. Zonder handshake-timeout
+    // sluit de proxy hem nooit (Node's server-timeouts gelden niet op een
+    // ge-hijackte upgrade-socket) en zou dit de 4s-guard raken.
+    const start = Date.now();
+    const closedAfterMs = await new Promise<number>((resolve) => {
+      const c = net.connect(proxyPort, '127.0.0.1');
+      const guard = setTimeout(() => { try { c.destroy(); } catch {} resolve(-1); }, 4000);
+      c.on('connect', () => {
+        c.write(
+          `GET http://127.0.0.1:${stallPort}/echo HTTP/1.1\r\n` +
+          `Host: 127.0.0.1:${stallPort}\r\n` +
+          `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+          `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`
+        );
+      });
+      const done = () => { clearTimeout(guard); resolve(Date.now() - start); };
+      c.on('close', done);
+      c.on('error', done);
+    });
+    expect(stallAccepted).toBeGreaterThan(before); // proxy dialde upstream (allow)
+    // De backstop kapte de half-open handshake af: dicht ná de 800ms-timeout,
+    // ruim vóór de 4s-guard. -1 = nooit gesloten = leak (regressie).
+    expect(closedAfterMs).toBeGreaterThanOrEqual(0);
+    expect(closedAfterMs).toBeLessThan(3000);
+  }, 8000);
 });
