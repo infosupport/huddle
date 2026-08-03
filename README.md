@@ -228,6 +228,43 @@ huddle firewall list -i      # interactive mode
 
 When a devcontainer tries to reach a blocked domain, the request appears on the Firewall page. From there you can allow the domain (permanently or temporarily) or reject it — per container or globally.
 
+### Custom rules and wildcards
+
+Besides triaging incoming requests, you can author your own rules up front — from the
+**Firewall** page (**Add rule**) or the CLI. Both the domain and an optional path
+pattern support wildcards:
+
+- **Domain wildcard** — a `*.` prefix matches any subdomain (but not the bare host).
+  For example `*.pkgs.dev.azure.com` matches `myorg.pkgs.dev.azure.com` but not
+  `pkgs.dev.azure.com`.
+- **Path wildcard** — a `*` in the path pattern matches any run of characters *within
+  a single segment* (it never crosses a `/`). A **trailing** `*` keeps the classic
+  prefix behaviour and spans deeper segments (`/foo/*` also matches `/foo/a/b`).
+
+This solves the Azure DevOps NuGet case, where every request carries a fresh feed GUID
+in the middle of the path so per-request approvals never match. Author one broad rule
+instead:
+
+```bash
+# Allow a whole Azure DevOps NuGet feed, GUID and endpoint wildcarded
+huddle firewall add "*.pkgs.dev.azure.com" --path "/_packaging/*/nuget/v3/*"
+
+# Deny a specific path on a domain, scoped to one container
+huddle firewall add example.com --path "/admin/*" --deny --container devcontainer-myapp
+```
+
+`huddle firewall add` options:
+
+| Option | Description |
+|--------|-------------|
+| `<domain>` | Domain to match (supports a leading `*.` wildcard). Required. |
+| `--path <pattern>` | Optional path pattern (supports `*` wildcards as described above). |
+| `--deny` | Create a block rule (default is allow). |
+| `--container <id>` | Scope the rule to one container (default is global). |
+
+Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
+`/foo/..%2fsecret`) can never slip through a wildcard allow.
+
 ---
 
 ## AI configuration

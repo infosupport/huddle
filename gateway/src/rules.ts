@@ -104,10 +104,47 @@ export function matchDomain(pattern: string, host: string): boolean {
   return suffix.every((seg, i) => seg === hostSuffix[i]);
 }
 
+// Escape regex-metatekens in een letterlijk pad-fragment, zodat alleen onze
+// eigen `*`-vertaling (zie wildcardToRegExp) een speciale betekenis krijgt en
+// bv. een `.` in het patroon letterlijk een punt matcht i.p.v. "elk teken".
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Vertaalt een padpatroon met `*`-wildcards naar een geankerde RegExp.
+// Regels:
+//   • Elke `*` MIDDEN in het patroon matcht een run tekens BINNEN één segment
+//     (`[^/]*`) en kruist dus nooit een `/` — precies wat de Azure-DevOps-case
+//     nodig heeft (een willekeurig segment als `/_packaging/<random>/nuget/…`).
+//   • Een `*` aan het EIND behoudt de oude prefix-semantiek en mag wél
+//     segment-grenzen kruisen, zodat bestaande `/foo/*`-regels niet regresseren
+//     (`/foo/*` matcht ook `/foo/a/b`). Staat er géén `/` vlak vóór de trailing
+//     `*`, dan moet de rest leeg zijn of op een segment-grens beginnen
+//     (`/safe*` matcht `/safe` en `/safe/x`, maar NIET `/safe-danger`).
+function wildcardToRegExp(pattern: string): RegExp {
+  const parts = pattern.split('*');
+  let re = '^';
+  for (let i = 0; i < parts.length; i++) {
+    re += escapeRegExp(parts[i]);
+    if (i === parts.length - 1) break; // laatste letterlijke deel, geen `*` meer
+    const isTrailing = i === parts.length - 2 && parts[parts.length - 1] === '';
+    if (isTrailing) {
+      // Trailing `*`: kruist segment-grenzen. Direct na een `/` (of aan de root)
+      // matcht het de hele rest incl. leeg (`.*`); anders eerst een segment-grens
+      // afdwingen zodat `/safe*` niet `/safe-danger` vangt (`(?:/.*)?`).
+      re += parts[i] === '' || parts[i].endsWith('/') ? '.*' : '(?:/.*)?';
+    } else {
+      re += '[^/]*';
+    }
+  }
+  re += '$';
+  return new RegExp(re);
+}
+
 // Matcht een padpatroon tegen een pad. Een null/leeg patroon is een host-only
-// regel en matcht elk pad. `*` aan het eind is een prefix-match op
-// SEGMENT-grens (`/api/v1/*` matcht `/api/v1/foo` maar `/safe*` matcht NIET
-// `/safe-danger`); anders exacte gelijkheid.
+// regel en matcht elk pad. Een patroon mag `*`-wildcards bevatten (zie
+// wildcardToRegExp: midden = binnen één segment, eind = prefix-match die
+// segmenten mag kruisen). Zonder `*` geldt exacte gelijkheid.
 //
 // Het pad wordt eerst genormaliseerd (query eraf, één decode, `..` fail-closed)
 // zodat traversal-trucs (`/foo/../secret`, `/foo/..%2fsecret`) niet door een
@@ -117,17 +154,8 @@ export function matchPath(pattern: string | null, path: string | null): boolean 
   if (pattern === null || pattern === '') return true;
   const reqPath = normalizePathname(path);
   if (reqPath === null) return false; // traversal / kapotte encoding → fail closed
-  if (pattern.endsWith('*')) {
-    const prefix = pattern.slice(0, -1);
-    if (!reqPath.startsWith(prefix)) return false;
-    // Prefix die al op een segment-grens eindigt (`/foo/`) — of leeg is —
-    // matcht direct. Anders moet het volgende teken een `/` zijn (of het eind),
-    // zodat `/safe*` niet `/safe-danger` vangt.
-    if (prefix === '' || prefix.endsWith('/')) return true;
-    const rest = reqPath.slice(prefix.length);
-    return rest === '' || rest.startsWith('/');
-  }
-  return reqPath === pattern;
+  if (!pattern.includes('*')) return reqPath === pattern;
+  return wildcardToRegExp(pattern).test(reqPath);
 }
 
 // Groepeert een pad op zijn eerste segment tot een prefix-patroon, bv.
