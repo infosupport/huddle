@@ -227,4 +227,40 @@ describe('dumpYaml round-trip', () => {
     expect(text).toContain('c: true');
     expect(text).toContain('d: 42');
   });
+
+  // Regression: object KEYS (service/network names) come straight from an
+  // untrusted compose file. If emitted unquoted, a crafted key could break out
+  // of its line and inject sibling compose directives, or silently corrupt the
+  // security override. Keys must be quoted/escaped like scalar values are.
+  it('quotes malicious keys so they cannot inject or corrupt the override', () => {
+    const text = dumpYaml({
+      'a: b': null,
+      'evil #comment': 1,
+      'app\n  privileged: true': { x: 1 },
+    });
+    // Colon-in-key and comment-in-key are quoted, not left to corrupt structure.
+    expect(text).toContain('"a: b":');
+    expect(text).toContain('"evil #comment":');
+    // A newline in a key is escaped, never emitted raw (which would inject a
+    // `privileged: true` sibling directive).
+    expect(text).not.toMatch(/\n\s*privileged: true/);
+    expect(text).toContain('"app\\n  privileged: true":');
+
+    // And it must round-trip: the quoted key parses back to exactly one key.
+    const reparsed = parseYaml(dumpYaml({ 'a: b': 'v' }));
+    expect(reparsed).toEqual({ 'a: b': 'v' });
+  });
+
+  it('emits a structurally sound override even for a compose with a hostile service name', () => {
+    const doc: ComposeDoc = {
+      services: { 'a: b': { networks: ['dev'] } as any },
+      networks: { dev: { internal: true, labels: { [HUDDLE_NETWORK_LABEL]: 'true' } } as any },
+    };
+    const { override } = buildOverride(doc);
+    const text = dumpYaml(override);
+    // The full override still parses, and the hostile name survives as a single
+    // key rather than splitting into an injected `b:` mapping.
+    const reparsed = parseYaml(text);
+    expect(Object.keys(reparsed.services ?? {})).toEqual(['a: b']);
+  });
 });
