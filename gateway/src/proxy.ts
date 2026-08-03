@@ -127,7 +127,35 @@ function forwardUpgrade(
     return;
   }
 
+  // Handshake-timeout: een upstream die de TCP-verbinding wél accepteert maar de
+  // upgrade nooit afrondt (stalled/slowloris, of een SYN die in een blackhole
+  // verdwijnt) houdt anders zowel de client- als de upstream-socket onbeperkt
+  // open. Node's server-/headersTimeout gelden NIET meer op een ge-hijackte
+  // upgrade-socket, dus zonder deze backstop kan een devcontainer met één
+  // toegestane host ongelimiteerd half-open handshakes opstapelen en de FD's van
+  // de gedeelde gateway uitputten (DoS). We bewaken uitsluitend de handshake-
+  // fase; zodra upstream 101/response geeft wissen we de timer, zodat legitieme
+  // langlevende WebSockets nooit afgekapt worden.
+  // upstreamReq.destroy() aborteert de request maar sluit de reeds verbonden
+  // socket niet altijd (die kan in de agent-pool blijven hangen) — destroy dus
+  // ook expliciet upstreamReq.socket, anders leakt de uitgaande gateway-socket.
+  const destroyUpstream = () => {
+    try { upstreamReq.socket?.destroy(); } catch {}
+    try { upstreamReq.destroy(); } catch {}
+  };
+  const timeoutMs = Number(process.env.WS_UPGRADE_TIMEOUT_MS) || 30_000;
+  let settled = false;
+  const handshakeTimer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    destroyUpstream();
+    try { clientSocket.destroy(); } catch {}
+  }, timeoutMs);
+  if (typeof handshakeTimer.unref === 'function') handshakeTimer.unref();
+  const clearHandshakeTimer = () => { settled = true; clearTimeout(handshakeTimer); };
+
   upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+    clearHandshakeTimer();
     // Reconstrueer de 101-handshake byte-voor-byte terug naar de client.
     const lines = [`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}`];
     for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
@@ -157,6 +185,7 @@ function forwardUpgrade(
   // Upstream honoreerde de upgrade niet (geen 101): relay de gewone response
   // terug naar de client en sluit — fail-closed t.o.v. de tunnel.
   upstreamReq.on('response', (upstreamRes) => {
+    clearHandshakeTimer();
     const lines = [`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}`];
     for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
       lines.push(`${upstreamRes.rawHeaders[i]}: ${upstreamRes.rawHeaders[i + 1]}`);
@@ -167,8 +196,8 @@ function forwardUpgrade(
     upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch {} });
   });
 
-  upstreamReq.on('error', () => { try { clientSocket.destroy(); } catch {} });
-  clientSocket.on('error', () => { try { upstreamReq.destroy(); } catch {} });
+  upstreamReq.on('error', () => { clearHandshakeTimer(); try { clientSocket.destroy(); } catch {} });
+  clientSocket.on('error', () => { clearHandshakeTimer(); destroyUpstream(); });
   upstreamReq.end();
 }
 
