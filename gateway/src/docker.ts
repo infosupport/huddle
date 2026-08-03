@@ -2,7 +2,8 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { saveCredentials, getSetting, listFolderMappings } from './db';
+import { getSetting, listFolderMappings } from './db';
+import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
@@ -264,6 +265,48 @@ export async function execContainerOutput(containerId: string, cmd: string[]): P
   });
 }
 
+// Voer een commando (execve-array, GEEN shell) als root uit in de container en
+// pipe `stdin` naar het proces. Gebruikt door de sudo-grant-flow om `chpasswd`
+// het wachtwoord via stdin te voeden — nooit als shell-argument (geen injectie,
+// niet zichtbaar in de proceslijst). Retourneert de exit-code (uit exec-inspect)
+// zodat de aanroeper fail-closed kan beslissen.
+//
+// De body van /exec/<id>/start bevat de JSON-opties gevolgd door de stdin-bytes:
+// de daemon leest de leidende JSON en pipet de rest naar stdin. Dit deel vereist
+// live-daemon-validatie; de grant-logica eromheen is los te unit-testen.
+export async function execInContainer(containerName: string, cmd: string[], stdin: string): Promise<ExecResult> {
+  const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
+    AttachStdin: stdin.length > 0,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    Cmd: cmd,
+    User: 'root',
+  });
+  await new Promise<void>((resolve, reject) => {
+    const options = JSON.stringify({ Detach: false, Tty: false });
+    const body = Buffer.concat([Buffer.from(options, 'utf8'), Buffer.from(stdin, 'utf8')]);
+    const req = http.request(
+      {
+        socketPath: '/var/run/docker.sock',
+        method: 'POST',
+        path: `/exec/${execCreate.Id}/start`,
+        headers: { 'content-type': 'application/json', 'content-length': body.length },
+      },
+      (res) => {
+        res.on('data', () => { /* multiplexed stdout/stderr negeren */ });
+        res.on('end', () => resolve());
+        res.on('error', reject);
+      },
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  const info = await dockerRequest('GET', `/exec/${execCreate.Id}/json`);
+  return { exitCode: typeof info.ExitCode === 'number' ? info.ExitCode : null };
+}
+
 export async function commitContainer(containerId: string, imageName: string): Promise<string> {
   const [repo, tag = 'latest'] = imageName.split(':');
   // Inherit the IDE label from the source container so the snapshot is filterable per IDE.
@@ -430,6 +473,25 @@ const DOCKER_SOCK_SYMLINK = `# Docker-toegang loopt via de socket in de gemounte
 # (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
+// Maak de admin-gebruiker `noot` aan in de sudo/wheel-groep, maar GELOCKED en
+// zonder bruikbaar wachtwoord. Er wordt hier bewust géén wachtwoord gezet: dat
+// gebeurt pas per grant (ephemeer, zie sudo-grant.ts) en wordt daarna weer
+// gelockt. Idempotent — een tweede run (of een container van vóór deze versie
+// met een staand wachtwoord) wordt óók naar de gelockte toestand gebracht.
+// Gedeeld tussen het JetBrains- en het VS Code-startscript zodat beide in sync
+// blijven.
+const NOOT_LOCKED_SETUP = `# Admin-gebruiker 'noot': in de sudo-groep maar standaard GELOCKED (geen staand
+# wachtwoord). Huddle zet per grant tijdelijk een vers wachtwoord en lockt weer.
+export DEBIAN_FRONTEND=noninteractive
+command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
+id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
+usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+# Lock + verval: een vers aangemaakt account is al gelockt ('!'), maar dit dekt
+# ook upgrades van containers die eerder een staand wachtwoord hadden.
+usermod -L noot 2>/dev/null || true
+passwd -l noot 2>/dev/null || true
+passwd -e noot 2>/dev/null || true`;
+
 // Finding #15 (IDE-kanaal, VS Code Remote + JetBrains Gateway): het attach-kanaal
 // loopt over `docker exec`/stdio en wordt door NOCH de egress-proxy NOCH de
 // socket-proxy gezien. Het echte host-token komt NOOIT als bestand binnen; VS
@@ -488,7 +550,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -574,12 +636,7 @@ else
 fi
 fi
 
-# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
-export DEBIAN_FRONTEND=noninteractive
-command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:${password}" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+${NOOT_LOCKED_SETUP}
 
 # Fix workspace permissions
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
@@ -652,7 +709,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string): string {
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -679,12 +736,7 @@ chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 ${IDE_CRED_SCRUB}
 
-# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
-export DEBIAN_FRONTEND=noninteractive
-command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:${password}" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+${NOOT_LOCKED_SETUP}
 
 # Fix workspace permissions
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
@@ -788,8 +840,6 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const backend = ideName === 'rider' ? 'Rider' : isVscode ? 'VSCode' : 'IntelliJ';
   const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
-
-  const password = crypto.randomBytes(12).toString('base64url');
 
   try {
     const existing = await inspectContainer(containerName);
@@ -933,15 +983,16 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   // Run config script via exec — VS Code-variant zonder JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), seedScript)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), seedScript);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
 
-  saveCredentials(containerName, password);
+  // Geen staand wachtwoord meer: 'noot' is gelockt aangemaakt. Admin-toegang gaat
+  // voortaan via een ephemere sudo-grant (POST /api/docker/containers/:name/sudo-grant).
 
   return id;
 }

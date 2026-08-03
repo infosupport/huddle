@@ -98,8 +98,19 @@ export class ApiService {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
-  getContainerCredentials(name: string): Observable<{ password: string; createdAt: number }> {
-    return this.handle(this.http.get<{ password: string; createdAt: number }>(`/api/docker/containers/${name}/credentials`));
+  // Ephemere sudo-grant: 'noot' start gelockt zonder wachtwoord. Deze endpoints
+  // verlenen/tonen/intrekken tijdelijke admin-toegang. Het wachtwoord komt maar
+  // één keer terug (bij grantSudo); status geeft nooit een wachtwoord.
+  getSudoGrant(name: string): Observable<{ active: boolean; until: number | null }> {
+    return this.handle(this.http.get<{ active: boolean; until: number | null }>(`/api/docker/containers/${name}/sudo-grant`));
+  }
+
+  grantSudo(name: string, minutes: number): Observable<{ password: string; until: number }> {
+    return this.handle(this.http.post<{ password: string; until: number }>(`/api/docker/containers/${name}/sudo-grant`, { minutes }));
+  }
+
+  revokeSudo(name: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/docker/containers/${name}/sudo-grant`));
   }
 
   snapshotContainer(name: string, imageName: string): Observable<{ imageId: string }> {
