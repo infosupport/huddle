@@ -437,17 +437,22 @@ export function dumpYaml(obj: unknown, indent = 0): string {
     if (entries.length === 0) return `${pad}{}\n`;
     let out = '';
     for (const [key, value] of entries) {
+      // Keys can come straight from an untrusted compose file (service/network
+      // names). Emit them through the same quote/escape path as scalar values so
+      // a crafted key (`a: b`, `evil #comment`, or one containing a newline)
+      // cannot break out of its line and inject sibling compose directives.
+      const k = formatScalar(key);
       if (value === null || value === undefined) {
-        out += `${pad}${key}:\n`;
+        out += `${pad}${k}:\n`;
       } else if (typeof value === 'object') {
         const isEmpty = Array.isArray(value) ? value.length === 0 : Object.keys(value).length === 0;
         if (isEmpty) {
-          out += `${pad}${key}: ${Array.isArray(value) ? '[]' : '{}'}\n`;
+          out += `${pad}${k}: ${Array.isArray(value) ? '[]' : '{}'}\n`;
         } else {
-          out += `${pad}${key}:\n${dumpYaml(value, indent + 1)}`;
+          out += `${pad}${k}:\n${dumpYaml(value, indent + 1)}`;
         }
       } else {
-        out += `${pad}${key}: ${formatScalar(value)}\n`;
+        out += `${pad}${k}: ${formatScalar(value)}\n`;
       }
     }
     return out;
@@ -467,7 +472,18 @@ function dumpInlineOrBlock(item: unknown, indent: number): string {
 function formatScalar(value: unknown): string {
   if (typeof value === 'boolean' || typeof value === 'number') return String(value);
   const str = String(value);
-  if (needsQuote(str)) return `"${str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  if (needsQuote(str)) {
+    // Escape backslash first, then quotes, then control chars — otherwise a raw
+    // newline/CR/tab would terminate the current line and let attacker-supplied
+    // text be reparsed as fresh YAML structure.
+    const escaped = str
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t');
+    return `"${escaped}"`;
+  }
   return str;
 }
 
@@ -476,6 +492,7 @@ function needsQuote(str: string): boolean {
   if (/^(true|false|null|~|yes|no|on|off)$/i.test(str)) return true;
   if (/^-?\d+(\.\d+)?$/.test(str)) return true;
   if (/[:#[\]{}&*!|>%@`,"']/.test(str)) return true;
+  if (/[\n\r\t]/.test(str)) return true;
   if (/^\s|\s$/.test(str)) return true;
   return false;
 }
