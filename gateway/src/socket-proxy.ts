@@ -313,10 +313,14 @@ export function validateHostConfig(rawHostConfig: any, perms: MountPermissions =
 
   // PoC `mask`: een lege (of afgeslankte) MaskedPaths/ReadonlyPaths verzwakt de
   // secure defaults van de daemon en unmaskt o.a. /proc/kcore en
-  // /proc/sysrq-trigger. Een devcontainer heeft nooit een legitieme reden deze
-  // te overriden → weiger elke aanwezige waarde, óók een lege array.
-  if (hc.maskedpaths !== undefined) return 'MaskedPaths override not permitted';
-  if (hc.readonlypaths !== undefined) return 'ReadonlyPaths override not permitted';
+  // /proc/sysrq-trigger. Weiger daarom élke expliciet meegestuurde LIJST (leeg of
+  // afgeslankt) — een devcontainer heeft nooit een legitieme reden deze te zetten.
+  // Let op: de docker-CLI stuurt bij een gewone create standaard `MaskedPaths:
+  // null` / `ReadonlyPaths: null` mee; `null` betekent "daemon vult de secure
+  // defaults in" en is dus juist veilig. Alleen een array is een override, dus
+  // gaten we op Array.isArray i.p.v. "aanwezig" — anders sneuvelt élke create.
+  if (Array.isArray(hc.maskedpaths)) return 'MaskedPaths override not permitted';
+  if (Array.isArray(hc.readonlypaths)) return 'ReadonlyPaths override not permitted';
 
   const sys = hc.sysctls;
   if (sys && typeof sys === 'object' && Object.keys(sys).length > 0)

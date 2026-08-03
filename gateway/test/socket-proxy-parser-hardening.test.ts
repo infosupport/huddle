@@ -80,6 +80,15 @@ describe('validateHostConfig — mask/RO unmask (PoC `mask`)', () => {
   it('weigert ook een niet-lege (afgeslankte) override', () => {
     expect(validateHostConfig({ MaskedPaths: ['/proc/keep'] })).toMatch(/MaskedPaths/);
   });
+  // Regressie: de docker-CLI stuurt bij ELKE `docker create` standaard
+  // `MaskedPaths: null` / `ReadonlyPaths: null` mee (null = "daemon vult secure
+  // defaults in", juist veilig). Weigerden we op "aanwezig" i.p.v. "is een array",
+  // dan sneuvelde elke gewone create hierop nog vóór de echte security-checks —
+  // precies de e2e-regressie op finding #8 (named-volume ownership).
+  it('laat een null MaskedPaths/ReadonlyPaths door (CLI-default → daemon-defaults)', () => {
+    expect(validateHostConfig({ MaskedPaths: null, ReadonlyPaths: null })).toBeNull();
+    expect(validateHostConfig({ maskedpaths: null, readonlypaths: null })).toBeNull();
+  });
 });
 
 describe('validateHostConfig — case-insensitieve dubbele sleutels (Go merget dupes)', () => {
