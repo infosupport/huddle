@@ -104,46 +104,88 @@ export function matchDomain(pattern: string, host: string): boolean {
   return suffix.every((seg, i) => seg === hostSuffix[i]);
 }
 
-// Escape regex-metatekens in een letterlijk pad-fragment, zodat alleen onze
-// eigen `*`-vertaling (zie wildcardToRegExp) een speciale betekenis krijgt en
-// bv. een `.` in het patroon letterlijk een punt matcht i.p.v. "elk teken".
-function escapeRegExp(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Wildcard-matching gebeurt met een LINEAIRE two-pointer-scan i.p.v. een RegExp.
+// Reden (security, ReDoS): een `*`-patroon dat naar `new RegExp` gaat, zou bij
+// meerdere wildcards catastrofaal kunnen backtracken. Ook al escapen we alle
+// regex-metatekens in de letterlijke stukken, dan nog levert een patroon als
+// `/a*a*a*…X` de regex `^/a[^/]*a[^/]*a…X$` op — meerdere naast elkaar liggende
+// onbegrensde quantifiers die op een lang segment (attacker-gestuurd request-pad)
+// in polynomiale/exponentiële tijd ontsporen en de event-loop laten hangen.
+// Het glob-algoritme hieronder is O(n·m) en kent geen backtracking-explosie.
+
+// Een token in een gecompileerd patroon: een letterlijk teken (string), of een
+// wildcard. MID matcht een run tekens BINNEN één segment (kruist nooit `/`);
+// CROSS matcht alles incl. `/` (voor de trailing-prefix-semantiek).
+const MID_STAR = 0;
+const CROSS_STAR = 1;
+type Token = string | typeof MID_STAR | typeof CROSS_STAR;
+
+function tokenizeMid(literal: string): Token[] {
+  const out: Token[] = [];
+  for (const ch of literal) out.push(ch === '*' ? MID_STAR : ch);
+  return out;
 }
 
-// Vertaalt een padpatroon met `*`-wildcards naar een geankerde RegExp.
-// Regels:
-//   • Elke `*` MIDDEN in het patroon matcht een run tekens BINNEN één segment
-//     (`[^/]*`) en kruist dus nooit een `/` — precies wat de Azure-DevOps-case
-//     nodig heeft (een willekeurig segment als `/_packaging/<random>/nuget/…`).
-//   • Een `*` aan het EIND behoudt de oude prefix-semantiek en mag wél
-//     segment-grenzen kruisen, zodat bestaande `/foo/*`-regels niet regresseren
-//     (`/foo/*` matcht ook `/foo/a/b`). Staat er géén `/` vlak vóór de trailing
-//     `*`, dan moet de rest leeg zijn of op een segment-grens beginnen
-//     (`/safe*` matcht `/safe` en `/safe/x`, maar NIET `/safe-danger`).
-function wildcardToRegExp(pattern: string): RegExp {
-  const parts = pattern.split('*');
-  let re = '^';
-  for (let i = 0; i < parts.length; i++) {
-    re += escapeRegExp(parts[i]);
-    if (i === parts.length - 1) break; // laatste letterlijke deel, geen `*` meer
-    const isTrailing = i === parts.length - 2 && parts[parts.length - 1] === '';
-    if (isTrailing) {
-      // Trailing `*`: kruist segment-grenzen. Direct na een `/` (of aan de root)
-      // matcht het de hele rest incl. leeg (`.*`); anders eerst een segment-grens
-      // afdwingen zodat `/safe*` niet `/safe-danger` vangt (`(?:/.*)?`).
-      re += parts[i] === '' || parts[i].endsWith('/') ? '.*' : '(?:/.*)?';
+// Klassieke greedy glob-match met één onthouden wildcard-positie → O(n·m), geen
+// exponentieel backtracken. Een MID_STAR mag `/` niet opeten; een CROSS_STAR wel.
+function matchTokens(tokens: Token[], str: string): boolean {
+  let ti = 0;
+  let si = 0;
+  let starTi = -1;
+  let starCross = false;
+  let mark = 0;
+  const n = tokens.length;
+  const m = str.length;
+  while (si < m) {
+    if (ti < n && typeof tokens[ti] === 'string' && tokens[ti] === str[si]) {
+      ti++;
+      si++;
+    } else if (ti < n && typeof tokens[ti] !== 'string') {
+      starTi = ti;
+      starCross = tokens[ti] === CROSS_STAR;
+      mark = si;
+      ti++;
+    } else if (starTi !== -1) {
+      // Rek de laatst geziene wildcard één teken op. Een MID_STAR stopt bij `/`.
+      if (!starCross && str[mark] === '/') return false;
+      ti = starTi + 1;
+      mark++;
+      si = mark;
     } else {
-      re += '[^/]*';
+      return false;
     }
   }
-  re += '$';
-  return new RegExp(re);
+  while (ti < n && typeof tokens[ti] !== 'string') ti++;
+  return ti === n;
+}
+
+// Matcht een padpatroon met `*`-wildcards tegen een pad. Semantiek:
+//   • Elke `*` MIDDEN in het patroon matcht binnen één segment (kruist geen `/`)
+//     — precies wat de Azure-DevOps-case nodig heeft (`/_packaging/<random>/…`).
+//   • Een `*` aan het EIND mag segment-grenzen kruisen (prefix-match), zodat
+//     `/foo/*` ook `/foo/a/b` matcht. Staat er géén `/` vlak vóór die trailing
+//     `*`, dan moet de rest leeg zijn of op een segment-grens beginnen
+//     (`/safe*` matcht `/safe` en `/safe/x`, maar NIET `/safe-danger`).
+// Opeenvolgende `*` worden samengetrokken tot één (`**` ≡ `*`); dat is bewust
+// (voorkomt naast elkaar liggende wildcards) en semantisch onbeduidend.
+function matchWildcardPath(rawPattern: string, path: string): boolean {
+  const pattern = rawPattern.replace(/\*+/g, '*');
+  if (pattern.endsWith('*')) {
+    const core = pattern.slice(0, -1); // patroon zonder de trailing `*`
+    const crossSegment = core === '' || core.endsWith('/');
+    if (crossSegment) {
+      return matchTokens([...tokenizeMid(core), CROSS_STAR], path);
+    }
+    // Trailing `*` niet op een grens: rest leeg (exacte core) OF `/` + wat dan ook.
+    if (matchTokens(tokenizeMid(core), path)) return true;
+    return matchTokens([...tokenizeMid(core), '/', CROSS_STAR], path);
+  }
+  return matchTokens(tokenizeMid(pattern), path);
 }
 
 // Matcht een padpatroon tegen een pad. Een null/leeg patroon is een host-only
 // regel en matcht elk pad. Een patroon mag `*`-wildcards bevatten (zie
-// wildcardToRegExp: midden = binnen één segment, eind = prefix-match die
+// matchWildcardPath: midden = binnen één segment, eind = prefix-match die
 // segmenten mag kruisen). Zonder `*` geldt exacte gelijkheid.
 //
 // Het pad wordt eerst genormaliseerd (query eraf, één decode, `..` fail-closed)
@@ -155,7 +197,7 @@ export function matchPath(pattern: string | null, path: string | null): boolean 
   const reqPath = normalizePathname(path);
   if (reqPath === null) return false; // traversal / kapotte encoding → fail closed
   if (!pattern.includes('*')) return reqPath === pattern;
-  return wildcardToRegExp(pattern).test(reqPath);
+  return matchWildcardPath(pattern, reqPath);
 }
 
 // Groepeert een pad op zijn eerste segment tot een prefix-patroon, bv.
