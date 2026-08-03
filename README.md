@@ -265,6 +265,59 @@ huddle firewall add example.com --path "/admin/*" --deny --container devcontaine
 Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
 `/foo/..%2fsecret`) can never slip through a wildcard allow.
 
+### Export & import rules
+
+Rulesets can be shared between machines and teammates as a JSON document. The
+document is a versioned envelope containing only the shareable rule fields
+(`domain`, `container_id`, `status`, `path_pattern`, `path_mode`, `expires_at`) —
+volatile fields such as the row id, last-seen time and request count are never
+exported.
+
+```json
+{
+  "version": 1,
+  "exported_at": 1717430400,
+  "rules": [
+    { "domain": "github.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}
+```
+
+**Scope.** Both export and import accept an optional `container` scope. Use
+`__global__` for the global (container-less) rules, or a container name for that
+container's rules. Omitting it means "all rules" on export; on import it remaps
+every incoming rule into that scope.
+
+**Merge vs. replace.** Import runs in one of two modes:
+
+- `merge` (default) — upserts each rule. An incoming rule that matches an
+  existing one on `(domain, container, path)` updates its status/expiry/path-mode;
+  otherwise it is inserted.
+- `replace` — first deletes the existing rules in the scope(s) being imported,
+  then inserts. Only the imported scopes are wiped, never the whole table.
+
+Import validates every rule fail-closed: unknown fields, an empty domain or an
+invalid status reject the whole request with `400`. The response summarises the
+result as `{ imported, updated, skipped }` (`skipped` counts within-file
+duplicates).
+
+**CLI:**
+
+```bash
+huddle firewall export                       # print all rules as JSON to stdout
+huddle firewall export --container __global__ --out rules.json
+huddle firewall import rules.json            # merge (upsert)
+huddle firewall import rules.json --replace  # replace the imported scope(s)
+huddle firewall import rules.json --container devcontainer-app   # remap scope
+```
+
+**UI:** the Firewall page has **Export** and **Import** buttons. Export
+downloads a `.json` file; Import reads a selected `.json` file and merges it.
+
+**API:** `GET /api/rules/export[?container=<id|__global__>]` and
+`POST /api/rules/import[?container=<id|__global__>]` with body
+`{ "mode": "merge" | "replace", "rules": [ ... ] }`.
+
 ---
 
 ## AI configuration
