@@ -70,11 +70,19 @@ describe('validateHostConfig', () => {
       LogConfig: { Type: 'json-file', Config: {} },
       Binds: null, VolumesFrom: [], CapAdd: [], CapDrop: [], Devices: [],
       DeviceCgroupRules: [], Privileged: false, IpcMode: 'private',
-      MaskedPaths: ['/proc/kcore'], ReadonlyPaths: ['/proc/sysrq-trigger'],
       Ulimits: [{ Name: 'nofile', Soft: 1024, Hard: 2048 }],
       AutoRemove: true,
     });
     expect(denial).toBeNull();
+  });
+  // Parser-differential-hardening: MaskedPaths/ReadonlyPaths zijn geen legitieme
+  // velden meer voor een gespawnde container — een (lege of afgeslankte) override
+  // verzwakt de secure defaults van de daemon (PoC `mask`: /proc/kcore +
+  // /proc/sysrq-trigger). Elke aanwezige waarde wordt nu geweigerd.
+  it('weigert een MaskedPaths/ReadonlyPaths override (PoC `mask`)', () => {
+    expect(validateHostConfig({ MaskedPaths: [] })).toMatch(/MaskedPaths/);
+    expect(validateHostConfig({ MaskedPaths: ['/proc/kcore'] })).toMatch(/MaskedPaths/);
+    expect(validateHostConfig({ ReadonlyPaths: [] })).toMatch(/ReadonlyPaths/);
   });
   it('log-only default: een onbekend niet-leeg veld wordt NIET geweigerd', () => {
     delete process.env.HUDDLE_HOSTCONFIG_ENFORCE;
