@@ -90,7 +90,15 @@ export function parseDockerContextSocket(json: string): string | null {
     ?.Endpoints?.docker?.Host;
   if (typeof host !== 'string' || !host.startsWith('unix://')) return null;
   const path = host.slice('unix://'.length);
-  return path.startsWith('/') ? path : null;
+  if (!path.startsWith('/')) return null;
+  // Het teruggegeven pad wordt later ONgequote in een `docker run -v <pad>:...`
+  // shell-commando geïnterpoleerd (init.ts). De `Host` uit `docker context
+  // inspect` is beïnvloedbaar (wie een docker-context kan aanmaken/activeren
+  // bepaalt de waarde), dus laat alleen tekens toe die in een echt socketpad
+  // voorkomen. Zo kan een gemanipuleerde context geen shell-metatekens
+  // ($(), backticks, ;, |, spaties, ...) binnensmokkelen — command injection.
+  if (!/^[A-Za-z0-9._/-]+$/.test(path)) return null;
+  return path;
 }
 
 /** Herkent het socketpad van Rancher Desktop (dockerd/moby-modus): `~/.rd/docker.sock`. */
