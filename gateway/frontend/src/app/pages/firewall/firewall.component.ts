@@ -40,12 +40,12 @@ export class FirewallComponent {
   toasts: Toast[] = [];
   resolving = new Set<number>();
 
-  // Known containers for the scope choice in the "add custom rule" form.
+  // Known containers for the scope selection in the "add custom rule" form.
   containers$ = this.state.containers$;
 
   // ── "Add custom rule" form ──────────────────────────────────────────────────
-  // Lets the operator write their own rule with wildcards: `*.` in the domain
-  // and `*` in the path pattern (e.g. an Azure DevOps feed with a rotating GUID).
+  // Lets the operator write a rule themselves with wildcards: `*.` in the domain
+  // and `*` in the path pattern (e.g. an Azure DevOps feed with a changing GUID).
   showAddForm = false;
   addSubmitting = false;
   newDomain = '';
@@ -248,7 +248,7 @@ export class FirewallComponent {
   onImportFile(event: Event): void {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
-    input.value = ''; // sta toe hetzelfde bestand opnieuw te kiezen
+    input.value = ''; // allow selecting the same file again
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {

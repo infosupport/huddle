@@ -69,8 +69,8 @@ interface Rule {
   request_count: number;
 }
 
-// De deelbare subset van een regel (export/import, #69). Bewust zonder de
-// volatiele kolommen (id/last_seen/request_count/created_at/updated_at).
+// The shareable subset of a rule (export/import, #69). Deliberately without the
+// volatile columns (id/last_seen/request_count/created_at/updated_at).
 interface ShareableRule {
   domain: string;
   container_id: string | null;
@@ -83,15 +83,15 @@ interface ShareableRule {
 export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
-  // A single access model for the entire management API: the operator token (auth.ts).
-  // Source IP tells us nothing reliable here — Docker's proxy and Podman's
-  // rootlessport rewrite the source to a bridge-gateway IP, and under rootless
-  // Podman even which network that is changes per restart/disconnect
-  // (GetRootlessPortChildIP iterates a map). Devcontainers, LAN and operator can
-  // therefore only be distinguished by the token; the former subnet gate has
-  // therefore been replaced by auth on every /api/* route.
+  // One access model for the entire management API: the operator token (auth.ts).
+  // Source IP says nothing reliable here — Docker's proxy and Podman's
+  // rootlessport rewrite the source to a bridge-gateway IP, and under
+  // rootless Podman even which network that is changes per restart/disconnect
+  // (GetRootlessPortChildIP iterates a map). Devcontainers, LAN and operator
+  // can therefore only be separated by the token; the former subnet gate has
+  // thus been replaced by auth on every /api/* route.
   //
-  // Endpoints that devcontainers must be able to reach WITHOUT a token (sudo-audit
+  // Endpoints that devcontainers must be able to reach without a token (sudo-audit
   // ingest and the proxy CA). Keep this deliberately minimal: everything here is
   // callable by anyone on the network.
   const devcontainerPublicApi: Array<{ method: string; path: string }> = [
@@ -99,27 +99,27 @@ export async function createApiServer(): Promise<FastifyInstance> {
     { method: 'GET',  path: '/api/tls/ca.crt' },
   ];
   // Endpoints that the operator browser/CLI must be able to reach without a
-  // logged-in session in order to be able to log in at all (and to see THAT login
-  // is required). The static SPA assets fall under this too (everything outside
-  // /api/): it is only client code, and the API itself stays behind auth.
+  // logged-in session in order to be able to log in at all (and to see that
+  // login is needed). The static SPA assets fall under this too (everything
+  // outside /api/): it is only client code, and the API itself stays behind auth.
   const authPublicApi = new Set<string>(['/api/auth/login', '/api/auth/logout', '/api/auth/status']);
 
   app.addHook('onRequest', async (req, reply) => {
     const url = req.url ?? '';
     const pathOnly = url.split('?')[0];
     if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
-    if (authPublicApi.has(pathOnly)) return;         // login/logout/status are free
+    if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
     if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
     if (!isAuthenticated(req.headers)) {
       reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
     }
   });
 
-  // ── Auth endpoints ─────────────────────────────────────────────────────────
-  // Login: verify the token (constant-time) and on success set an httpOnly,
-  // SameSite=Strict session cookie. SameSite=Strict is at once the CSRF/CSWSH
-  // defense (finding #4): the browser does not send the cookie on cross-site
-  // requests or WebSocket handshakes.
+  // ── Auth-endpoints ─────────────────────────────────────────────────────────
+  // Login: check the token (constant-time) and on success set an httpOnly,
+  // SameSite=Strict session cookie. SameSite=Strict is at once the
+  // CSRF/CSWSH defense (finding #4): the browser does not send the cookie on
+  // cross-site requests or WebSocket handshakes.
   app.post<{ Body: { token?: string } }>('/api/auth/login', async (req, reply) => {
     const token = typeof req.body?.token === 'string' ? req.body.token : '';
     if (!token || !timingSafeEqualStr(token, getOperatorToken())) {
@@ -149,8 +149,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   });
 
   // Separate WSS for the embedded terminal tab (/ws/exec/<container>).
-  // We keep it separate from the state-push wss so that lifecycle and error
-  // handling do not get intertwined.
+  // We keep it apart from the state-push wss so that lifecycle and error
+  // handling do not get tangled up.
   const wssTerminal = new WebSocketServer({ noServer: true });
   wssTerminal.on('connection', (ws, req) => {
     const m = (req.url ?? '').match(/^\/ws\/exec\/([^/?#]+)/);
@@ -162,8 +162,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     });
   });
 
-  // Multi-attach terminal (/ws/terminal/<container>): multiple clients share the
-  // same Docker exec via the ptyManager. Will eventually replace /ws/exec.
+  // Multi-attach terminal (/ws/terminal/<container>): multiple clients share
+  // the same Docker exec via the ptyManager. Eventually replaces /ws/exec.
   const wssPty = new WebSocketServer({ noServer: true });
   wssPty.on('connection', (ws, req) => {
     const m = (req.url ?? '').match(/^\/ws\/terminal\/([^/?#]+)/);
@@ -185,8 +185,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   stateEvents.on('changed', broadcast);
 
   app.server.on('upgrade', (req, socket, head) => {
-    // Cross-Site WebSocket Hijacking (finding #4): a page the operator visits
-    // must not be able to open a WS to the portal. Two independent layers:
+    // Cross-Site WebSocket Hijacking (finding #4): a page that the operator
+    // visits must not be able to open a WS to the portal. Two independent layers:
     // (1) Origin must be same-origin; (2) a valid operator session (cookie/
     // bearer) is required — and thanks to SameSite=Strict that cookie does not
     // travel along on a cross-site handshake anyway.
@@ -257,9 +257,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!['requested', 'allow', 'deny'].includes(status)) {
         return reply.code(400).send({ error: 'invalid status' });
       }
-      // Only change path_pattern when the client explicitly sends it (e.g. the
-      // operator refines a requested subpath on approval). May hit the unique
-      // index (domain, container, path) → 409 on a duplicate.
+      // Only update path_pattern when the client explicitly sends it
+      // (e.g. operator refines a requested sub-path while approving). Can hit the
+      // unique index (domain, container, path) → 409 on a duplicate.
       let result;
       try {
         result = path_pattern !== undefined
@@ -374,10 +374,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return updatedGlobal;
   });
 
-  // Toggle path-allowlist mode for a domain on/off. Operates on the host-only rule
+  // Toggle a domain in/out of path-allowlist mode. Operates on the host-only rule
   // (path_pattern IS NULL): when enabled the bare domain is set to 'deny' with
-  // path_mode=1, so unknown subpaths are henceforth raised as 'requested' instead
-  // of being silently denied. Disabling restores it to a plain host-only deny rule.
+  // path_mode=1, so that unknown sub-paths are from then on raised as 'requested'
+  // instead of being silently denied. Disabling restores it to a normal
+  // host-only deny rule.
   app.post<{ Params: { id: string }; Body: { enabled: boolean } }>(
     '/api/rules/:id/path-mode',
     async (req, reply) => {
@@ -405,13 +406,13 @@ export async function createApiServer(): Promise<FastifyInstance> {
   }>('/api/rules', async (req, reply) => {
     const { domain, container_id = null, status, expires_at = null, path_pattern = null } = req.body;
     // Explicitly require a non-empty string: a truthy non-string domain (e.g. a
-    // number/object in the JSON) would otherwise blow up later with a 500 instead
-    // of this clean 400.
+    // number/object in the JSON) would otherwise blow up further on with a 500
+    // instead of this clean 400.
     if (typeof domain !== 'string' || !domain || !['requested', 'allow', 'deny'].includes(status)) {
       return reply.code(400).send({ error: 'invalid payload' });
     }
-    // Store the domain as supplied — no casing mutation. The rule engine already
-    // matches case-insensitively (COLLATE NOCASE in db.ts + canonicalizeHost/
+    // Store the domain as supplied — no casing mutation. The rule engine
+    // already matches case-insensitively (COLLATE NOCASE in db.ts + canonicalizeHost/
     // matchDomain, finding #3), so lowercasing is redundant and would change the
     // echo-back to clients.
     try {
@@ -421,10 +422,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
         )
         .run(domain, container_id, status, expires_at, path_pattern);
       const inserted = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(info.lastInsertRowid) as Rule;
-      // Only clean up the host-only requested row; per-domain path rules remain so
-      // fine-grained policy can coexist. COLLATE NOCASE: requested rows are created
-      // lowercase (proxy/canonicalizeHost), so they also match when the operator
-      // supplies mixed-case here.
+      // Only clean up the host-only requested row; per-domain path rules stay
+      // in place so that fine-grained policy can coexist. COLLATE NOCASE:
+      // requested rows are created lowercase (proxy/canonicalizeHost), so they
+      // match even if the operator supplies mixed-case here.
       if (container_id === null && path_pattern === null && (status === 'allow' || status === 'deny')) {
         db.prepare(`DELETE FROM rules WHERE domain = ? COLLATE NOCASE AND status = 'requested' AND path_pattern IS NULL`).run(domain);
       }
@@ -442,15 +443,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
-  // ── Rules export / import (delen van rulesets, #69) ────────────────────────
-  // Alleen de deelbare velden reizen mee; volatiele kolommen (id/last_seen/
-  // request_count/created_at) blijven lokaal. `container` filtert net als
-  // GET /api/rules op scope (één container of '__global__').
+  // ── Rules export / import (sharing rulesets, #69) ──────────────────────────
+  // Only the shareable fields travel along; volatile columns (id/last_seen/
+  // request_count/created_at) stay local. `container` filters by scope just like
+  // GET /api/rules (one container or '__global__').
   const RULE_IMPORT_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'expires_at']);
 
-  // Valideer één inkomende regel fail-closed: onbekende sleutel → afkeuren, en
-  // elk veld op type controleren. Retourneert een genormaliseerde ShareableRule;
-  // gooit een Error met een bruikbare boodschap bij ongeldige invoer.
+  // Validate one incoming rule fail-closed: unknown key → reject, and
+  // check every field's type. Returns a normalized ShareableRule;
+  // throws an Error with a usable message on invalid input.
   function validateImportRule(raw: unknown): ShareableRule {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new Error('rule must be an object');
@@ -508,9 +509,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'rules must be an array' });
     }
 
-    // Optionele scope-override: alle geïmporteerde regels naar deze container
-    // remappen ('__global__' → globaal). Ontbreekt de param, dan houdt elke
-    // regel zijn eigen container_id uit het document.
+    // Optional scope override: remap all imported rules to this container
+    // ('__global__' → global). If the param is absent, each rule keeps its own
+    // container_id from the document.
     const { container } = req.query;
     const scopeOverride =
       container === undefined ? undefined : container === '__global__' ? null : container;
@@ -543,16 +544,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
     const runImport = db.transaction(() => {
       if (mode === 'replace') {
-        // 'replace' vervangt exact de scopes die we importeren (globaal en/of
-        // specifieke containers), niet de hele tabel.
+        // 'replace' replaces exactly the scopes we are importing (global and/or
+        // specific containers), not the whole table.
         const scopes = new Set(effective.map((r) => r.container_id));
         for (const s of scopes) {
           if (s === null) db.prepare(`DELETE FROM rules WHERE container_id IS NULL`).run();
           else db.prepare(`DELETE FROM rules WHERE container_id = ?`).run(s);
         }
       }
-      // Binnen-batch dedupe op de unieke sleutel (domein NOCASE/container/pad):
-      // een tweede voorkomen in hetzelfde document telt als 'skipped'.
+      // In-batch dedupe on the unique key (domain NOCASE/container/path):
+      // a second occurrence in the same document counts as 'skipped'.
       const seen = new Set<string>();
       for (const r of effective) {
         const key = `${r.domain.toLowerCase()} ${r.container_id ?? ''} ${r.path_pattern ?? ''}`;
@@ -635,9 +636,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
-  // Reconnect huddle to a devcontainer's dc-net-<name> network. Needed when a
-  // container recreates its network after a restart cycle; huddle's old attachment
-  // is then stale and must be refreshed.
+  // Reconnect huddle to a devcontainer's dc-net-<name> network.
+  // Needed when a container recreates its network after a restart cycle;
+  // huddle's old attachment is then stale and must be refreshed.
   app.post<{ Params: { name: string } }>('/api/docker/containers/:name/reconnect-huddle', async (req, reply) => {
     const netName = `dc-net-${req.params.name}`;
     try {
@@ -721,8 +722,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { imageName: getBaseImageName(req.query.ide), ide: req.query.ide };
   });
 
-  // Huddle's MITM root CA for HTTPS interception. Devcontainers download this
-  // certificate (via the whitelist) and install it in the system trust store.
+  // Huddle's MITM root-CA voor HTTPS-interceptie. Devcontainers downloaden dit
+  // certificaat (via de whitelist) en installeren het in de system trust store.
   app.get('/api/tls/ca.crt', async (_req, reply) => {
     return reply
       .header('content-type', 'application/x-x509-ca-cert')
@@ -795,7 +796,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── Fijnmazige Docker-actie-rechten ───────────────────────────────────────
+  // ── Fine-grained Docker action permissions ────────────────────────────────
 
   app.get('/api/authz/docker-actions', async () => ({ actions: DOCKER_ACTIONS }));
 
@@ -833,8 +834,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   );
 
   // ── Client-side logging (frontend → container logs) ──────────────────────
-  // The Angular UI sends uncaught runtime errors here so they are visible in
-  // `docker logs huddle`. Only log, persist nothing.
+  // The Angular UI sends uncaught runtime errors here so that they are visible
+  // in `docker logs huddle`. Only log, persist nothing.
 
   app.post<{ Body: { level?: string; message?: string; stack?: string; url?: string } }>(
     '/api/client-log',
@@ -888,11 +889,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
   });
 
   // ── Ephemeral sudo grant (admin access to 'noot') ─────────────────────────
-  // The 'noot' admin user starts LOCKED without a password. Admin access is now
-  // temporary: a grant sets a FRESH password in the container, unlocks the account
-  // for `minutes` minutes, and returns the password EXACTLY ONCE. On expiry
-  // (sweeper) or revoke the account is locked again. No (plaintext or hashed)
-  // password is stored (finding #10).
+  // The 'noot' admin user starts LOCKED without a password. Admin access is
+  // from now on temporary: a grant sets a FRESH password in the container, unlocks
+  // the account for `minutes` minutes, and returns the password EXACTLY ONCE.
+  // On expiry (sweeper) or revocation the account is locked again. No
+  // (plaintext or hashed) password is stored (finding #10).
 
   // Status: is there an active grant and until when? NEVER returns a (reusable)
   // password — replaces the old /credentials endpoint.
@@ -904,8 +905,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   });
 
   // Grant admin access: generate a password, set+unlock in the container, store the
-  // grant and return the password once. Fail closed: if the exec fails, no grant is
-  // stored and a 500 follows.
+  // grant and return the password once. Fail closed: if the exec fails,
+  // no grant is stored and a 500 follows.
   app.post<{ Params: { name: string }; Body: { minutes: number } }>(
     '/api/docker/containers/:name/sudo-grant',
     async (req, reply) => {
@@ -926,7 +927,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // Revoke admin access immediately: lock 'noot' and delete the grant.
+  // Revoke admin access immediately: lock 'noot' and remove the grant.
   app.delete<{ Params: { name: string } }>(
     '/api/docker/containers/:name/sudo-grant',
     async (req) => {
@@ -994,9 +995,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
   });
 
   // ── Extensions ────────────────────────────────────────────────────────────
-  // Catch-all for extension API routes. Must come BEFORE loadAllExtensions() so
-  // it is registered before listen() — extensions write to extDispatch instead of
-  // putting routes directly on Fastify.
+  // Catch-all for extension API routes. Must come BEFORE loadAllExtensions()
+  // so that it is registered before listen() — extensions write to
+  // extDispatch instead of setting routes directly on Fastify.
   app.route({
     method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     url: '/api/ext/:extId/*',
@@ -1061,9 +1062,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
   initLoader(app, db);
   await loadAllExtensions();
 
-  // Serve an extension's static frontend assets from <EXT_DIR>/<id>/frontend/.
-  // The resolved path must stay within that directory, otherwise it is a traversal
-  // attempt (e.g. ../../).
+  // Serve an extension's static frontend assets from
+  // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
+  // otherwise it is a traversal attempt (e.g. ../../).
   app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
     const { id } = req.params;
     if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('invalid id');
@@ -1177,8 +1178,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
-  // Initialize (and log, if generated) the operator token before listen, so the
-  // operator immediately knows what to log in with.
+  // Initialize (and log, if generated) the operator token before listen,
+  // so that the operator immediately knows what to log in with.
   getOperatorToken();
 
   const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });

@@ -2,11 +2,11 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 // ── Rules export/import (#69) ────────────────────────────────────────────────
-// Zelfde hermetische aanpak als rules-api.test.ts: createApiServer() bindt een
-// poort en raakt Docker aan, dus we bouwen een minimale Fastify met exact de
-// export/import-handlers uit api.ts tegen de in-memory DB. Getest: de export-
-// envelope, de merge round-trip (export → wipe → import), replace-scope, en
-// fail-closed validatie (400) op ongeldige payloads.
+// Same hermetic approach as rules-api.test.ts: createApiServer() binds a
+// port and touches Docker, so we build a minimal Fastify with exactly the
+// export/import handlers from api.ts against the in-memory DB. Tested: the export
+// envelope, the merge round-trip (export → wipe → import), replace scope, and
+// fail-closed validation (400) on invalid payloads.
 let sqliteAvailable = true;
 try {
   const mod = await import('better-sqlite3');
@@ -14,7 +14,7 @@ try {
 } catch (e) {
   sqliteAvailable = false;
   console.warn(
-    `[rules-export-import.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
+    `[rules-export-import.test] SKIPPED — better-sqlite3 binding not usable: ${(e as Error).message}`
   );
 }
 
@@ -149,7 +149,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
   }
 
   describe('GET /api/rules/export', () => {
-    it('geeft een versioned envelope met alleen deelbare velden', async () => {
+    it('returns a versioned envelope with only shareable fields', async () => {
       seed('a.example.com', null, 'allow');
       seed('b.example.com', 'c1', 'deny');
       const res = await app.inject({ method: 'GET', url: '/api/rules/export' });
@@ -158,12 +158,12 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(body.version).toBe(1);
       expect(typeof body.exported_at).toBe('number');
       expect(body.rules).toHaveLength(2);
-      // Geen volatiele velden lekken mee
+      // No volatile fields leak along
       const keys = Object.keys(body.rules[0]).sort();
       expect(keys).toEqual(['container_id', 'domain', 'expires_at', 'path_mode', 'path_pattern', 'status']);
     });
 
-    it('filtert op container-scope', async () => {
+    it('filters by container scope', async () => {
       seed('g.example.com', null, 'allow');
       seed('c.example.com', 'c1', 'allow');
       const global = (await app.inject({ method: 'GET', url: '/api/rules/export?container=__global__' })).json();
@@ -176,7 +176,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
   });
 
   describe('POST /api/rules/import', () => {
-    it('merge round-trip: export → wipe → import herstelt de regels', async () => {
+    it('merge round-trip: export → wipe → import restores the rules', async () => {
       seed('one.example.com', null, 'allow');
       seed('two.example.com', 'c1', 'deny');
       const doc = (await app.inject({ method: 'GET', url: '/api/rules/export' })).json();
@@ -189,7 +189,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(rows.map((r) => r.domain)).toEqual(['one.example.com', 'two.example.com']);
     });
 
-    it('merge upsert: bestaande unieke sleutel wordt bijgewerkt i.p.v. gedupliceerd', async () => {
+    it('merge upsert: an existing unique key is updated instead of duplicated', async () => {
       seed('dup.example.com', null, 'deny');
       const res = await app.inject({
         method: 'POST',
@@ -203,7 +203,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(rows[0].status).toBe('allow');
     });
 
-    it('binnen-batch duplicaat telt als skipped', async () => {
+    it('in-batch duplicate counts as skipped', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/rules/import',
@@ -218,7 +218,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(res.json()).toEqual({ imported: 1, updated: 0, skipped: 1 });
     });
 
-    it('replace vervangt alleen de geïmporteerde scope', async () => {
+    it('replace only replaces the imported scope', async () => {
       seed('old-global.example.com', null, 'allow');
       seed('keep-c1.example.com', 'c1', 'allow');
       const res = await app.inject({
@@ -228,14 +228,14 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ imported: 1, updated: 0, skipped: 0 });
-      // Globale scope vervangen, container-scope ongemoeid
+      // Global scope replaced, container scope left untouched
       const globals = db.prepare(`SELECT domain FROM rules WHERE container_id IS NULL`).all() as any[];
       expect(globals.map((r) => r.domain)).toEqual(['new-global.example.com']);
       const c1 = db.prepare(`SELECT domain FROM rules WHERE container_id = 'c1'`).all() as any[];
       expect(c1.map((r) => r.domain)).toEqual(['keep-c1.example.com']);
     });
 
-    it('container-override remapt alle regels naar de opgegeven scope', async () => {
+    it('container override remaps all rules to the given scope', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/rules/import?container=c2',
@@ -246,7 +246,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(row.container_id).toBe('c2');
     });
 
-    it('400 bij een onbekend veld (fail-closed)', async () => {
+    it('400 on an unknown field (fail-closed)', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/rules/import',
@@ -255,7 +255,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('400 bij een ongeldige status', async () => {
+    it('400 on an invalid status', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/rules/import',
@@ -264,7 +264,7 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('400 bij een leeg/ontbrekend domein', async () => {
+    it('400 on an empty/missing domain', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/rules/import',
@@ -273,12 +273,12 @@ describe.skipIf(!sqliteAvailable)('rules export/import', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('400 wanneer rules geen array is', async () => {
+    it('400 when rules is not an array', async () => {
       const res = await app.inject({ method: 'POST', url: '/api/rules/import', payload: { mode: 'merge', rules: 'nope' } });
       expect(res.statusCode).toBe(400);
     });
 
-    it('400 bij een ongeldige mode', async () => {
+    it('400 on an invalid mode', async () => {
       const res = await app.inject({ method: 'POST', url: '/api/rules/import', payload: { mode: 'wipe', rules: [] } });
       expect(res.statusCode).toBe(400);
     });
