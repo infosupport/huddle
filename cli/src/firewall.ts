@@ -97,9 +97,9 @@ export interface FirewallAddOptions {
 
 // Creates a custom firewall rule. Supports wildcards: `*.` in the domain
 // (e.g. `*.pkgs.dev.azure.com`) and `*` in the path pattern (e.g.
-// `/_packaging/*/nuget/v3/*` for an Azure DevOps feed with a rotating
-// GUID). Defaults to 'allow'; with --deny a block rule. Without --container the
-// rule is global.
+// `/_packaging/*/nuget/v3/*` for an Azure DevOps feed with a changing
+// GUID). Defaults to 'allow'; --deny creates a block rule. Without --container
+// the rule is global.
 export async function runFirewallAdd(opts: FirewallAddOptions): Promise<void> {
   const domain = (opts.domain ?? '').trim();
   if (!domain) {
@@ -141,7 +141,7 @@ function formatTarget(rule: Rule): string {
   return rule.path_pattern ? `${rule.domain}${rule.path_pattern}` : rule.domain;
 }
 
-// ── Export / import (delen van rulesets, #69) ────────────────────────────────
+// ── Export / import (sharing rulesets, #69) ──────────────────────────────────
 
 interface RulesEnvelope {
   version: number;
@@ -168,7 +168,7 @@ export async function runFirewallExport(opts: FirewallExportOptions): Promise<vo
   const json = JSON.stringify(doc, null, 2);
   if (opts.out) {
     fs.writeFileSync(opts.out, `${json}\n`);
-    // Voortgang naar stderr zodat een pure `--out` run niets naar stdout lekt.
+    // Progress to stderr so a pure `--out` run leaks nothing to stdout.
     console.error(green(`[OK] Exported ${doc.rules.length} rule(s) to ${opts.out}`));
   } else {
     console.log(json);

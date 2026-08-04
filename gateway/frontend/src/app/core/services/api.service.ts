@@ -111,9 +111,9 @@ export class ApiService {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
-  // Ephemeral sudo grant: 'noot' starts locked without a password. These endpoints
-  // grant/show/revoke temporary admin access. The password is returned only once
-  // (from grantSudo); status never returns a password.
+  // Ephemeral sudo grant: 'noot' starts locked without a password. These
+  // endpoints grant/show/revoke temporary admin access. The password is
+  // returned only once (on grantSudo); status never returns a password.
   getSudoGrant(name: string): Observable<{ active: boolean; until: number | null }> {
     return this.handle(this.http.get<{ active: boolean; until: number | null }>(`/api/docker/containers/${name}/sudo-grant`));
   }
