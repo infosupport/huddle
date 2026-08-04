@@ -123,7 +123,7 @@ function forwardUpgrade(
     // ERR_UNESCAPED_CHARACTERS): fail per handshake, not per process.
     upstreamReq = secure ? https.request(options) : http.request(options);
   } catch {
-    try { clientSocket.destroy(); } catch {}
+    try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
     return;
   }
 
@@ -140,8 +140,8 @@ function forwardUpgrade(
   // connected socket (it can linger in the agent pool) — so also destroy
   // upstreamReq.socket explicitly, otherwise the outgoing gateway socket leaks.
   const destroyUpstream = () => {
-    try { upstreamReq.socket?.destroy(); } catch {}
-    try { upstreamReq.destroy(); } catch {}
+    try { upstreamReq.socket?.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
+    try { upstreamReq.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
   };
   const timeoutMs = Number(process.env.WS_UPGRADE_TIMEOUT_MS) || 30_000;
   let settled = false;
@@ -149,7 +149,7 @@ function forwardUpgrade(
     if (settled) return;
     settled = true;
     destroyUpstream();
-    try { clientSocket.destroy(); } catch {}
+    try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
   }, timeoutMs);
   handshakeTimer.unref?.();
   const clearHandshakeTimer = () => { settled = true; clearTimeout(handshakeTimer); };
@@ -165,7 +165,7 @@ function forwardUpgrade(
       clientSocket.write(lines.join('\r\n') + '\r\n\r\n');
       if (upstreamHead && upstreamHead.length) clientSocket.write(upstreamHead);
     } catch {
-      try { upstreamSocket.destroy(); } catch {}
+      try { upstreamSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
       return;
     }
     // Bytes the client already sent after its handshake: forward them first, then pipe.
@@ -173,13 +173,13 @@ function forwardUpgrade(
     upstreamSocket.pipe(clientSocket);
     clientSocket.pipe(upstreamSocket);
     const teardown = () => {
-      try { upstreamSocket.destroy(); } catch {}
-      try { clientSocket.destroy(); } catch {}
+      try { upstreamSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
+      try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
     };
     upstreamSocket.on('error', teardown);
     clientSocket.on('error', teardown);
-    upstreamSocket.on('close', () => { try { clientSocket.destroy(); } catch {} });
-    clientSocket.on('close', () => { try { upstreamSocket.destroy(); } catch {} });
+    upstreamSocket.on('close', () => { try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
+    clientSocket.on('close', () => { try { upstreamSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   });
 
   // Upstream did not honor the upgrade (no 101): relay the regular response
@@ -190,13 +190,13 @@ function forwardUpgrade(
     for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
       lines.push(`${upstreamRes.rawHeaders[i]}: ${upstreamRes.rawHeaders[i + 1]}`);
     }
-    try { clientSocket.write(lines.join('\r\n') + '\r\n\r\n'); } catch {}
-    upstreamRes.on('data', (c: Buffer) => { try { clientSocket.write(c); } catch {} });
-    upstreamRes.on('end', () => { try { clientSocket.end(); } catch {} });
-    upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch {} });
+    try { clientSocket.write(lines.join('\r\n') + '\r\n\r\n'); } catch { /* best-effort: peer socket may already be closed */ }
+    upstreamRes.on('data', (c: Buffer) => { try { clientSocket.write(c); } catch { /* best-effort: peer socket may already be closed */ } });
+    upstreamRes.on('end', () => { try { clientSocket.end(); } catch { /* best-effort: peer socket may already be closed */ } });
+    upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   });
 
-  upstreamReq.on('error', () => { clearHandshakeTimer(); try { clientSocket.destroy(); } catch {} });
+  upstreamReq.on('error', () => { clearHandshakeTimer(); try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   clientSocket.on('error', () => { clearHandshakeTimer(); destroyUpstream(); });
   upstreamReq.end();
 }
@@ -624,7 +624,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       if (err.code !== 'ECONNRESET') {
         console.warn(`[proxy-mitm] inner TLS error (${hostname}):`, err.message);
       }
-      try { clientSocket.destroy(); } catch {}
+      try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
     });
     if (head && head.length) innerTls.unshift(head);
 
@@ -784,7 +784,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           try {
             innerRes.writeHead(502, { 'content-type': 'application/json' });
             innerRes.end(JSON.stringify({ error: 'bad_gateway', message: err.message }));
-          } catch {}
+          } catch { /* best-effort: peer socket may already be closed */ }
         }
         complete(502);
       });
@@ -857,11 +857,11 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         innerHead,
       );
     });
-    innerHttp.on('clientError', (_err, sock) => { try { sock.destroy(); } catch {} });
+    innerHttp.on('clientError', (_err, sock) => { try { sock.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
 
     innerHttp.emit('connection', innerTls);
 
-    clientSocket.on('close', () => { try { innerTls.destroy(); } catch {} });
+    clientSocket.on('close', () => { try { innerTls.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   });
 
   server.listen(port, () => {
