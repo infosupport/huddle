@@ -94,11 +94,11 @@ export interface FirewallAddOptions {
   container?: string;
 }
 
-// Maakt een eigen firewall-regel aan. Ondersteunt wildcards: `*.` in het domein
-// (bv. `*.pkgs.dev.azure.com`) en `*` in het padpatroon (bv.
-// `/_packaging/*/nuget/v3/*` voor een Azure-DevOps-feed met een wisselende
-// GUID). Standaard 'allow'; met --deny een block-regel. Zonder --container is
-// de regel globaal.
+// Creates a custom firewall rule. Supports wildcards: `*.` in the domain
+// (e.g. `*.pkgs.dev.azure.com`) and `*` in the path pattern (e.g.
+// `/_packaging/*/nuget/v3/*` for an Azure DevOps feed with a rotating
+// GUID). Defaults to 'allow'; with --deny a block rule. Without --container the
+// rule is global.
 export async function runFirewallAdd(opts: FirewallAddOptions): Promise<void> {
   const domain = (opts.domain ?? '').trim();
   if (!domain) {
