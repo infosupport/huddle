@@ -528,7 +528,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
       client.on('error', () => upstream?.destroy());
       client.on('end', () => upstream?.end());
 
-      function openUpstream(firstData: Buffer): void {
+      function openUpstream(firstData: Buffer, opts?: { allowUpgrade?: boolean }): void {
         phase = 'tunnel';
         upstream = net.createConnection(DOCKER_SOCKET);
         upstream.on('error', (err) => {
@@ -539,15 +539,32 @@ export async function createContainerProxy(containerName: string, socketDir: str
         upstream.on('end', () => client.end());
         upstream.pipe(client);
 
-        // Force Connection: close so docker CLI cannot reuse this TCP socket
-        // for a second request — every request must reopen and re-enter our
-        // header parser (otherwise we'd tunnel subsequent requests raw and
-        // bypass /containers/json filtering).
         const sep = firstData.indexOf('\r\n\r\n');
         if (sep === -1) { upstream.write(firstData); return; }
         const headerStr = firstData.slice(0, sep).toString();
         const tail = firstData.slice(sep + 4);
         const lines = headerStr.split('\r\n');
+
+        // Connection hijack (docker attach / attach ws): the client negotiates
+        // an HTTP Upgrade, the daemon replies 101 and the socket becomes a
+        // dedicated raw bidirectional stdio stream that is never reused for
+        // another HTTP request. Forward the Upgrade/Connection headers verbatim
+        // — forcing `Connection: close` (below) would break the hijack. Gated
+        // on the caller opting in (only the attach handlers do) AND the request
+        // genuinely being an upgrade, so a non-upgrade request still gets the
+        // single-use `Connection: close` rewrite and cannot pipeline a second
+        // request that would be tunnelled raw past the classifier.
+        if (opts?.allowUpgrade &&
+            lines.some(l => /^connection:\s*upgrade/i.test(l)) &&
+            lines.some(l => /^upgrade:\s*/i.test(l))) {
+          upstream.write(firstData);
+          return;
+        }
+
+        // Force Connection: close so docker CLI cannot reuse this TCP socket
+        // for a second request — every request must reopen and re-enter our
+        // header parser (otherwise we'd tunnel subsequent requests raw and
+        // bypass /containers/json filtering).
         const fixed = [
           lines[0],
           'Connection: close',
@@ -883,6 +900,26 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
+          // WebSocket attach — same hijack semantics as the POST attach above.
+          // Only on own spawned containers, never a devcontainer itself.
+          const attachWsCt = p.match(/^\/containers\/([^/]+)\/attach\/ws$/)?.[1];
+          if (attachWsCt) {
+            if (devcontainerIds.has(attachWsCt)) {
+              deny403(client, 'operation on devcontainer not permitted');
+              return;
+            }
+            client.pause();
+            hasOwnLabel('container', attachWsCt, containerName).then(ok => {
+              if (ok) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
+              } else {
+                deny403(client, 'container was not created by this devcontainer');
+              }
+              client.resume();
+            });
+            return;
+          }
+
           // Inspect / logs / top / archive (docker cp stat+download) — only on
           // containers labeled by this devcontainer
           const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
@@ -990,6 +1027,28 @@ export async function createContainerProxy(containerName: string, socketDir: str
               phase = 'body';
               bodyBuf = remainder;
               if (bodyBuf.length >= bodyContentLength) bodyHandler();
+              client.resume();
+            });
+            return;
+          }
+
+          // Attach — foreground `docker run` and `docker attach` hijack the
+          // connection into a raw bidirectional stdio stream. Only on own
+          // spawned containers, never a devcontainer itself. Tunnel raw (via
+          // allowUpgrade) so the daemon's 101/TCP upgrade survives.
+          const attachCt = p.match(/^\/containers\/([^/]+)\/attach$/)?.[1];
+          if (attachCt) {
+            if (devcontainerIds.has(attachCt)) {
+              deny403(client, 'operation on devcontainer not permitted');
+              return;
+            }
+            client.pause();
+            hasOwnLabel('container', attachCt, containerName).then(ok => {
+              if (ok) {
+                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
+              } else {
+                deny403(client, 'container was not created by this devcontainer');
+              }
               client.resume();
             });
             return;

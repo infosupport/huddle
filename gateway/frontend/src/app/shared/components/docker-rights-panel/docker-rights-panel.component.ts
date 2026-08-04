@@ -62,6 +62,7 @@ const ACTION_ICONS: Record<string, string> = {
   'container.remove': 'trash',
   'container.update': 'refresh',
   'container.exec': 'terminal',
+  'container.attach': 'terminal',
   'image.pull': 'download',
   'image.build': 'hammer',
   'image.push': 'upload',
