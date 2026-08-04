@@ -31,6 +31,7 @@ let matchDomain: typeof import('../src/rules').matchDomain;
 let matchPath: typeof import('../src/rules').matchPath;
 let firstSegmentPattern: typeof import('../src/rules').firstSegmentPattern;
 let isPathMode: typeof import('../src/rules').isPathMode;
+let ensurePathModeMarker: typeof import('../src/rules').ensurePathModeMarker;
 let canonicalizeHost: typeof import('../src/rules').canonicalizeHost;
 let normalizePathname: typeof import('../src/rules').normalizePathname;
 
@@ -60,6 +61,7 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     matchPath = rulesMod.matchPath;
     firstSegmentPattern = rulesMod.firstSegmentPattern;
     isPathMode = rulesMod.isPathMode;
+    ensurePathModeMarker = rulesMod.ensurePathModeMarker;
     canonicalizeHost = rulesMod.canonicalizeHost;
     normalizePathname = rulesMod.normalizePathname;
     dbMod.initDb();
@@ -79,6 +81,18 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
       setRule('sub.example.com', null, 'requested');
       setRule('*.example.com', null, 'deny');
       expect(checkRule('sub.example.com', null).status).toBe('deny');
+    });
+  });
+
+  describe('finding #6a: a path-scoped rule establishes path mode', () => {
+    it('ensurePathModeMarker admits the CONNECT and makes the path rule fire', () => {
+      // `firewall add example.com --path /get*`: a path allow with no marker.
+      setRule('example.com', null, 'allow', null, '/get*', 0);
+      expect(isPathMode('example.com', null)).toBe(false); // inert without the marker
+      ensurePathModeMarker('example.com', null);
+      expect(isPathMode('example.com', null)).toBe(true);  // path-mode -> CONNECT admitted
+      expect(checkRule('example.com', null, '/get').status).toBe('allow');
+      expect(checkRule('example.com', null, '/other').status).not.toBe('allow');
     });
   });
 
