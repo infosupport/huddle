@@ -1,40 +1,40 @@
-// ── Ephemere admin-grants voor de 'noot'-gebruiker ───────────────────────────
-// Elke managed devcontainer heeft naast de gewone dev-gebruiker `vscode` een
-// aparte admin-gebruiker `noot` (zit in de sudo/wheel-groep). `noot` staat
-// standaard GELOCKED zonder bruikbaar wachtwoord: pas wanneer de operator admin-
-// toegang verleent zetten we een VERS willekeurig wachtwoord, unlocken we het
-// account voor een begrensde duur, en tonen we dat wachtwoord precies één keer.
-// Bij verval (sweeper) of intrekken wordt het account weer gelockt. Zo bestaan
-// er nooit permanente admin-credentials (finding #10).
+// ── Ephemeral admin grants for the 'noot' user ───────────────────────────────
+// Besides the regular dev user `vscode`, every managed devcontainer has a
+// separate admin user `noot` (member of the sudo/wheel group). `noot` is LOCKED
+// by default without a usable password: only when the operator grants admin
+// access do we set a FRESH random password, unlock the account for a bounded
+// duration, and show that password exactly once. On expiry (sweeper) or revoke
+// the account is locked again. This way permanent admin credentials never exist
+// (finding #10).
 //
-// De docker-exec-grens is geïnjecteerd (ContainerExec) zodat deze logica zonder
-// levende docker-daemon te unit-testen valt.
+// The docker-exec boundary is injected (ContainerExec) so this logic can be
+// unit-tested without a live docker daemon.
 
 import crypto from 'crypto';
 import { setSudoGrant, deleteSudoGrant, getExpiredSudoGrants } from './db';
 
 export const NOOT_USER = 'noot';
 
-// Resultaat van een exec in de container. `exitCode` is null als de daemon geen
-// code teruggaf (dan behandelen we het als mislukking bij het zetten).
+// Result of an exec in the container. `exitCode` is null if the daemon returned
+// no code (in which case we treat it as a failure when setting the password).
 export interface ExecResult {
   exitCode: number | null;
   stdout?: string;
 }
 
-// Injecteerbare exec-grens: voert `cmd` (execve-array, GEEN shell) uit als root
-// in de container en pipet `stdin` naar het proces. De echte implementatie leeft
-// in docker.ts (execInContainer); tests geven een mock.
+// Injectable exec boundary: runs `cmd` (execve array, NO shell) as root in the
+// container and pipes `stdin` to the process. The real implementation lives in
+// docker.ts (execInContainer); tests pass a mock.
 export type ContainerExec = (containerName: string, cmd: string[], stdin: string) => Promise<ExecResult>;
 
-// Sterk willekeurig wachtwoord: 18 bytes ≈ 144 bit entropie, base64url zodat het
-// zonder quoting/injectie-risico als tekst door te geven is.
+// Strong random password: 18 bytes ≈ 144 bits of entropy, base64url so it can be
+// passed as text without any quoting/injection risk.
 export function generateNootPassword(): string {
   return crypto.randomBytes(18).toString('base64url');
 }
 
-// `chpasswd` leest regels `user:password` van stdin. Het wachtwoord gaat dus
-// NOOIT als shell-argument mee (geen injectie, niet zichtbaar in de proceslijst).
+// `chpasswd` reads `user:password` lines from stdin. The password is therefore
+// NEVER passed as a shell argument (no injection, not visible in the process list).
 export function chpasswdCmd(): string[] {
   return ['chpasswd'];
 }
@@ -43,22 +43,22 @@ export function chpasswdStdin(password: string): string {
   return `${NOOT_USER}:${password}\n`;
 }
 
-// Unlock-commando (execve-array, vaste argumenten — geen interpolatie).
+// Unlock command (execve array, fixed arguments — no interpolation).
 export function unlockCmd(): string[] {
   return ['usermod', '-U', NOOT_USER];
 }
 
-// Lock + wachtwoord onbruikbaar maken. Alle argumenten zijn constant; `sh -c`
-// bevat geen enkele caller-input, dus geen injectievector. `passwd -l` prefixt
-// het hashveld met '!', `passwd -e` forceert verval, en het lege chpasswd-alias
-// via `usermod -L` dekt distros zonder `passwd -l`.
+// Lock + make the password unusable. All arguments are constant; `sh -c`
+// contains no caller input whatsoever, so there is no injection vector. `passwd -l`
+// prefixes the hash field with '!', `passwd -e` forces expiry, and the
+// `usermod -L` fallback covers distros without `passwd -l`.
 export function lockCmd(): string[] {
   return ['sh', '-c', `usermod -L ${NOOT_USER} 2>/dev/null; passwd -l ${NOOT_USER} 2>/dev/null; passwd -e ${NOOT_USER} 2>/dev/null; true`];
 }
 
-// Verleen admin-toegang: zet een vers wachtwoord + unlock in de container en sla
-// pas bij succes de grant op. FAIL CLOSED — mislukt de chpasswd-exec, dan gooien
-// we en wordt er GEEN actieve grant opgeslagen (geen valse "success").
+// Grant admin access: set a fresh password + unlock in the container and only
+// store the grant on success. FAIL CLOSED — if the chpasswd exec fails we throw
+// and NO active grant is stored (no false "success").
 export async function grantSudo(
   containerName: string,
   minutes: number,
@@ -68,32 +68,32 @@ export async function grantSudo(
   const password = generateNootPassword();
   const set = await exec(containerName, chpasswdCmd(), chpasswdStdin(password));
   if (set.exitCode !== 0) {
-    throw new Error(`kon noot-wachtwoord niet zetten (exit ${set.exitCode})`);
+    throw new Error(`could not set noot password (exit ${set.exitCode})`);
   }
-  // chpasswd unlockt het account doorgaans al door het hashveld te overschrijven;
-  // usermod -U is de expliciete unlock. Best-effort: op een al-unlocked account
-  // geeft usermod een niet-nul code, dat mag de grant niet laten falen.
+  // chpasswd usually already unlocks the account by overwriting the hash field;
+  // usermod -U is the explicit unlock. Best-effort: on an already-unlocked account
+  // usermod returns a non-zero code, which must not make the grant fail.
   try { await exec(containerName, unlockCmd(), ''); } catch { /* best-effort */ }
   const until = Math.floor(now / 1000) + minutes * 60;
   setSudoGrant(containerName, until);
   return { password, until };
 }
 
-// Trek admin-toegang direct in: lock het account (best-effort — de container kan
-// al weg zijn) en verwijder de grant-rij hoe dan ook.
+// Revoke admin access immediately: lock the account (best-effort — the container
+// may already be gone) and delete the grant row regardless.
 export async function revokeSudo(containerName: string, exec: ContainerExec): Promise<void> {
   try {
     await exec(containerName, lockCmd(), '');
   } catch {
-    /* container mogelijk verdwenen — grant toch opruimen */
+    /* container may have disappeared — clean up the grant anyway */
   }
   deleteSudoGrant(containerName);
 }
 
-// Actieve sweep: lock elke container met een verlopen grant en ruim de rij op.
-// Best-effort per container zodat één verdwenen/onbereikbare container de rest
-// niet blokkeert. Retourneert de containers die succesvol gelockt zijn (handig
-// voor logging/tests).
+// Active sweep: lock every container with an expired grant and clean up the row.
+// Best-effort per container so that one disappeared/unreachable container does not
+// block the rest. Returns the containers that were successfully locked (handy for
+// logging/tests).
 export async function sweepExpiredSudoGrants(
   exec: ContainerExec,
   now: number = Date.now(),
@@ -106,7 +106,7 @@ export async function sweepExpiredSudoGrants(
       const res = await exec(containerName, lockCmd(), '');
       if (res.exitCode === 0) locked.push(containerName);
     } catch {
-      /* container weg/onbereikbaar — toch opruimen */
+      /* container gone/unreachable — clean up anyway */
     }
     deleteSudoGrant(containerName);
   }
