@@ -397,3 +397,27 @@ export function isPathMode(domain: string, containerId: string | null): boolean 
   ];
   return rows.some(r => r.path_pattern === null && r.path_mode === 1);
 }
+
+// Ensure a domain is in path-allowlist mode after a path-scoped rule is created.
+// A path rule is inert over HTTPS unless a host-only marker (path_pattern IS NULL)
+// with path_mode=1 exists: the proxy only sees the host at CONNECT and admits the
+// tunnel (so MITM can read the path) only for a path-mode domain. Without the
+// marker the CONNECT is refused and the path rule never fires (finding #6a).
+// Idempotent: creates the marker, or promotes an existing host-only row to one
+// (a stale 'requested' placeholder becomes a default-deny marker; an explicit
+// allow/deny keeps its decision).
+export function ensurePathModeMarker(domain: string, containerId: string | null): void {
+  const marker = db
+    .prepare(
+      `SELECT id, status, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND COALESCE(container_id, '') = COALESCE(?, '') AND path_pattern IS NULL`
+    )
+    .get(domain, containerId) as { id: number; status: RuleStatus; path_mode: number } | undefined;
+  if (!marker) {
+    db.prepare(
+      `INSERT INTO rules (domain, container_id, status, path_pattern, path_mode) VALUES (?, ?, 'deny', NULL, 1)`
+    ).run(domain, containerId);
+  } else if (marker.path_mode !== 1) {
+    const status = marker.status === 'requested' ? 'deny' : marker.status;
+    db.prepare(`UPDATE rules SET path_mode = 1, status = ?, updated_at = unixepoch() WHERE id = ?`).run(status, marker.id);
+  }
+}
