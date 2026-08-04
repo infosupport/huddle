@@ -271,12 +271,15 @@ export async function execContainerOutput(containerId: string, cmd: string[]): P
 // niet zichtbaar in de proceslijst). Retourneert de exit-code (uit exec-inspect)
 // zodat de aanroeper fail-closed kan beslissen.
 //
-// De body van /exec/<id>/start bevat de JSON-opties gevolgd door de stdin-bytes:
-// de daemon leest de leidende JSON en pipet de rest naar stdin. Dit deel vereist
-// live-daemon-validatie; de grant-logica eromheen is los te unit-testen.
+// Belangrijk: de body van POST /exec/<id>/start bevat UITSLUITEND de JSON-opties.
+// De daemon parseert die body als JSON en weigert trailing bytes erna — stdin
+// mag daar dus NIET in mee. Bij een attached exec hijackt de daemon de connectie
+// tot een rauwe bidirectionele stream; stdin gaat over die socket en wordt met
+// een half-close (FIN) afgesloten zodat het proces (chpasswd) EOF ziet en stopt.
 export async function execInContainer(containerName: string, cmd: string[], stdin: string): Promise<ExecResult> {
+  const attachStdin = stdin.length > 0;
   const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
-    AttachStdin: stdin.length > 0,
+    AttachStdin: attachStdin,
     AttachStdout: true,
     AttachStderr: true,
     Tty: false,
@@ -284,27 +287,52 @@ export async function execInContainer(containerName: string, cmd: string[], stdi
     User: 'root',
   });
   await new Promise<void>((resolve, reject) => {
-    const options = JSON.stringify({ Detach: false, Tty: false });
-    const body = Buffer.concat([Buffer.from(options, 'utf8'), Buffer.from(stdin, 'utf8')]);
+    const startBody = JSON.stringify({ Detach: false, Tty: false });
     const req = http.request(
       {
         socketPath: '/var/run/docker.sock',
         method: 'POST',
         path: `/exec/${execCreate.Id}/start`,
-        headers: { 'content-type': 'application/json', 'content-length': body.length },
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
       },
       (res) => {
+        // Fail closed: een niet-2xx op start betekent dat het proces nooit liep.
+        // Niet inslikken (anders zou dit als "exit null" verschijnen).
+        if (res.statusCode && res.statusCode >= 400) {
+          let raw = '';
+          res.on('data', (c: Buffer) => { raw += c.toString(); });
+          res.on('end', () => reject(new Error(`exec start → ${res.statusCode}: ${raw}`)));
+          res.on('error', reject);
+          return;
+        }
+        // De connectie is nu gehijackt tot een rauwe stream. Voed stdin over de
+        // socket en half-close zodat het proces EOF krijgt; daarna komt de
+        // gemultiplexte stdout/stderr binnen tot de daemon de stream sluit.
+        if (attachStdin) {
+          res.socket.write(Buffer.from(stdin, 'utf8'));
+          res.socket.end();
+        }
         res.on('data', () => { /* multiplexed stdout/stderr negeren */ });
         res.on('end', () => resolve());
         res.on('error', reject);
       },
     );
     req.on('error', reject);
-    req.write(body);
-    req.end();
+    req.end(startBody);
   });
-  const info = await dockerRequest('GET', `/exec/${execCreate.Id}/json`);
-  return { exitCode: typeof info.ExitCode === 'number' ? info.ExitCode : null };
+  // De stream sluit pas nadat het proces is geëxit, dus ExitCode is doorgaans al
+  // gezet. Op sommige daemons/platforms (bv. WSL2) reapt de daemon net na de
+  // stream-close; poll dan kort tot Running=false i.p.v. meteen null te melden.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const info = await dockerRequest('GET', `/exec/${execCreate.Id}/json`);
+    if (typeof info.ExitCode === 'number' && info.Running !== true) {
+      return { exitCode: info.ExitCode };
+    }
+    if (info.Running !== true) break; // klaar maar geen numerieke code → null
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const final = await dockerRequest('GET', `/exec/${execCreate.Id}/json`);
+  return { exitCode: typeof final.ExitCode === 'number' ? final.ExitCode : null };
 }
 
 export async function commitContainer(containerId: string, imageName: string): Promise<string> {
