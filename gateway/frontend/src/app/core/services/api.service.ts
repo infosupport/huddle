@@ -94,12 +94,36 @@ export class ApiService {
     return this.handle(this.http.post<Rule>('/api/rules', body));
   }
 
+  // ── Rules export / import (#69) ────────────────────────────────────────────
+  exportRules(container?: string): Observable<unknown> {
+    const params: Record<string, string> = {};
+    if (container) params['container'] = container;
+    return this.handle(this.http.get('/api/rules/export', { params }));
+  }
+
+  importRules(body: unknown): Observable<{ imported: number; updated: number; skipped: number }> {
+    return this.handle(
+      this.http.post<{ imported: number; updated: number; skipped: number }>('/api/rules/import', body),
+    );
+  }
+
   getContainerDetail(name: string): Observable<ContainerDetail> {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
-  getContainerCredentials(name: string): Observable<{ password: string; createdAt: number }> {
-    return this.handle(this.http.get<{ password: string; createdAt: number }>(`/api/docker/containers/${name}/credentials`));
+  // Ephemeral sudo grant: 'noot' starts locked without a password. These
+  // endpoints grant/show/revoke temporary admin access. The password is
+  // returned only once (on grantSudo); status never returns a password.
+  getSudoGrant(name: string): Observable<{ active: boolean; until: number | null }> {
+    return this.handle(this.http.get<{ active: boolean; until: number | null }>(`/api/docker/containers/${name}/sudo-grant`));
+  }
+
+  grantSudo(name: string, minutes: number): Observable<{ password: string; until: number }> {
+    return this.handle(this.http.post<{ password: string; until: number }>(`/api/docker/containers/${name}/sudo-grant`, { minutes }));
+  }
+
+  revokeSudo(name: string): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/docker/containers/${name}/sudo-grant`));
   }
 
   snapshotContainer(name: string, imageName: string): Observable<{ imageId: string }> {

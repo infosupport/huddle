@@ -44,3 +44,6 @@ cli/cli/
 
 # Interne presentatie/binaries — niet voor de publieke repo
 *.pptx
+
+# Huddle firewall compat-test logs
+tests/firewall/.logs/

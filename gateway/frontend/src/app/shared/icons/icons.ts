@@ -10,6 +10,8 @@ export const ICONS: Record<string, string> = {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
   'plus':         `<path d="M12 5v14M5 12h14"/>`,
+  'download':     `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>`,
+  'upload':       `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>`,
   'trash':        `<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>`,
   'check':        `<polyline points="20 6 9 17 4 12"/>`,
   'x':            `<path d="M18 6 6 18M6 6l12 12"/>`,

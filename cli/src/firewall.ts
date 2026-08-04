@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { get, post } from './api';
 import { bold, dim, green, red, cyan, promptKey, formatTime, printTable } from './utils';
 
@@ -87,6 +88,42 @@ async function resolveRule(rule: Rule, status: 'allow' | 'deny', scope: 'rule' |
   await post<Rule>(`/api/rules/${rule.id}/resolve`, { status, scope });
 }
 
+export interface FirewallAddOptions {
+  domain?: string;
+  path?: string;
+  deny: boolean;
+  container?: string;
+}
+
+// Creates a custom firewall rule. Supports wildcards: `*.` in the domain
+// (e.g. `*.pkgs.dev.azure.com`) and `*` in the path pattern (e.g.
+// `/_packaging/*/nuget/v3/*` for an Azure DevOps feed with a changing
+// GUID). Defaults to 'allow'; --deny creates a block rule. Without --container
+// the rule is global.
+export async function runFirewallAdd(opts: FirewallAddOptions): Promise<void> {
+  const domain = (opts.domain ?? '').trim();
+  if (!domain) {
+    throw new Error(
+      'Usage: huddle firewall add <domain> [--path <pattern>] [--deny] [--container <id>]'
+    );
+  }
+  const status: 'allow' | 'deny' = opts.deny ? 'deny' : 'allow';
+  const path = opts.path?.trim();
+
+  const body: Record<string, unknown> = {
+    domain,
+    container_id: opts.container ?? null,
+    status,
+  };
+  if (path) body.path_pattern = path;
+
+  const rule = await post<Rule>('/api/rules', body);
+  const target = formatTarget(rule);
+  const scope = rule.container_id ? `container: ${rule.container_id}` : 'global';
+  const verb = status === 'deny' ? red('Denied') : green('Allowed');
+  console.log(`${verb} ${bold(cyan(target))} ${dim(`(${scope})`)}`);
+}
+
 function printRulesTable(rules: Rule[]): void {
   const headers = ['ID', 'Status', 'Domain/path', 'Container', 'Requests', 'Seen'];
   const rows = rules.map((r) => [
@@ -102,4 +139,69 @@ function printRulesTable(rules: Rule[]): void {
 
 function formatTarget(rule: Rule): string {
   return rule.path_pattern ? `${rule.domain}${rule.path_pattern}` : rule.domain;
+}
+
+// ── Export / import (sharing rulesets, #69) ──────────────────────────────────
+
+interface RulesEnvelope {
+  version: number;
+  exported_at: number;
+  rules: unknown[];
+}
+
+interface ImportSummary {
+  imported: number;
+  updated: number;
+  skipped: number;
+}
+
+export interface FirewallExportOptions {
+  container?: string;
+  out?: string;
+}
+
+export async function runFirewallExport(opts: FirewallExportOptions): Promise<void> {
+  const qs = new URLSearchParams();
+  if (opts.container) qs.set('container', opts.container);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  const doc = await get<RulesEnvelope>(`/api/rules/export${suffix}`);
+  const json = JSON.stringify(doc, null, 2);
+  if (opts.out) {
+    fs.writeFileSync(opts.out, `${json}\n`);
+    // Progress to stderr so a pure `--out` run leaks nothing to stdout.
+    console.error(green(`[OK] Exported ${doc.rules.length} rule(s) to ${opts.out}`));
+  } else {
+    console.log(json);
+  }
+}
+
+export interface FirewallImportOptions {
+  file: string;
+  replace?: boolean;
+  container?: string;
+}
+
+export async function runFirewallImport(opts: FirewallImportOptions): Promise<void> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(opts.file, 'utf8');
+  } catch {
+    throw new Error(`Cannot read ${opts.file}`);
+  }
+  let doc: { rules?: unknown };
+  try {
+    doc = JSON.parse(raw) as { rules?: unknown };
+  } catch {
+    throw new Error(`${opts.file} is not valid JSON`);
+  }
+
+  const mode = opts.replace ? 'replace' : 'merge';
+  const qs = new URLSearchParams();
+  if (opts.container) qs.set('container', opts.container);
+  const suffix = qs.toString() ? `?${qs}` : '';
+
+  const res = await post<ImportSummary>(`/api/rules/import${suffix}`, { mode, rules: doc.rules });
+  console.error(
+    green(`[OK] Imported (${mode}): ${res.imported} added, ${res.updated} updated, ${res.skipped} skipped`)
+  );
 }
