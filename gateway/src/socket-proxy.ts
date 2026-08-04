@@ -809,6 +809,15 @@ export async function createContainerProxy(containerName: string, socketDir: str
           // containers labeled by this devcontainer
           const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
           if (inspectCt) {
+            // Fast-path: een devcontainer is per definitie nooit 'own', dus de
+            // Docker-inspect van de ownership-check kan overgeslagen worden.
+            // Exact dezelfde 404 als de langzame route hieronder, zodat het
+            // antwoord niet verraadt dát dit een (bestaande) devcontainer is.
+            if (devcontainerIds.has(inspectCt)) {
+              console.warn(`[socket-proxy] denied inspect of foreign container ${inspectCt} (container: ${containerName})`);
+              denyNotFound(client, inspectCt);
+              return;
+            }
             client.pause();
             classifyContainerOwnership(inspectCt, containerName).then(ownership => {
               if (ownership === 'own') {
@@ -826,9 +835,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
                 //     waarin een net-aangemaakte vreemde container alsnog
                 //     geïnspecteerd zou kunnen worden.
                 // Een devcontainer heeft geen huddle.parent-label en valt dus
-                // vanzelf onder 'foreign'; de expliciete devcontainer-guard is
-                // daarom overbodig op deze lees-tak (en 404 verraadt ook niet
-                // langer dát het een devcontainer is).
+                // vanzelf onder 'foreign' — het devcontainer-fast-path hierboven
+                // is puur een optimalisatie, geen aparte security-beslissing, en
+                // de 404 verraadt niet dát het een devcontainer is.
                 if (ownership === 'foreign') {
                   console.warn(`[socket-proxy] denied inspect of foreign container ${inspectCt} (container: ${containerName})`);
                 }

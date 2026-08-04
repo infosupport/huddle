@@ -142,10 +142,29 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
         expect(`${r.stdout}${r.stderr}`).toMatch(/privileged.*not permitted/i);
       });
 
-      it('weigert inspect van een vreemde container (huddle)', async () => {
-        const r = execIn(E2E_NAME, 'docker inspect huddle');
+      // Sinds #61 leest een vreemde container als afwezig (gesynthetiseerde
+      // 404) in plaats van een 403 "not owned": 'foreign' en 'missing' zijn
+      // bewust niet te onderscheiden (geen bestaans-oracle). `--type container`
+      // voorkomt dat de CLI na de 404 terugvalt op image-inspect — dat pad
+      // heeft z'n eigen actietoggle en is hier niet wat we testen.
+      it('vreemde container (huddle) leest als niet-bestaand', async () => {
+        const r = execIn(E2E_NAME, 'docker inspect --type container huddle');
         expect(r.status).not.toBe(0);
-        expect(`${r.stdout}${r.stderr}`).toMatch(/not owned|not permitted/i);
+        const out = `${r.stdout}${r.stderr}`;
+        expect(out).toMatch(/no such container/i);
+        // Het antwoord mag niet verraden dát de container bestaat.
+        expect(out).not.toMatch(/not owned|not permitted/i);
+      });
+
+      // Zelfde 404, maar dan via het devcontainer-fast-path (de naam staat in
+      // devcontainerIds, dus de proxy antwoordt zonder Docker-round-trip). Het
+      // antwoord moet identiek zijn aan de trage route hierboven.
+      it('devcontainer zelf leest óók als niet-bestaand (fast-path)', async () => {
+        const r = execIn(E2E_NAME, `docker inspect --type container ${E2E_NAME}`);
+        expect(r.status).not.toBe(0);
+        const out = `${r.stdout}${r.stderr}`;
+        expect(out).toMatch(/no such container/i);
+        expect(out).not.toMatch(/not owned|not permitted/i);
       });
 
       // Finding #1 (CRITICAL) — VolumesFrom erft huddle's echte docker.sock +

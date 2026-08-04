@@ -47,6 +47,6 @@ The suite cleans up the container + test rules afterwards (`afterAll`).
 | mutation with toggle and grant → exit 0 | timer + toggle opens mutations; own-volume delete proves label injection |
 | `-v /:/host` → `not permitted` (T11) | HostConfig escape (host-path bind) rejected |
 | `--privileged` → `not permitted` (T11) | privileged spawn rejected |
-| `docker inspect huddle` → rejected (T3) | inspecting a foreign container rejected |
+| `docker inspect huddle` → "No such object" (T3) | a foreign container reads as absent (synthesized 404, no existence oracle) |
 | `GET huddle:3000/api/rules` → 403 (T4) | management API unreachable from the container |
 | `POST huddle:3000/api/audit/sudo` → 200 (T5) | sudo-audit ingest is reachable |
