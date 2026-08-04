@@ -8,10 +8,13 @@ import { Grant, GrantMap } from '../models/grant.model';
 import { DockerActionCatalog, DockerActionPolicies, DockerActionPolicyResult } from '../models/docker-action.model';
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
+import { FirewallGroup, GroupDetail, ImportGroupResult } from '../models/group.model';
 
 export interface HuddleSettings {
   defaultMemory: string;
   defaultCpus: string;
+  extensionsFolder: string;
+  firewallRulesFolder: string;
 }
 
 export interface ApprovedHostPort {
@@ -105,6 +108,51 @@ export class ApiService {
     return this.handle(
       this.http.post<{ imported: number; updated: number; skipped: number }>('/api/rules/import', body),
     );
+  }
+
+  // ── Firewall groups (#69) ──────────────────────────────────────────────────
+  getGroups(): Observable<FirewallGroup[]> {
+    return this.handle(this.http.get<FirewallGroup[]>('/api/groups'));
+  }
+
+  getGroup(id: number): Observable<GroupDetail> {
+    return this.handle(this.http.get<GroupDetail>(`/api/groups/${id}`));
+  }
+
+  createGroup(name: string, description = '', shared = false): Observable<FirewallGroup> {
+    return this.handle(this.http.post<FirewallGroup>('/api/groups', { name, description, shared }));
+  }
+
+  updateGroup(id: number, patch: { name?: string; description?: string; shared?: boolean }): Observable<FirewallGroup> {
+    return this.handle(this.http.put<FirewallGroup>(`/api/groups/${id}`, patch));
+  }
+
+  deleteGroup(id: number): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${id}`));
+  }
+
+  assignRuleToGroup(groupId: number, ruleId: number): Observable<{ ok: true }> {
+    return this.handle(this.http.post<{ ok: true }>(`/api/groups/${groupId}/rules`, { rule_id: ruleId }));
+  }
+
+  removeRuleFromGroup(groupId: number, ruleId: number): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${groupId}/rules/${ruleId}`));
+  }
+
+  applyGroup(groupId: number, container: string | null): Observable<{ ok: true; applied: number; updated: number }> {
+    return this.handle(this.http.post<{ ok: true; applied: number; updated: number }>(`/api/groups/${groupId}/apply`, { container }));
+  }
+
+  exportGroup(groupId: number): Observable<unknown> {
+    return this.handle(this.http.get(`/api/groups/${groupId}/export`));
+  }
+
+  importGroup(envelope: unknown, mode: 'merge' | 'replace' = 'merge'): Observable<ImportGroupResult> {
+    return this.handle(this.http.post<ImportGroupResult>('/api/groups/import', { mode, envelope }));
+  }
+
+  reloadFirewallRulesFolder(): Observable<{ folder: string | null; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/firewall-rules-folder/reload', {}));
   }
 
   getContainerDetail(name: string): Observable<ContainerDetail> {

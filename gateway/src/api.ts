@@ -5,7 +5,16 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
+import {
+  exportGroup,
+  importGroupEnvelope,
+  applyGroup,
+  validateGroupEnvelope,
+  reloadFirewallRulesFolder,
+  FIREWALL_RULES_FOLDER_KEY,
+  EXTENSIONS_FOLDER_KEY,
+} from './firewall-groups';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -587,6 +596,139 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { imported, updated, skipped };
   });
 
+  // ── Firewall groups (#69) ──────────────────────────────────────────────────
+
+  app.get('/api/groups', async () => listGroups());
+
+  app.get<{ Params: { id: string } }>('/api/groups/:id', async (req, reply) => {
+    const id = Number(req.params.id);
+    const group = getGroup(id);
+    if (!group) return reply.code(404).send({ error: 'not_found' });
+    const rules = db
+      .prepare(`SELECT * FROM rules WHERE group_id = ? ORDER BY last_seen DESC`)
+      .all(id) as Rule[];
+    return { group, rules };
+  });
+
+  app.post<{ Body: { name?: string; description?: string; shared?: boolean } }>(
+    '/api/groups',
+    async (req, reply) => {
+      const name = (req.body?.name ?? '').trim();
+      if (!name) return reply.code(400).send({ error: 'name is required' });
+      if (getGroupByName(name)) return reply.code(409).send({ error: 'duplicate', message: 'a group with that name already exists' });
+      const id = createGroup({ name, description: req.body?.description ?? '', shared: req.body?.shared ? 1 : 0 });
+      logAudit({ containerId: null, domain: 'firewall', action: 'admin:group-create', path: `group=${name}` });
+      notifyStateChanged();
+      return getGroup(id);
+    },
+  );
+
+  app.put<{ Params: { id: string }; Body: { name?: string; description?: string; shared?: boolean } }>(
+    '/api/groups/:id',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const group = getGroup(id);
+      if (!group) return reply.code(404).send({ error: 'not_found' });
+      const patch: { name?: string; description?: string; shared?: number } = {};
+      if (typeof req.body?.name === 'string') {
+        const name = req.body.name.trim();
+        if (!name) return reply.code(400).send({ error: 'name cannot be empty' });
+        const clash = getGroupByName(name);
+        if (clash && clash.id !== id) return reply.code(409).send({ error: 'duplicate' });
+        patch.name = name;
+      }
+      if (typeof req.body?.description === 'string') patch.description = req.body.description;
+      if (req.body?.shared !== undefined) patch.shared = req.body.shared ? 1 : 0;
+      try {
+        updateGroup(id, patch);
+      } catch (err: any) {
+        return reply.code(400).send({ error: 'invalid', message: err.message });
+      }
+      notifyStateChanged();
+      return getGroup(id);
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>('/api/groups/:id', async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!getGroup(id)) return reply.code(404).send({ error: 'not_found' });
+    deleteGroup(id);
+    logAudit({ containerId: null, domain: 'firewall', action: 'admin:group-delete', path: `group=${id}` });
+    notifyStateChanged();
+    return { ok: true };
+  });
+
+  // Assign an existing rule to the group (the `+` on a pending request).
+  app.post<{ Params: { id: string }; Body: { rule_id?: number } }>(
+    '/api/groups/:id/rules',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      if (!getGroup(id)) return reply.code(404).send({ error: 'not_found' });
+      const ruleId = Number(req.body?.rule_id);
+      if (!Number.isInteger(ruleId)) return reply.code(400).send({ error: 'rule_id is required' });
+      const rule = db.prepare(`SELECT id FROM rules WHERE id = ?`).get(ruleId);
+      if (!rule) return reply.code(404).send({ error: 'rule_not_found' });
+      db.prepare(`UPDATE rules SET group_id = ?, updated_at = unixepoch() WHERE id = ?`).run(id, ruleId);
+      notifyStateChanged();
+      return { ok: true };
+    },
+  );
+
+  // Remove a rule from a group (clears group_id; the rule itself stays).
+  app.delete<{ Params: { id: string; ruleId: string } }>(
+    '/api/groups/:id/rules/:ruleId',
+    async (req) => {
+      const id = Number(req.params.id);
+      const ruleId = Number(req.params.ruleId);
+      db.prepare(`UPDATE rules SET group_id = NULL, updated_at = unixepoch() WHERE id = ? AND group_id = ?`).run(ruleId, id);
+      notifyStateChanged();
+      return { ok: true };
+    },
+  );
+
+  // Apply the group's rules to a scope: global (container null/'__global__') or
+  // a specific container.
+  app.post<{ Params: { id: string }; Body: { container?: string | null } }>(
+    '/api/groups/:id/apply',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      if (!getGroup(id)) return reply.code(404).send({ error: 'not_found' });
+      const raw = req.body?.container;
+      const container = raw === undefined || raw === null || raw === '__global__' || raw === '' ? null : raw;
+      const res = applyGroup(id, container);
+      return { ok: true, ...res };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/api/groups/:id/export', async (req, reply) => {
+    const env = exportGroup(Number(req.params.id));
+    if (!env) return reply.code(404).send({ error: 'not_found' });
+    return env;
+  });
+
+  app.post<{ Body: { mode?: string; envelope?: unknown } & Record<string, unknown> }>(
+    '/api/groups/import',
+    async (req, reply) => {
+      const body = req.body ?? {};
+      const mode = body.mode === 'replace' ? 'replace' : 'merge';
+      // Accept either { mode, envelope: {...} } or a bare envelope in the body.
+      const rawEnvelope = body.envelope ?? body;
+      let env;
+      try {
+        env = validateGroupEnvelope(rawEnvelope);
+      } catch (err: any) {
+        return reply.code(400).send({ error: 'invalid envelope', message: err.message });
+      }
+      const res = importGroupEnvelope(env, { mode });
+      return res;
+    },
+  );
+
+  // Manual reload of the team-managed firewall-rules folder.
+  app.post('/api/firewall-rules-folder/reload', async () => {
+    return reloadFirewallRulesFolder(getSetting(FIREWALL_RULES_FOLDER_KEY));
+  });
+
   app.get('/api/containers', async () => {
     const rows = db
       .prepare(
@@ -1062,6 +1204,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
   initLoader(app, db);
   await loadAllExtensions();
 
+  // Load team-managed firewall rules from the configured folder at startup
+  // (#69). Mirrors the extensions startup scan; no-op when unset.
+  try {
+    const folder = getSetting(FIREWALL_RULES_FOLDER_KEY);
+    if (folder) {
+      const res = reloadFirewallRulesFolder(folder);
+      console.log(`[firewall] team folder loaded: ${res.groups} group(s), ${res.imported} rule(s), ${res.errors.length} error(s)`);
+    }
+  } catch (err) {
+    console.error('[firewall] team folder load failed:', (err as Error).message);
+  }
+
   // Serve an extension's static frontend assets from
   // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
   // otherwise it is a traversal attempt (e.g. ../../).
@@ -1090,17 +1244,28 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return {
       defaultMemory: getSetting('defaultMemory') ?? '',
       defaultCpus: getSetting('defaultCpus') ?? '',
+      extensionsFolder: getSetting(EXTENSIONS_FOLDER_KEY) ?? '',
+      firewallRulesFolder: getSetting(FIREWALL_RULES_FOLDER_KEY) ?? '',
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
     '/api/settings',
     async (req) => {
-      const { defaultMemory, defaultCpus } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
       if (defaultMemory !== undefined) setSetting('defaultMemory', defaultMemory);
       if (defaultCpus !== undefined) setSetting('defaultCpus', defaultCpus);
+      if (extensionsFolder !== undefined) setSetting(EXTENSIONS_FOLDER_KEY, extensionsFolder);
+      // Setting/changing the firewall-rules folder re-reads it immediately (the
+      // design's "read when the folder path is configured or changed").
+      let firewallFolderReload;
+      if (firewallRulesFolder !== undefined) {
+        const changed = getSetting(FIREWALL_RULES_FOLDER_KEY) !== firewallRulesFolder;
+        setSetting(FIREWALL_RULES_FOLDER_KEY, firewallRulesFolder);
+        if (changed) firewallFolderReload = reloadFirewallRulesFolder(firewallRulesFolder || null);
+      }
       notifyStateChanged();
-      return { ok: true };
+      return { ok: true, firewallFolderReload };
     }
   );
 

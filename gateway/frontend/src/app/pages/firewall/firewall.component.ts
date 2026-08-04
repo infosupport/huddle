@@ -11,6 +11,7 @@ import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
 import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { IconComponent } from '../../shared/components/icon/icon.component';
+import { FirewallGroupsPanelComponent } from './firewall-groups-panel.component';
 import { map } from 'rxjs';
 
 interface Toast { id: number; caption: string; text: string; tone: 'allow' | 'deny' | 'temp'; }
@@ -26,7 +27,7 @@ interface PathRequestRow {
 @Component({
   selector: 'app-firewall',
   standalone: true,
-  imports: [AsyncPipe, FormsModule, RelTimePipe, PieMenuComponent, PathAllowlistComponent, IconComponent],
+  imports: [AsyncPipe, FormsModule, RelTimePipe, PieMenuComponent, PathAllowlistComponent, IconComponent, FirewallGroupsPanelComponent],
   templateUrl: './firewall.component.html',
   styleUrl: './firewall.component.css',
 })

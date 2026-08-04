@@ -107,6 +107,22 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE(container_id, host_port, protocol)
     );
+    -- Firewall groups (#69): a named, reusable bundle of firewall rules for a
+    -- product/service (OpenAI, GitHub, ...). Rules point at a group via
+    -- rules.group_id. The shared flag marks a group meant to travel between
+    -- installs; source records whether it was created in the UI (manual) or
+    -- loaded from the team-managed rules folder (startup-folder).
+    CREATE TABLE IF NOT EXISTS firewall_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      shared INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_groups_name
+      ON firewall_groups (name COLLATE NOCASE);
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -127,6 +143,19 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'last_path')) {
     db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
   }
+  // Firewall groups (#69): a rule may belong to one group (NULL = ungrouped).
+  // added_by records the operator identity that created it (shown as "you" in
+  // the UI); source is 'manual' or 'startup-folder' (loaded from the team folder).
+  if (!cols.some(c => c.name === 'group_id')) {
+    db.exec('ALTER TABLE rules ADD COLUMN group_id INTEGER');
+  }
+  if (!cols.some(c => c.name === 'added_by')) {
+    db.exec('ALTER TABLE rules ADD COLUMN added_by TEXT');
+  }
+  if (!cols.some(c => c.name === 'source')) {
+    db.exec("ALTER TABLE rules ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_rules_group ON rules(group_id)');
 
   // Domains are now stored canonically (lowercase) so the exact lookup and the
   // wildcard match operate on the same form (finding #3). Migrate existing rows
@@ -516,6 +545,81 @@ export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, '
 
 export function deleteFolderMapping(id: number): void {
   db.prepare('DELETE FROM folder_mappings WHERE id = ?').run(id);
+}
+
+// ── Firewall Groups (#69) ─────────────────────────────────────────────────────
+
+export interface FirewallGroup {
+  id: number;
+  name: string;
+  description: string;
+  shared: number;
+  source: string; // 'manual' | 'startup-folder'
+  created_at: number;
+  updated_at: number;
+}
+
+export interface FirewallGroupWithCount extends FirewallGroup {
+  rule_count: number;
+}
+
+export function listGroups(): FirewallGroupWithCount[] {
+  return db.prepare(
+    `SELECT g.*, (SELECT COUNT(*) FROM rules r WHERE r.group_id = g.id) AS rule_count
+       FROM firewall_groups g
+      ORDER BY g.name COLLATE NOCASE ASC`
+  ).all() as FirewallGroupWithCount[];
+}
+
+export function getGroup(id: number): FirewallGroup | undefined {
+  return db.prepare('SELECT * FROM firewall_groups WHERE id = ?').get(id) as FirewallGroup | undefined;
+}
+
+export function getGroupByName(name: string): FirewallGroup | undefined {
+  return db.prepare('SELECT * FROM firewall_groups WHERE name = ? COLLATE NOCASE').get(name) as
+    | FirewallGroup
+    | undefined;
+}
+
+export function createGroup(g: { name: string; description?: string; shared?: number; source?: string }): number {
+  const result = db.prepare(
+    `INSERT INTO firewall_groups (name, description, shared, source) VALUES (?, ?, ?, ?)`
+  ).run(g.name, g.description ?? '', g.shared ?? 0, g.source ?? 'manual');
+  return Number(result.lastInsertRowid);
+}
+
+// Column allowlist for dynamic updates — keys never come from request input into
+// the SQL text (same SQL-injection defense as folder mappings, finding #9).
+const FIREWALL_GROUP_COLUMNS: ReadonlyArray<'name' | 'description' | 'shared' | 'source'> = [
+  'name', 'description', 'shared', 'source',
+];
+
+export function validateGroupKeys(m: object): Array<'name' | 'description' | 'shared' | 'source'> {
+  const allowed = FIREWALL_GROUP_COLUMNS as ReadonlyArray<string>;
+  const unknown = Object.keys(m).filter((k) => !allowed.includes(k));
+  if (unknown.length > 0) throw new Error(`unknown group field(s): ${unknown.join(', ')}`);
+  return Object.keys(m).filter((k): k is 'name' | 'description' | 'shared' | 'source' => allowed.includes(k));
+}
+
+export function updateGroup(
+  id: number,
+  m: Partial<Pick<FirewallGroup, 'name' | 'description' | 'shared' | 'source'>>,
+): void {
+  const keys = validateGroupKeys(m);
+  if (keys.length === 0) return;
+  const fields = [...keys.map((k) => `${k} = ?`), 'updated_at = unixepoch()'].join(', ');
+  const values = [...keys.map((k) => (m as Record<string, unknown>)[k]), id];
+  db.prepare(`UPDATE firewall_groups SET ${fields} WHERE id = ?`).run(...values);
+}
+
+// Deleting a group ungroups its rules (group_id → NULL); the rules themselves
+// are kept so an accidental group delete never silently opens/closes traffic.
+export function deleteGroup(id: number): void {
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE rules SET group_id = NULL WHERE group_id = ?').run(id);
+    db.prepare('DELETE FROM firewall_groups WHERE id = ?').run(id);
+  });
+  tx();
 }
 
 // ── Approved Host Ports ───────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
-import { runFirewallList, runFirewallAdd, runFirewallExport, runFirewallImport } from './firewall';
+import { runFirewallList, runFirewallAdd, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
@@ -108,6 +108,12 @@ Usage:
                                      supported: *.example.com and /path/*)
   huddle firewall export [options]   Export firewall rules as JSON
   huddle firewall import <file>      Import firewall rules from a JSON file
+  huddle firewall group list         List firewall groups (#69)
+  huddle firewall group export <name>  Export a group as JSON (--out <file>)
+  huddle firewall group import <file>  Import a group (--replace to mirror)
+  huddle firewall group apply <name>   Apply a group (--container <id> or global)
+  huddle firewall folder set <path>  Set the team-managed rules folder
+  huddle firewall folder reload      Re-read the team-managed rules folder
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -262,6 +268,16 @@ async function main(): Promise<void> {
         replace: flagBool(flags, 'replace'),
         container: flagString(flags, 'container'),
       });
+    } else if (subCmd === 'group' || subCmd === 'groups') {
+      await runFirewallGroup({
+        action: positional[2],
+        arg: positional[3],
+        out: flagString(flags, 'out'),
+        replace: flagBool(flags, 'replace'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'folder') {
+      await runFirewallFolder({ action: positional[2], path: positional[3] });
     } else {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
       process.exit(1);
