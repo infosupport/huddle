@@ -54,8 +54,8 @@ async function hasOwnLabel(type: 'container' | 'image', targetId: string, contai
   } catch { return false; }
 }
 
-// Ownership-lookup voor netwerken en volumes: geeft het huddle.parent-label en
-// de echte naam terug (het pad kan ook een ID bevatten).
+// Ownership lookup for networks and volumes: returns the huddle.parent label and
+// the real name (the path may also contain an ID).
 async function lookupParentLabel(kind: 'network' | 'volume', id: string): Promise<{ parent: string | null; name: string }> {
   try {
     const data = await dockerGet(
@@ -73,14 +73,14 @@ function lookupContainerId(containerName: string): Promise<{ id: string; shortId
 
 // Add/merge a label filter into a Docker API query string.
 //
-// De Docker-client (CLI/compose, API 1.55) verstuurt `filters` nog steeds in het
-// legacy map-formaat: `{"label":{"foo=bar":true},"status":{"running":true}}`. De
-// daemon accepteert dat, maar ook het array-formaat (`{"label":["foo=bar"]}`).
-// Wat de daemon NIET accepteert is een gemengde vorm — en die kregen we als we
-// alleen `label` naar een array omzetten en de andere sleutels (bv. `status`) als
-// map lieten staan: dat levert "Error response from daemon: invalid filter" op en
-// breekt o.a. `docker compose up`. Normaliseer daarom ELKE sleutel naar het
-// array-formaat voordat we de labelfilter toevoegen.
+// The Docker client (CLI/compose, API 1.55) still sends `filters` in the
+// legacy map format: `{"label":{"foo=bar":true},"status":{"running":true}}`. The
+// daemon accepts that, but also the array format (`{"label":["foo=bar"]}`).
+// What the daemon does NOT accept is a mixed form — and that is what we got if we
+// only converted `label` to an array and left the other keys (e.g. `status`) as
+// a map: that produces "Error response from daemon: invalid filter" and
+// breaks `docker compose up` among others. Therefore normalize EVERY key to the
+// array format before adding the label filter.
 function toArrayFilter(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   if (value && typeof value === 'object') return Object.keys(value as object);
@@ -108,32 +108,32 @@ function rewriteFirstLine(headerPart: string, newUrl: string): string {
 }
 
 // ── Policy ────────────────────────────────────────────────────────────────────
-// De vroegere alles-of-niets grant-check is vervangen door fijnmazige
-// per-actie-autorisatie: classifyRequest bepaalt de actie, authorizeAction
-// (docker-actions.ts) combineert de toggle-stand met de grant-timer.
+// The former all-or-nothing grant check has been replaced by fine-grained
+// per-action authorization: classifyRequest determines the action, authorizeAction
+// (docker-actions.ts) combines the toggle state with the grant timer.
 
-// ── HostConfig-policy: allowlist i.p.v. denylist ────────────────────────────
-// Root-cause van findings #1 (VolumesFrom) en #2 (DeviceCgroupRules): de oude
-// validatie was een DENYLIST over een spec die Huddle niet bezit — elk veld dat
-// Docker toevoegt (of dat we vergaten) glipte er ongezien doorheen. De nieuwe
-// aanpak:
-//   1. Value-specifieke HARD-DENIES voor de bevestigde escape-vectoren en de
-//      klassiekers — altijd afgedwongen, ongeacht de mode. Dit sluit #1/#2/etc.
-//   2. Een generieke ALLOWLIST-sweep over de overige sleutels: een sleutel die
-//      we niet kennen én die een niet-lege waarde draagt is verdacht. Dit vangt
-//      elk TOEKOMSTIG veld zonder dat we het hoeven te kennen.
+// ── HostConfig policy: allowlist instead of denylist ────────────────────────
+// Root cause of findings #1 (VolumesFrom) and #2 (DeviceCgroupRules): the old
+// validation was a DENYLIST over a spec that Huddle does not own — every field that
+// Docker adds (or that we forgot) slipped through unseen. The new
+// approach:
+//   1. Value-specific HARD-DENIES for the confirmed escape vectors and the
+//      classics — always enforced, regardless of the mode. This closes #1/#2/etc.
+//   2. A generic ALLOWLIST sweep over the remaining keys: a key that
+//      we do not know and that carries a non-empty value is suspicious. This catches
+//      every FUTURE field without us having to know it.
 //
-// De Docker-CLI/compose stuurt vrijwel de hele HostConfig-struct mee, meestal
-// met nul-/lege waarden. Daarom flag't de sweep alleen NIET-lege waarden op
-// onbekende sleutels. Omdat de exacte set "genuinely-needed" velden alleen
-// empirisch (tegen echte dev-flows) vast te stellen is, draait de sweep default
-// in LOG-ONLY modus (waarschuwt, weigert niet). Zet HUDDLE_HOSTCONFIG_ENFORCE=1
-// om te handhaven zodra de allowlist tegen echt verkeer gevalideerd is. De
-// hard-denies staan hier los van en zijn altijd actief.
+// The Docker CLI/compose sends nearly the entire HostConfig struct along, usually
+// with zero/empty values. That is why the sweep only flags NON-empty values on
+// unknown keys. Because the exact set of "genuinely-needed" fields can only be
+// established empirically (against real dev flows), the sweep runs by default
+// in LOG-ONLY mode (warns, does not deny). Set HUDDLE_HOSTCONFIG_ENFORCE=1
+// to enforce once the allowlist has been validated against real traffic. The
+// hard-denies are independent of this and are always active.
 
-// Sleutels die een gespawnde sandbox-container legitiem met een betekenisvolle
-// waarde mag zetten (resource-limieten, lifecycle, logging, poorten, named
-// volumes). Bewust géén host-/device-/privilege-velden.
+// Keys that a spawned sandbox container may legitimately set with a meaningful
+// value (resource limits, lifecycle, logging, ports, named
+// volumes). Deliberately no host/device/privilege fields.
 const ALLOWED_HOSTCONFIG_KEYS = new Set<string>([
   'NetworkMode',
   'Memory', 'MemoryReservation', 'MemorySwap', 'MemorySwappiness', 'KernelMemory',
@@ -147,47 +147,47 @@ const ALLOWED_HOSTCONFIG_KEYS = new Set<string>([
   'CapDrop', 'ReadonlyRootfs', 'Isolation', 'ConsoleSize', 'Annotations',
 ]);
 
-// Sleutels met een eigen value-specifieke hard-deny hieronder. Ze zijn "bekend"
-// voor de sweep (hun gevaarlijke waarde is al eerder geweigerd; een onschuldige
-// waarde — bv. Privileged:false, IpcMode:'private' — mag door).
+// Keys with their own value-specific hard-deny below. They are "known"
+// to the sweep (their dangerous value is already denied earlier; an innocuous
+// value — e.g. Privileged:false, IpcMode:'private' — may pass).
 const HARD_CHECKED_HOSTCONFIG_KEYS = new Set<string>([
   'Privileged', 'PidMode', 'IpcMode', 'UsernsMode', 'CgroupnsMode', 'UTSMode',
   'CgroupParent', 'CapAdd', 'Devices', 'Sysctls', 'SecurityOpt',
   'VolumesFrom', 'DeviceCgroupRules', 'DeviceRequests',
   'BlkioDeviceReadBps', 'BlkioDeviceWriteBps', 'BlkioDeviceReadIOps', 'BlkioDeviceWriteIOps',
-  // Overrides waarmee een container de secure defaults van de daemon zou
-  // verzwakken (PoC `mask`: /proc/kcore + /proc/sysrq-trigger unmasken). Elke
-  // aanwezige waarde — óók een lege array — wordt hard geweigerd.
+  // Overrides with which a container could weaken the daemon's secure defaults
+  // (PoC `mask`: unmask /proc/kcore + /proc/sysrq-trigger). Any
+  // present value — including an empty array — is hard-denied.
   'MaskedPaths', 'ReadonlyPaths',
 ]);
 
-// ── Parser-differential-hardening (PoC findings #1a/#1b/#1c + exec #7) ────────
-// De Docker-daemon (Go encoding/json) matcht struct-velden HOOFDLETTER-ONGEVOELIG
-// en merget dubbele sleutels; deze proxy las sleutels hoofdlettergevoelig. Zo
-// omzeilde `{"hostconfig":{…}}` (top-level lowercase), `{"HostConfig":{"privileged":
-// true}}` (lowercase inner) of een lowercase `type` in Mounts élke check, terwijl
-// de daemon ze wél honoreerde. Verweer in drie lagen:
-//   1. findAmbiguousKey — weiger ELKE case-insensitieve dubbele sleutel, overal in
-//      de body. Fail-closed, en het maakt de lowercase-view hieronder eenduidig.
-//   2. deepLowerKeys — valideer op een diep-gelowercasede kopie zodat de checks
-//      precies zien wat de daemon zal honoreren, ongeacht de casing.
-//   3. renameKeyCI — canonicaliseer de sleutels waar de proxy zélf in injecteert
-//      (HostConfig/Labels/Env/NetworkingConfig/NetworkMode) zodat een lowercase
-//      variant niet als tweede, door de daemon gemergde, sleutel blijft staan.
+// ── Parser-differential hardening (PoC findings #1a/#1b/#1c + exec #7) ────────
+// The Docker daemon (Go encoding/json) matches struct fields CASE-INSENSITIVELY
+// and merges duplicate keys; this proxy read keys case-sensitively. That way
+// `{"hostconfig":{…}}` (top-level lowercase), `{"HostConfig":{"privileged":
+// true}}` (lowercase inner) or a lowercase `type` in Mounts bypassed every check, while
+// the daemon did honor them. Defense in three layers:
+//   1. findAmbiguousKey — deny EVERY case-insensitive duplicate key, anywhere in
+//      the body. Fail-closed, and it makes the lowercase view below unambiguous.
+//   2. deepLowerKeys — validate on a deeply-lowercased copy so the checks
+//      see exactly what the daemon will honor, regardless of the casing.
+//   3. renameKeyCI — canonicalize the keys that the proxy itself injects into
+//      (HostConfig/Labels/Env/NetworkingConfig/NetworkMode) so that a lowercase
+//      variant does not remain as a second key that the daemon would merge.
 
-// Diepte-limiet tegen stack-overflow-DoS (CWE-674). V8's JSON.parse is iteratief
-// en accepteert extreem diep geneste bodies, maar de recursieve helpers hieronder
-// lopen dan de call-stack over → RangeError → unhandled rejection die de gedeelde
-// gateway laat crashen (een enkele kwaadaardige create/exec/volume-body volstaat).
-// Geen enkele legitieme Docker-body nest ook maar in de buurt van deze grens, dus
-// weiger dieper: findAmbiguousKey draait als éérste in elke validator/proxy-pad en
-// faalt gesloten (retourneert een pseudo-ambigue sleutel → deny), zodat deepLowerKeys
-// nooit op te diepe input draait.
+// Depth limit against stack-overflow DoS (CWE-674). V8's JSON.parse is iterative
+// and accepts extremely deeply nested bodies, but the recursive helpers below
+// then overflow the call stack → RangeError → unhandled rejection that crashes the
+// shared gateway (a single malicious create/exec/volume body suffices).
+// No legitimate Docker body nests anywhere near this bound, so
+// deny deeper: findAmbiguousKey runs first in every validator/proxy path and
+// fails closed (returns a pseudo-ambiguous key → deny), so deepLowerKeys
+// never runs on too-deep input.
 const MAX_KEY_DEPTH = 200;
 
-// Loopt de hele waarde recursief af en geeft de eerste sleutel terug die op één
-// object-niveau case-insensitief botst met een andere (bv. `HostConfig` naast
-// `hostconfig`), of null als alles eenduidig is.
+// Walks the entire value recursively and returns the first key that, at one
+// object level, collides case-insensitively with another (e.g. `HostConfig` next to
+// `hostconfig`), or null if everything is unambiguous.
 export function findAmbiguousKey(value: unknown, depth = 0): string | null {
   if (depth > MAX_KEY_DEPTH) return '__depth_exceeded__';
   if (Array.isArray(value)) {
@@ -207,11 +207,11 @@ export function findAmbiguousKey(value: unknown, depth = 0): string | null {
   return null;
 }
 
-// Diepe kopie met alle object-sleutels lowercase. Veronderstelt dat er géén
-// case-insensitieve dubbele sleutels zijn (findAmbiguousKey dekt dat af), zodat
-// het lowercasen verliesvrij is. Arrays/primitives blijven qua waarde intact.
-// De diepte-guard is defensief: elke call-site draait findAmbiguousKey (met
-// dezelfde limiet) eerst, dus over-diepe input is hier al geweigerd.
+// Deep copy with all object keys lowercased. Assumes there are no
+// case-insensitive duplicate keys (findAmbiguousKey covers that), so that
+// the lowercasing is lossless. Arrays/primitives keep their value intact.
+// The depth guard is defensive: every call site runs findAmbiguousKey (with
+// the same limit) first, so over-deep input is already denied here.
 export function deepLowerKeys(value: any, depth = 0): any {
   if (depth > MAX_KEY_DEPTH) return value;
   if (Array.isArray(value)) return value.map(el => deepLowerKeys(el, depth + 1));
@@ -223,10 +223,10 @@ export function deepLowerKeys(value: any, depth = 0): any {
   return value;
 }
 
-// Hernoem een eventuele case-variant van `canonical` naar exact `canonical`
-// (bv. `hostconfig` → `HostConfig`). No-op als de sleutel al canoniek is of
-// ontbreekt. Veilig omdat findAmbiguousKey al gegarandeerd heeft dat er hooguit
-// één case-variant bestaat.
+// Rename any case variant of `canonical` to exactly `canonical`
+// (e.g. `hostconfig` → `HostConfig`). No-op if the key is already canonical or
+// missing. Safe because findAmbiguousKey has already guaranteed that at most
+// one case variant exists.
 export function renameKeyCI(obj: Record<string, any>, canonical: string): void {
   if (!obj || typeof obj !== 'object') return;
   const target = canonical.toLowerCase();
@@ -239,12 +239,12 @@ export function renameKeyCI(obj: Record<string, any>, canonical: string): void {
   }
 }
 
-// Lowercase-varianten van de canonieke sleutelsets; de sweep draait op de
-// gelowercasede view (deepLowerKeys) en vergelijkt dus lowercase-tegen-lowercase.
+// Lowercase variants of the canonical key sets; the sweep runs on the
+// lowercased view (deepLowerKeys) and thus compares lowercase against lowercase.
 const ALLOWED_HOSTCONFIG_KEYS_LC = new Set([...ALLOWED_HOSTCONFIG_KEYS].map(k => k.toLowerCase()));
 const HARD_CHECKED_HOSTCONFIG_KEYS_LC = new Set([...HARD_CHECKED_HOSTCONFIG_KEYS].map(k => k.toLowerCase()));
 
-// Draagt een HostConfig-waarde een betekenisvolle (niet-default) instelling?
+// Does a HostConfig value carry a meaningful (non-default) setting?
 function isMeaningfulValue(v: unknown): boolean {
   if (v === undefined || v === null || v === false || v === 0 || v === '') return false;
   if (Array.isArray(v)) return v.length > 0;
@@ -267,16 +267,16 @@ function validateBind(bind: unknown, perms: MountPermissions): string | null {
 
 // Gate one structured `Mounts[]` entry against `perms`. tmpfs and any other type
 // are in-memory / harmless and pass through. Returns a denial reason, or null.
-// NB: `mount` komt uit de gelowercasede view (deepLowerKeys), dus alle
-// veldnamen zijn hier lowercase — dat sluit de `{"type":"bind"}`-casing-bypass.
+// NB: `mount` comes from the lowercased view (deepLowerKeys), so all
+// field names are lowercase here — that closes the `{"type":"bind"}` casing bypass.
 function validateMount(mount: any, perms: MountPermissions): string | null {
   if (!mount) return null;
   if (mount.type === 'bind') return perms.bind ? null : 'bind-type mounts not permitted';
   if (mount.type !== 'volume') return null;
-  // Een `local`-volume met inline driver-config kan een willekeurig hostpad
-  // bind-backen (type=none, o=bind, device=/…) — net zo gevaarlijk als een host
-  // bind. Weiger elke volume-mount die zelf een driver meebrengt, ongeacht de
-  // mount-toggles.
+  // A `local` volume with inline driver config can bind-back an arbitrary host path
+  // (type=none, o=bind, device=/…) — just as dangerous as a host
+  // bind. Deny every volume mount that brings its own driver, regardless of the
+  // mount toggles.
   if (mount.volumeoptions?.driverconfig) return 'volume DriverConfig not permitted';
   const source = typeof mount.source === 'string' ? mount.source : '';
   if (source === '') return perms.anonymous ? null : mountDenied('anonymous volume');
@@ -289,14 +289,14 @@ function validateMount(mount: any, perms: MountPermissions): string | null {
 export function validateHostConfig(rawHostConfig: any, perms: MountPermissions = DEFAULT_MOUNT_PERMS): string | null {
   if (!rawHostConfig || typeof rawHostConfig !== 'object') return null;
 
-  // Parser-differential-verweer: weiger case-insensitieve dubbele sleutels en
-  // valideer daarna op een diep-gelowercasede view, zodat de checks precies zien
-  // wat de daemon zal honoreren — ongeacht hoe de client de sleutels kapitaliseert.
+  // Parser-differential defense: deny case-insensitive duplicate keys and
+  // then validate on a deeply-lowercased view, so the checks see exactly
+  // what the daemon will honor — regardless of how the client capitalizes the keys.
   const amb = findAmbiguousKey(rawHostConfig);
   if (amb) return `ambiguous duplicate HostConfig key not permitted: ${amb}`;
   const hc = deepLowerKeys(rawHostConfig);
 
-  // ── Hard-denies (altijd afgedwongen, casing-agnostisch) ───────────────────
+  // ── Hard-denies (always enforced, casing-agnostic) ───────────────────
   if (hc.privileged === true) return 'Privileged containers not permitted';
   if (hc.pidmode && hc.pidmode !== '') return 'PidMode not permitted';
   if (hc.ipcmode === 'host') return 'IpcMode=host not permitted';
@@ -310,13 +310,13 @@ export function validateHostConfig(rawHostConfig: any, perms: MountPermissions =
   if (Array.isArray(hc.devices) && hc.devices.length > 0)
     return 'Devices not permitted';
 
-  // Finding #1: VolumesFrom laat de nieuwe container de mounts (incl. huddle's
-  // echte docker.sock + CA-key + DB) van een andere container erven → host-takeover.
+  // Finding #1: VolumesFrom lets the new container inherit the mounts (incl. huddle's
+  // real docker.sock + CA key + DB) of another container → host takeover.
   if (Array.isArray(hc.volumesfrom) && hc.volumesfrom.length > 0)
     return 'VolumesFrom not permitted';
 
-  // Finding #2 + device-familie: cgroup/whitelist- en device-request-velden
-  // geven toegang tot host block-/char-devices (raw-disk via default CAP_MKNOD).
+  // Finding #2 + device family: cgroup/whitelist and device-request fields
+  // give access to host block/char devices (raw-disk via default CAP_MKNOD).
   if (Array.isArray(hc.devicecgrouprules) && hc.devicecgrouprules.length > 0)
     return 'DeviceCgroupRules not permitted';
   if (Array.isArray(hc.devicerequests) && hc.devicerequests.length > 0)
@@ -325,14 +325,14 @@ export function validateHostConfig(rawHostConfig: any, perms: MountPermissions =
     if (Array.isArray(hc[k]) && hc[k].length > 0) return `${k} not permitted`;
   }
 
-  // PoC `mask`: een lege (of afgeslankte) MaskedPaths/ReadonlyPaths verzwakt de
-  // secure defaults van de daemon en unmaskt o.a. /proc/kcore en
-  // /proc/sysrq-trigger. Weiger daarom élke expliciet meegestuurde LIJST (leeg of
-  // afgeslankt) — een devcontainer heeft nooit een legitieme reden deze te zetten.
-  // Let op: de docker-CLI stuurt bij een gewone create standaard `MaskedPaths:
-  // null` / `ReadonlyPaths: null` mee; `null` betekent "daemon vult de secure
-  // defaults in" en is dus juist veilig. Alleen een array is een override, dus
-  // gaten we op Array.isArray i.p.v. "aanwezig" — anders sneuvelt élke create.
+  // PoC `mask`: an empty (or trimmed-down) MaskedPaths/ReadonlyPaths weakens the
+  // daemon's secure defaults and unmasks /proc/kcore and
+  // /proc/sysrq-trigger among others. Therefore deny every explicitly supplied LIST (empty or
+  // trimmed) — a devcontainer never has a legitimate reason to set these.
+  // Note: on a normal create the docker CLI sends `MaskedPaths:
+  // null` / `ReadonlyPaths: null` by default; `null` means "daemon fills in the secure
+  // defaults" and is therefore actually safe. Only an array is an override, so
+  // we gate on Array.isArray instead of "present" — otherwise every create would fail.
   if (Array.isArray(hc.maskedpaths)) return 'MaskedPaths override not permitted';
   if (Array.isArray(hc.readonlypaths)) return 'ReadonlyPaths override not permitted';
 
@@ -370,11 +370,11 @@ export function validateHostConfig(rawHostConfig: any, perms: MountPermissions =
     }
   }
 
-  // ── Generieke allowlist-sweep (log-only default, enforce via env) ──────────
-  // Elke sleutel die we niet herkennen én die een betekenisvolle waarde draagt
-  // is verdacht — dit vangt toekomstige/onbekende velden zonder ze te kennen.
-  // Itereer over de ORIGINELE sleutels zodat de melding hun casing behoudt; de
-  // membership-check draait case-insensitief (findAmbiguousKey borgde 1-op-1).
+  // ── Generic allowlist sweep (log-only default, enforce via env) ──────────
+  // Every key we do not recognize and that carries a meaningful value
+  // is suspicious — this catches future/unknown fields without knowing them.
+  // Iterate over the ORIGINAL keys so that the message preserves their casing; the
+  // membership check runs case-insensitively (findAmbiguousKey guaranteed 1-to-1).
   const unknown: string[] = [];
   for (const key of Object.keys(rawHostConfig)) {
     const lk = key.toLowerCase();
@@ -408,10 +408,10 @@ export function validateHostConfig(rawHostConfig: any, perms: MountPermissions =
   return null;
 }
 
-// Valideer een exec-create body (POST /containers/<id>/exec). Finding #7: de
-// proxy inspecteerde deze body nooit, dus `{"Privileged":true}` gaf een exec met
-// alle capabilities + device-cgroup-allow-all → rauwe host-disk. Zelfde
-// casing-agnostische aanpak als validateHostConfig.
+// Validate an exec-create body (POST /containers/<id>/exec). Finding #7: the
+// proxy never inspected this body, so `{"Privileged":true}` gave an exec with
+// all capabilities + device-cgroup-allow-all → raw host disk. Same
+// casing-agnostic approach as validateHostConfig.
 export function validateExecConfig(rawBody: any): string | null {
   if (!rawBody || typeof rawBody !== 'object') return null;
   const amb = findAmbiguousKey(rawBody);
@@ -422,13 +422,13 @@ export function validateExecConfig(rawBody: any): string | null {
 }
 
 // Reject volume-create bodies that map a named volume onto a host path via the
-// `local` driver (type=none / o=bind / device=…). Zo'n volume kan daarna onder
-// een niet-`/` bron-naam in een container gebonden worden en omzeilt daarmee de
-// host-path-check in validateHostConfig. Returns een denial reason, of null.
+// `local` driver (type=none / o=bind / device=…). Such a volume can then be bound
+// into a container under a non-`/` source name and thereby bypass the
+// host-path check in validateHostConfig. Returns a denial reason, or null.
 export function validateVolumeCreate(rawBody: any): string | null {
   if (!rawBody || typeof rawBody !== 'object') return null;
-  // Zelfde parser-differential-verweer als validateHostConfig: een lowercase
-  // `driveropts` zou anders de bind-backed-volume-check ontwijken.
+  // Same parser-differential defense as validateHostConfig: a lowercase
+  // `driveropts` would otherwise evade the bind-backed-volume check.
   const amb = findAmbiguousKey(rawBody);
   if (amb) return `ambiguous duplicate volume key not permitted: ${amb}`;
   const body = deepLowerKeys(rawBody);
@@ -437,22 +437,22 @@ export function validateVolumeCreate(rawBody: any): string | null {
   if (driver !== 'local' || !opts || typeof opts !== 'object') return null;
   const norm: Record<string, string> = {};
   for (const [k, v] of Object.entries(opts)) norm[k.toLowerCase()] = String(v).toLowerCase();
-  // `device` dekt zowel bind- (o=bind) als externe-storage-mounts (nfs/cifs);
-  // een devcontainer heeft geen van beide nodig en beide kunnen data buiten de
-  // sandbox koppelen.
+  // `device` covers both bind (o=bind) and external-storage mounts (nfs/cifs);
+  // a devcontainer needs neither and both can attach data outside the
+  // sandbox.
   if (norm.device || (norm.o ?? '').includes('bind') || norm.type === 'none')
     return 'local bind-backed volumes not permitted';
   return null;
 }
 
-// Verzamel de named-volume bronnen uit een HostConfig (Binds + Mounts). Host-
-// path binds en bind-type mounts zijn al door validateHostConfig geweigerd;
-// anonieme volumes (geen Source) worden overgeslagen. Wordt gebruikt voor de
-// ownership-check bij container-create (finding #8).
+// Collect the named-volume sources from a HostConfig (Binds + Mounts). Host-
+// path binds and bind-type mounts are already denied by validateHostConfig;
+// anonymous volumes (no Source) are skipped. Used for the
+// ownership check on container-create (finding #8).
 function namedVolumeSources(hostConfig: any): string[] {
   const out: string[] = [];
-  // Lower de view zodat lowercase `binds`/`mounts`/`type`/`source` óók meetellen
-  // (parser-differential — anders zou een lowercase-mount de ownership-check ontwijken).
+  // Lower the view so that lowercase `binds`/`mounts`/`type`/`source` also count
+  // (parser-differential — otherwise a lowercase mount would evade the ownership check).
   const hc = hostConfig && typeof hostConfig === 'object' ? deepLowerKeys(hostConfig) : {};
   if (Array.isArray(hc.binds)) {
     for (const bind of hc.binds) {
@@ -477,10 +477,10 @@ function deny403(client: net.Socket, msg: string): void {
 
 // ── Per-container socket proxy ────────────────────────────────────────────────
 
-// containerName vloeit in path.join() voor de socket-directory. De naam komt uit
-// huddle's eigen orchestratie (Docker-containernaam), maar we dwingen de
-// Docker-naamgrammatica hier expliciet af: geen slashes en geen leidende punt,
-// dus onmogelijk om met `..`/`/` buiten socketDir te schrijven of te lezen.
+// containerName flows into path.join() for the socket directory. The name comes from
+// huddle's own orchestration (Docker container name), but we explicitly enforce the
+// Docker naming grammar here: no slashes and no leading dot,
+// so it is impossible to write or read outside socketDir with `..`/`/`.
 const CONTAINER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
 function assertSafeContainerName(name: string): void {
@@ -496,15 +496,15 @@ export async function createContainerProxy(containerName: string, socketDir: str
   const { id, shortId } = await lookupContainerId(containerName);
   registerDevcontainer(containerName, id);
 
-  // De socket leeft in een per-container subdirectory die als DIRECTORY in de
-  // devcontainer gemount wordt. Een bind-mount van het socket-bestand zelf pint
-  // de inode: na een huddle-herstart (unlink + nieuwe listen) kijkt zo'n mount
-  // voorgoed naar de dode oude socket. Een directory-mount overleeft dat.
+  // The socket lives in a per-container subdirectory that is mounted as a DIRECTORY
+  // into the devcontainer. A bind-mount of the socket file itself pins
+  // the inode: after a huddle restart (unlink + new listen) such a mount
+  // points forever at the dead old socket. A directory mount survives that.
   const containerDir = path.join(socketDir, containerName);
   const socketPath = path.join(containerDir, 'docker.sock');
-  // Oude platte pad (`<naam>.sock`): blijft als symlink bestaan voor
-  // devcontainers van vóór de directory-mount; die werken dan weer na een
-  // eigen herstart (docker volgt de symlink bij het opzetten van de bind).
+  // Old flat path (`<name>.sock`): remains as a symlink for
+  // devcontainers from before the directory mount; those then work again after their
+  // own restart (docker follows the symlink when setting up the bind).
   const legacySocketPath = path.join(socketDir, `${containerName}.sock`);
   try {
     fs.mkdirSync(containerDir, { recursive: true });
@@ -572,11 +572,11 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid container create body');
           return;
         }
-        // Parser-differential (PoC #1a/#1b/#1c): weiger case-insensitieve dubbele
-        // sleutels ergens in de body, en canonicaliseer de sleutels waar de proxy
-        // zelf in injecteert. Zo landt een lowercase `hostconfig`/`labels`/`env`
-        // niet als tweede, door de daemon gemergde, sleutel naast onze injectie —
-        // en ziet validateHostConfig gegarandeerd dezelfde HostConfig als de daemon.
+        // Parser-differential (PoC #1a/#1b/#1c): deny case-insensitive duplicate
+        // keys anywhere in the body, and canonicalize the keys that the proxy
+        // itself injects into. That way a lowercase `hostconfig`/`labels`/`env`
+        // does not land as a second key — merged by the daemon — next to our injection,
+        // and validateHostConfig is guaranteed to see the same HostConfig as the daemon.
         const amb = findAmbiguousKey(body);
         if (amb) { deny403(client, `ambiguous duplicate key not permitted: ${amb}`); return; }
         renameKeyCI(body, 'HostConfig');
@@ -600,12 +600,12 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
         }
-        // Finding #8: named-volume ownership. Een devcontainer mag alleen zijn
-        // eigen (huddle.parent) of ongelabelde/operator-volumes mounten — nooit
-        // een volume dat aan een ANDERE devcontainer toebehoort (cross-container
-        // diefstal van source-/credential-volumes). Zelfde semantiek als de
-        // delete/prune-paden. Ongelabelde (pre-bestaande) volumes blijven toe-
-        // gestaan; een nog niet bestaand named volume (404) telt als ongelabeld.
+        // Finding #8: named-volume ownership. A devcontainer may only mount its
+        // own (huddle.parent) or unlabeled/operator volumes — never
+        // a volume that belongs to ANOTHER devcontainer (cross-container
+        // theft of source/credential volumes). Same semantics as the
+        // delete/prune paths. Unlabeled (pre-existing) volumes remain
+        // allowed; a not-yet-existing named volume (404) counts as unlabeled.
         for (const src of namedVolumeSources(body.HostConfig)) {
           const { parent } = await lookupParentLabel('volume', src);
           if (parent && parent !== containerName) {
@@ -615,21 +615,21 @@ export async function createContainerProxy(containerName: string, socketDir: str
         }
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         // Force spawned containers onto the parent devcontainer's network only.
-        // Canonicaliseer NetworkMode binnen HostConfig zodat een lowercase
-        // `networkmode` van de client niet als tweede sleutel naast onze forcering
-        // blijft staan (die de daemon zou kunnen mergen tot het originele net).
+        // Canonicalize NetworkMode within HostConfig so that a lowercase
+        // `networkmode` from the client does not remain as a second key next to our forcing
+        // (which the daemon could merge back into the original network).
         const netName = `dc-net-${containerName}`;
         const hcOut = { ...(body.HostConfig ?? {}) };
         renameKeyCI(hcOut, 'NetworkMode');
         hcOut.NetworkMode = netName;
         body.HostConfig = hcOut;
-        // Compose zet in de create-body óók een NetworkingConfig.EndpointsConfig
-        // die naar zijn eigen netwerk (bv. `socialekaart_default`) wijst. Als we
-        // alleen NetworkMode omzetten wint die EndpointsConfig en landt de
-        // container tóch op het compose-net — onbereikbaar voor de devcontainer en
-        // zonder egress via de huddle-proxy. Klap daarom álle endpoints samen tot
-        // één entry op dc-net-<naam>, met behoud van de Aliases (service-namen)
-        // zodat DNS tussen compose-services blijft werken.
+        // Compose also puts a NetworkingConfig.EndpointsConfig in the create body
+        // that points to its own network (e.g. `socialekaart_default`). If we
+        // only convert NetworkMode, that EndpointsConfig wins and the
+        // container still lands on the compose network — unreachable for the devcontainer and
+        // without egress via the huddle proxy. Therefore collapse all endpoints into
+        // one entry on dc-net-<name>, preserving the Aliases (service names)
+        // so that DNS between compose services keeps working.
         const endpoints = body.NetworkingConfig?.EndpointsConfig;
         if (endpoints && typeof endpoints === 'object') {
           const aliases = new Set<string>();
@@ -648,8 +648,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
           'https_proxy=http://huddle:80',
           'HTTP_PROXY=http://huddle:80',
           'HTTPS_PROXY=http://huddle:80',
-          // Loopback nooit via de proxy; `[::1]` bracketed voor .NET/Aspire
-          // (zie de toelichting bij dezelfde regels in docker.ts).
+          // Loopback never via the proxy; `[::1]` bracketed for .NET/Aspire
+          // (see the explanation for the same lines in docker.ts).
           'no_proxy=localhost,127.0.0.1,::1,[::1]',
           'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
           'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
@@ -677,9 +677,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid network create body');
           return;
         }
-        // Canonicaliseer de sleutels waar we in injecteren zodat een lowercase
-        // `labels`/`options` niet als tweede, gemergde, sleutel blijft staan (een
-        // gespooft `labels.huddle.parent` zou anders ownership kunnen vervalsen).
+        // Canonicalize the keys we inject into so that a lowercase
+        // `labels`/`options` does not remain as a second, merged key (a
+        // spoofed `labels.huddle.parent` could otherwise forge ownership).
         const netAmb = findAmbiguousKey(body);
         if (netAmb) { deny403(client, `ambiguous duplicate key not permitted: ${netAmb}`); return; }
         renameKeyCI(body, 'Options');
@@ -706,11 +706,11 @@ export async function createContainerProxy(containerName: string, socketDir: str
         }
         const denial = validateVolumeCreate(body);
         if (denial) { deny403(client, denial); return; }
-        // Canonicaliseer `labels` zodat de ownership-injectie niet naast een
-        // gespoofte lowercase-variant belandt.
+        // Canonicalize `labels` so that the ownership injection does not land next to a
+        // spoofed lowercase variant.
         renameKeyCI(body, 'Labels');
-        // Label-injectie maakt volumes herleidbaar naar hun devcontainer, zodat
-        // remove/prune ownership kunnen afdwingen.
+        // Label injection makes volumes traceable to their devcontainer, so that
+        // remove/prune can enforce ownership.
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         const newBodyBuf = Buffer.from(JSON.stringify(body));
         const newHeader = savedHeaderPart.replace(
@@ -720,9 +720,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
         openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
       }
 
-      // Finding #7: exec-create body werd nooit geïnspecteerd, dus een
-      // `{"Privileged":true}` exec kreeg alle capabilities → rauwe host-disk.
-      // Buffer de body en weiger een privileged exec; verder ongewijzigd doorsturen.
+      // Finding #7: exec-create body was never inspected, so a
+      // `{"Privileged":true}` exec got all capabilities → raw host disk.
+      // Buffer the body and deny a privileged exec; forward otherwise unchanged.
       function processExecCreate(): void {
         const bodyBytes = bodyBuf.slice(0, bodyContentLength);
         const rest = bodyBuf.slice(bodyContentLength);
@@ -730,8 +730,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
         try {
           body = JSON.parse(bodyBytes.toString());
         } catch {
-          // Fail-closed: een niet-parseerbare exec-body mag de Privileged-check
-          // niet overslaan.
+          // Fail-closed: an unparseable exec body must not skip the Privileged
+          // check.
           deny403(client, 'invalid exec create body');
           return;
         }
@@ -779,14 +779,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
         // ── DELETE ───────────────────────────────────────────────────────────
         if (method === 'DELETE') {
           const ctId = p.match(/^\/containers\/([^/]+)$/)?.[1];
-          // Image-namen kunnen slashes bevatten (registry/repo:tag).
+          // Image names can contain slashes (registry/repo:tag).
           const imgId = p.match(/^\/images\/(.+)$/)?.[1];
           const targetId = ctId ?? imgId;
           const type = ctId ? 'container' : 'image';
 
-          // Network delete — alleen eigen (huddle.parent-gelabelde) netwerken.
-          // Ongelabelde netwerken van vóór deze wijziging blijven verwijderbaar,
-          // behalve de door huddle beheerde dc-net-* netwerken.
+          // Network delete — only own (huddle.parent-labeled) networks.
+          // Unlabeled networks from before this change remain deletable,
+          // except the huddle-managed dc-net-* networks.
           const netId = p.match(/^\/networks\/([^/]+)$/)?.[1];
           if (netId) {
             client.pause();
@@ -805,9 +805,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Volume delete — needed for docker compose down -v. Alleen eigen of
-          // ongelabelde (pre-bestaande) volumes; volumes van een andere
-          // devcontainer zijn onaantastbaar.
+          // Volume delete — needed for docker compose down -v. Only own or
+          // unlabeled (pre-existing) volumes; volumes of another
+          // devcontainer are untouchable.
           const volId = p.match(/^\/volumes\/([^/]+)$/)?.[1];
           if (volId) {
             client.pause();
@@ -864,14 +864,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Volume listing — filter tot eigen volumes zodat peer-volumenamen
-          // niet enumereerbaar zijn (finding #8), consistent met de container-
-          // en netwerk-listings hierboven.
+          // Volume listing — filter to own volumes so that peer volume names
+          // are not enumerable (finding #8), consistent with the container
+          // and network listings above.
           if (p === '/volumes') {
             forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
             return;
           }
-          // Volume inspect — nodig voor docker compose named volumes.
+          // Volume inspect — needed for docker compose named volumes.
           if (/^\/volumes\/[^/]+$/.test(p)) {
             openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             return;
@@ -941,16 +941,16 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Image tag — lokale metadata-operatie, toegestaan op elk image.
+          // Image tag — local metadata operation, allowed on any image.
           if (/^\/images\/.+\/tag$/.test(p)) {
             openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             return;
           }
 
-          // Image push — alleen eigen (huddle.parent-gelabelde, dus zelf
-          // gebouwde) images. Push loopt via de docker-daemon van de host en
-          // passeert de huddle-egress-firewall dus niet; de actie staat
-          // bovendien standaard uit in het portal.
+          // Image push — only own (huddle.parent-labeled, thus self-
+          // built) images. Push goes through the host's docker daemon and
+          // therefore does not pass the huddle egress firewall; the action is
+          // moreover disabled by default in the portal.
           const pushImg = p.match(/^\/images\/(.+)\/push$/)?.[1];
           if (pushImg) {
             client.pause();
@@ -965,8 +965,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Exec-create — buffer + valideer de body (finding #7: Privileged exec).
-          // Alleen op eigen spawned containers, nooit op een devcontainer zelf.
+          // Exec-create — buffer + validate the body (finding #7: Privileged exec).
+          // Only on own spawned containers, never on a devcontainer itself.
           const execCt = p.match(/^\/containers\/([^/]+)\/exec$/)?.[1];
           if (execCt) {
             if (devcontainerIds.has(execCt)) {
@@ -982,8 +982,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
                 client.resume();
                 return;
               }
-              // Ownership ok → schakel over naar body-buffering; processExecCreate
-              // keurt de exec-config zodra de volledige body binnen is.
+              // Ownership ok → switch to body buffering; processExecCreate
+              // validates the exec config once the full body is in.
               bodyContentLength = bodyLen;
               savedHeaderPart = headerPart;
               bodyHandler = processExecCreate;
@@ -1014,9 +1014,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Volume create — needed for docker compose named volumes. Body wordt
-          // gebufferd en gevalideerd: local bind-backed volumes (host-path
-          // escape) worden geweigerd.
+          // Volume create — needed for docker compose named volumes. Body is
+          // buffered and validated: local bind-backed volumes (host-path
+          // escape) are denied.
           if (p === '/volumes/create') {
             const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
             bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
@@ -1028,9 +1028,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          // Volume prune — beperkt tot eigen volumes door een verplicht
-          // labelfilter te injecteren; volumes van andere containers (of van
-          // vóór de label-injectie) blijven buiten schot.
+          // Volume prune — restricted to own volumes by injecting a mandatory
+          // label filter; volumes of other containers (or from
+          // before the label injection) stay out of range.
           if (p === '/volumes/prune') {
             forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
             return;
@@ -1058,9 +1058,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
         // ── PUT ──────────────────────────────────────────────────────────────
         if (method === 'PUT') {
-          // Archive upload (docker cp naar een container) — o.a. Aspire's DCP
-          // kopieert dev-certs in elke gestarte container (CopyFile, issue #12).
-          // Alleen toegestaan op eigen spawned containers, nooit devcontainers.
+          // Archive upload (docker cp to a container) — Aspire's DCP among others
+          // copies dev-certs into every started container (CopyFile, issue #12).
+          // Only allowed on own spawned containers, never devcontainers.
           const archiveCt = p.match(/^\/containers\/([^/]+)\/archive$/)?.[1];
           if (archiveCt) {
             if (devcontainerIds.has(archiveCt)) {

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// socket-proxy importeert db.ts alleen voor de grant-checks; mocken houdt de
-// native better-sqlite3-binding buiten deze test (die ontbreekt in een verse
-// DMZ-devcontainer, zie rules.test.ts / grants.test.ts). De geteste functies
-// zijn puur en raken de db niet.
+// socket-proxy imports db.ts only for the grant checks; mocking keeps the
+// native better-sqlite3 binding out of this test (which is missing in a fresh
+// DMZ devcontainer, see rules.test.ts / grants.test.ts). The tested functions
+// are pure and do not touch the db.
 vi.mock('../src/db', () => ({
   getGrant: () => null,
   isHostPortApproved: () => false,
@@ -12,20 +12,20 @@ vi.mock('../src/db', () => ({
 const { validateHostConfig, validateVolumeCreate } = await import('../src/socket-proxy');
 
 // ── Boundary — socket-proxy HostConfig / volume policy ──────────────────────
-// De per-container Docker-socket-proxy moet elke poging blokkeren om via een
-// gespawnde container of via een volume uit de devcontainer-sandbox te breken.
+// The per-container Docker socket proxy must block every attempt to break out of
+// the devcontainer sandbox via a spawned container or via a volume.
 
 describe('validateHostConfig', () => {
-  it('staat een onschuldige config toe', () => {
-    // Volume-mount-soorten staan standaard uit; test de shape-acceptatie met de
-    // bijbehorende toggle aan.
+  it('allows an innocuous config', () => {
+    // Volume mount kinds are off by default; test the shape acceptance with the
+    // corresponding toggle on.
     const allowVols = { bind: false, named: true, anonymous: true };
     expect(validateHostConfig({})).toBeNull();
     expect(validateHostConfig({ Binds: ['myvol:/data'] }, allowVols)).toBeNull();
     expect(validateHostConfig({ Mounts: [{ Type: 'volume', Source: 'myvol', Target: '/data' }] }, allowVols)).toBeNull();
   });
 
-  it('weigert de klassieke escape-vectoren', () => {
+  it('denies the classic escape vectors', () => {
     expect(validateHostConfig({ Privileged: true })).toMatch(/privileged/i);
     expect(validateHostConfig({ PidMode: 'host' })).toMatch(/pidmode/i);
     expect(validateHostConfig({ CapAdd: ['SYS_ADMIN'] })).toMatch(/capadd/i);
@@ -33,7 +33,7 @@ describe('validateHostConfig', () => {
     expect(validateHostConfig({ Mounts: [{ Type: 'bind', Source: '/', Target: '/host' }] })).toMatch(/bind-type/i);
   });
 
-  it('weigert een volume-mount met inline driver-config (local bind escape)', () => {
+  it('denies a volume mount with inline driver config (local bind escape)', () => {
     const denial = validateHostConfig({
       Mounts: [{
         Type: 'volume',
@@ -44,25 +44,25 @@ describe('validateHostConfig', () => {
     expect(denial).toMatch(/driverconfig not permitted/i);
   });
 
-  // ── Findings #1 / #2 — bevestigde escape-vectoren (hard-deny) ──────────────
-  it('weigert HostConfig.VolumesFrom (finding #1 — erven van huddle-mounts)', () => {
+  // ── Findings #1 / #2 — confirmed escape vectors (hard-deny) ──────────────
+  it('denies HostConfig.VolumesFrom (finding #1 — inheriting huddle mounts)', () => {
     expect(validateHostConfig({ VolumesFrom: ['huddle'] })).toMatch(/volumesfrom not permitted/i);
-    // Lege VolumesFrom (wat de CLI standaard meestuurt) is ONSCHULDIG.
+    // Empty VolumesFrom (which the CLI sends by default) is INNOCUOUS.
     expect(validateHostConfig({ VolumesFrom: [] })).toBeNull();
   });
-  it('weigert HostConfig.DeviceCgroupRules (finding #2 — host raw-disk)', () => {
+  it('denies HostConfig.DeviceCgroupRules (finding #2 — host raw-disk)', () => {
     expect(validateHostConfig({ DeviceCgroupRules: ['b 8:0 rwm'] })).toMatch(/devicecgrouprules not permitted/i);
     expect(validateHostConfig({ DeviceCgroupRules: [] })).toBeNull();
   });
-  it('weigert de rest van de device-familie (DeviceRequests, Blkio device-limieten)', () => {
+  it('denies the rest of the device family (DeviceRequests, Blkio device limits)', () => {
     expect(validateHostConfig({ DeviceRequests: [{ Driver: 'nvidia', Count: -1 }] })).toMatch(/devicerequests not permitted/i);
     expect(validateHostConfig({ BlkioDeviceReadBps: [{ Path: '/dev/sda', Rate: 1 }] })).toMatch(/blkiodevicereadbps not permitted/i);
     expect(validateHostConfig({ BlkioDeviceWriteIOps: [{ Path: '/dev/sda', Rate: 1 }] })).toMatch(/blkiodevicewriteiops not permitted/i);
   });
 
-  // ── Generieke allowlist-sweep over onbekende velden ────────────────────────
-  it('staat de nul-/lege waarden toe die de Docker-CLI standaard meestuurt', () => {
-    // Een representatieve `docker run`-achtige HostConfig met veel default-velden.
+  // ── Generic allowlist sweep over unknown fields ────────────────────────
+  it('allows the zero/empty values that the Docker CLI sends by default', () => {
+    // A representative `docker run`-like HostConfig with many default fields.
     const denial = validateHostConfig({
       NetworkMode: 'bridge',
       Memory: 0, CpuShares: 0, NanoCpus: 0,
@@ -75,30 +75,30 @@ describe('validateHostConfig', () => {
     });
     expect(denial).toBeNull();
   });
-  // Parser-differential-hardening: MaskedPaths/ReadonlyPaths zijn geen legitieme
-  // velden meer voor een gespawnde container — een (lege of afgeslankte) override
-  // verzwakt de secure defaults van de daemon (PoC `mask`: /proc/kcore +
-  // /proc/sysrq-trigger). Elke aanwezige waarde wordt nu geweigerd.
-  it('weigert een MaskedPaths/ReadonlyPaths override (PoC `mask`)', () => {
+  // Parser-differential hardening: MaskedPaths/ReadonlyPaths are no longer legitimate
+  // fields for a spawned container — an (empty or trimmed-down) override
+  // weakens the daemon's secure defaults (PoC `mask`: /proc/kcore +
+  // /proc/sysrq-trigger). Any present value is now denied.
+  it('denies a MaskedPaths/ReadonlyPaths override (PoC `mask`)', () => {
     expect(validateHostConfig({ MaskedPaths: [] })).toMatch(/MaskedPaths/);
     expect(validateHostConfig({ MaskedPaths: ['/proc/kcore'] })).toMatch(/MaskedPaths/);
     expect(validateHostConfig({ ReadonlyPaths: [] })).toMatch(/ReadonlyPaths/);
   });
-  it('log-only default: een onbekend niet-leeg veld wordt NIET geweigerd', () => {
+  it('log-only default: an unknown non-empty field is NOT denied', () => {
     delete process.env.HUDDLE_HOSTCONFIG_ENFORCE;
     expect(validateHostConfig({ SomeFutureField: { danger: true } })).toBeNull();
   });
-  it('enforce-mode: een onbekend niet-leeg veld wordt geweigerd', () => {
+  it('enforce mode: an unknown non-empty field is denied', () => {
     process.env.HUDDLE_HOSTCONFIG_ENFORCE = '1';
     try {
       expect(validateHostConfig({ SomeFutureField: { danger: true } })).toMatch(/not permitted: SomeFutureField/);
-      // Een onbekend veld met een lege waarde blijft toegestaan, ook in enforce.
+      // An unknown field with an empty value remains allowed, even in enforce.
       expect(validateHostConfig({ SomeFutureField: [] })).toBeNull();
     } finally {
       delete process.env.HUDDLE_HOSTCONFIG_ENFORCE;
     }
   });
-  it('enforce-mode breekt de legitieme create-body niet', () => {
+  it('enforce mode does not break the legitimate create body', () => {
     process.env.HUDDLE_HOSTCONFIG_ENFORCE = '1';
     try {
       expect(validateHostConfig({
@@ -115,7 +115,7 @@ describe('validateHostConfig — mount permissions', () => {
   const allowAll = { bind: true, named: true, anonymous: true };
   const denyAll  = { bind: false, named: false, anonymous: false };
 
-  it('defaults: alle mount-soorten geweigerd (secure by default)', () => {
+  it('defaults: all mount kinds denied (secure by default)', () => {
     expect(validateHostConfig({ Binds: ['/host:/data'] })).toMatch(/host-path bind/i);
     expect(validateHostConfig({ Binds: ['myvol:/data'] })).toMatch(/named volume/i);
     expect(validateHostConfig({ Binds: ['/data'] })).toMatch(/anonymous volume/i); // anonymous (no source)
@@ -151,26 +151,26 @@ describe('validateHostConfig — mount permissions', () => {
 });
 
 describe('validateVolumeCreate', () => {
-  it('staat een gewoon named volume toe', () => {
+  it('allows an ordinary named volume', () => {
     expect(validateVolumeCreate({ Name: 'data' })).toBeNull();
     expect(validateVolumeCreate({ Name: 'data', Driver: 'local' })).toBeNull();
     expect(validateVolumeCreate({ Name: 'data', Driver: 'local', DriverOpts: {} })).toBeNull();
   });
 
-  it('weigert een local bind-backed volume (host-path escape)', () => {
+  it('denies a local bind-backed volume (host-path escape)', () => {
     expect(validateVolumeCreate({
       Name: 'hostroot', Driver: 'local',
       DriverOpts: { type: 'none', device: '/', o: 'bind' },
     })).toMatch(/bind-backed/i);
   });
 
-  it('weigert varianten: alleen o=bind, alleen device, of type=none', () => {
+  it('denies variants: only o=bind, only device, or type=none', () => {
     expect(validateVolumeCreate({ Driver: 'local', DriverOpts: { o: 'bind' } })).toMatch(/bind-backed/i);
     expect(validateVolumeCreate({ Driver: 'local', DriverOpts: { device: '/etc' } })).toMatch(/bind-backed/i);
     expect(validateVolumeCreate({ Driver: 'local', DriverOpts: { type: 'none' } })).toMatch(/bind-backed/i);
   });
 
-  it('is case-insensitief op sleutels en waarden', () => {
+  it('is case-insensitive on keys and values', () => {
     expect(validateVolumeCreate({ Driver: 'LOCAL', DriverOpts: { O: 'BIND' } })).toMatch(/bind-backed/i);
   });
 });
