@@ -1,0 +1,116 @@
+name: Compat — firewall
+
+# End-to-end compatibility suite: ONE runtime-agnostic firewall test, run across
+# the OS × container-runtime matrix. This workflow holds only the platform and
+# runtime configuration — the test logic lives in tests/firewall/ so the exact
+# same scenario runs locally and in CI (see tests/firewall/README.md).
+#
+# Milestone 1 covers the firewall basics only. We run pragmatically on the
+# combinations that work headless on hosted runners (Linux + Docker/Podman) and
+# keep the full 3×3 matrix visible from the start; the combinations that need a
+# self-hosted runner (Docker Desktop / Rancher Desktop, Windows, macOS) are
+# listed as `hosted: false` and reported as "planned" until a runner exists.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/firewall/**'
+      - '.github/workflows/compat-firewall.yml'
+      - 'gateway/**'
+      - 'cli/**'
+
+permissions:
+  contents: read
+
+jobs:
+  firewall:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    # Experimental combos may fail without failing the whole run while the suite
+    # is young; the Linux + Docker baseline must stay green.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux (hosted) ──────────────────────────────────────────────────
+          - { name: linux-docker,  os: Linux,   engine: docker,  runtime: docker, runner: ubuntu-latest,  hosted: true,  experimental: false }
+          - { name: linux-podman,  os: Linux,   engine: podman,  runtime: podman, runner: ubuntu-latest,  hosted: true,  experimental: true  }
+          - { name: linux-rancher, os: Linux,   engine: rancher, runtime: docker, runner: ubuntu-latest,  hosted: false, experimental: true  }
+          # ── Windows (planned — needs a self-hosted runner) ──────────────────
+          - { name: win-docker,    os: Windows, engine: docker,  runtime: docker, runner: windows-latest, hosted: false, experimental: true  }
+          - { name: win-rancher,   os: Windows, engine: rancher, runtime: docker, runner: windows-latest, hosted: false, experimental: true  }
+          - { name: win-podman,    os: Windows, engine: podman,  runtime: podman, runner: windows-latest, hosted: false, experimental: true  }
+          # ── macOS (planned — needs a self-hosted runner) ────────────────────
+          - { name: mac-docker,    os: macOS,   engine: docker,  runtime: docker, runner: macos-latest,   hosted: false, experimental: true  }
+          - { name: mac-rancher,   os: macOS,   engine: rancher, runtime: docker, runner: macos-latest,   hosted: false, experimental: true  }
+          - { name: mac-podman,    os: macOS,   engine: podman,  runtime: podman, runner: macos-latest,   hosted: false, experimental: true  }
+
+    steps:
+      - name: Planned combination (no hosted runner yet)
+        if: ${{ !matrix.hosted }}
+        run: |
+          echo "::notice title=${{ matrix.name }}::${{ matrix.os }} + ${{ matrix.engine }} is part of the matrix but has no hosted runner yet."
+          echo "This combination needs a self-hosted runner (Docker Desktop / Rancher Desktop are not headless-installable on GitHub-hosted runners)."
+          echo "Tracked as planned; flip 'hosted: true' once a runner is available."
+
+      - name: Checkout
+        if: ${{ matrix.hosted }}
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        if: ${{ matrix.hosted }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build the CLI
+        if: ${{ matrix.hosted }}
+        working-directory: cli
+        run: |
+          npm ci
+          npm run build
+
+      # ── Runtime activation ───────────────────────────────────────────────────
+      - name: Activate Docker
+        if: ${{ matrix.hosted && matrix.runtime == 'docker' }}
+        run: docker version
+
+      - name: Activate Podman (rootless API socket)
+        if: ${{ matrix.hosted && matrix.runtime == 'podman' }}
+        run: |
+          podman --version
+          # The CLI mounts the rootless API socket into the Huddle container, so
+          # it must actually exist. Start the service detached (nohup + disown) so
+          # it survives this step and is still up for the test step. --time=0
+          # keeps it running instead of idling out.
+          nohup podman system service --time=0 >/tmp/podman-service.log 2>&1 &
+          disown
+          sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+          for _ in $(seq 1 15); do test -S "$sock" && break; sleep 1; done
+          test -S "$sock" || { echo "podman API socket did not appear at $sock"; cat /tmp/podman-service.log || true; exit 1; }
+          podman info
+
+      # ── Run the one, runtime-agnostic test ────────────────────────────────────
+      - name: Firewall test (Linux/macOS)
+        if: ${{ matrix.hosted && (matrix.os == 'Linux' || matrix.os == 'macOS') }}
+        shell: bash
+        run: bash tests/firewall/run-test.sh --runtime ${{ matrix.runtime }}
+
+      - name: Firewall test (Windows)
+        if: ${{ matrix.hosted && matrix.os == 'Windows' }}
+        shell: pwsh
+        run: pwsh -File tests/firewall/run-test.ps1 -Runtime ${{ matrix.runtime }}
+
+      # ── Diagnostics ────────────────────────────────────────────────────────────
+      - name: Upload Huddle logs
+        if: ${{ always() && matrix.hosted }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: huddle-logs-${{ matrix.name }}
+          path: tests/firewall/.logs/
+          if-no-files-found: ignore
