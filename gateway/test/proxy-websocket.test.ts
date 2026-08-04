@@ -4,17 +4,17 @@ import net from 'net';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { AddressInfo } from 'net';
 
-// ── WebSocket-proxying (#74) ────────────────────────────────────────────────
-// De proxy moet HTTP Upgrade-handshakes (WebSocket) forwarden, niet alleen
-// gewone requests. Node emit't een upgrade als een SEPARAAT 'upgrade'-event;
-// zonder handler sloot de gateway de socket en time-outte de handshake (de
-// Codex-CLI-vertraging). Deze suite pint het plain-HTTP-pad (`ws://`) vast:
-// een echte lokale ws-echoserver upstream, een echte ws-client die via de proxy
-// als forward-proxy-client verbindt. Het MITM-pad (`wss://`) deelt exact
-// dezelfde forwardUpgrade-helper en padhandhaving.
+// ── WebSocket proxying (#74) ────────────────────────────────────────────────
+// The proxy must forward HTTP Upgrade handshakes (WebSocket), not only
+// regular requests. Node emits an upgrade as a SEPARATE 'upgrade' event;
+// without a handler the gateway closed the socket and timed out the handshake (the
+// Codex CLI delay). This suite pins the plain-HTTP path (`ws://`):
+// a real local ws echo server upstream, a real ws client that connects via the proxy
+// as a forward-proxy client. The MITM path (`wss://`) shares exactly
+// the same forwardUpgrade helper and path enforcement.
 //
-// better-sqlite3 is een native module; zonder gebouwde binding slaan we de suite
-// over (zie rules.test.ts / proxy-forward-path.test.ts). Probe vóór de db-import.
+// better-sqlite3 is a native module; without a built binding we skip the suite
+// (see rules.test.ts / proxy-forward-path.test.ts). Probe before the db import.
 let sqliteAvailable = true;
 try {
   const mod = await import('better-sqlite3');
@@ -22,7 +22,7 @@ try {
 } catch (e) {
   sqliteAvailable = false;
   console.warn(
-    `[proxy-websocket.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
+    `[proxy-websocket.test] SKIPPED — better-sqlite3 binding not usable: ${(e as Error).message}`
   );
 }
 
@@ -34,12 +34,12 @@ let upstreamPort = 0;
 let proxy: http.Server;
 let proxyPort = 0;
 
-// createConnection-hook voor de ws-client: de client denkt dat hij rechtstreeks
-// met de upstream praat (Host-header + pad kloppen daardoor), maar de TCP-
-// verbinding gaat naar de proxy. De eerste write (de handshake-request-regel)
-// wordt herschreven van origin-vorm (`GET /pad`) naar de absolute vorm die een
-// forward-proxy verwacht (`GET http://host:poort/pad`) — precies wat een
-// HTTP-proxy-client (Codex met HTTPS_PROXY) op de draad zet.
+// createConnection hook for the ws client: the client thinks it talks directly
+// to the upstream (Host header + path are therefore correct), but the TCP
+// connection goes to the proxy. The first write (the handshake request line)
+// is rewritten from origin form (`GET /path`) to the absolute form that a
+// forward proxy expects (`GET http://host:port/path`) — exactly what an
+// HTTP proxy client (Codex with HTTPS_PROXY) puts on the wire.
 function proxyCreateConnection(upstreamP: number, proxyP: number) {
   return () => {
     const socket = net.connect(proxyP, '127.0.0.1');
@@ -60,8 +60,8 @@ function proxyCreateConnection(upstreamP: number, proxyP: number) {
   };
 }
 
-// Verbind een ws-client via de proxy naar de upstream. Resolvet met het bericht
-// dat de echo-server terugkaatst (bewijst end-to-end proxying), of rejectet.
+// Connect a ws client via the proxy to the upstream. Resolves with the message
+// the echo server bounces back (proves end-to-end proxying), or rejects.
 function wsEchoViaProxy(path: string, payload: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${upstreamPort}${path}`, {
@@ -78,9 +78,9 @@ function wsEchoViaProxy(path: string, payload: string): Promise<string> {
   });
 }
 
-// Als bewust-geblokkeerd: verwacht dat de handshake NIET slaagt. Resolvet met de
-// HTTP-status van de weigering (403) of met 'error' bij een socketfout — beide
-// bewijzen dat er geen tunnel tot stand kwam.
+// When deliberately blocked: expect that the handshake does NOT succeed. Resolves with the
+// HTTP status of the rejection (403) or with 'error' on a socket failure — both
+// prove that no tunnel was established.
 function wsExpectRejected(path: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${upstreamPort}${path}`, {
@@ -96,9 +96,9 @@ function wsExpectRejected(path: string): Promise<string> {
   });
 }
 
-// Upstream die de TCP-verbinding accepteert maar de handshake NOOIT afrondt.
-// Bewijst de socket-leak-backstop: zonder handshake-timeout blijft zo'n
-// half-open upgrade beide sockets onbeperkt vasthouden (FD-exhaustion DoS).
+// Upstream that accepts the TCP connection but NEVER completes the handshake.
+// Proves the socket-leak backstop: without a handshake timeout such a
+// half-open upgrade keeps both sockets held indefinitely (FD-exhaustion DoS).
 let stallUpstream: net.Server;
 let stallPort = 0;
 let stallAccepted = 0;
@@ -106,19 +106,19 @@ const stallSockets: net.Socket[] = [];
 
 describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
   beforeAll(async () => {
-    // Korte handshake-timeout zodat de leak-regressietest snel is; productie
-    // valt terug op de 30s-default.
+    // Short handshake timeout so the leak regression test is fast; production
+    // falls back to the 30s default.
     process.env.WS_UPGRADE_TIMEOUT_MS = '800';
     const dbMod = await import('../src/db');
     db = dbMod.db;
     dbMod.initDb();
 
-    // Geen Docker in de unit-omgeving: client-IP resolvet niet naar een
-    // container — regels op globaal niveau volstaan.
+    // No Docker in the unit environment: client IP does not resolve to a
+    // container — rules at the global level suffice.
     const dockerMod = await import('../src/docker');
     vi.spyOn(dockerMod, 'resolveContainerByIp').mockResolvedValue(null);
 
-    // Upstream: echte ws-echoserver.
+    // Upstream: real ws echo server.
     upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     upstream.on('connection', (socket) => {
       socket.on('message', (data) => socket.send(data.toString()));
@@ -126,7 +126,7 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     await new Promise<void>((r) => upstream.once('listening', () => r()));
     upstreamPort = (upstream.address() as AddressInfo).port;
 
-    // Stalled upstream: accepteert TCP, antwoordt nooit.
+    // Stalled upstream: accepts TCP, never answers.
     stallUpstream = net.createServer((s) => {
       stallAccepted++;
       stallSockets.push(s);
@@ -141,8 +141,8 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
   });
 
   afterAll(async () => {
-    // Force-close eventuele resterende sockets (bv. de proxy→stall-upstream
-    // verbinding) zodat server.close() niet blijft hangen op de teardown.
+    // Force-close any remaining sockets (e.g. the proxy→stall-upstream
+    // connection) so server.close() does not hang on teardown.
     (proxy as any)?.closeAllConnections?.();
     for (const s of stallSockets) { try { s.destroy(); } catch {} }
     await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()));
@@ -155,29 +155,29 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     db.exec('DELETE FROM rules');
   });
 
-  it('proxyt een toegestane WebSocket-upgrade end-to-end (echo)', async () => {
-    // Host-only allow voor de upstream-host → elk pad toegestaan.
+  it('proxies an allowed WebSocket upgrade end-to-end (echo)', async () => {
+    // Host-only allow for the upstream host → every path allowed.
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
-    const echoed = await wsEchoViaProxy('/echo', 'hallo huddle');
-    expect(echoed).toBe('hallo huddle');
+    const echoed = await wsEchoViaProxy('/echo', 'hello huddle');
+    expect(echoed).toBe('hello huddle');
   });
 
-  it('weigert een upgrade naar een niet-toegestane host/pad (403)', async () => {
-    // Geen allow-regel → checkRule levert 'requested' op → fail-closed geweigerd.
+  it('rejects an upgrade to a disallowed host/path (403)', async () => {
+    // No allow rule → checkRule returns 'requested' → fail-closed rejected.
     const result = await wsExpectRejected('/echo');
     expect(result).toBe('http:403');
   });
 
-  it('kapt een stalled upstream-handshake af (geen socket-leak DoS)', async () => {
-    // Host toegestaan, maar upstream rondt de handshake nooit af. Zonder de
-    // handshake-timeout blijft de client-socket onbeperkt open (Node's server-
-    // timeouts gelden niet op een ge-hijackte upgrade-socket). Verwacht: de
-    // proxy dialt upstream (allow) én sluit daarna de client-socket zelf.
+  it('cuts off a stalled upstream handshake (no socket-leak DoS)', async () => {
+    // Host allowed, but upstream never completes the handshake. Without the
+    // handshake timeout the client socket stays open indefinitely (Node's server
+    // timeouts do not apply on a hijacked upgrade socket). Expect: the
+    // proxy dials upstream (allow) and then closes the client socket itself.
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
     const before = stallAccepted;
-    // Meet hoe lang de client-socket open blijft. Zonder handshake-timeout
-    // sluit de proxy hem nooit (Node's server-timeouts gelden niet op een
-    // ge-hijackte upgrade-socket) en zou dit de 4s-guard raken.
+    // Measure how long the client socket stays open. Without a handshake timeout
+    // the proxy never closes it (Node's server timeouts do not apply on a
+    // hijacked upgrade socket) and this would hit the 4s guard.
     const start = Date.now();
     const closedAfterMs = await new Promise<number>((resolve) => {
       const c = net.connect(proxyPort, '127.0.0.1');
@@ -187,8 +187,8 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
           `GET http://127.0.0.1:${stallPort}/echo HTTP/1.1\r\n` +
           `Host: 127.0.0.1:${stallPort}\r\n` +
           `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
-          // Willekeurige dummy handshake-key (16 nul-bytes, base64) — geen secret;
-          // de stall-upstream antwoordt toch nooit, dus de waarde doet niet ter zake.
+          // Arbitrary dummy handshake key (16 null bytes, base64) — no secret;
+          // the stall upstream never answers anyway, so the value does not matter.
           `Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\nSec-WebSocket-Version: 13\r\n\r\n`
         );
       });
@@ -196,9 +196,9 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
       c.on('close', done);
       c.on('error', done);
     });
-    expect(stallAccepted).toBeGreaterThan(before); // proxy dialde upstream (allow)
-    // De backstop kapte de half-open handshake af: dicht ná de 800ms-timeout,
-    // ruim vóór de 4s-guard. -1 = nooit gesloten = leak (regressie).
+    expect(stallAccepted).toBeGreaterThan(before); // proxy dialed upstream (allow)
+    // The backstop cut off the half-open handshake: closed after the 800ms timeout,
+    // well before the 4s guard. -1 = never closed = leak (regression).
     expect(closedAfterMs).toBeGreaterThanOrEqual(0);
     expect(closedAfterMs).toBeLessThan(3000);
   }, 8000);
