@@ -289,8 +289,48 @@ function stripComment(line: string): string {
   return line;
 }
 
+function unsupportedYaml(feature: string): Error {
+  return new Error(
+    `the compose file uses ${feature}, which \`huddle migrate\`'s built-in YAML reader does ` +
+      'not support and would mis-parse (risking a dropped, un-filtered service). Inline or ' +
+      'quote it, or flatten the file first with `docker compose config`, then re-run `huddle migrate`.',
+  );
+}
+
+// A YAML block-scalar header: `|` or `>` followed by an optional indentation
+// indicator (1-9) and/or chomping indicator (+/-), each at most once, in either
+// order. Anchored so plain scalars that merely start with `>`/`|` (e.g. `>=1.0`)
+// do not match.
+const BLOCK_SCALAR_HEADER = /^[|>]([1-9][+-]?|[+-][1-9]?)?$/;
+
+// The value carried by a tokenized line: a mapping value (after `key:`), a
+// sequence-item value (after `- `), or the bare line.
+function lineValue(text: string): string {
+  const colon = findKeyColon(text);
+  if (colon >= 0) return text.slice(colon + 1).trim();
+  if (isSeqItem(text)) return text.replace(/^-\s*/, '').trim();
+  return text;
+}
+
+// Fail-closed on YAML features the indentation reader below cannot represent
+// (finding #9). Block scalars (`|`/`>`), anchors/aliases (`&`/`*`) and merge keys
+// (`<<`) are silently mis-parsed — a block scalar's indented body is read as real
+// structure, which can swallow the next service and drop it from the generated
+// override (leaving it with an unfiltered route out). Detect them up front and
+// refuse with a clear, actionable error instead of guessing.
+function rejectUnsupportedYaml(lines: Line[]): void {
+  for (const { text } of lines) {
+    if (/^<<\s*:/.test(text)) throw unsupportedYaml('a merge key (`<<`)');
+    const value = lineValue(text);
+    if (BLOCK_SCALAR_HEADER.test(value)) throw unsupportedYaml('a block scalar (`|` or `>`)');
+    if (/^&[A-Za-z0-9_]/.test(value)) throw unsupportedYaml('a YAML anchor (`&`)');
+    if (/^\*[A-Za-z0-9_]/.test(value)) throw unsupportedYaml('a YAML alias (`*`)');
+  }
+}
+
 export function parseYaml(input: string): ComposeDoc {
   const lines = tokenize(input);
+  rejectUnsupportedYaml(lines);
   let pos = 0;
 
   function parseNode(indent: number): unknown {

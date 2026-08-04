@@ -87,6 +87,25 @@ describe('parseYaml (minimal compose reader)', () => {
     );
     expect(normalizeLabels((doc.networks?.dev as any).labels)).toEqual({ 'huddle.network': 'true' });
   });
+
+  it('rejects block scalars fail-closed instead of silently mis-parsing (finding #9)', () => {
+    const withBlock = [
+      'services:',
+      '  api:',
+      '    command: |',
+      '      echo hi',
+      '    networks: [backend]',
+      '  web:',
+      '    networks: [backend]',
+      'networks:',
+      '  backend: { internal: true, labels: { huddle.network: "true" } }',
+    ].join('\n');
+    expect(() => parseYaml(withBlock)).toThrow(/block scalar/i);
+  });
+
+  it('rejects YAML anchors and merge keys fail-closed (finding #9)', () => {
+    expect(() => parseYaml('base: &anchor\n  x: 1\nsvc:\n  <<: *anchor\n')).toThrow(/anchor|merge/i);
+  });
 });
 
 describe('marked-network detection', () => {
