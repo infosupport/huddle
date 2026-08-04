@@ -96,7 +96,11 @@ export async function resolveContainerByIp(rawIp: string): Promise<string | null
     try {
       ipToName = await fetchContainerMap();
       cacheExpiry = now + CACHE_TTL_MS;
-    } catch {}
+    } catch (err: any) {
+      // Stale map blijft bruikbaar; wel loggen, anders is een 'unknown
+      // source'-denial door een mislukte refresh niet te diagnosticeren.
+      console.warn(`[docker] container-map refresh failed for ${ip}: ${err?.message ?? err}`);
+    }
   }
   return ipToName.get(ip) ?? null;
 }

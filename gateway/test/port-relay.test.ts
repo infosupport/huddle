@@ -13,6 +13,7 @@ vi.mock('../src/db', () => ({
 const {
   extractRelaySpecs, resolveTarget, buildForwarderSetupScript,
   createNetworkRefTracker, ipInSubnet, dialWithTimeout,
+  assertSafeOwner, syncContainerRelays, ensurePortForwarder,
 } = await import('../src/port-relay');
 const { parseHttpStatus } = await import('../src/socket-proxy');
 
@@ -267,5 +268,29 @@ describe('parseHttpStatus', () => {
   it('geeft 0 voor een onherkenbaar antwoord', () => {
     expect(parseHttpStatus(Buffer.from(''))).toBe(0);
     expect(parseHttpStatus(Buffer.from('garbage'))).toBe(0);
+  });
+});
+
+// ── Owner-naamguard op de relay-entry-points ─────────────────────────────────
+// `owner` vloeit in path.join() onder de gedeelde sockets-directory. Dezelfde
+// Docker-naamgrammatica als assertSafeContainerName (socket-proxy.ts): een
+// traversal-naam mag nooit tot een pad buiten die directory leiden — ook niet
+// via de operator-API (`/api/docker/containers/:name/start`).
+describe('assertSafeOwner', () => {
+  it('accepteert geldige Docker-containernamen', () => {
+    for (const ok of ['devcontainer-aspire', 'a', 'A1_b.c-d']) {
+      expect(() => assertSafeOwner(ok)).not.toThrow();
+    }
+  });
+
+  it('weigert traversal- en niet-grammatica-namen', () => {
+    for (const bad of ['../evil', 'a/b', '.hidden', '', '..', 'a b']) {
+      expect(() => assertSafeOwner(bad)).toThrow(/unsafe owner name/);
+    }
+  });
+
+  it('vuurt vóór alle I/O op beide publieke entry points', async () => {
+    await expect(syncContainerRelays('../evil', 'x')).rejects.toThrow(/unsafe owner name/);
+    await expect(ensurePortForwarder('../evil')).rejects.toThrow(/unsafe owner name/);
   });
 });

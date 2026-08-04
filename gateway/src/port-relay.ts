@@ -222,7 +222,9 @@ function resolveSelfRef(): Promise<string> {
   if (!selfRefPromise) {
     selfRefPromise = (async () => {
       const candidates: string[] = [];
-      try { candidates.push(fs.readFileSync('/etc/hostname', 'utf8').trim()); } catch {}
+      try { candidates.push(fs.readFileSync('/etc/hostname', 'utf8').trim()); } catch (err: any) {
+        console.warn(`[port-relay] cannot read /etc/hostname (${err?.message ?? err}); falling back to container name 'huddle'`);
+      }
       candidates.push('huddle');
       for (const c of candidates) {
         if (!c) continue;
@@ -327,7 +329,21 @@ const relaysById = new Map<string, ContainerRelays>();
 // docker-client ook maar in het pad zette.
 const aliasIndex = new Map<string, string>();
 
+// `owner` vloeit in path.join() onder SOCKET_DIR. De naam komt uit huddle's
+// eigen orchestratie of een operator-API-parameter; net als in socket-proxy.ts
+// (assertSafeContainerName — hier gedupliceerd omdat socket-proxy déze module
+// importeert en een cyclus anders snel gemaakt is) dwingen we de Docker-naam-
+// grammatica expliciet af: geen slashes en geen leidende punt, dus onmogelijk
+// om met `..`/`/` buiten de sockets-directory te schrijven of te lezen.
+const OWNER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+export function assertSafeOwner(owner: string): void {
+  if (typeof owner !== 'string' || !OWNER_NAME_RE.test(owner))
+    throw new Error(`unsafe owner name: ${JSON.stringify(owner)}`);
+}
+
 function portsDirFor(owner: string): string {
+  assertSafeOwner(owner);
   return path.join(SOCKET_DIR, owner, 'ports');
 }
 
@@ -473,6 +489,7 @@ async function waitForForwarderReady(dir: string, spec: RelaySpec, owner: string
 // verdediging-in-de-diepte: de socket-proxy heeft al geverifieerd, maar relays
 // van andermans containers mogen ook standalone nooit ontstaan (#82-semantiek).
 export async function syncContainerRelays(owner: string, containerRef: string): Promise<void> {
+  assertSafeOwner(owner);
   const { status, data } = await dockerRequestJson('GET', `/containers/${encodeURIComponent(containerRef)}/json`);
   if (status !== 200 || !data) return;
   if (data.Config?.Labels?.['huddle.parent'] !== owner) return;
@@ -665,6 +682,7 @@ echo $! > "$PIDFILE"
 // Installeer/start de forwarder in een (draaiende) devcontainer. Aangeroepen
 // bij devcontainer-aanmaak, bij een start via het portal en bij gateway-start.
 export async function ensurePortForwarder(owner: string, containerRef?: string): Promise<void> {
+  assertSafeOwner(owner);
   const ref = containerRef ?? owner;
   try {
     fs.mkdirSync(portsDirFor(owner), { recursive: true });
