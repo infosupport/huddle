@@ -531,8 +531,8 @@ export function resolveComposeFile(target?: string): string {
 function huddleNetworkExists(internalNet: string, runtime?: string): boolean | undefined {
   try {
     const rt = resolveRuntime(runtime);
-    // execFileSync (arg-array, geen shell) i.p.v. execSync: er komt geen shell aan
-    // te pas, dus geen command-injection-oppervlak via de runtime-/netwerknaam.
+    // execFileSync (arg array, no shell) instead of execSync: no shell is
+    // involved, so there is no command-injection surface via the runtime/network name.
     execFileSync(rt.name, ['network', 'inspect', internalNet], { stdio: 'ignore' });
     return true;
   } catch {
