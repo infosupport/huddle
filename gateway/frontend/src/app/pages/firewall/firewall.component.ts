@@ -40,17 +40,17 @@ export class FirewallComponent {
   toasts: Toast[] = [];
   resolving = new Set<number>();
 
-  // Bekende containers voor de scope-keuze in het "eigen regel toevoegen"-formulier.
+  // Known containers for the scope choice in the "add custom rule" form.
   containers$ = this.state.containers$;
 
-  // ── "Add custom rule"-formulier ─────────────────────────────────────────────
-  // Laat de operator zelf een regel schrijven met wildcards: `*.` in het domein
-  // en `*` in het padpatroon (bv. een Azure-DevOps-feed met een wisselende GUID).
+  // ── "Add custom rule" form ──────────────────────────────────────────────────
+  // Lets the operator write their own rule with wildcards: `*.` in the domain
+  // and `*` in the path pattern (e.g. an Azure DevOps feed with a rotating GUID).
   showAddForm = false;
   addSubmitting = false;
   newDomain = '';
   newPath = '';
-  newScope = '';                       // '' = globaal, anders container_id
+  newScope = '';                       // '' = global, otherwise container_id
   newAction: 'allow' | 'deny' = 'allow';
 
   readonly pieConfig: PieMenuConfig = {

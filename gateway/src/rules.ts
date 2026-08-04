@@ -13,82 +13,81 @@ interface RuleRow {
   path_mode: number;
 }
 
-// ── Pure match-helpers (geen DB) ─────────────────────────────────────────────
-// Bewust los van de DB zodat ze deterministisch testbaar zijn zonder draaiende
-// SQLite-binding.
+// ── Pure match helpers (no DB) ───────────────────────────────────────────────
+// Deliberately decoupled from the DB so they are deterministically testable
+// without a running SQLite binding.
 
-// Canoniseer een host naar precies de vorm waarop de downstream (OS-resolver,
-// SNI, upstream-server) hem zal interpreteren, zodat de proxy op één plek — aan
-// de grens — normaliseert en daarna zowel matcht als forward't op diezelfde
-// waarde. Voorkomt de parser-differential-klasse (finding #3 en de staart:
-// hoofdletters, IDN/punycode, trailing dot, control chars).
+// Canonicalize a host to exactly the form in which the downstream (OS resolver,
+// SNI, upstream server) will interpret it, so the proxy normalizes in one place
+// — at the boundary — and then both matches and forwards on that same value.
+// Prevents the parser-differential class (finding #3 and its tail: uppercase,
+// IDN/punycode, trailing dot, control chars).
 //
-// Retourneert de canonieke host (lowercase, punycode, zonder trailing dot) of
-// null wanneer de host ongeldig/verdacht is (control chars, whitespace, lege of
-// onparseerbare host) — de caller moet dan fail-closed weigeren.
+// Returns the canonical host (lowercase, punycode, without trailing dot) or
+// null when the host is invalid/suspicious (control chars, whitespace, empty or
+// unparseable host) — the caller must then fail-closed and reject.
 export function canonicalizeHost(raw: string): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  // Control chars en whitespace horen nooit in een host (request-smuggling /
-  // log-injectie) — weiger ze expliciet vóór het parsen.
+  // Control chars and whitespace never belong in a host (request smuggling /
+  // log injection) — reject them explicitly before parsing.
   // eslint-disable-next-line no-control-regex
   if (/[\s\u0000-\u001f\u007f]/.test(trimmed)) return null;
   let host: string;
   try {
-    // De WHATWG-URL-parser doet precies de canonicalisatie die de downstream
-    // ook doet: lowercasen, IDNA/punycode toepassen, de host valideren en
-    // bracketed IPv6 normaliseren. We voeren enkel de authority in.
+    // The WHATWG URL parser performs exactly the canonicalization the
+    // downstream also does: lowercasing, applying IDNA/punycode, validating the
+    // host and normalizing bracketed IPv6. We only feed in the authority.
     host = new URL(`http://${trimmed}`).hostname;
   } catch {
     return null;
   }
   if (!host) return null;
-  // Eén trailing dot (FQDN-root) strippen: `a.b.` en `a.b` zijn dezelfde host
-  // voor DNS/SNI. Een dubbele punt aan het eind is ongeldig → laten vallen.
+  // Strip one trailing dot (FQDN root): `a.b.` and `a.b` are the same host for
+  // DNS/SNI. A double dot at the end is invalid → drop it.
   if (host.endsWith('.') && !host.endsWith('..')) host = host.slice(0, -1);
   return host.toLowerCase();
 }
 
-// Normaliseer een request-pad naar de vorm waarop de upstream het zal
-// interpreteren, zodat pad-allowlist-matching niet te omzeilen is met traversal
-// (finding #7). Strategie: query/fragment eraf, één keer percent-decoden, en
-// fail-closed weigeren (null) zodra er een `..`-segment overblijft of de
-// encoding kapot is. `.`-segmenten worden weggevouwen. Bewust NIET verder
-// canonicaliseren dan dat: het pad dat we forwarden blijft de originele
-// (encoded) bytes, zodat legitieme %-encoded tekens niet verminkt worden — we
-// beslissen op de gedecodeerde vorm, maar traversal wordt altijd geblokkeerd,
-// dus er worden nooit `..`-bytes doorgestuurd.
+// Normalize a request path to the form in which the upstream will interpret it,
+// so path-allowlist matching cannot be bypassed with traversal (finding #7).
+// Strategy: drop query/fragment, percent-decode once, and fail-closed reject
+// (null) as soon as a `..` segment remains or the encoding is broken. `.`
+// segments are folded away. Deliberately NO further canonicalization than that:
+// the path we forward stays the original (encoded) bytes, so legitimate
+// %-encoded characters are not mangled — we decide on the decoded form, but
+// traversal is always blocked, so `..` bytes are never forwarded.
 export function normalizePathname(raw: string | null): string | null {
   const input = raw ?? '';
-  // Query en fragment horen niet bij het pad; strip ze vóór het decoden.
+  // Query and fragment are not part of the path; strip them before decoding.
   let p = input.split('#')[0].split('?')[0];
   if (p === '') p = '/';
   let decoded: string;
   try {
     decoded = decodeURIComponent(p);
   } catch {
-    // Kapotte percent-encoding (bv. `%zz`, `%2`) → fail closed.
+    // Broken percent-encoding (e.g. `%zz`, `%2`) → fail closed.
     return null;
   }
   const segs = decoded.split('/');
-  // Elk `..`-segment na één decode is traversal — legitieme flows hebben het
-  // niet nodig. Fail closed i.p.v. proberen te resolven (dat opent double-decode
-  // en clamp-tot-root varianten).
+  // Every `..` segment after one decode is traversal — legitimate flows do not
+  // need it. Fail closed instead of trying to resolve (which opens double-decode
+  // and clamp-to-root variants).
   if (segs.some(s => s === '..')) return null;
-  // `.`-segmenten (huidige map) zijn onschuldig maar vervuilen de match; vouw ze
-  // weg. Lege segmenten (`//`, leidende `/`) blijven staan zodat een trailing
-  // slash behouden blijft.
+  // `.` segments (current directory) are harmless but pollute the match; fold
+  // them away. Empty segments (`//`, leading `/`) remain so that a trailing
+  // slash is preserved.
   const out = segs.filter(s => s !== '.');
   let result = out.join('/');
   if (!result.startsWith('/')) result = '/' + result;
   return result;
 }
 
-// Matcht een domein-patroon tegen een host. Exacte gelijkheid, of een wildcard
-// `*.example.com` die elke subdomein-host matcht (maar NIET kaal `example.com`).
-// Bewust strikt: split op punten en vergelijk segment-voor-segment, zodat
-// substring-trucs (`evilexample.com`, `a.b.example.com.attacker.com`) falen.
+// Matches a domain pattern against a host. Exact equality, or a wildcard
+// `*.example.com` that matches every subdomain host (but NOT bare `example.com`).
+// Deliberately strict: split on dots and compare segment by segment, so
+// substring tricks (`evilexample.com`, `a.b.example.com.attacker.com`) fail.
 export function matchDomain(pattern: string, host: string): boolean {
   if (!pattern || !host) return false;
   const p = pattern.toLowerCase();
@@ -96,26 +95,26 @@ export function matchDomain(pattern: string, host: string): boolean {
   if (p === h) return true;
   if (!p.startsWith('*.')) return false;
 
-  const suffix = p.slice(2).split('.'); // segmenten ná de "*."
+  const suffix = p.slice(2).split('.'); // segments after the "*."
   const hostSegs = h.split('.');
-  // Een wildcard vereist minstens één subdomein-segment vóór het suffix.
+  // A wildcard requires at least one subdomain segment before the suffix.
   if (hostSegs.length <= suffix.length) return false;
   const hostSuffix = hostSegs.slice(hostSegs.length - suffix.length);
   return suffix.every((seg, i) => seg === hostSuffix[i]);
 }
 
-// Wildcard-matching gebeurt met een LINEAIRE two-pointer-scan i.p.v. een RegExp.
-// Reden (security, ReDoS): een `*`-patroon dat naar `new RegExp` gaat, zou bij
-// meerdere wildcards catastrofaal kunnen backtracken. Ook al escapen we alle
-// regex-metatekens in de letterlijke stukken, dan nog levert een patroon als
-// `/a*a*a*…X` de regex `^/a[^/]*a[^/]*a…X$` op — meerdere naast elkaar liggende
-// onbegrensde quantifiers die op een lang segment (attacker-gestuurd request-pad)
-// in polynomiale/exponentiële tijd ontsporen en de event-loop laten hangen.
-// Het glob-algoritme hieronder is O(n·m) en kent geen backtracking-explosie.
+// Wildcard matching is done with a LINEAR two-pointer scan instead of a RegExp.
+// Reason (security, ReDoS): a `*` pattern that goes into `new RegExp` could
+// backtrack catastrophically with multiple wildcards. Even if we escape all
+// regex metacharacters in the literal parts, a pattern like `/a*a*a*…X` still
+// yields the regex `^/a[^/]*a[^/]*a…X$` — multiple adjacent unbounded
+// quantifiers that, on a long segment (attacker-controlled request path), blow
+// up in polynomial/exponential time and hang the event loop. The glob algorithm
+// below is O(n·m) and has no backtracking explosion.
 
-// Een token in een gecompileerd patroon: een letterlijk teken (string), of een
-// wildcard. MID matcht een run tekens BINNEN één segment (kruist nooit `/`);
-// CROSS matcht alles incl. `/` (voor de trailing-prefix-semantiek).
+// A token in a compiled pattern: a literal character (string), or a wildcard.
+// MID matches a run of characters WITHIN one segment (never crosses `/`); CROSS
+// matches everything incl. `/` (for the trailing-prefix semantics).
 const MID_STAR = 0;
 const CROSS_STAR = 1;
 type Token = string | typeof MID_STAR | typeof CROSS_STAR;
@@ -126,8 +125,8 @@ function tokenizeMid(literal: string): Token[] {
   return out;
 }
 
-// Klassieke greedy glob-match met één onthouden wildcard-positie → O(n·m), geen
-// exponentieel backtracken. Een MID_STAR mag `/` niet opeten; een CROSS_STAR wel.
+// Classic greedy glob match with a single remembered wildcard position → O(n·m),
+// no exponential backtracking. A MID_STAR may not eat `/`; a CROSS_STAR may.
 function matchTokens(tokens: Token[], str: string): boolean {
   let ti = 0;
   let si = 0;
@@ -146,7 +145,7 @@ function matchTokens(tokens: Token[], str: string): boolean {
       mark = si;
       ti++;
     } else if (starTi !== -1) {
-      // Rek de laatst geziene wildcard één teken op. Een MID_STAR stopt bij `/`.
+      // Stretch the last-seen wildcard by one character. A MID_STAR stops at `/`.
       if (!starCross && str[mark] === '/') return false;
       ti = starTi + 1;
       mark++;
@@ -159,51 +158,52 @@ function matchTokens(tokens: Token[], str: string): boolean {
   return ti === n;
 }
 
-// Matcht een padpatroon met `*`-wildcards tegen een pad. Semantiek:
-//   • Elke `*` MIDDEN in het patroon matcht binnen één segment (kruist geen `/`)
-//     — precies wat de Azure-DevOps-case nodig heeft (`/_packaging/<random>/…`).
-//   • Een `*` aan het EIND mag segment-grenzen kruisen (prefix-match), zodat
-//     `/foo/*` ook `/foo/a/b` matcht. Staat er géén `/` vlak vóór die trailing
-//     `*`, dan moet de rest leeg zijn of op een segment-grens beginnen
-//     (`/safe*` matcht `/safe` en `/safe/x`, maar NIET `/safe-danger`).
-// Opeenvolgende `*` worden samengetrokken tot één (`**` ≡ `*`); dat is bewust
-// (voorkomt naast elkaar liggende wildcards) en semantisch onbeduidend.
+// Matches a path pattern with `*` wildcards against a path. Semantics:
+//   • Every `*` in the MIDDLE of the pattern matches within one segment (does
+//     not cross `/`) — exactly what the Azure DevOps case needs
+//     (`/_packaging/<random>/…`).
+//   • A `*` at the END may cross segment boundaries (prefix match), so `/foo/*`
+//     also matches `/foo/a/b`. If there is NO `/` right before that trailing
+//     `*`, the rest must be empty or start on a segment boundary (`/safe*`
+//     matches `/safe` and `/safe/x`, but NOT `/safe-danger`).
+// Consecutive `*` are collapsed into one (`**` ≡ `*`); that is deliberate
+// (avoids adjacent wildcards) and semantically insignificant.
 function matchWildcardPath(rawPattern: string, path: string): boolean {
   const pattern = rawPattern.replace(/\*+/g, '*');
   if (pattern.endsWith('*')) {
-    const core = pattern.slice(0, -1); // patroon zonder de trailing `*`
+    const core = pattern.slice(0, -1); // pattern without the trailing `*`
     const crossSegment = core === '' || core.endsWith('/');
     if (crossSegment) {
       return matchTokens([...tokenizeMid(core), CROSS_STAR], path);
     }
-    // Trailing `*` niet op een grens: rest leeg (exacte core) OF `/` + wat dan ook.
+    // Trailing `*` not on a boundary: rest empty (exact core) OR `/` + anything.
     if (matchTokens(tokenizeMid(core), path)) return true;
     return matchTokens([...tokenizeMid(core), '/', CROSS_STAR], path);
   }
   return matchTokens(tokenizeMid(pattern), path);
 }
 
-// Matcht een padpatroon tegen een pad. Een null/leeg patroon is een host-only
-// regel en matcht elk pad. Een patroon mag `*`-wildcards bevatten (zie
-// matchWildcardPath: midden = binnen één segment, eind = prefix-match die
-// segmenten mag kruisen). Zonder `*` geldt exacte gelijkheid.
+// Matches a path pattern against a path. A null/empty pattern is a host-only
+// rule and matches every path. A pattern may contain `*` wildcards (see
+// matchWildcardPath: middle = within one segment, end = prefix match that may
+// cross segments). Without `*`, exact equality applies.
 //
-// Het pad wordt eerst genormaliseerd (query eraf, één decode, `..` fail-closed)
-// zodat traversal-trucs (`/foo/../secret`, `/foo/..%2fsecret`) niet door een
-// `/foo/*`-allow glippen (finding #7). Een pad dat niet veilig normaliseert
-// matcht nooit.
+// The path is normalized first (drop query, one decode, `..` fail-closed) so
+// that traversal tricks (`/foo/../secret`, `/foo/..%2fsecret`) do not slip
+// through a `/foo/*` allow (finding #7). A path that does not normalize safely
+// never matches.
 export function matchPath(pattern: string | null, path: string | null): boolean {
   if (pattern === null || pattern === '') return true;
   const reqPath = normalizePathname(path);
-  if (reqPath === null) return false; // traversal / kapotte encoding → fail closed
+  if (reqPath === null) return false; // traversal / broken encoding → fail closed
   if (!pattern.includes('*')) return reqPath === pattern;
   return matchWildcardPath(pattern, reqPath);
 }
 
-// Groepeert een pad op zijn eerste segment tot een prefix-patroon, bv.
-// `/api/v1/users?x=1` → `/api/*`. Dit is het patroon waarmee een onbekend subpad
-// van een pad-allowlist-domein als 'requested' wordt opgevoerd; de operator kan
-// het later verfijnen naar iets specifiekers (`/api/v1/*` of exact `/api/v1/x`).
+// Groups a path by its first segment into a prefix pattern, e.g.
+// `/api/v1/users?x=1` → `/api/*`. This is the pattern under which an unknown
+// subpath of a path-allowlist domain is filed as 'requested'; the operator can
+// refine it later into something more specific (`/api/v1/*` or exact `/api/v1/x`).
 export function firstSegmentPattern(path: string): string {
   const clean = path.split('?')[0].split('#')[0];
   const segs = clean.split('/').filter(Boolean);
@@ -215,11 +215,11 @@ let stmts: ReturnType<typeof prepareStmts> | null = null;
 
 function prepareStmts() {
   return {
-    // COLLATE NOCASE: de exacte-host lookup moet hoofdletter-ongevoelig zijn,
-    // net als matchDomain (dat beide kanten lowercase't). Zonder dit werd een
-    // exacte deny-regel omzeild door de host anders te kapitaliseren (finding
-    // #3). Domeinen worden bovendien lowercase opgeslagen (zie checkRule +
-    // db.ts-migratie) — dit is de belt-and-suspenders SQL-kant.
+    // COLLATE NOCASE: the exact-host lookup must be case-insensitive, just like
+    // matchDomain (which lowercases both sides). Without this an exact deny rule
+    // was bypassed by capitalizing the host differently (finding #3). Domains
+    // are moreover stored lowercase (see checkRule + db.ts migration) — this is
+    // the belt-and-suspenders SQL side.
     selectPerContainer: db.prepare<[string, string]>(
       `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND container_id = ?`
     ),
@@ -257,8 +257,8 @@ function s() {
 
 type Candidate = RuleRow & { domain_is_wildcard: boolean };
 
-// Specificiteit van een kandidaat-regel. Hoger = specifieker = wint. Volgorde:
-// per-container > globaal; exacte host > wildcard host; mét pad > zonder pad.
+// Specificity of a candidate rule. Higher = more specific = wins. Order:
+// per-container > global; exact host > wildcard host; with path > without path.
 function specificity(c: Candidate): number {
   let score = 0;
   if (c.container_id !== null) score += 4;
@@ -272,18 +272,18 @@ export function checkRule(
   containerId: string | null,
   path: string | null = null,
 ): { status: RuleStatus; ruleId: number | null } {
-  // Canoniseer de host één keer aan de rand: lowercase zodat exacte lookups en
-  // wildcard-matching op dezelfde vorm werken (finding #3). De proxy voert al de
-  // volledige punycode/trailing-dot-canonicalisatie uit via canonicalizeHost;
-  // hier lowercasen we defensief voor directe callers/tests.
+  // Canonicalize the host once at the boundary: lowercase so that exact lookups
+  // and wildcard matching operate on the same form (finding #3). The proxy
+  // already performs the full punycode/trailing-dot canonicalization via
+  // canonicalizeHost; here we lowercase defensively for direct callers/tests.
   const domain = rawDomain.toLowerCase();
   const {
     selectPerContainer, selectGlobal, selectWildcardPerContainer, selectWildcardGlobal,
     touchRule, setLastPath, insertRequested, insertRequestedPath, resetExpired,
   } = s();
 
-  // Verzamel alle kandidaat-regels: exacte-host (per-container + globaal) en
-  // wildcard-host (per-container + globaal). Filter daarna in TypeScript.
+  // Collect all candidate rules: exact-host (per-container + global) and
+  // wildcard-host (per-container + global). Then filter in TypeScript.
   const candidates: Candidate[] = [];
 
   const addExact = (rows: RuleRow[]) => {
@@ -299,9 +299,9 @@ export function checkRule(
     }
   };
 
-  // Airlock: een geïsoleerde container krijgt géén globale-regel-fallback. Alleen
-  // zijn eigen allow-regels tellen; al het overige verkeer wordt als requested
-  // opgevoerd (zie de no-match-tak onderaan). De globale lookup wordt overgeslagen.
+  // Airlock: an isolated container gets NO global-rule fallback. Only its own
+  // allow rules count; all other traffic is filed as requested (see the no-match
+  // branch at the bottom). The global lookup is skipped.
   const airlocked = containerId ? getAirlocked(containerId) : false;
 
   if (containerId) {
@@ -314,7 +314,7 @@ export function checkRule(
   }
 
   if (candidates.length > 0) {
-    // Kies de meest specifieke. Bij gelijke specificiteit wint deny van allow
+    // Pick the most specific. On equal specificity, deny wins over allow
     // (fail-closed).
     candidates.sort((a, b) => {
       const d = specificity(b) - specificity(a);
@@ -324,19 +324,18 @@ export function checkRule(
     });
     const best = candidates[0];
 
-    // Pad-allowlist modus: er bestaat een host-only marker-regel (path_mode=1).
-    // Matchte alléén die marker (geen specifiekere padregel), dan is dit subpad
-    // nog onbekend: voer het — gegroepeerd op het eerste padsegment — als
-    // 'requested' op zodat de operator het kan beoordelen, i.p.v. het stil te
-    // weigeren. Een wél matchende padregel (allow/deny/requested) wordt hieronder
-    // gewoon gehonoreerd.
+    // Path-allowlist mode: a host-only marker rule exists (path_mode=1). If only
+    // that marker matched (no more specific path rule), this subpath is still
+    // unknown: file it — grouped by the first path segment — as 'requested' so
+    // the operator can review it, instead of silently rejecting it. A path rule
+    // that does match (allow/deny/requested) is simply honored below.
     const inPathMode = candidates.some(c => c.path_pattern === null && c.path_mode === 1);
     if (inPathMode && path !== null) {
       const hostOnlyBest = best.path_pattern === null || best.path_pattern === '';
       if (hostOnlyBest) {
-        // Alléén de host-only marker matchte → onbekend subpad: groepeer op het
-        // eerste segment en voer het als requested op. Bewaar het volledige pad
-        // als concreet voorbeeld voor de operator.
+        // Only the host-only marker matched → unknown subpath: group by the
+        // first segment and file it as requested. Keep the full path as a
+        // concrete example for the operator.
         const grp = firstSegmentPattern(path);
         const containerForRule = best.container_id;
         const inserted = insertRequestedPath.run(domain, containerForRule, grp);
@@ -348,12 +347,12 @@ export function checkRule(
         return { status: 'requested', ruleId: created?.id ?? null };
       }
       if (best.status === 'requested') {
-        // Bestaande requested-groep opnieuw geraakt → ververs het voorbeeld-pad.
+        // Existing requested group hit again → refresh the example path.
         setLastPath.run(path, best.id);
         touchRule.run(best.id);
         return { status: 'requested', ruleId: best.id };
       }
-      // Anders won een expliciete allow/deny-padregel → normale afhandeling.
+      // Otherwise an explicit allow/deny path rule won → normal handling.
     }
 
     if (best.status === 'allow' && best.expires_at !== null && best.expires_at < Math.floor(Date.now() / 1000)) {
@@ -364,8 +363,8 @@ export function checkRule(
     return { status: best.status, ruleId: best.id };
   }
 
-  // Geen match → maak een host-only requested-regel aan zodat de operator hem
-  // in de UI ziet. (Pad wordt niet vastgelegd: de operator kiest zelf scope.)
+  // No match → create a host-only requested rule so the operator sees it in the
+  // UI. (The path is not recorded: the operator chooses the scope themselves.)
   const inserted = insertRequested.run(domain, containerId);
   if (inserted.changes > 0) notifyStateChanged();
   const created = (containerId
@@ -378,10 +377,10 @@ export function checkRule(
   return { status: 'requested', ruleId: created?.id ?? null };
 }
 
-// Staat dit domein in pad-allowlist modus? D.w.z. bestaat er een host-only
-// marker-regel (path_mode=1) die geldt voor deze container of globaal. De proxy
-// gebruikt dit bij CONNECT (pad nog versleuteld) om de HTTPS-tunnel tóch toe te
-// laten, zodat MITM het pad kan zien en de echte handhaving per request gebeurt.
+// Is this domain in path-allowlist mode? I.e. does a host-only marker rule
+// (path_mode=1) exist that applies to this container or globally. The proxy uses
+// this at CONNECT (path still encrypted) to allow the HTTPS tunnel anyway, so
+// that MITM can see the path and the real enforcement happens per request.
 export function isPathMode(domain: string, containerId: string | null): boolean {
   const { selectPerContainer, selectGlobal } = s();
   const rows = [
