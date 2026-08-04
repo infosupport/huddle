@@ -2,20 +2,20 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import http from 'http';
 import type { AddressInfo } from 'net';
 
-// ── Default-deny voor onbekende proxy-bronnen ────────────────────────────────
-// De egress-proxy identificeert clients op bron-IP → containermap (kinderen
-// erven hun parent-devcontainer). Sinds de port-relay de gateway aan workload-
-// netwerken koppelt, kan de proxy in principe bereikt worden door bronnen die
-// niet naar een huddle-beheerde container herleiden. Die mochten voorheen
-// stilletjes meeliften op GLOBALE allow-regels (en vervuilden de rules-tabel
-// met requested-regels) — een bypass van "no direct internet". Deze suite pint
-// het nieuwe contract vast:
-//   1. onbekende bron → 403, óók met een matchende globale allow-regel;
-//   2. onbekende bron maakt géén requested-regel aan;
-//   3. een bekende container blijft de globale-regel-fallback houden.
+// ── Default-deny for unknown proxy sources ───────────────────────────────────
+// The egress proxy identifies clients via source-IP → container mapping
+// (children inherit their parent devcontainer). Since the port relay attaches
+// the gateway to workload networks, the proxy can in principle be reached by
+// sources that do not resolve to a huddle-managed container. Those could
+// previously piggyback silently on GLOBAL allow rules (and polluted the rules
+// table with requested rules) — a bypass of "no direct internet". This suite
+// pins down the new contract:
+//   1. unknown source → 403, even with a matching global allow rule;
+//   2. an unknown source creates no requested rule;
+//   3. a known container keeps the global-rule fallback.
 //
-// better-sqlite3 is een native module; zonder bruikbare binding slaan we over
-// (zelfde probe als proxy-forward-path.test.ts).
+// better-sqlite3 is a native module; without a usable binding we skip
+// (same probe as proxy-forward-path.test.ts).
 let sqliteAvailable = true;
 try {
   const mod = await import('better-sqlite3');
@@ -23,7 +23,7 @@ try {
 } catch (e) {
   sqliteAvailable = false;
   console.warn(
-    `[proxy-unknown-source.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
+    `[proxy-unknown-source.test] SKIPPED — better-sqlite3 binding not usable: ${(e as Error).message}`
   );
 }
 
@@ -59,7 +59,7 @@ function proxyGet(pathAndQuery: string): Promise<{ status: number; blockedHeader
   });
 }
 
-describe.skipIf(!sqliteAvailable)('proxy default-deny voor onbekende bronnen', () => {
+describe.skipIf(!sqliteAvailable)('proxy default-deny for unknown sources', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;
@@ -89,27 +89,27 @@ describe.skipIf(!sqliteAvailable)('proxy default-deny voor onbekende bronnen', (
   beforeEach(() => {
     db.exec('DELETE FROM rules');
     db.exec('DELETE FROM audit_log');
-    // Globale allow voor de upstream-host: de verleiding waar een onbekende
-    // bron vroeger op meeliftte.
+    // Global allow for the upstream host: the temptation an unknown source
+    // used to piggyback on.
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
   });
 
-  it('onbekende bron → 403, ondanks een matchende globale allow-regel', async () => {
+  it('unknown source → 403, despite a matching global allow rule', async () => {
     resolveMock.mockResolvedValue(null);
     const { status, blockedHeader } = await proxyGet('/data');
     expect(status).toBe(403);
     expect(blockedHeader).toBe('1');
   });
 
-  it('onbekende bron maakt géén requested-regel aan (geen rules-vervuiling)', async () => {
+  it('unknown source creates no requested rule (no rules pollution)', async () => {
     resolveMock.mockResolvedValue(null);
-    db.exec('DELETE FROM rules'); // ook geen globale regel: het no-match-pad
+    db.exec('DELETE FROM rules'); // no global rule either: the no-match path
     await proxyGet('/data');
     const count = (db.prepare('SELECT COUNT(*) AS n FROM rules').get() as { n: number }).n;
     expect(count).toBe(0);
   });
 
-  it('bekende container houdt de globale-regel-fallback (regressieguard)', async () => {
+  it('known container keeps the global-rule fallback (regression guard)', async () => {
     resolveMock.mockResolvedValue('dc-known');
     const { status } = await proxyGet('/data');
     expect(status).toBe(200);

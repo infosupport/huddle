@@ -526,8 +526,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       if (inspect.State?.Running) return { ok: true };
       await startExistingContainer(inspect.Id);
-      // De forwarder (port-relay.ts) leeft in de devcontainer en sterft met een
-      // stop; na een start opnieuw opzetten.
+      // The forwarder (port-relay.ts) lives inside the devcontainer and dies
+      // with a stop; re-install it after a start.
       await ensurePortForwarder(name, inspect.Id);
       logAudit({ containerId: name, domain: 'docker', action: 'container:start' });
       notifyStateChanged();
@@ -979,13 +979,13 @@ export async function createApiServer(): Promise<FastifyInstance> {
   getOperatorToken();
 
   const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
-  // :3000 moet op 0.0.0.0 blijven (de host bereikt het portal via de published
-  // port, die op het container-IP uitkomt — loopback-binden kan dus niet). Maar
-  // netwerken die de gateway alleen voor de port-relay joinde dragen puur
-  // workload-verkeer: verbindingen daarvandaan worden op TCP-niveau geweigerd
-  // (dekt HTTP én WebSocket-upgrades), zodat een netwerk-join geen nieuw
-  // API-oppervlak oplevert. dc-net-verkeer (devcontainers, o.a. de
-  // sudo-audit-ingest) blijft ongemoeid.
+  // :3000 must stay bound to 0.0.0.0 (the host reaches the portal through the
+  // published port, which lands on the container IP — binding loopback is not
+  // an option). But networks the gateway joined solely for the port-relay carry
+  // pure workload traffic: connections from there are refused at the TCP level
+  // (covers both HTTP and WebSocket upgrades), so a network join never adds new
+  // API surface. dc-net traffic (devcontainers, incl. the sudo-audit ingest)
+  // is left untouched.
   app.server.on('connection', (sock) => {
     const ip = sock.remoteAddress ?? '';
     if (ip && isRelayNetworkIp(ip)) {

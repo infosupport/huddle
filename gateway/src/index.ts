@@ -71,8 +71,8 @@ initContainerProxies();
 // internal-net aardvark-DNS erin); sanitize erna zodat egress-DNS blijft werken,
 // óók als er (nog) geen devcontainers zijn. De settling-runs vangen bovendien de
 // devcontainer-net-connect op die `huddle init` pas ná de start uitvoert.
-// Port-relays herstellen ná de netwerk-reconnects: de relay bereikt de
-// workload-containers via het dc-net waar huddle (weer) aan moet hangen.
+// Restore port-relays AFTER the network reconnects: a relay reaches the
+// workload containers via the dc-net that huddle must be (re)attached to.
 initContainerNetworks().finally(() => { void sanitizeResolvConf(); void initPortRelays(); });
 scheduleSettlingSanitize();
 initContainerIptables();

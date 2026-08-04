@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// socket-proxy importeert db.ts alleen voor de grant-checks; mocken houdt de
-// native better-sqlite3-binding buiten deze test (die ontbreekt in een verse
-// DMZ-devcontainer, zie rules.test.ts / grants.test.ts). ownershipFromInspect is
-// puur en raakt de db niet.
+// socket-proxy imports db.ts only for the grant checks; mocking it keeps the
+// native better-sqlite3 binding out of this test (it is absent in a fresh
+// DMZ devcontainer, see rules.test.ts / grants.test.ts). ownershipFromInspect
+// is pure and never touches the db.
 vi.mock('../src/db', () => ({
   getGrant: () => null,
   isHostPortApproved: () => false,
@@ -11,45 +11,45 @@ vi.mock('../src/db', () => ({
 
 const { ownershipFromInspect } = await import('../src/socket-proxy');
 
-// ── Container-ownership classificatie (issue #61) ────────────────────────────
-// De inspect-policy classificeert een container als 'own', 'foreign' of
-// 'missing'. Alleen 'own' wordt naar Docker doorgezet; 'foreign' én 'missing'
-// krijgen beide een gesynthetiseerde 404 (zie de inspect-tak in socket-proxy.ts).
-// Dat 'foreign' óók een 404 geeft is bewust: zo is een vreemde container niet van
-// een niet-bestaande te onderscheiden (geen bestaans-oracle) en ziet Aspire's DCP
-// een nog-niet-aangemaakte persistent container als afwezig → maakt 'm aan. Het
-// onderscheid 'foreign' vs 'missing' blijft bestaan zodat een probe op een écht
-// bestaande vreemde container als verdacht gelogd kan worden. Deze pure functie
-// is het beslispunt.
+// ── Container-ownership classification (issue #61) ───────────────────────────
+// The inspect policy classifies a container as 'own', 'foreign' or 'missing'.
+// Only 'own' is passed through to Docker; 'foreign' and 'missing' both get a
+// synthesized 404 (see the inspect branch in socket-proxy.ts). That 'foreign'
+// also yields a 404 is deliberate: it makes a foreign container
+// indistinguishable from a nonexistent one (no existence oracle), and Aspire's
+// DCP sees a not-yet-created persistent container as absent → creates it. The
+// distinction 'foreign' vs 'missing' is kept so a probe against a genuinely
+// existing foreign container can be logged as suspicious. This pure function
+// is the decision point.
 describe('ownershipFromInspect', () => {
   const own = { Config: { Labels: { 'huddle.parent': 'dc-a' } } };
 
-  it('markeert een eigen container als "own"', () => {
+  it('classifies our own container as "own"', () => {
     expect(ownershipFromInspect(200, own, 'dc-a')).toBe('own');
   });
 
-  it('markeert een container van een andere devcontainer als "foreign"', () => {
+  it('classifies a container of another devcontainer as "foreign"', () => {
     expect(ownershipFromInspect(200, own, 'dc-b')).toBe('foreign');
   });
 
-  it('markeert een ongelabelde container als "foreign"', () => {
+  it('classifies an unlabeled container as "foreign"', () => {
     expect(ownershipFromInspect(200, { Config: { Labels: {} } }, 'dc-a')).toBe('foreign');
     expect(ownershipFromInspect(200, { Config: {} }, 'dc-a')).toBe('foreign');
   });
 
-  it('markeert een 404 (No such container) als "missing"', () => {
-    // Dít is de kern van issue #61: een niet-bestaande container mag geen 403
-    // "not owned" opleveren, maar als "missing" worden doorgelaten zodat Docker
-    // z'n eigen 404 teruggeeft en DCP de persistent container alsnog aanmaakt.
+  it('classifies a 404 (No such container) as "missing"', () => {
+    // THIS is the core of issue #61: a nonexistent container must not yield a
+    // 403 "not owned" but be passed through as "missing", so Docker returns
+    // its own 404 and DCP still creates the persistent container.
     expect(ownershipFromInspect(404, { message: 'No such container: sqlserver-x' }, 'dc-a')).toBe('missing');
   });
 
-  it('behandelt een onverwachte fout (5xx) veilig als "foreign", niet als "missing"', () => {
+  it('safely treats an unexpected error (5xx) as "foreign", not "missing"', () => {
     expect(ownershipFromInspect(500, { message: 'boom' }, 'dc-a')).toBe('foreign');
     expect(ownershipFromInspect(500, null, 'dc-a')).toBe('foreign');
   });
 
-  it('behandelt onleesbaar/leeg body op een 200 veilig als "foreign"', () => {
+  it('safely treats an unreadable/empty body on a 200 as "foreign"', () => {
     expect(ownershipFromInspect(200, null, 'dc-a')).toBe('foreign');
   });
 });

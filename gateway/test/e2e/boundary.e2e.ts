@@ -142,24 +142,24 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
         expect(`${r.stdout}${r.stderr}`).toMatch(/privileged.*not permitted/i);
       });
 
-      // Sinds #61 leest een vreemde container als afwezig (gesynthetiseerde
-      // 404) in plaats van een 403 "not owned": 'foreign' en 'missing' zijn
-      // bewust niet te onderscheiden (geen bestaans-oracle). `--type container`
-      // voorkomt dat de CLI na de 404 terugvalt op image-inspect — dat pad
-      // heeft z'n eigen actietoggle en is hier niet wat we testen.
-      it('vreemde container (huddle) leest als niet-bestaand', async () => {
+      // Since #61 a foreign container reads as absent (synthesized 404)
+      // instead of a 403 "not owned": 'foreign' and 'missing' are deliberately
+      // indistinguishable (no existence oracle). `--type container` prevents
+      // the CLI from falling back to image-inspect after the 404 — that path
+      // has its own action toggle and is not what we test here.
+      it('foreign container (huddle) reads as non-existent', async () => {
         const r = execIn(E2E_NAME, 'docker inspect --type container huddle');
         expect(r.status).not.toBe(0);
         const out = `${r.stdout}${r.stderr}`;
         expect(out).toMatch(/no such container/i);
-        // Het antwoord mag niet verraden dát de container bestaat.
+        // The answer must not betray that the container exists.
         expect(out).not.toMatch(/not owned|not permitted/i);
       });
 
-      // Zelfde 404, maar dan via het devcontainer-fast-path (de naam staat in
-      // devcontainerIds, dus de proxy antwoordt zonder Docker-round-trip). Het
-      // antwoord moet identiek zijn aan de trage route hierboven.
-      it('devcontainer zelf leest óók als niet-bestaand (fast-path)', async () => {
+      // Same 404, but via the devcontainer fast-path (the name is in
+      // devcontainerIds, so the proxy answers without a Docker round-trip).
+      // The answer must be identical to the slow route above.
+      it('the devcontainer itself also reads as non-existent (fast-path)', async () => {
         const r = execIn(E2E_NAME, `docker inspect --type container ${E2E_NAME}`);
         expect(r.status).not.toBe(0);
         const out = `${r.stdout}${r.stderr}`;

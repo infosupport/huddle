@@ -205,14 +205,14 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
-    // Default-deny voor onbekende bronnen. Client-identiteit is bron-IP →
-    // containermap (kinderen erven hun parent-devcontainer, zie docker.ts); een
-    // IP dat na een geforceerde refresh nog steeds niet naar een huddle-beheerde
-    // container herleidt (host-verkeer, een vreemde container op een netwerk
-    // waar de gateway voor de port-relay bij zit) krijgt GEEN globale-regel-
-    // fallback en maakt ook geen requested-regel aan. Zonder deze guard was elke
-    // globale allow-regel bruikbaar voor iedereen die de proxy kan bereiken —
-    // een stille bypass van "no direct internet".
+    // Default-deny for unknown sources. Client identity is source IP →
+    // container map (children inherit their parent devcontainer, see docker.ts);
+    // an IP that still does not resolve to a huddle-managed container after a
+    // forced refresh (host traffic, a foreign container on a network the
+    // gateway joined for the port-relay) gets NO global-rule fallback and does
+    // not create a requested-rule either. Without this guard every global allow
+    // rule would be usable by anyone able to reach the proxy — a silent bypass
+    // of "no direct internet".
     if (!extHeader && containerId === null) {
       console.warn(`[proxy] denied request from unknown source ${req.socket.remoteAddress ?? '?'} for ${host}`);
       logAudit({
@@ -371,8 +371,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
-    // Default-deny voor onbekende bronnen — zelfde guard en rationale als op
-    // het plain-HTTP-pad hierboven.
+    // Default-deny for unknown sources — same guard and rationale as on the
+    // plain-HTTP path above.
     if (containerId === null) {
       console.warn(`[proxy] denied CONNECT from unknown source ${(clientSocket as net.Socket).remoteAddress ?? '?'} for ${hostname}`);
       logAudit({

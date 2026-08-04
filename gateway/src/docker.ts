@@ -73,9 +73,9 @@ async function fetchContainerMap(): Promise<Map<string, string>> {
   return map;
 }
 
-// Bij een cache-miss maximaal 1×/s een geforceerde refresh: sinds de proxy
-// onbekende bronnen hard weigert (default-deny) mag een net gestarte container
-// binnen de cache-TTL geen onterechte 403 krijgen.
+// On a cache miss, force a refresh at most once per second: now that the proxy
+// hard-refuses unknown sources (default-deny), a freshly started container must
+// not catch an unwarranted 403 within the cache TTL.
 let lastMissRefresh = 0;
 
 export async function resolveContainerByIp(rawIp: string): Promise<string | null> {
@@ -97,8 +97,8 @@ export async function resolveContainerByIp(rawIp: string): Promise<string | null
       ipToName = await fetchContainerMap();
       cacheExpiry = now + CACHE_TTL_MS;
     } catch (err: any) {
-      // Stale map blijft bruikbaar; wel loggen, anders is een 'unknown
-      // source'-denial door een mislukte refresh niet te diagnosticeren.
+      // The stale map stays usable; do log, though — otherwise an 'unknown
+      // source' denial caused by a failed refresh cannot be diagnosed.
       console.warn(`[docker] container-map refresh failed for ${ip}: ${err?.message ?? err}`);
     }
   }
@@ -960,8 +960,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
 
-  // Port-relay-forwarder: spiegelt gepubliceerde poorten van owned containers
-  // op de loopback van de devcontainer (zie port-relay.ts).
+  // Port-relay forwarder: mirrors published ports of owned containers onto
+  // the devcontainer's loopback (see port-relay.ts).
   await ensurePortForwarder(containerName, id);
 
   saveCredentials(containerName, password);

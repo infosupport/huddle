@@ -44,10 +44,10 @@ function dockerGet(urlPath: string): Promise<any> {
   });
 }
 
-// Zoals dockerGet, maar geeft óók de HTTP-status terug. dockerGet parse't het
-// body ongeacht de status, zodat een 404 (`{"message":"No such container"}`) niet
-// van een echte 200-inspect te onderscheiden is. Voor de ownership-check moeten we
-// "bestaat niet" (404) juist wél kunnen scheiden van "bestaat, maar niet van mij".
+// Like dockerGet, but also returns the HTTP status. dockerGet parses the body
+// regardless of the status, so a 404 (`{"message":"No such container"}`) cannot
+// be told apart from a genuine 200 inspect. For the ownership check we need to
+// distinguish "does not exist" (404) from "exists, but is not mine".
 function dockerGetStatus(urlPath: string): Promise<{ status: number; data: any }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -69,13 +69,13 @@ function dockerGetStatus(urlPath: string): Promise<{ status: number; data: any }
 
 export type ContainerOwnership = 'own' | 'foreign' | 'missing';
 
-// Classificeer een container-inspect-respons: van ons (huddle.parent-label komt
-// overeen), van een andere devcontainer, of niet-bestaand (404). Puur zodat de
-// beslissing zonder live Docker-socket te unit-testen valt.
+// Classify a container-inspect response: ours (huddle.parent label matches),
+// another devcontainer's, or non-existent (404). Pure so the decision can be
+// unit-tested without a live Docker socket.
 export function ownershipFromInspect(status: number, data: any, containerName: string): ContainerOwnership {
   if (status === 404) return 'missing';
-  // Onbekende/onverwachte fout of onleesbaar body → veilig als 'foreign' behandelen
-  // (weigeren), nooit per ongeluk als 'missing' doorlaten.
+  // Unknown/unexpected error or unreadable body → treat safely as 'foreign'
+  // (refuse), never accidentally let it pass as 'missing'.
   if (status >= 400 || !data || typeof data !== 'object') return 'foreign';
   const labels: Record<string, string> = data.Config?.Labels ?? {};
   return labels['huddle.parent'] === containerName ? 'own' : 'foreign';
@@ -145,8 +145,8 @@ export function withLabelFilter(rawUrl: string, label: string): string {
   return `${base}?${params.toString()}`;
 }
 
-// Statuscode uit een gebufferde HTTP-respons ("HTTP/1.1 204 …"). 0 bij een
-// onherkenbaar antwoord, zodat post-response hooks dan niets doen.
+// Status code from a buffered HTTP response ("HTTP/1.1 204 …"). 0 for an
+// unrecognizable reply, so post-response hooks then do nothing.
 export function parseHttpStatus(resp: Buffer): number {
   const m = /^HTTP\/1\.[01] (\d{3})/.exec(resp.toString('latin1', 0, 16));
   return m ? parseInt(m[1], 10) : 0;
@@ -397,13 +397,12 @@ function deny403(client: net.Socket, msg: string): void {
   client.end();
 }
 
-// Synthetiseer Docker's eigen "No such container"-404. Gebruikt op de
-// lees-/inspect-tak voor élke container die deze devcontainer niet bezit, zodat
-// een vreemde en een niet-bestaande container niet te onderscheiden zijn (geen
-// bestaans-oracle) en tools als Aspire's DCP een nog-niet-aangemaakte persistent
-// container als afwezig zien en 'm aanmaken (#61). Body byte-lengte i.p.v.
-// string-lengte: containernamen zijn ASCII, maar zo blijft het correct als daar
-// ooit iets anders in zou vloeien.
+// Synthesize Docker's own "No such container" 404. Used on the read/inspect
+// branch for every container this devcontainer does not own, so that a foreign
+// and a non-existent container are indistinguishable (no existence oracle) and
+// tools like Aspire's DCP see a not-yet-created persistent container as absent
+// and create it (#61). Body byte length instead of string length: container
+// names are ASCII, but this stays correct should anything else ever flow in.
 function denyNotFound(client: net.Socket, name: string): void {
   const body = JSON.stringify({ message: `No such container: ${name}` });
   client.write(`HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
@@ -494,14 +493,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
         writeRequestConnectionClose(upstream, firstData);
       }
 
-      // Als openUpstream, maar buffert de volledige upstream-respons en stelt
-      // het terugschrijven naar de client uit tot `onDone` klaar is. Nodig voor
-      // de port-relays: DCP/Testcontainers doen direct ná een geslaagde start
-      // een inspect + connect naar de gepubliceerde poort, dus de relay moet er
-      // ZIJN voordat de start-respons de client bereikt (anders racen eerste
-      // connecties op een dynamische poort in "connection refused"). Docker's
-      // respons op start/stop/kill/remove is klein (204/304 of een JSON-fout),
-      // dus bufferen is veilig.
+      // Like openUpstream, but buffers the full upstream response and defers
+      // writing it back to the client until `onDone` has finished. Needed for
+      // the port-relays: DCP/Testcontainers inspect + connect to the published
+      // port immediately after a successful start, so the relay must EXIST
+      // before the start response reaches the client (otherwise first
+      // connections on a dynamic port race into "connection refused"). Docker's
+      // response to start/stop/kill/remove is small (204/304 or a JSON error),
+      // so buffering is safe.
       function openUpstreamBuffered(firstData: Buffer, onDone: (status: number) => Promise<void>): void {
         phase = 'tunnel';
         upstream = net.createConnection(DOCKER_SOCKET);
@@ -744,9 +743,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
             if (!ok) {
               deny403(client, `cannot delete ${type} not created by this container`);
             } else if (type === 'container') {
-              // Ruim de port-relays op zodra de remove slaagde (of de container
-              // al weg bleek). Een 409 (nog draaiend, zonder force) laat de
-              // relays juist staan.
+              // Tear down the port-relays once the remove succeeded (or the
+              // container turned out to be gone already). A 409 (still running,
+              // without force) deliberately leaves the relays in place.
               openUpstreamBuffered(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), async (status) => {
                 if ((status > 0 && status < 400) || status === 404) await teardownContainerRelays(targetId);
               });
@@ -809,10 +808,10 @@ export async function createContainerProxy(containerName: string, socketDir: str
           // containers labeled by this devcontainer
           const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
           if (inspectCt) {
-            // Fast-path: een devcontainer is per definitie nooit 'own', dus de
-            // Docker-inspect van de ownership-check kan overgeslagen worden.
-            // Exact dezelfde 404 als de langzame route hieronder, zodat het
-            // antwoord niet verraadt dát dit een (bestaande) devcontainer is.
+            // Fast-path: a devcontainer is by definition never 'own', so the
+            // ownership check's Docker inspect can be skipped. Exactly the same
+            // 404 as the slow route below, so the answer does not betray that
+            // this is an (existing) devcontainer.
             if (devcontainerIds.has(inspectCt)) {
               console.warn(`[socket-proxy] denied inspect of foreign container ${inspectCt} (container: ${containerName})`);
               denyNotFound(client, inspectCt);
@@ -823,21 +822,22 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ownership === 'own') {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else {
-                // Alles wat deze devcontainer NIET zelf heeft aangemaakt — een
-                // vreemde container, een peer-devcontainer, of iets dat niet
-                // bestaat — krijgt Docker's eigen 404. Zo:
-                //  1. lijkt de sandbox leeg van andermans containers: 'foreign'
-                //     en 'missing' zijn niet te onderscheiden, dus geen
-                //     bestaans-oracle waarmee je containernamen kunt aftasten;
-                //  2. behandelt Aspire's DCP een nog-niet-bestaande persistent
-                //     container als afwezig en maakt 'm aan (#61);
-                //  3. forwarden we niets door na de check → geen TOCTOU-venster
-                //     waarin een net-aangemaakte vreemde container alsnog
-                //     geïnspecteerd zou kunnen worden.
-                // Een devcontainer heeft geen huddle.parent-label en valt dus
-                // vanzelf onder 'foreign' — het devcontainer-fast-path hierboven
-                // is puur een optimalisatie, geen aparte security-beslissing, en
-                // de 404 verraadt niet dát het een devcontainer is.
+                // Everything this devcontainer did NOT create itself — a
+                // foreign container, a peer devcontainer, or something that
+                // does not exist — gets Docker's own 404. This way:
+                //  1. the sandbox looks empty of other people's containers:
+                //     'foreign' and 'missing' are indistinguishable, so there is
+                //     no existence oracle to probe container names with;
+                //  2. Aspire's DCP treats a not-yet-existing persistent
+                //     container as absent and creates it (#61);
+                //  3. we forward nothing after the check → no TOCTOU window in
+                //     which a just-created foreign container could still be
+                //     inspected.
+                // A devcontainer carries no huddle.parent label and thus falls
+                // under 'foreign' automatically — the devcontainer fast-path
+                // above is purely an optimization, not a separate security
+                // decision, and the 404 does not betray that it is a
+                // devcontainer.
                 if (ownership === 'foreign') {
                   console.warn(`[socket-proxy] denied inspect of foreign container ${inspectCt} (container: ${containerName})`);
                 }
@@ -928,17 +928,18 @@ export async function createContainerProxy(containerName: string, socketDir: str
               }
               const reqBuf = Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]);
               if (ctVerb === 'start' || ctVerb === 'restart') {
-                // Relays opzetten vóórdat de respons teruggaat: clients
-                // inspecteren en connecten direct na een geslaagde start.
-                // 304 (already started) telt ook — de relay kan na een
-                // gateway-herstart ontbreken terwijl de container al draait.
+                // Set up the relays before the response goes back: clients
+                // inspect and connect immediately after a successful start.
+                // 304 (already started) counts too — the relay can be missing
+                // after a gateway restart while the container is already
+                // running.
                 openUpstreamBuffered(reqBuf, async (status) => {
                   if (status > 0 && status < 400) await syncContainerRelays(containerName, ctId);
                 });
               } else if (ctVerb === 'stop' || ctVerb === 'kill') {
                 openUpstreamBuffered(reqBuf, async (status) => {
-                  // 304 = al gestopt, 404 = weg (bv. AutoRemove) — in alle
-                  // gevallen is de relay stale.
+                  // 304 = already stopped, 404 = gone (e.g. AutoRemove) — in
+                  // all cases the relay is stale.
                   if ((status > 0 && status < 400) || status === 404) await teardownContainerRelays(ctId);
                 });
               } else {

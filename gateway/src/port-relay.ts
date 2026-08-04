@@ -4,33 +4,34 @@ import fs from 'fs';
 import path from 'path';
 import { sanitizeResolvConf } from './dns-egress';
 
-// ── Port-relay: gepubliceerde poorten van owned containers de devcontainer in ─
-// Een devcontainer praat met de docker-daemon van de HOST (docker-outside-of-
-// docker). Publiceert een owned container een poort, dan bindt die op de
-// loopback van de host — onbereikbaar vanuit de devcontainer, die geen default
-// route heeft en een eigen loopback (issue: Aspire/DCP, Testcontainers, plain
-// `docker run -p` — TCP connect naar 127.0.0.1:<hostPort> faalt of hangt).
+// ── Port-relay: published ports of owned containers into the devcontainer ────
+// A devcontainer talks to the HOST's docker daemon (docker-outside-of-
+// docker). When an owned container publishes a port, it binds on the host's
+// loopback — unreachable from the devcontainer, which has no default route
+// and its own loopback (issue: Aspire/DCP, Testcontainers, plain
+// `docker run -p` — a TCP connect to 127.0.0.1:<hostPort> fails or hangs).
 //
-// De oplossing spiegelt het docker.sock-mechanisme: per gepubliceerde TCP-poort
-// legt de gateway een unix-socket neer in de al gedeelde per-container mount
+// The solution mirrors the docker.sock mechanism: for each published TCP port
+// the gateway drops a unix-socket into the already-shared per-container mount
 // (/tmp/dc-sockets/<owner>/ports/<hostPort>.sock ≙ /var/run/huddle/ports/… in
-// de devcontainer). Een kleine in-devcontainer forwarder (Node, door de gateway
-// via docker exec geïnstalleerd) luistert op 127.0.0.1/::1:<hostPort> en pipe't
-// naar die unix-socket; de gateway pipe't de unix-socket door naar
-// containerIP:containerPort op het dc-net van de eigenaar (waar huddle zelf al
-// aan gekoppeld is). Zo is er nooit een pad via de host-loopback nodig.
+// the devcontainer). A small in-devcontainer forwarder (Node, installed by the
+// gateway via docker exec) listens on 127.0.0.1/::1:<hostPort> and pipes to
+// that unix-socket; the gateway pipes the unix-socket through to
+// containerIP:containerPort on the owner's dc-net (which huddle itself is
+// already attached to). This way no path via the host loopback is ever needed.
 
 const DOCKER_SOCKET = '/var/run/docker.sock';
 const SOCKET_DIR = '/tmp/dc-sockets';
 
-// Hoe lang we op de in-devcontainer forwarder wachten voordat de start-respons
-// alsnog doorgaat. DCP/Testcontainers inspecteren en connecten direct ná de
-// start-respons, dus de loopback-listener moet er vóór die respons zijn.
+// How long we wait for the in-devcontainer forwarder before the start response
+// proceeds anyway. DCP/Testcontainers inspect and connect immediately after the
+// start response, so the loopback listener must be there before that response.
 const FORWARDER_READY_TIMEOUT_MS = 2000;
 
 // ── Docker helpers ────────────────────────────────────────────────────────────
-// Bewust zelfstandig (geen import uit docker.ts): docker.ts importeert deze
-// module, en een importcyclus met socket-proxy.ts erbij is dan snel gemaakt.
+// Deliberately self-contained (no import from docker.ts): docker.ts imports
+// this module, and with socket-proxy.ts in the mix an import cycle is easily
+// created.
 
 function dockerRequestJson(method: string, urlPath: string, body?: unknown): Promise<{ status: number; data: any }> {
   return new Promise((resolve, reject) => {
@@ -62,7 +63,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-// ── Pure helpers (unit-getest) ────────────────────────────────────────────────
+// ── Pure helpers (unit-tested) ────────────────────────────────────────────────
 
 export interface RelaySpec {
   hostPort: number;
@@ -70,16 +71,16 @@ export interface RelaySpec {
   proto: string;
 }
 
-// Leid uit een container-inspect de te relayen poorten af. Bron is
-// NetworkSettings.Ports zoals dat er NÁ de start uitziet, dus inclusief
-// dynamisch toegewezen poorten (HostPort:0 → daadwerkelijke poort). Dubbele
-// bindings van dezelfde hostpoort (0.0.0.0 + ::) vallen samen tot één spec.
+// Derive the ports to relay from a container inspect. The source is
+// NetworkSettings.Ports as it looks AFTER the start, so including dynamically
+// assigned ports (HostPort:0 → actual port). Duplicate bindings of the same
+// host port (0.0.0.0 + ::) collapse into a single spec.
 export function extractRelaySpecs(inspect: any): RelaySpec[] {
   const ports = inspect?.NetworkSettings?.Ports;
   if (!ports || typeof ports !== 'object') return [];
   const seen = new Map<string, RelaySpec>();
   for (const [key, bindings] of Object.entries(ports)) {
-    if (!Array.isArray(bindings)) continue; // niet-gepubliceerde poort (null)
+    if (!Array.isArray(bindings)) continue; // unpublished port (null)
     const [portStr, proto = 'tcp'] = key.split('/');
     const containerPort = parseInt(portStr, 10);
     if (!Number.isInteger(containerPort) || containerPort <= 0) continue;
@@ -98,13 +99,13 @@ export interface RelayTarget {
   network: string;
 }
 
-// Netwerk + IP waarop de gateway de workload-container moet bereiken. Voorkeur:
-// het dc-net van de eigenaar (daar zit huddle standaard al in). Maar een
-// workload kan óók uitsluitend op een eigen netwerk leven — Aspire's DCP maakt
-// z'n session-netwerk via de socket-proxy aan en verhangt containers erheen —
-// en Docker's inter-bridge-isolatie DROP't SYN's stilletjes tussen bridges. De
-// caller moet de gateway dus expliciet aan `network` koppelen vóór de dial
-// (ensure + refcount hieronder); vandaar dat het netwerk hier mee terugkomt.
+// Network + IP on which the gateway must reach the workload container.
+// Preference: the owner's dc-net (huddle is already in it by default). But a
+// workload can also live exclusively on its own network — Aspire's DCP creates
+// its session network via the socket-proxy and moves containers onto it — and
+// Docker's inter-bridge isolation silently DROPs SYNs between bridges. The
+// caller must therefore explicitly attach the gateway to `network` before the
+// dial (ensure + refcount below); hence the network is returned here as well.
 export function resolveTarget(inspect: any, owner: string): RelayTarget | null {
   const nets = inspect?.NetworkSettings?.Networks ?? {};
   const dcNet = `dc-net-${owner}`;
@@ -115,14 +116,14 @@ export function resolveTarget(inspect: any, owner: string): RelayTarget | null {
   return null;
 }
 
-// ── Gateway-netwerkbeheer (join + refcount) ──────────────────────────────────
-// De gateway koppelt zichzelf on demand aan het netwerk van een workload-
-// container. Refcounted over alle relays heen: pas als de laatste relay op een
-// netwerk verdwijnt, koppelt de gateway zich weer los — een achtergebleven
-// membership blokkeert `docker network rm` wanneer Aspire/DCP z'n session-
-// netwerken opruimt. Netwerken waar de gateway al aan hing vóór de eerste
-// acquire (joinedByUs=false) en permanente netwerken (dc-net-*) worden nooit
-// losgekoppeld.
+// ── Gateway network management (join + refcount) ─────────────────────────────
+// The gateway attaches itself on demand to a workload container's network.
+// Refcounted across all relays: only when the last relay on a network
+// disappears does the gateway detach again — a leftover membership blocks
+// `docker network rm` when Aspire/DCP cleans up its session networks.
+// Networks the gateway was already attached to before the first acquire
+// (joinedByUs=false) and permanent networks (dc-net-*) are never
+// disconnected.
 
 export type NetworkConnectResult = 'connected' | 'already-connected' | 'missing' | 'error';
 
@@ -139,9 +140,9 @@ export interface NetworkRefTracker {
   isJoinedNetworkIp(ip: string): boolean;
 }
 
-// Zit `ip` in IPv4-CIDR `subnet`? IPv6-subnetten (zeldzaam voor Docker-bridges)
-// matchen conservatief niet — dan blijft alleen de default-deny van de proxy
-// als laag over. Exported voor unit-tests.
+// Is `ip` inside IPv4 CIDR `subnet`? IPv6 subnets (rare for Docker bridges)
+// conservatively don't match — in that case only the proxy's default-deny
+// remains as a layer. Exported for unit tests.
 export function ipInSubnet(rawIp: string, subnet: string): boolean {
   const ip = rawIp.replace(/^::ffff:/, '');
   const m = subnet.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/);
@@ -160,8 +161,8 @@ export function createNetworkRefTracker(
 ): NetworkRefTracker {
   interface JoinedNet { joinedByUs: boolean; refs: Set<string>; subnets: string[]; }
   const nets = new Map<string, JoinedNet>();
-  // Per netwerk geserialiseerd zodat een gelijktijdige acquire/release nooit
-  // een connect en disconnect door elkaar laat lopen.
+  // Serialized per network so that a concurrent acquire/release can never
+  // interleave a connect and a disconnect.
   const locks = new Map<string, Promise<unknown>>();
   function withLock<T>(network: string, fn: () => Promise<T>): Promise<T> {
     const prev = locks.get(network) ?? Promise.resolve();
@@ -197,10 +198,10 @@ export function createNetworkRefTracker(
     isJoined(network) {
       return nets.has(network);
     },
-    // Alleen subnetten van netwerken die WIJ voor de relay joinden: verkeer
-    // daarvandaan is per definitie workload-verkeer en mag de :3000-API nooit
-    // bereiken (zie de connection-guard in api.ts). Bestaande memberships
-    // (dc-net-*, het default-net) blijven buiten schot.
+    // Only subnets of networks that WE joined for the relay: traffic from
+    // there is by definition workload traffic and must never reach the :3000
+    // API (see the connection guard in api.ts). Existing memberships
+    // (dc-net-*, the default net) stay out of scope.
     isJoinedNetworkIp(ip) {
       for (const entry of nets.values()) {
         if (!entry.joinedByUs) continue;
@@ -213,10 +214,10 @@ export function createNetworkRefTracker(
   };
 }
 
-// Eigen container-referentie van de gateway voor connect/disconnect: de
-// container-id uit /etc/hostname (Docker zet de id als hostname), met 'huddle'
-// (de vaste containernaam uit de CLI-init) als fallback. Eénmalig geverifieerd
-// via inspect.
+// The gateway's own container reference for connect/disconnect: the container
+// id from /etc/hostname (Docker sets the id as hostname), with 'huddle' (the
+// fixed container name from the CLI init) as fallback. Verified once via
+// inspect.
 let selfRefPromise: Promise<string> | null = null;
 function resolveSelfRef(): Promise<string> {
   if (!selfRefPromise) {
@@ -246,8 +247,8 @@ const realNetworkOps: GatewayNetworkOps = {
       'POST', `/networks/${encodeURIComponent(network)}/connect`, { Container: self },
     );
     if (status < 300) {
-      // Podman regenereert resolv.conf bij elke connect van de gateway; herstel
-      // hem zodat egress-DNS blijft werken (zelfde reflex als docker.ts).
+      // Podman regenerates resolv.conf on every connect of the gateway;
+      // restore it so egress DNS keeps working (same reflex as docker.ts).
       await sanitizeResolvConf().catch(() => {});
       return 'connected';
     }
@@ -274,15 +275,15 @@ const realNetworkOps: GatewayNetworkOps = {
 
 const gatewayNetworks = createNetworkRefTracker(realNetworkOps);
 
-// Voor de :3000-API-guard (api.ts): komt dit bron-IP uit een netwerk dat de
-// gateway alleen voor de port-relay heeft gejoined?
+// For the :3000 API guard (api.ts): does this source IP come from a network
+// that the gateway joined solely for the port-relay?
 export function isRelayNetworkIp(ip: string): boolean {
   return gatewayNetworks.isJoinedNetworkIp(ip);
 }
 
-// Backend-dial met harde connect-timeout. Docker's inter-bridge-isolatie DROP't
-// SYN's stilletjes (geen RST): zonder timeout hangt een client voor altijd op
-// een accept zonder bytes. Exported voor unit-tests.
+// Backend dial with a hard connect timeout. Docker's inter-bridge isolation
+// silently DROPs SYNs (no RST): without a timeout a client hangs forever on
+// an accept with no bytes. Exported for unit tests.
 export function dialWithTimeout(host: string, port: number, timeoutMs: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection({ host, port });
@@ -292,7 +293,7 @@ export function dialWithTimeout(host: string, port: number, timeoutMs: number): 
     }, timeoutMs);
     sock.on('connect', () => {
       clearTimeout(timer);
-      // Vangnet tot de caller z'n eigen error-handlers hangt.
+      // Safety net until the caller attaches its own error handlers.
       sock.on('error', () => {});
       resolve(sock);
     });
@@ -319,22 +320,23 @@ interface ContainerRelays {
   containerName: string;
   aliases: string[];
   relays: ActiveRelay[];
-  // Netwerk waarover de relays momenteel dialen; draagt één refcount bij het
-  // netwerkbeheer. Kan per verbinding verspringen (herstart op ander netwerk).
+  // Network the relays currently dial over; carries one refcount with the
+  // network management. Can shift per connection (restart on another network).
   network: string | null;
 }
 
 const relaysById = new Map<string, ContainerRelays>();
-// name / korte id / volle id → volle id, zodat teardown werkt met wat de
-// docker-client ook maar in het pad zette.
+// name / short id / full id → full id, so that teardown works with whatever
+// the docker client happened to put in the path.
 const aliasIndex = new Map<string, string>();
 
-// `owner` vloeit in path.join() onder SOCKET_DIR. De naam komt uit huddle's
-// eigen orchestratie of een operator-API-parameter; net als in socket-proxy.ts
-// (assertSafeContainerName — hier gedupliceerd omdat socket-proxy déze module
-// importeert en een cyclus anders snel gemaakt is) dwingen we de Docker-naam-
-// grammatica expliciet af: geen slashes en geen leidende punt, dus onmogelijk
-// om met `..`/`/` buiten de sockets-directory te schrijven of te lezen.
+// `owner` flows into path.join() under SOCKET_DIR. The name comes from
+// huddle's own orchestration or an operator API parameter; just like in
+// socket-proxy.ts (assertSafeContainerName — duplicated here because
+// socket-proxy imports this very module and a cycle is otherwise easily
+// created) we explicitly enforce the Docker name grammar: no slashes and no
+// leading dot, so it is impossible to write or read outside the sockets
+// directory using `..`/`/`.
 const OWNER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
 export function assertSafeOwner(owner: string): void {
@@ -362,23 +364,24 @@ export async function teardownContainerRelays(ref: string): Promise<void> {
     if (aliasIndex.get(a) === id) aliasIndex.delete(a);
   }
   for (const r of entry.relays) {
-    // close() stopt met accepteren; lopende verbindingen mogen leeglopen (de
-    // container gaat toch neer, dan resetten ze vanzelf).
+    // close() stops accepting; in-flight connections may drain (the
+    // container is going down anyway, so they reset on their own).
     try { r.server.close(); } catch {}
     unlinkRelayFiles(r.sockPath);
   }
   console.log(`[port-relay] ${entry.owner}: relays down for ${id.slice(0, 12)} (${entry.relays.map(r => r.spec.hostPort).join(', ') || 'none'})`);
-  // Netwerk-ref pas ná het sluiten vrijgeven: was dit de laatste relay op dat
-  // netwerk, dan koppelt de gateway zich los en kan `docker network rm` weer.
+  // Release the network ref only after closing: if this was the last relay on
+  // that network, the gateway detaches and `docker network rm` works again.
   if (entry.network) await gatewayNetworks.release(entry.network, id);
 }
 
-// Eén inkomende verbinding op de unix-socket doorzetten naar de workload-
-// container. Target (netwerk + IP) wordt per verbinding vers uit een inspect
-// gehaald: zo overleeft de relay een container-herstart met nieuw IP of ander
-// netwerk, en ruimt hij zichzelf op wanneer de container buiten de proxy om
-// verdween (404). Elke faalroute sluit de client hard (fail fast) — de stille
-// oneindige hang van Docker's inter-bridge-DROP mag niet reproduceerbaar zijn.
+// Forward one incoming connection on the unix-socket to the workload
+// container. The target (network + IP) is fetched fresh from an inspect per
+// connection: that way the relay survives a container restart with a new IP or
+// a different network, and it cleans itself up when the container disappeared
+// outside the proxy (404). Every failure path closes the client hard (fail
+// fast) — the silent infinite hang of Docker's inter-bridge DROP must not be
+// reproducible.
 async function relayConnection(client: net.Socket, owner: string, containerId: string, spec: RelaySpec): Promise<void> {
   client.on('error', () => {});
   const fail = (reason: string): void => {
@@ -401,9 +404,9 @@ async function relayConnection(client: net.Socket, owner: string, containerId: s
     fail('container is not running');
     return;
   }
-  // Ownership her-checken op het verse inspect: een relay mag ook ná een
-  // herstart/re-create nooit naar een container van een ander gaan wijzen
-  // (#82-semantiek — het id kan inmiddels van eigenaar gewisseld zijn).
+  // Re-check ownership on the fresh inspect: even after a restart/re-create a
+  // relay must never end up pointing at someone else's container
+  // (#82 semantics — the id may have changed owner in the meantime).
   if (inspect.data.Config?.Labels?.['huddle.parent'] !== owner) {
     fail('container is no longer owned by this devcontainer');
     void teardownContainerRelays(containerId);
@@ -414,11 +417,11 @@ async function relayConnection(client: net.Socket, owner: string, containerId: s
     fail('container has no reachable network/IP');
     return;
   }
-  // Zorg dat de gateway aan het doelnetwerk hangt vóór de dial; tussen bridges
-  // worden SYN's anders geluidloos gedropt. Idempotent en refcounted; bij een
-  // netwerkwissel (herstart) verhuist de ref van het oude naar het nieuwe net.
-  // Geen entry meer = teardown won de race — dan geen ref meer nemen die
-  // niemand nog vrijgeeft.
+  // Make sure the gateway is attached to the target network before the dial;
+  // otherwise SYNs between bridges are dropped silently. Idempotent and
+  // refcounted; on a network switch (restart) the ref moves from the old to
+  // the new net. No entry left = teardown won the race — in that case don't
+  // take a ref that nobody will release anymore.
   const entry = relaysById.get(containerId);
   if (!entry) {
     client.destroy();
@@ -462,10 +465,10 @@ function listenRelay(owner: string, containerId: string, spec: RelaySpec, sockPa
   });
 }
 
-// Wacht tot de in-devcontainer forwarder de loopback-listener bevestigt
-// (`<port>.ready`), of een duidelijke fout meldt (`<port>.err`, bv. poort al in
-// gebruik in de devcontainer). Timeout is geen fout: de relay werkt dan alsnog
-// zodra de forwarder bijtrekt, alleen kunnen eerste connecties racen.
+// Wait until the in-devcontainer forwarder confirms the loopback listener
+// (`<port>.ready`), or reports a clear error (`<port>.err`, e.g. port already
+// in use in the devcontainer). A timeout is not an error: the relay still
+// works once the forwarder catches up, only the first connections may race.
 async function waitForForwarderReady(dir: string, spec: RelaySpec, owner: string): Promise<void> {
   const readyPath = path.join(dir, `${spec.hostPort}.ready`);
   const errPath = path.join(dir, `${spec.hostPort}.err`);
@@ -483,11 +486,12 @@ async function waitForForwarderReady(dir: string, spec: RelaySpec, owner: string
   console.warn(`[port-relay] ${owner}: devcontainer forwarder did not confirm port ${spec.hostPort} within ${FORWARDER_READY_TIMEOUT_MS}ms; first connections may be refused`);
 }
 
-// (Her)bouw de relays voor één owned container op basis van een verse inspect.
-// Aangeroepen ná een geslaagde start/restart via de socket-proxy, en bij
-// gateway-start voor al draaiende owned containers. De ownership-check hier is
-// verdediging-in-de-diepte: de socket-proxy heeft al geverifieerd, maar relays
-// van andermans containers mogen ook standalone nooit ontstaan (#82-semantiek).
+// (Re)build the relays for one owned container based on a fresh inspect.
+// Called after a successful start/restart via the socket-proxy, and at
+// gateway startup for already-running owned containers. The ownership check
+// here is defence-in-depth: the socket-proxy has already verified, but relays
+// for someone else's containers must never come into existence standalone
+// either (#82 semantics).
 export async function syncContainerRelays(owner: string, containerRef: string): Promise<void> {
   assertSafeOwner(owner);
   const { status, data } = await dockerRequestJson('GET', `/containers/${encodeURIComponent(containerRef)}/json`);
@@ -518,10 +522,10 @@ export async function syncContainerRelays(owner: string, containerRef: string): 
     network: null,
   };
 
-  // Gateway alvast aan het doelnetwerk koppelen, zodat de eerste dial niet op
-  // de join hoeft te wachten. Faalt dit (netwerk net verwijderd?), dan blijft
-  // de relay bestaan: elke verbinding probeert het opnieuw en faalt anders
-  // luid via de dial-guard in relayConnection.
+  // Attach the gateway to the target network up front, so the first dial
+  // doesn't have to wait for the join. If this fails (network just removed?),
+  // the relay stays in place: every connection retries it and otherwise fails
+  // loudly via the dial guard in relayConnection.
   const target = resolveTarget(data, owner);
   if (target) {
     if (await gatewayNetworks.acquire(target.network, id)) {
@@ -550,14 +554,14 @@ export async function syncContainerRelays(owner: string, containerRef: string): 
 }
 
 // ── In-devcontainer forwarder ─────────────────────────────────────────────────
-// Draait als root in de devcontainer (Node zit in het base-image). Houdt
-// /var/run/huddle/ports in de gaten en spiegelt elke <port>.sock naar een
-// TCP-listener op 127.0.0.1 (verplicht) en ::1 (best effort — DCP adresseert
-// [::1]). Meldt succes/falen via <port>.ready / <port>.err zodat de gateway de
-// start-respons kan ophouden tot de listener er echt is.
+// Runs as root in the devcontainer (Node is in the base image). Watches
+// /var/run/huddle/ports and mirrors every <port>.sock to a TCP listener on
+// 127.0.0.1 (required) and ::1 (best effort — DCP addresses [::1]). Reports
+// success/failure via <port>.ready / <port>.err so the gateway can hold the
+// start response until the listener really exists.
 
-const FORWARDER_JS = `// huddle-port-forwarder: spiegelt gepubliceerde poorten van owned containers
-// op de loopback van deze devcontainer. Beheerd door de huddle-gateway.
+const FORWARDER_JS = `// huddle-port-forwarder: mirrors published ports of owned containers
+// onto this devcontainer's loopback. Managed by the huddle gateway.
 'use strict';
 const fs = require('fs');
 const net = require('net');
@@ -614,7 +618,7 @@ function open(port) {
     });
     servers.push(srv);
   };
-  // 127.0.0.1 is verplicht; ::1 best effort (IPv6 kan uit staan).
+  // 127.0.0.1 is required; ::1 best effort (IPv6 may be disabled).
   listen('127.0.0.1', true);
   listen('::1', false);
 }
@@ -634,7 +638,7 @@ function sync() {
     log('closed ' + port);
   }
   for (const port of want) {
-    if (active.has(port)) ensureReady(port); // gateway kan .ready herschreven willen zien na resync
+    if (active.has(port)) ensureReady(port); // gateway may want to see .ready rewritten after a resync
     else open(port);
   }
 }
@@ -648,16 +652,16 @@ function ensureWatch() {
 }
 ensureWatch();
 sync();
-// Vangnet voor gemiste inotify-events of een pas later verschenen ports-dir.
+// Safety net for missed inotify events or a ports dir that appears only later.
 setInterval(() => { ensureWatch(); sync(); }, 2000);
 log('forwarder started');
 `;
 
-// Sh-script dat de forwarder in de devcontainer installeert en (her)start.
-// Idempotent: bij ongewijzigd script en levend pid-bestand gebeurt er niets;
-// een nieuwe forwarder-versie vervangt het bestand en herstart het proces.
-// Zet daarnaast host.docker.internal → 127.0.0.1 in /etc/hosts, zodat de
-// hostnaam-conventie van DCP/Testcontainers op de relays uitkomt.
+// Sh script that installs and (re)starts the forwarder in the devcontainer.
+// Idempotent: with an unchanged script and a live pid file nothing happens;
+// a new forwarder version replaces the file and restarts the process.
+// Additionally sets host.docker.internal → 127.0.0.1 in /etc/hosts, so that
+// the hostname convention of DCP/Testcontainers ends up on the relays.
 export function buildForwarderSetupScript(): string {
   const b64 = Buffer.from(FORWARDER_JS, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -679,8 +683,8 @@ echo $! > "$PIDFILE"
 `;
 }
 
-// Installeer/start de forwarder in een (draaiende) devcontainer. Aangeroepen
-// bij devcontainer-aanmaak, bij een start via het portal en bij gateway-start.
+// Install/start the forwarder in a (running) devcontainer. Called on
+// devcontainer creation, on a start via the portal, and at gateway startup.
 export async function ensurePortForwarder(owner: string, containerRef?: string): Promise<void> {
   assertSafeOwner(owner);
   const ref = containerRef ?? owner;
@@ -700,9 +704,9 @@ export async function ensurePortForwarder(owner: string, containerRef?: string):
   }
 }
 
-// Herstel na een gateway-herstart: forwarder in elke draaiende devcontainer
-// (opnieuw) opzetten en relays terugbouwen voor hun al draaiende owned
-// containers (de unix-sockets van vóór de herstart zijn dood).
+// Recovery after a gateway restart: set up the forwarder (again) in every
+// running devcontainer and rebuild relays for their already-running owned
+// containers (the unix-sockets from before the restart are dead).
 export async function initPortRelays(): Promise<void> {
   try {
     const filters = encodeURIComponent(JSON.stringify({ label: ['com.intellij.devcontainer.id'] }));
