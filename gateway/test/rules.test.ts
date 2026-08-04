@@ -66,6 +66,22 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
   });
   beforeEach(() => { db.exec('DELETE FROM rules'); db.exec('DELETE FROM containers'); });
 
+  describe('finding #7: a concrete rule outranks a stale requested placeholder', () => {
+    it('a matching wildcard allow wins over an exact-host requested row', () => {
+      // Host blocked earlier -> exact-host 'requested' row auto-created; operator
+      // then adds a covering wildcard allow. The allow must win (not stay blocked).
+      setRule('sub.example.com', null, 'requested');
+      setRule('*.example.com', null, 'allow');
+      expect(checkRule('sub.example.com', null).status).toBe('allow');
+    });
+
+    it('a matching wildcard deny also wins over an exact-host requested row', () => {
+      setRule('sub.example.com', null, 'requested');
+      setRule('*.example.com', null, 'deny');
+      expect(checkRule('sub.example.com', null).status).toBe('deny');
+    });
+  });
+
   describe('per-container rules', () => {
     it('allow for an allowed domain', () => {
       setRule('example.com', CID, 'allow');

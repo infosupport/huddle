@@ -314,9 +314,17 @@ export function checkRule(
   }
 
   if (candidates.length > 0) {
-    // Pick the most specific. On equal specificity, deny wins over allow
+    // Pick the winning rule. A concrete decision (allow/deny) always outranks an
+    // unresolved 'requested' placeholder, regardless of host-specificity —
+    // otherwise a stale exact-host 'requested' row (auto-created on an earlier
+    // block) would shadow a matching wildcard allow and keep the host blocked
+    // even after the operator added a covering rule (finding #7). Among concrete
+    // rules the most specific wins, and on equal specificity deny beats allow
     // (fail-closed).
     candidates.sort((a, b) => {
+      const concrete = (st: RuleStatus) => (st === 'requested' ? 0 : 1);
+      const c = concrete(b.status) - concrete(a.status);
+      if (c !== 0) return c;
       const d = specificity(b) - specificity(a);
       if (d !== 0) return d;
       const rank = (st: RuleStatus) => (st === 'deny' ? 0 : st === 'allow' ? 1 : 2);
