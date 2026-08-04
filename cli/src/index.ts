@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
-import { runFirewallList, runFirewallAdd, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
+import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { resolveImages } from './images';
@@ -111,6 +111,8 @@ Usage:
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
                                      supported: *.example.com and /path/*)
+  huddle firewall delete <id>        Delete a firewall rule by id (or domain;
+                                     narrow with --container)
   huddle firewall export [options]   Export firewall rules as JSON
   huddle firewall import <file>      Import firewall rules from a JSON file
   huddle firewall group list         List firewall groups (#69)
@@ -274,6 +276,11 @@ async function main(): Promise<void> {
         domain: positional[2],
         path: flagString(flags, 'path'),
         deny: flagBool(flags, 'deny'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'delete' || subCmd === 'remove' || subCmd === 'rm') {
+      await runFirewallDelete({
+        target: positional[2],
         container: flagString(flags, 'container'),
       });
     } else if (subCmd === 'export') {

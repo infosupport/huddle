@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { get, post } from './api';
+import { get, post, del } from './api';
 import { readConfig, writeConfig } from './config';
 import { bold, dim, green, red, cyan, promptKey, formatTime, printTable } from './utils';
 
@@ -123,6 +123,51 @@ export async function runFirewallAdd(opts: FirewallAddOptions): Promise<void> {
   const scope = rule.container_id ? `container: ${rule.container_id}` : 'global';
   const verb = status === 'deny' ? red('Denied') : green('Allowed');
   console.log(`${verb} ${bold(cyan(target))} ${dim(`(${scope})`)}`);
+}
+
+export interface FirewallDeleteOptions {
+  target?: string; // numeric rule id OR a domain
+  container?: string; // disambiguates when target is a domain
+}
+
+// Deletes a firewall rule. Accepts the numeric id shown by `firewall list`
+// (deleted directly) or a domain, which is resolved to a single rule id via a
+// lookup. `--container` narrows a domain match to one scope; an ambiguous
+// domain (multiple matching rules) is refused with the candidate ids so the
+// caller can re-run with an exact id.
+export async function runFirewallDelete(opts: FirewallDeleteOptions): Promise<void> {
+  const target = (opts.target ?? '').trim();
+  if (!target) {
+    throw new Error('Usage: huddle firewall delete <id-or-domain> [--container <id>]');
+  }
+
+  let id: number;
+  if (/^\d+$/.test(target)) {
+    id = Number(target);
+  } else {
+    // Domain form: list all rules (optionally scoped) and resolve to one id.
+    const qs = new URLSearchParams();
+    if (opts.container) qs.set('container', opts.container);
+    const query = qs.toString();
+    const rules = await get<Rule[]>(`/api/rules${query ? `?${query}` : ''}`);
+    const matches = rules.filter((r) => r.domain === target);
+    if (matches.length === 0) {
+      const scope = opts.container ? ` for container ${opts.container}` : '';
+      throw new Error(`No firewall rule found for "${target}"${scope}.`);
+    }
+    if (matches.length > 1) {
+      const ids = matches
+        .map((r) => `  ${r.id}  ${r.status.padEnd(9)} ${formatTarget(r)}  ${r.container_id ?? '(global)'}`)
+        .join('\n');
+      throw new Error(
+        `"${target}" matches ${matches.length} rules — delete by id (or narrow with --container):\n${ids}`
+      );
+    }
+    id = matches[0].id;
+  }
+
+  await del<{ ok: true }>(`/api/rules/${id}`);
+  console.log(`${green('Deleted')} rule ${bold(cyan(String(id)))}`);
 }
 
 function printRulesTable(rules: Rule[]): void {
