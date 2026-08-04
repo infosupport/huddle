@@ -133,10 +133,10 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // SELinux-labeled proxy socket.
   const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
 
-  // Operator-token voor de control-plane-auth. Hergebruik het token uit de
-  // config (zodat een bestaande browser-sessie/CLI blijft werken over re-inits),
-  // anders genereer er één. We geven het aan de gateway mee via env én bewaren
-  // het lokaal zodat volgende `huddle`-commando's zich kunnen authenticeren.
+  // Operator token for control-plane auth. Reuse the token from the config (so an
+  // existing browser session/CLI keeps working across re-inits), otherwise
+  // generate one. We pass it to the gateway via env AND store it locally so that
+  // subsequent `huddle` commands can authenticate.
   const cfg = readConfig();
   const operatorToken =
     process.env.HUDDLE_OPERATOR_TOKEN?.trim() ||
@@ -175,9 +175,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
   console.log();
-  // Volledige auto-login-link: open deze en de portal logt je automatisch in met
-  // het operator-token (de frontend leest ?token=..., logt in en verwijdert het
-  // daarna uit de adresbalk). Zo hoef je niets te plakken.
+  // Full auto-login link: open it and the portal logs you in automatically with
+  // the operator token (the frontend reads ?token=..., logs in and then removes it
+  // from the address bar). This way you don't have to paste anything.
   const loginUrl = `http://localhost:${HOST_PORT}/?token=${encodeURIComponent(operatorToken)}`;
   console.log(bold('Open the portal (auto-login link):'));
   console.log(green(`    ${loginUrl}`));
