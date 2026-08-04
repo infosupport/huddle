@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 
-// De pure helpers voor Rancher Desktop-detectie wonen in de CLI (cli/src/
-// runtime.ts), maar de CLI heeft geen eigen test-runner. Gateway draait vitest
-// (en dat is wat CI uitvoert), dus testen we het parsen hier. Alleen zuivere
-// functies zonder daemon-afhankelijkheid — geen live docker nodig.
+// The pure helpers for Rancher Desktop detection live in the CLI (cli/src/
+// runtime.ts), but the CLI has no test runner of its own. Gateway runs vitest
+// (and that is what CI executes), so we test the parsing here. Only pure
+// functions without a daemon dependency — no live docker needed.
 import { parseDockerContextSocket, isRancherDesktopSocket } from '../../cli/src/runtime';
 
 describe('parseDockerContextSocket (#81)', () => {
-  it('haalt het unix-socketpad uit de rancher-desktop context', () => {
+  it('extracts the unix socket path from the rancher-desktop context', () => {
     const json = JSON.stringify([
       {
         Name: 'rancher-desktop',
@@ -17,41 +17,41 @@ describe('parseDockerContextSocket (#81)', () => {
     expect(parseDockerContextSocket(json)).toBe('/home/toon/.rd/docker.sock');
   });
 
-  it('haalt het pad ook uit de standaard docker-context', () => {
+  it('also extracts the path from the default docker context', () => {
     const json = JSON.stringify([
       { Name: 'default', Endpoints: { docker: { Host: 'unix:///var/run/docker.sock' } } },
     ]);
     expect(parseDockerContextSocket(json)).toBe('/var/run/docker.sock');
   });
 
-  it('accepteert ook een enkel object i.p.v. een array', () => {
+  it('also accepts a single object instead of an array', () => {
     const json = JSON.stringify({ Endpoints: { docker: { Host: 'unix:///run/user/1000/docker.sock' } } });
     expect(parseDockerContextSocket(json)).toBe('/run/user/1000/docker.sock');
   });
 
-  it('geeft null voor een niet-unix endpoint (Windows npipe)', () => {
+  it('returns null for a non-unix endpoint (Windows npipe)', () => {
     const json = JSON.stringify([
       { Endpoints: { docker: { Host: 'npipe:////./pipe/docker_engine' } } },
     ]);
     expect(parseDockerContextSocket(json)).toBeNull();
   });
 
-  it('geeft null voor een remote tcp/ssh endpoint', () => {
+  it('returns null for a remote tcp/ssh endpoint', () => {
     const json = JSON.stringify([{ Endpoints: { docker: { Host: 'tcp://1.2.3.4:2375' } } }]);
     expect(parseDockerContextSocket(json)).toBeNull();
   });
 
-  it('geeft null bij onparsebare of onvolledige JSON', () => {
+  it('returns null for unparsable or incomplete JSON', () => {
     expect(parseDockerContextSocket('not json')).toBeNull();
     expect(parseDockerContextSocket('[]')).toBeNull();
     expect(parseDockerContextSocket('[{}]')).toBeNull();
     expect(parseDockerContextSocket(JSON.stringify([{ Endpoints: {} }]))).toBeNull();
   });
 
-  // Regressie (#81, security): het pad belandt ONgequote in een `docker run -v
-  // <pad>:...` shell-commando. Een beïnvloedbare docker-context mag geen
-  // shell-metatekens kunnen binnensmokkelen -> command injection.
-  it('weigert paden met shell-metatekens (command injection)', () => {
+  // Regression (#81, security): the path ends up UNquoted in a `docker run -v
+  // <path>:...` shell command. An attacker-influenceable docker context must
+  // not be able to smuggle in shell metacharacters -> command injection.
+  it('rejects paths with shell metacharacters (command injection)', () => {
     const payloads = [
       'unix:///tmp/$(touch /tmp/pwned)/.rd/docker.sock',
       'unix:///tmp/`id`/.rd/docker.sock',
@@ -68,7 +68,7 @@ describe('parseDockerContextSocket (#81)', () => {
     }
   });
 
-  it('laat gewone (veilige) absolute socketpaden ongemoeid', () => {
+  it('leaves ordinary (safe) absolute socket paths untouched', () => {
     const json = JSON.stringify([
       { Endpoints: { docker: { Host: 'unix:///home/toon/.rd/docker.sock' } } },
     ]);
@@ -77,12 +77,12 @@ describe('parseDockerContextSocket (#81)', () => {
 });
 
 describe('isRancherDesktopSocket (#81)', () => {
-  it('herkent het rancher-desktop socketpad', () => {
+  it('recognizes the rancher-desktop socket path', () => {
     expect(isRancherDesktopSocket('/home/toon/.rd/docker.sock')).toBe(true);
     expect(isRancherDesktopSocket('/Users/toon/.rd/docker.sock')).toBe(true);
   });
 
-  it('herkent gewone docker-sockets niet als Rancher Desktop', () => {
+  it('does not recognize ordinary docker sockets as Rancher Desktop', () => {
     expect(isRancherDesktopSocket('/var/run/docker.sock')).toBe(false);
     expect(isRancherDesktopSocket('/run/user/1000/docker.sock')).toBe(false);
     expect(isRancherDesktopSocket(undefined)).toBe(false);
