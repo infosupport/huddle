@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvFlags } from './images';
-import { readConfig, writeConfig } from './config';
+import { readConfig, writeConfig, CONFIG_DIR } from './config';
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
@@ -138,6 +138,17 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // network (moby/moby#36174). Which source IP the gateway sees for forwarded
   // traffic no longer matters — the control plane authenticates with the
   // operator token instead of source-IP filtering.
+  // Team-managed folders (#69). Bind the CLI config dir (~/.huddle) read-write so
+  // the gateway/portal read and write the folder paths there (config.json is the
+  // single source of truth), then bind each configured team folder to a FIXED
+  // path so the gateway reads it without knowing the host path. Read-only.
+  const fwFolder = cfg.firewallRulesFolder?.trim();
+  const extFolder = cfg.extensionsFolder?.trim();
+  const homeMountFlag = ` -v "${CONFIG_DIR}:/huddle-home:rw" -e HUDDLE_HOME_DIR=/huddle-home`;
+  const fwMountFlag = fwFolder ? ` -v "${fwFolder}:/firewall-rules:ro"` : '';
+  const extMountFlag = extFolder ? ` -v "${extFolder}:/extensions:ro"` : '';
+  if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
+  if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
   run(
     `${rt} run -d` +
     ` --name ${CONTAINER}` +
@@ -149,6 +160,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     ` -v ${VOLUME}:/data` +
     ` -v ${runtime.socketPath}:/var/run/docker.sock` +
     ` -v "${hostTmpSockets}:/tmp/dc-sockets"` +
+    homeMountFlag +
+    fwMountFlag +
+    extMountFlag +
     gatewayEnvFlags(images) +
     ` ${IMAGE}`,
   );

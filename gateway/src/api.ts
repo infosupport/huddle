@@ -12,9 +12,8 @@ import {
   applyGroup,
   validateGroupEnvelope,
   reloadFirewallRulesFolder,
-  FIREWALL_RULES_FOLDER_KEY,
-  EXTENSIONS_FOLDER_KEY,
 } from './firewall-groups';
+import { readHostConfig, setHostFolder, hostConfigAvailable } from './host-config';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -726,7 +725,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // Manual reload of the team-managed firewall-rules folder.
   app.post('/api/firewall-rules-folder/reload', async () => {
-    return reloadFirewallRulesFolder(getSetting(FIREWALL_RULES_FOLDER_KEY));
+    return reloadFirewallRulesFolder();
   });
 
   app.get('/api/containers', async () => {
@@ -1204,12 +1203,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
   initLoader(app, db);
   await loadAllExtensions();
 
-  // Load team-managed firewall rules from the configured folder at startup
-  // (#69). Mirrors the extensions startup scan; no-op when unset.
+  // Load team-managed firewall rules from the CLI-mounted folder at startup
+  // (#69). The CLI binds the configured host folder to FIREWALL_RULES_MOUNT;
+  // no-op when nothing is mounted there.
   try {
-    const folder = getSetting(FIREWALL_RULES_FOLDER_KEY);
-    if (folder) {
-      const res = reloadFirewallRulesFolder(folder);
+    const res = reloadFirewallRulesFolder();
+    if (res.mounted) {
       console.log(`[firewall] team folder loaded: ${res.groups} group(s), ${res.imported} rule(s), ${res.errors.length} error(s)`);
     }
   } catch (err) {
@@ -1241,11 +1240,17 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // ── Settings ──────────────────────────────────────────────────────────────
   app.get('/api/settings', async () => {
+    // Resource limits stay in the DB; the team folders live in the CLI config
+    // (~/.huddle/config.json), mounted read-write into the gateway (#69), so
+    // the config file is the single source of truth for those paths.
+    const host = readHostConfig();
     return {
       defaultMemory: getSetting('defaultMemory') ?? '',
       defaultCpus: getSetting('defaultCpus') ?? '',
-      extensionsFolder: getSetting(EXTENSIONS_FOLDER_KEY) ?? '',
-      firewallRulesFolder: getSetting(FIREWALL_RULES_FOLDER_KEY) ?? '',
+      extensionsFolder: host.extensionsFolder ?? '',
+      firewallRulesFolder: host.firewallRulesFolder ?? '',
+      // Whether the CLI config is actually mounted; the portal warns if not.
+      hostConfigMounted: hostConfigAvailable(),
     };
   });
 
@@ -1255,17 +1260,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
       if (defaultMemory !== undefined) setSetting('defaultMemory', defaultMemory);
       if (defaultCpus !== undefined) setSetting('defaultCpus', defaultCpus);
-      if (extensionsFolder !== undefined) setSetting(EXTENSIONS_FOLDER_KEY, extensionsFolder);
-      // Setting/changing the firewall-rules folder re-reads it immediately (the
-      // design's "read when the folder path is configured or changed").
-      let firewallFolderReload;
-      if (firewallRulesFolder !== undefined) {
-        const changed = getSetting(FIREWALL_RULES_FOLDER_KEY) !== firewallRulesFolder;
-        setSetting(FIREWALL_RULES_FOLDER_KEY, firewallRulesFolder);
-        if (changed) firewallFolderReload = reloadFirewallRulesFolder(firewallRulesFolder || null);
-      }
+      // Folder paths are written into the mounted CLI config. They only take
+      // effect after the CLI re-mounts them, so signal that a restart is needed.
+      let restartRequired = false;
+      let persisted = true;
+      if (extensionsFolder !== undefined) { persisted = setHostFolder('extensionsFolder', extensionsFolder) && persisted; restartRequired = true; }
+      if (firewallRulesFolder !== undefined) { persisted = setHostFolder('firewallRulesFolder', firewallRulesFolder) && persisted; restartRequired = true; }
       notifyStateChanged();
-      return { ok: true, firewallFolderReload };
+      return { ok: true, restartRequired, persisted };
     }
   );
 

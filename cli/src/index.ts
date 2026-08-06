@@ -24,7 +24,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'out']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'replace']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -102,6 +102,8 @@ Usage:
   huddle start [options] [folder]    Explicitly start a devcontainer
   huddle init [options]              Pull the Huddle + devcontainer base images and
                                      start them via Docker or Podman
+  huddle restart                     Recreate the gateway (e.g. to mount a changed
+                                     team firewall-rules folder)
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
@@ -216,6 +218,16 @@ async function main(): Promise<void> {
     // While an experiment is active, the CLI itself must also run on the matching
     // version; if needed this installs the right version and restarts the
     // process itself (in which case it does not return).
+    ensureCliForChannel(process.argv.slice(2));
+    await runInit(initOpts, resolveImages());
+    return;
+  }
+
+  if (cmd === 'restart') {
+    // Stop + recreate the gateway (runInit does `rm -f` first) so changed team
+    // folders get mounted. The portal writes the paths straight into the mounted
+    // ~/.huddle/config.json, so runInit already reads the latest values here.
+    const initOpts = { runtime: flagString(flags, 'runtime') };
     ensureCliForChannel(process.argv.slice(2));
     await runInit(initOpts, resolveImages());
     return;

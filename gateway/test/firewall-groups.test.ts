@@ -101,6 +101,35 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     expect(scoped.n).toBe(2);
   });
 
+  it('export/apply of a path-mode group include its ungrouped allowed sub-paths', () => {
+    // A path-mode domain in a group: the marker (deny, path_mode=1) is assigned
+    // to the group, but its allowed paths are created ungrouped (group_id NULL),
+    // like the portal's "Add path" / addPath does.
+    groups.importGroupEnvelope(groups.validateGroupEnvelope({
+      version: 1, kind: 'huddle-firewall-group',
+      group: { name: 'NPM', shared: false },
+      rules: [{ domain: 'registry.npmjs.org', container_id: null, status: 'deny', path_pattern: null, path_mode: 1, expires_at: null }],
+    }));
+    const g = dbMod.getGroupByName('NPM')!;
+    dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, source) VALUES ('registry.npmjs.org', NULL, 'allow', '/@types/*', 0, 'manual')").run();
+    dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, source) VALUES ('registry.npmjs.org', NULL, 'allow', '/typescript/*', 0, 'manual')").run();
+
+    // Export must carry the marker AND both allowed paths — not just the deny.
+    const env = groups.exportGroup(g.id)!;
+    expect(env.rules).toHaveLength(3);
+    expect(env.rules.filter((r) => r.path_pattern).map((r) => r.path_pattern).sort()).toEqual(['/@types/*', '/typescript/*']);
+    expect(env.rules.some((r) => r.path_mode === 1 && !r.path_pattern)).toBe(true);
+
+    // Apply to a container must stamp the marker AND both paths there.
+    groups.applyGroup(g.id, 'devcontainer-x');
+    const scoped = dbMod.db
+      .prepare("SELECT path_pattern, path_mode FROM rules WHERE container_id = 'devcontainer-x' AND domain = 'registry.npmjs.org'")
+      .all() as { path_pattern: string | null; path_mode: number }[];
+    expect(scoped).toHaveLength(3);
+    expect(scoped.some((r) => r.path_mode === 1 && !r.path_pattern)).toBe(true);
+    expect(scoped.filter((r) => r.path_pattern).length).toBe(2);
+  });
+
   it('loads groups from a team folder and removes stale startup-folder rules on reload', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
     fs.writeFileSync(path.join(dir, 'openai.json'), JSON.stringify(envOpenAI()));
@@ -111,7 +140,10 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
       ] }),
     );
 
-    const first = groups.reloadFirewallRulesFolder(dir);
+    // The loader reads the fixed mount point; point it at our temp dir.
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    const first = groups.reloadFirewallRulesFolder();
+    expect(first.mounted).toBe(true);
     expect(first.groups).toBe(2);
     expect(first.errors).toHaveLength(0);
     expect(dbMod.listGroups().map((g) => g.name).sort()).toEqual(['GitHub', 'OpenAI']);
@@ -120,7 +152,7 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
 
     // Remove one file → reload drops that group's rules.
     fs.rmSync(path.join(dir, 'github.json'));
-    const second = groups.reloadFirewallRulesFolder(dir);
+    const second = groups.reloadFirewallRulesFolder();
     expect(second.groups).toBe(1);
     expect(dbMod.listGroups().map((g) => g.name)).toEqual(['OpenAI']);
   });
@@ -130,7 +162,8 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, source) VALUES ('manual.example', NULL, 'allow', 'manual')").run();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
     fs.writeFileSync(path.join(dir, 'openai.json'), JSON.stringify(envOpenAI()));
-    groups.reloadFirewallRulesFolder(dir);
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    groups.reloadFirewallRulesFolder();
     const survives = dbMod.db.prepare("SELECT COUNT(*) AS n FROM rules WHERE domain = 'manual.example'").get() as { n: number };
     expect(survives.n).toBe(1);
   });

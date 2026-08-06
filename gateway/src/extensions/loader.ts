@@ -224,12 +224,16 @@ function unloadModule(id: string): void {
   }
 }
 
-export async function loadExtension(id: string): Promise<void> {
-  const dir = path.join(EXT_DIR, id);
+// Team-managed extensions folder (#69): the CLI binds the configured host
+// folder here, alongside the uploaded extensions in EXT_DIR.
+export const TEAM_EXT_DIR = process.env.HUDDLE_EXTENSIONS_MOUNT ?? '/extensions';
+
+export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
+  const dir = path.join(baseDir, id);
   const manifestPath = path.join(dir, 'manifest.json');
   const indexPath = path.join(dir, 'index.js');
   if (!fs.existsSync(manifestPath) || !fs.existsSync(indexPath)) {
-    throw new Error(`Extension '${id}' not found in ${EXT_DIR}`);
+    throw new Error(`Extension '${id}' not found in ${baseDir}`);
   }
 
   const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf8'));
@@ -247,13 +251,18 @@ export async function loadExtension(id: string): Promise<void> {
 }
 
 export async function loadAllExtensions(): Promise<void> {
-  if (!fs.existsSync(EXT_DIR)) return;
-  for (const entry of fs.readdirSync(EXT_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    try {
-      await loadExtension(entry.name);
-    } catch (err: any) {
-      console.error(`[ext:${entry.name}] loading failed:`, err.message);
+  // Uploaded extensions (EXT_DIR volume) + the team-managed folder the CLI
+  // mounts at TEAM_EXT_DIR. Team folder loads last so a team extension can
+  // override an uploaded one with the same id.
+  for (const baseDir of [EXT_DIR, TEAM_EXT_DIR]) {
+    if (!fs.existsSync(baseDir)) continue;
+    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        await loadExtension(entry.name, baseDir);
+      } catch (err: any) {
+        console.error(`[ext:${entry.name}] loading failed:`, err.message);
+      }
     }
   }
 }

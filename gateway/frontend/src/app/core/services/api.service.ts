@@ -15,6 +15,7 @@ export interface HuddleSettings {
   defaultCpus: string;
   extensionsFolder: string;
   firewallRulesFolder: string;
+  hostConfigMounted?: boolean;
 }
 
 export interface ApprovedHostPort {
@@ -151,7 +152,7 @@ export class ApiService {
     return this.handle(this.http.post<ImportGroupResult>('/api/groups/import', { mode, envelope }));
   }
 
-  reloadFirewallRulesFolder(): Observable<{ folder: string | null; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }> {
+  reloadFirewallRulesFolder(): Observable<{ folder: string | null; mounted: boolean; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }> {
     return this.handle(this.http.post<any>('/api/firewall-rules-folder/reload', {}));
   }
 
@@ -273,8 +274,8 @@ export class ApiService {
     return this.handle(this.http.get<HuddleSettings>('/api/settings'));
   }
 
-  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean }> {
-    return this.handle(this.http.post<{ ok: boolean }>('/api/settings', values));
+  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean; restartRequired?: boolean; persisted?: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean; restartRequired?: boolean; persisted?: boolean }>('/api/settings', values));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; path?: string; limit?: number }): Observable<AuditLog[]> {

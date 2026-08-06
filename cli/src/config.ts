@@ -14,9 +14,15 @@ export interface HuddleConfig {
   // hier bewaard zodat volgende CLI-commando's zich als operator kunnen
   // authenticeren (Authorization: Bearer). Env HUDDLE_OPERATOR_TOKEN wint.
   operatorToken?: string;
+  // Team-managed folders (#69). Persisted here (the single source of truth) so
+  // the CLI can bind them into the gateway on start/restart (the gateway only
+  // sees folders the CLI mounts). The portal edits these via the mounted
+  // ~/.huddle/config.json; changes apply on the next `huddle restart`.
+  firewallRulesFolder?: string;
+  extensionsFolder?: string;
 }
 
-const CONFIG_DIR = path.join(os.homedir(), '.huddle');
+export const CONFIG_DIR = path.join(os.homedir(), '.huddle');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 export function configPath(): string {

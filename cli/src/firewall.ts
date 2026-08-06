@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { get, post } from './api';
+import { readConfig, writeConfig } from './config';
 import { bold, dim, green, red, cyan, promptKey, formatTime, printTable } from './utils';
 
 interface Rule {
@@ -300,26 +301,33 @@ export async function runFirewallFolder(opts: FirewallFolderOptions): Promise<vo
   const action = opts.action ?? 'show';
 
   if (action === 'show') {
-    const s = await get<{ firewallRulesFolder?: string }>('/api/settings');
-    console.log(s.firewallRulesFolder ? s.firewallRulesFolder : dim('(no firewall rules folder configured)'));
+    // The CLI config is the source of truth for the path.
+    const folder = readConfig().firewallRulesFolder;
+    console.log(folder ? folder : dim('(no firewall rules folder configured)'));
     return;
   }
 
   if (action === 'set') {
     const path = (opts.path ?? '').trim();
     if (!path) throw new Error('Usage: huddle firewall folder set <path>');
-    await post('/api/settings', { firewallRulesFolder: path });
-    console.log(green(`[OK] Firewall rules folder set to ${cyan(path)} (re-read now and on startup)`));
+    // Config-only: the gateway reads the folder at the fixed mount point the CLI
+    // binds it to; there is no DB setting. Persist here and mount on restart.
+    writeConfig({ ...readConfig(), firewallRulesFolder: path });
+    console.log(green(`[OK] Firewall rules folder set to ${cyan(path)}`));
+    console.log(dim('  Run `huddle restart` to mount it into the gateway; it is then read on start & reload.'));
     return;
   }
 
   if (action === 'reload') {
-    const res = await post<{ folder: string | null; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }>(
+    const res = await post<{ folder: string | null; mounted: boolean; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }>(
       '/api/firewall-rules-folder/reload',
       {},
     );
-    if (!res.folder) { console.log(dim('No firewall rules folder configured. Use `huddle firewall folder set <path>`.')); return; }
-    console.log(green(`[OK] Reloaded ${res.folder}: ${res.groups} group(s), ${res.imported} rule(s), ${res.errors.length} error(s)`));
+    if (!res.mounted) {
+      console.log(dim('No firewall rules folder mounted. Set one with `huddle firewall folder set <path>` and run `huddle restart`.'));
+      return;
+    }
+    console.log(green(`[OK] Reloaded: ${res.groups} group(s), ${res.imported} rule(s), ${res.errors.length} error(s)`));
     for (const e of res.errors) console.error(red(`  [!] ${e.file}: ${e.message}`));
     return;
   }

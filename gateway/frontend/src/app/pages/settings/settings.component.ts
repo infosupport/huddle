@@ -228,8 +228,9 @@ export class SettingsComponent implements OnInit {
     });
   }
 
-  // Persist both folder paths. Used by the Extensions-folder Reload button
-  // (extensions are re-scanned at startup; here we just save the path).
+  // Save both folder paths. They are written into the mounted ~/.huddle/config.json
+  // and only take effect once the CLI re-mounts them — so tell the operator to
+  // restart. Used by the Extensions-folder Reload button too.
   saveFolders(): void {
     this.savingFolders.set(true);
     this.folderNote.set(null);
@@ -238,12 +239,19 @@ export class SettingsComponent implements OnInit {
       extensionsFolder: this.resources.extensionsFolder,
       firewallRulesFolder: this.resources.firewallRulesFolder,
     }).subscribe({
-      next: () => { this.savingFolders.set(false); this.folderNote.set('Saved'); },
+      next: (res) => {
+        this.savingFolders.set(false);
+        if (res.persisted === false) {
+          this.folderNote.set('Could not save — the CLI config is not mounted into Huddle. Run `huddle restart` on the host first.');
+        } else {
+          this.folderNote.set('Saved to config. Run `huddle restart` on the host to (re)mount the folder(s).');
+        }
+      },
       error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
     });
   }
 
-  // Save the firewall-rules folder path and re-read it now.
+  // Save the folder paths, then re-read whatever is currently mounted.
   reloadFirewallFolder(): void {
     this.savingFolders.set(true);
     this.folderNote.set(null);
@@ -256,8 +264,12 @@ export class SettingsComponent implements OnInit {
         this.api.reloadFirewallRulesFolder().subscribe({
           next: (r) => {
             this.savingFolders.set(false);
-            const errs = r.errors.length ? `, ${r.errors.length} error(s)` : '';
-            this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)${errs}`);
+            if (!r.mounted) {
+              this.folderNote.set('Saved to config, but the folder is not mounted into Huddle yet — run `huddle restart` on the host, then Reload.');
+            } else {
+              const errs = r.errors.length ? `, ${r.errors.length} error(s)` : '';
+              this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)${errs}`);
+            }
           },
           error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
         });

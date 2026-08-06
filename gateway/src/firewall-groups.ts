@@ -115,13 +115,26 @@ function findRuleStmt() {
 export function exportGroup(groupId: number): GroupEnvelope | null {
   const group = getGroup(groupId);
   if (!group) return null;
+  // Export the group's own rules PLUS, for any path-mode domain in the group
+  // (a status='deny', path_mode=1 marker), its allowed sub-path rules — those
+  // are created ungrouped (group_id NULL) but conceptually belong to the group.
+  // Without this a path-mode domain would export as a bare "block at root" with
+  // no allowed paths.
   const rules = db
     .prepare(
-      `SELECT domain, container_id, status, path_pattern, path_mode, expires_at
-         FROM rules WHERE group_id = ?
-        ORDER BY domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, '')`,
+      `SELECT DISTINCT r.domain, r.container_id, r.status, r.path_pattern, r.path_mode, r.expires_at
+         FROM rules r
+        WHERE r.group_id = ?
+           OR EXISTS (
+             SELECT 1 FROM rules m
+              WHERE m.group_id = ?
+                AND m.path_mode = 1 AND m.path_pattern IS NULL
+                AND m.domain = r.domain COLLATE NOCASE
+                AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+           )
+        ORDER BY r.domain COLLATE NOCASE, COALESCE(r.container_id, ''), COALESCE(r.path_pattern, '')`,
     )
-    .all(groupId) as ShareableGroupRule[];
+    .all(groupId, groupId) as ShareableGroupRule[];
   return {
     version: GROUP_ENVELOPE_VERSION,
     kind: GROUP_ENVELOPE_KIND,
@@ -222,9 +235,24 @@ export function applyGroup(
 ): { applied: number; updated: number } {
   const group = getGroup(groupId);
   if (!group) throw new Error('group not found');
+  // Members = the group's own rules PLUS the allowed sub-paths of any path-mode
+  // domain in the group, so applying a path-mode group stamps the marker AND its
+  // allowed paths into the target scope (otherwise the domain lands blocked at
+  // the root with no paths).
   const members = db
-    .prepare(`SELECT domain, status, path_pattern, path_mode, expires_at FROM rules WHERE group_id = ?`)
-    .all(groupId) as Omit<ShareableGroupRule, 'container_id'>[];
+    .prepare(
+      `SELECT DISTINCT r.domain, r.status, r.path_pattern, r.path_mode, r.expires_at
+         FROM rules r
+        WHERE r.group_id = ?
+           OR EXISTS (
+             SELECT 1 FROM rules m
+              WHERE m.group_id = ?
+                AND m.path_mode = 1 AND m.path_pattern IS NULL
+                AND m.domain = r.domain COLLATE NOCASE
+                AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+           )`,
+    )
+    .all(groupId, groupId) as Omit<ShareableGroupRule, 'container_id'>[];
 
   const find = findRuleStmt();
   const insertRule = db.prepare(
@@ -271,6 +299,7 @@ export function applyGroup(
 
 export interface FolderReloadSummary {
   folder: string | null;
+  mounted: boolean;
   files: number;
   groups: number;
   imported: number;
@@ -278,15 +307,25 @@ export interface FolderReloadSummary {
   errors: { file: string; message: string }[];
 }
 
-export function reloadFirewallRulesFolder(folder: string | null): FolderReloadSummary {
-  const summary: FolderReloadSummary = { folder, files: 0, groups: 0, imported: 0, updated: 0, errors: [] };
-  if (!folder || !folder.trim()) return summary;
+// The team firewall-rules folder is bound by the CLI to this fixed path inside
+// the gateway (#69). The gateway therefore never resolves the host path itself;
+// the configured host path lives only in the CLI config and is shown in the
+// portal for reference. Read per-call so it is overridable in tests.
+export function firewallRulesMount(): string {
+  return process.env.HUDDLE_FIREWALL_RULES_MOUNT || '/firewall-rules';
+}
+
+export function reloadFirewallRulesFolder(): FolderReloadSummary {
+  const mount = firewallRulesMount();
+  const summary: FolderReloadSummary = { folder: mount, mounted: false, files: 0, groups: 0, imported: 0, updated: 0, errors: [] };
 
   let entries: string[] = [];
   try {
-    entries = fs.readdirSync(folder).filter((f) => f.toLowerCase().endsWith('.json')).sort();
-  } catch (err) {
-    summary.errors.push({ file: folder, message: `cannot read folder: ${(err as Error).message}` });
+    entries = fs.readdirSync(mount).filter((f) => f.toLowerCase().endsWith('.json')).sort();
+    summary.mounted = true;
+  } catch {
+    // Not mounted yet — the operator must set the folder + `huddle restart`.
+    // Not an error; the portal shows a "not mounted" hint.
     return summary;
   }
 
@@ -300,7 +339,7 @@ export function reloadFirewallRulesFolder(folder: string | null): FolderReloadSu
 
   for (const file of entries) {
     summary.files++;
-    const full = path.join(folder, file);
+    const full = path.join(mount, file);
     try {
       const raw = fs.readFileSync(full, 'utf8');
       const env = validateGroupEnvelope(JSON.parse(raw));
@@ -317,11 +356,8 @@ export function reloadFirewallRulesFolder(folder: string | null): FolderReloadSu
     containerId: null,
     domain: 'firewall',
     action: 'admin:folder-reload',
-    path: `folder=${folder} files=${summary.files} groups=${summary.groups} imported=${summary.imported} errors=${summary.errors.length}`,
+    path: `mount=${mount} files=${summary.files} groups=${summary.groups} imported=${summary.imported} errors=${summary.errors.length}`,
   });
   notifyStateChanged();
   return summary;
 }
-
-export const FIREWALL_RULES_FOLDER_KEY = 'firewall_rules_folder';
-export const EXTENSIONS_FOLDER_KEY = 'extensions_folder';
