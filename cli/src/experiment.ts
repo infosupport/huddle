@@ -28,9 +28,14 @@ export function parseIssueNumber(raw: string | undefined): number {
  * itself (install + restart) is done by self-update.ts. On a switch this
  * function does not return (process.exit with the exit code of the new process).
  */
-export function ensureCliForChannel(relaunchArgs: string[]): void {
+export function ensureCliForChannel(relaunchArgs: string[], opts: { force?: boolean } = {}): void {
   const wanted = activeExperiment();
-  if (wanted === cliExperiment()) return;
+  // Normally we only switch when the experiment NUMBER differs — otherwise every
+  // command would reinstall. But `huddle experiment use <n>` must pick up a newer
+  // build of the SAME experiment (the CLI version is baked in, so the number
+  // alone can't tell 66.34 from 66.35): force a reinstall of the channel tag,
+  // which npm resolves to the latest build for that experiment.
+  if (!opts.force && wanted === cliExperiment()) return;
 
   const spec = wanted !== undefined ? `${CLI_PACKAGE}@experiment-${wanted}` : `${CLI_PACKAGE}@latest`;
   try {
@@ -52,7 +57,9 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
 
   const relaunchArgs = ['init', ...(initOpts.runtime ? ['--runtime', initOpts.runtime] : [])];
   try {
-    ensureCliForChannel(relaunchArgs);
+    // Force: `use` always (re)installs the latest build of the target experiment,
+    // even when already on that experiment number, so a republished build lands.
+    ensureCliForChannel(relaunchArgs, { force: true });
   } catch (err) {
     // Activation failed → roll back the config so a subsequent `huddle init`
     // doesn't stay stuck on an experiment that cannot be installed.
