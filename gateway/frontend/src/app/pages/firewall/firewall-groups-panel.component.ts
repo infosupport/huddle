@@ -417,12 +417,13 @@ export class FirewallGroupsPanelComponent implements OnInit {
     if (!domain || this.adding()) return;
     const path = this.newPath.trim() || null;
     const scope = this.container ?? (this.newScope || null);
+    const action = this.newAction; // capture before the reset below resets it to 'allow'
     this.adding.set(true);
-    this.api.createRule(domain, scope, this.newAction, path).subscribe({
+    this.api.createRule(domain, scope, action, path).subscribe({
       next: () => {
         this.adding.set(false); this.showAdd.set(false);
         this.newDomain = ''; this.newPath = ''; this.newScope = ''; this.newAction = 'allow';
-        this.note.set(`Rule ${this.newAction}ed for ${scope ? this.shortName(scope) : 'global'}`);
+        this.note.set(`Rule ${action}ed for ${scope ? this.shortName(scope) : 'global'}`);
         this.reloadAfterMutation();
       },
       error: (e) => { this.adding.set(false); this.note.set(e.message); },

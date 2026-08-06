@@ -178,4 +178,41 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
       groups.validateGroupEnvelope({ group: { name: 'X' }, rules: [{ domain: 'a', status: 'allow', evil: 1 }] } as any),
     ).toThrow(/unknown field/);
   });
+
+  it('accepts a bare { name, rules } envelope (top-level group meta)', () => {
+    const env = groups.validateGroupEnvelope({
+      name: 'Bare', description: 'no wrapper', shared: true,
+      rules: [{ domain: 'a.example', container_id: null, status: 'allow', path_pattern: null, path_mode: 0, expires_at: null }],
+    } as any);
+    expect(env.group).toMatchObject({ name: 'Bare', description: 'no wrapper', shared: true });
+    expect(env.rules).toHaveLength(1);
+  });
+
+  it('export/apply include only ALLOWED sub-paths, not requested/deny placeholders', () => {
+    // Grouped path-mode marker for the domain.
+    groups.importGroupEnvelope(groups.validateGroupEnvelope({
+      version: 1, kind: 'huddle-firewall-group',
+      group: { name: 'NuGet', shared: false },
+      rules: [{ domain: 'nuget.org', container_id: null, status: 'deny', path_pattern: null, path_mode: 1, expires_at: null }],
+    }));
+    const g = dbMod.getGroupByName('NuGet')!;
+    // Ungrouped sub-paths for the same domain: one allowed (belongs to the group's
+    // export), one still 'requested' (a pending placeholder that must NOT travel).
+    dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, source) VALUES ('nuget.org', NULL, 'allow', '/v3/*', 0, 'manual')").run();
+    dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, source) VALUES ('nuget.org', NULL, 'requested', '/pending/*', 0, 'manual')").run();
+
+    const env = groups.exportGroup(g.id)!;
+    // marker + the single allowed sub-path only — NOT the requested placeholder.
+    expect(env.rules).toHaveLength(2);
+    const patterns = env.rules.map((r) => r.path_pattern);
+    expect(patterns).toContain('/v3/*');
+    expect(patterns).toContain(null);
+    expect(patterns).not.toContain('/pending/*');
+
+    groups.applyGroup(g.id, 'devcontainer-y');
+    const scoped = dbMod.db
+      .prepare("SELECT path_pattern FROM rules WHERE container_id = 'devcontainer-y' AND domain = 'nuget.org'")
+      .all() as { path_pattern: string | null }[];
+    expect(scoped).toHaveLength(2); // marker + allowed sub-path, not the requested one
+  });
 });

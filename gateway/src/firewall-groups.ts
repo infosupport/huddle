@@ -83,7 +83,10 @@ export function validateGroupRule(raw: unknown): ShareableGroupRule {
 export function validateGroupEnvelope(raw: unknown): GroupEnvelope {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('envelope must be an object');
   const e = raw as Record<string, unknown>;
-  const groupRaw = (e.group ?? {}) as Record<string, unknown>;
+  // Full envelope keeps group meta under `group`; a bare `{ name, rules }` puts
+  // it at the top level. Read from `e.group` when it is a plain object, else fall
+  // back to `e` itself so the documented bare form actually works.
+  const groupRaw = (e.group && typeof e.group === 'object' && !Array.isArray(e.group) ? e.group : e) as Record<string, unknown>;
   const name = typeof groupRaw.name === 'string' && groupRaw.name.trim() ? groupRaw.name.trim() : undefined;
   if (!name) throw new Error('group.name must be a non-empty string');
   const description = typeof groupRaw.description === 'string' ? groupRaw.description : '';
@@ -125,12 +128,18 @@ export function exportGroup(groupId: number): GroupEnvelope | null {
       `SELECT DISTINCT r.domain, r.container_id, r.status, r.path_pattern, r.path_mode, r.expires_at
          FROM rules r
         WHERE r.group_id = ?
-           OR EXISTS (
-             SELECT 1 FROM rules m
-              WHERE m.group_id = ?
-                AND m.path_mode = 1 AND m.path_pattern IS NULL
-                AND m.domain = r.domain COLLATE NOCASE
-                AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+           OR (
+             -- Only the ALLOWED SUB-PATH entries of a grouped path-mode domain
+             -- (an allow rule with a path_pattern). A requested placeholder or a
+             -- redundant path-deny for the same domain/container must NOT be
+             -- swept into the group's export/apply.
+             r.path_pattern IS NOT NULL AND r.status = 'allow' AND EXISTS (
+               SELECT 1 FROM rules m
+                WHERE m.group_id = ?
+                  AND m.path_mode = 1 AND m.path_pattern IS NULL
+                  AND m.domain = r.domain COLLATE NOCASE
+                  AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+             )
            )
         ORDER BY r.domain COLLATE NOCASE, COALESCE(r.container_id, ''), COALESCE(r.path_pattern, '')`,
     )
@@ -244,12 +253,18 @@ export function applyGroup(
       `SELECT DISTINCT r.domain, r.status, r.path_pattern, r.path_mode, r.expires_at
          FROM rules r
         WHERE r.group_id = ?
-           OR EXISTS (
-             SELECT 1 FROM rules m
-              WHERE m.group_id = ?
-                AND m.path_mode = 1 AND m.path_pattern IS NULL
-                AND m.domain = r.domain COLLATE NOCASE
-                AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+           OR (
+             -- Only the ALLOWED SUB-PATH entries of a grouped path-mode domain
+             -- (an allow rule with a path_pattern). A requested placeholder or a
+             -- redundant path-deny for the same domain/container must NOT be
+             -- swept into the group's export/apply.
+             r.path_pattern IS NOT NULL AND r.status = 'allow' AND EXISTS (
+               SELECT 1 FROM rules m
+                WHERE m.group_id = ?
+                  AND m.path_mode = 1 AND m.path_pattern IS NULL
+                  AND m.domain = r.domain COLLATE NOCASE
+                  AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+             )
            )`,
     )
     .all(groupId, groupId) as Omit<ShareableGroupRule, 'container_id'>[];
