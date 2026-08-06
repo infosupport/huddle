@@ -276,62 +276,83 @@ export async function execContainerOutput(containerId: string, cmd: string[]): P
 // connection into a raw bidirectional stream; stdin goes over that socket and is
 // closed with a half-close (FIN) so the process (chpasswd) sees EOF and stops.
 export async function execInContainer(containerName: string, cmd: string[], stdin: string): Promise<ExecResult> {
-  const attachStdin = stdin.length > 0;
   const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
-    AttachStdin: attachStdin,
+    AttachStdin: stdin.length > 0,
     AttachStdout: true,
     AttachStderr: true,
     Tty: false,
     Cmd: cmd,
     User: 'root',
   });
-  await new Promise<void>((resolve, reject) => {
+  await startExec(execCreate.Id, stdin);
+  return waitForExecExit(execCreate.Id);
+}
+
+// POST /exec/<id>/start with the JSON options ONLY — stdin must not go in the
+// body (the daemon parses the body as JSON and rejects trailing bytes). On a 2xx
+// the connection is hijacked into a raw bidirectional stream; on a non-2xx we
+// fail closed with the error body so a failed start never looks like "exit null".
+function startExec(execId: string, stdin: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const startBody = JSON.stringify({ Detach: false, Tty: false });
     const req = http.request(
       {
         socketPath: '/var/run/docker.sock',
         method: 'POST',
-        path: `/exec/${execCreate.Id}/start`,
+        path: `/exec/${execId}/start`,
         headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
       },
       (res) => {
-        // Fail closed: a non-2xx on start means the process never ran.
-        // Do not swallow it (otherwise this would show up as "exit null").
         if (res.statusCode && res.statusCode >= 400) {
-          let raw = '';
-          res.on('data', (c: Buffer) => { raw += c.toString(); });
-          res.on('end', () => reject(new Error(`exec start → ${res.statusCode}: ${raw}`)));
-          res.on('error', reject);
-          return;
+          rejectStartError(res, reject);
+        } else {
+          pumpHijackedStream(res, stdin, resolve, reject);
         }
-        // The connection is now hijacked into a raw stream. Feed stdin over the
-        // socket and half-close so the process gets EOF; after that the
-        // multiplexed stdout/stderr comes in until the daemon closes the stream.
-        if (attachStdin) {
-          res.socket.write(Buffer.from(stdin, 'utf8'));
-          res.socket.end();
-        }
-        res.on('data', () => { /* ignore multiplexed stdout/stderr */ });
-        res.on('end', () => resolve());
-        res.on('error', reject);
       },
     );
     req.on('error', reject);
     req.end(startBody);
   });
-  // The stream only closes after the process has exited, so ExitCode is usually
-  // already set. On some daemons/platforms (e.g. WSL2) the daemon reaps just after
-  // the stream close; in that case poll briefly until Running=false instead of
-  // reporting null right away.
+}
+
+// Collect a non-2xx exec-start response body and reject with it (fail closed).
+function rejectStartError(res: http.IncomingMessage, reject: (err: Error) => void): void {
+  let raw = '';
+  res.on('data', (c: Buffer) => { raw += c.toString(); });
+  res.on('end', () => reject(new Error(`exec start → ${res.statusCode}: ${raw}`)));
+  res.on('error', reject);
+}
+
+// Feed stdin over the hijacked raw stream and half-close (FIN) so the process
+// gets EOF, then drain the multiplexed stdout/stderr until the daemon closes it.
+function pumpHijackedStream(
+  res: http.IncomingMessage,
+  stdin: string,
+  resolve: () => void,
+  reject: (err: Error) => void,
+): void {
+  if (stdin.length > 0) {
+    res.socket.write(Buffer.from(stdin, 'utf8'));
+    res.socket.end();
+  }
+  res.on('data', () => { /* ignore multiplexed stdout/stderr */ });
+  res.on('end', () => resolve());
+  res.on('error', reject);
+}
+
+// Poll the exec inspect until the process has exited. The stream close usually
+// means ExitCode is already set; some daemons/platforms (e.g. WSL2) reap just
+// after the stream close, so poll briefly instead of reporting null right away.
+async function waitForExecExit(execId: string): Promise<ExecResult> {
   for (let attempt = 0; attempt < 10; attempt++) {
-    const info = await dockerRequest('GET', `/exec/${execCreate.Id}/json`);
+    const info = await dockerRequest('GET', `/exec/${execId}/json`);
     if (typeof info.ExitCode === 'number' && info.Running !== true) {
       return { exitCode: info.ExitCode };
     }
     if (info.Running !== true) break; // done but no numeric code → null
     await new Promise((r) => setTimeout(r, 50));
   }
-  const final = await dockerRequest('GET', `/exec/${execCreate.Id}/json`);
+  const final = await dockerRequest('GET', `/exec/${execId}/json`);
   return { exitCode: typeof final.ExitCode === 'number' ? final.ExitCode : null };
 }
 
