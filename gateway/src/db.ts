@@ -565,7 +565,8 @@ export interface FirewallGroupWithCount extends FirewallGroup {
 
 export function listGroups(): FirewallGroupWithCount[] {
   return db.prepare(
-    `SELECT g.*, (SELECT COUNT(*) FROM rules r WHERE r.group_id = g.id) AS rule_count
+    `SELECT g.id, g.name, g.description, g.shared, g.source, g.created_at, g.updated_at,
+            (SELECT COUNT(*) FROM rules r WHERE r.group_id = g.id) AS rule_count
        FROM firewall_groups g
       ORDER BY g.name COLLATE NOCASE ASC`
   ).all() as FirewallGroupWithCount[];

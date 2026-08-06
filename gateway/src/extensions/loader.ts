@@ -250,20 +250,26 @@ export async function loadExtension(id: string, baseDir: string = EXT_DIR): Prom
   console.log(`[ext] loaded: ${id} v${manifest.version ?? '?'}`);
 }
 
+// Load every extension directory in one base dir, best-effort (one failure does
+// not stop the rest). Extracted so loadAllExtensions stays flat.
+async function loadExtensionsFrom(baseDir: string): Promise<void> {
+  if (!fs.existsSync(baseDir)) return;
+  for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    try {
+      await loadExtension(entry.name, baseDir);
+    } catch (err: any) {
+      console.error(`[ext:${entry.name}] loading failed:`, err.message);
+    }
+  }
+}
+
 export async function loadAllExtensions(): Promise<void> {
   // Uploaded extensions (EXT_DIR volume) + the team-managed folder the CLI
   // mounts at TEAM_EXT_DIR. Team folder loads last so a team extension can
   // override an uploaded one with the same id.
   for (const baseDir of [EXT_DIR, TEAM_EXT_DIR]) {
-    if (!fs.existsSync(baseDir)) continue;
-    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      try {
-        await loadExtension(entry.name, baseDir);
-      } catch (err: any) {
-        console.error(`[ext:${entry.name}] loading failed:`, err.message);
-      }
-    }
+    await loadExtensionsFrom(baseDir);
   }
 }
 

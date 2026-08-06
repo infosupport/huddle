@@ -364,7 +364,16 @@ export class FirewallGroupsPanelComponent implements OnInit {
     return [...rs].sort((a, b) => a.domain.localeCompare(b.domain));
   });
 
-  countFor(groupId: number): number { return this.domainRules().filter((r) => r.group_id === groupId).length; }
+  // Count rules per group ONCE per domainRules() change (a computed memoizes it),
+  // so the template's per-group countFor() is an O(1) lookup instead of O(rules).
+  private groupCounts = computed(() => {
+    const counts = new Map<number, number>();
+    for (const r of this.domainRules()) {
+      if (r.group_id != null) counts.set(r.group_id, (counts.get(r.group_id) ?? 0) + 1);
+    }
+    return counts;
+  });
+  countFor(groupId: number): number { return this.groupCounts().get(groupId) ?? 0; }
   groupName(groupId: number): string { return this.groups().find((g) => g.id === groupId)?.name ?? '—'; }
 
   headTitle(): string {

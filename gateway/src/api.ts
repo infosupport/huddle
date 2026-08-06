@@ -604,7 +604,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const group = getGroup(id);
     if (!group) return reply.code(404).send({ error: 'not_found' });
     const rules = db
-      .prepare(`SELECT * FROM rules WHERE group_id = ? ORDER BY last_seen DESC`)
+      .prepare(
+        `SELECT id, domain, container_id, status, expires_at, path_pattern, path_mode,
+                last_path, group_id, added_by, source, created_at, updated_at, last_seen, request_count
+           FROM rules WHERE group_id = ? ORDER BY last_seen DESC`,
+      )
       .all(id) as Rule[];
     return { group, rules };
   });
