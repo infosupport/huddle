@@ -30,19 +30,19 @@ export function readHostConfig(): HostConfig {
 }
 
 // Merge-write a single folder key, preserving everything else in the file
-// (operatorToken, channel, …). No-op with a warning if the config is not mounted.
+// (operatorToken, channel, …). Returns false (not mounted, or write failed) so
+// the caller can report the outcome — the API endpoint surfaces `persisted` to
+// the operator, so no separate log line is needed here.
 export function setHostFolder(key: 'firewallRulesFolder' | 'extensionsFolder', value: string): boolean {
   if (!hostConfigAvailable()) {
-    console.warn(`[host-config] ${CONFIG_FILE} is not mounted; cannot persist ${key}. Run \`huddle restart\` from the host.`);
-    return false;
+    return false; // config not mounted; run `huddle restart` from the host
   }
   try {
     const cfg = readHostConfig();
     const next = { ...cfg, [key]: value || undefined };
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n');
     return true;
-  } catch (err) {
-    console.error(`[host-config] failed to write ${CONFIG_FILE}:`, (err as Error).message);
-    return false;
+  } catch {
+    return false; // write failed; caller sees persisted=false
   }
 }

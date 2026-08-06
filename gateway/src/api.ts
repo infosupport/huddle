@@ -1209,14 +1209,13 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // Load team-managed firewall rules from the CLI-mounted folder at startup
   // (#69). The CLI binds the configured host folder to FIREWALL_RULES_MOUNT;
-  // no-op when nothing is mounted there.
+  // no-op when nothing is mounted there. Best-effort: the live folder status
+  // (mounted, group/rule/error counts) is surfaced on demand via the
+  // firewall-rules-folder endpoint, so startup does not print it.
   try {
-    const res = reloadFirewallRulesFolder();
-    if (res.mounted) {
-      console.log(`[firewall] team folder loaded: ${res.groups} group(s), ${res.imported} rule(s), ${res.errors.length} error(s)`);
-    }
-  } catch (err) {
-    console.error('[firewall] team folder load failed:', (err as Error).message);
+    reloadFirewallRulesFolder();
+  } catch {
+    // best-effort startup load; a failure is reflected in the folder-status endpoint
   }
 
   // Serve an extension's static frontend assets from

@@ -229,6 +229,13 @@ function unloadModule(id: string): void {
 export const TEAM_EXT_DIR = process.env.HUDDLE_EXTENSIONS_MOUNT ?? '/extensions';
 
 export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
+  // Defense-in-depth: the id indexes a directory under baseDir, so it must be a
+  // single safe path component (no separators, no `..`). Callers already pass a
+  // validated manifest.id or a readdir basename; this guard makes the path-join
+  // sink safe regardless of the source and closes the traversal class outright.
+  if (!/^[a-z0-9-]+$/.test(id)) {
+    throw new Error(`invalid extension id: ${id}`);
+  }
   const dir = path.join(baseDir, id);
   const manifestPath = path.join(dir, 'manifest.json');
   const indexPath = path.join(dir, 'index.js');
