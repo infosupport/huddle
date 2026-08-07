@@ -106,6 +106,27 @@ describe('parseYaml (minimal compose reader)', () => {
   it('rejects YAML anchors and merge keys fail-closed (finding #9)', () => {
     expect(() => parseYaml('base: &anchor\n  x: 1\nsvc:\n  <<: *anchor\n')).toThrow(/anchor|merge/i);
   });
+
+  it('also rejects anchors/aliases embedded in flow collections (bypass fix)', () => {
+    // Plain `x: *a` was already caught; flow forms must be too, else a marked
+    // service could be silently left unwired.
+    expect(() => parseYaml('services:\n  x:\n    networks: [*net]\n')).toThrow(/alias/i);
+    expect(() => parseYaml('services:\n  x:\n    networks: {n: *net}\n')).toThrow(/alias/i);
+    expect(() => parseYaml('x:\n  y: [&a, 1]\n')).toThrow(/anchor/i);
+  });
+
+  it('does NOT reject scalars that merely contain * or & (globs, env URLs)', () => {
+    // `*.log` (glob) and `a=1&b=2` (URL query) are ordinary scalars, not aliases.
+    expect(() => parseYaml('services:\n  x:\n    command: rm *.log\n')).not.toThrow();
+    expect(() => parseYaml('services:\n  x:\n    environment:\n      - URL=http://h/?a=1&b=2\n')).not.toThrow();
+  });
+
+  it('caps parse recursion depth (CWE-674) instead of overflowing the stack', () => {
+    // 200 levels of nested mapping — well past MAX_DEPTH (64).
+    let y = '';
+    for (let i = 0; i < 200; i++) y += '  '.repeat(i) + `k${i}:\n`;
+    expect(() => parseYaml(y)).toThrow(/nesting exceeds/i);
+  });
 });
 
 describe('marked-network detection', () => {
@@ -185,15 +206,17 @@ describe('buildOverride', () => {
     expect(warnings.some((w) => w.includes('container_name'))).toBe(true);
   });
 
-  it('warns when the marked network is not internal', () => {
+  it('blocks (fail-closed) when the marked network is not internal', () => {
     const doc: ComposeDoc = {
       services: { app: { networks: ['dev'] } },
       networks: { dev: { labels: { [HUDDLE_NETWORK_LABEL]: 'true' } } },
     };
-    expect(buildOverride(doc).warnings.some((w) => w.includes('internal'))).toBe(true);
+    // Security-critical → a blocker, not an advisory warning (runMigrate refuses
+    // to write the override unless --force).
+    expect(buildOverride(doc).blockers.some((b) => b.includes('internal'))).toBe(true);
   });
 
-  it('warns when a wired service also sits on a second non-internal network', () => {
+  it('blocks (fail-closed) when a wired service also sits on a second non-internal network', () => {
     const doc: ComposeDoc = {
       services: { app: { networks: ['dev', 'public'] } },
       networks: {
@@ -201,7 +224,35 @@ describe('buildOverride', () => {
         public: {},
       },
     };
-    expect(buildOverride(doc).warnings.some((w) => w.includes('public'))).toBe(true);
+    expect(buildOverride(doc).blockers.some((b) => b.includes('public'))).toBe(true);
+  });
+
+  it('does not collapse the egress net when the marked network is literally "huddle"', () => {
+    const doc: ComposeDoc = {
+      services: { app: { networks: ['huddle'] } },
+      networks: { huddle: { internal: true, labels: { [HUDDLE_NETWORK_LABEL]: 'true' } } },
+    };
+    const { override } = buildOverride(doc);
+    // The egress key must differ from the marked network, else the service's
+    // networks map { huddle, huddle } collapses and the egress net is dropped.
+    const egressKey = Object.keys(override.networks ?? {})[0];
+    expect(egressKey).not.toBe('huddle');
+    expect((override.services?.app as any).networks).toHaveProperty(egressKey);
+    expect((override.services?.app as any).networks).toHaveProperty('huddle');
+  });
+
+  it('finds a unique egress key when both "huddle" and "huddle-egress" already exist', () => {
+    const doc: ComposeDoc = {
+      services: { app: { networks: ['dev'] } },
+      networks: {
+        dev: { internal: true, labels: { [HUDDLE_NETWORK_LABEL]: 'true' } },
+        huddle: { internal: true },
+        'huddle-egress': { internal: true },
+      },
+    };
+    const egressKey = Object.keys(buildOverride(doc).override.networks ?? {})[0];
+    expect(['huddle', 'huddle-egress']).not.toContain(egressKey);
+    expect(egressKey).toBe('huddle-egress-1');
   });
 
   it('renames the egress network key if the project already uses "huddle"', () => {

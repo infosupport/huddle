@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { bold, green, cyan, dim, yellow } from './utils';
+import { bold, green, cyan, dim, yellow, red } from './utils';
 import { resolveRuntime } from './runtime';
 import { INTERNAL_NET, HOST_SOCKET_DIR } from './init';
 
@@ -52,8 +52,15 @@ export interface AnalysisResult {
   services: string[];
   /** The generated Compose override object (dump with dumpYaml). */
   override: ComposeDoc;
-  /** Non-fatal advisories (e.g. marked network not internal). */
+  /** Non-fatal advisories (e.g. a service without container_name). */
   warnings: string[];
+  /**
+   * Security-critical problems that leave the service with a direct internet
+   * path (marked network not internal, or a second non-internal network). The
+   * override is still generated, but `runMigrate` refuses to write it unless
+   * `--force` is given — reporting success here would be misleading.
+   */
+  blockers: string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +165,7 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
   const internalNet = opts.internalNet ?? INTERNAL_NET;
   const socketDir = opts.socketDir ?? HOST_SOCKET_DIR;
   const warnings: string[] = [];
+  const blockers: string[] = [];
 
   const marked = findMarkedNetworks(compose);
   if (marked.length === 0) {
@@ -171,18 +179,26 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
   }
   const markedNetwork = marked[0];
 
-  // Pick a collision-free key for the injected egress network.
-  const existingNetKeys = new Set(Object.keys(compose.networks ?? {}));
+  // Pick a key for the injected egress network that collides with NOTHING: not
+  // an existing network, and not the marked network itself (otherwise the two
+  // keys in the service's `networks` map below collapse into one and the egress
+  // net is silently never added). Keep suffixing until it is unique.
+  const taken = new Set(Object.keys(compose.networks ?? {}));
+  taken.add(markedNetwork);
   let huddleNetKey = opts.huddleNetKey ?? HUDDLE_NET_KEY;
-  if (existingNetKeys.has(huddleNetKey) && huddleNetKey !== markedNetwork) {
-    huddleNetKey = `${HUDDLE_NET_KEY}-egress`;
+  if (taken.has(huddleNetKey)) {
+    let n = 0;
+    do {
+      huddleNetKey = n === 0 ? `${HUDDLE_NET_KEY}-egress` : `${HUDDLE_NET_KEY}-egress-${n}`;
+      n++;
+    } while (taken.has(huddleNetKey));
   }
 
   // Guardrail: the marked network must be internal, otherwise it already has a
   // route to the internet and would bypass the firewall/proxy.
   const markedDef = (compose.networks?.[markedNetwork] ?? {}) as ComposeNetwork;
   if (!isTruthy(markedDef.internal)) {
-    warnings.push(
+    blockers.push(
       `Network "${markedNetwork}" is not marked \`internal: true\`. It must be internal, ` +
         'otherwise services can reach the internet directly and bypass Huddle.',
     );
@@ -206,7 +222,7 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
       if (netKey === markedNetwork) continue;
       const def = (compose.networks?.[netKey] ?? {}) as ComposeNetwork;
       if (!isTruthy(def.internal)) {
-        warnings.push(
+        blockers.push(
           `Service "${name}" is also on network "${netKey}", which is not internal. ` +
             'Remove it or make it internal — a second non-internal network bypasses Huddle.',
         );
@@ -244,7 +260,7 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
     },
   };
 
-  return { markedNetwork, services, override, warnings };
+  return { markedNetwork, services, override, warnings, blockers };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -323,8 +339,13 @@ function rejectUnsupportedYaml(lines: Line[]): void {
     if (/^<<\s*:/.test(text)) throw unsupportedYaml('a merge key (`<<`)');
     const value = lineValue(text);
     if (BLOCK_SCALAR_HEADER.test(value)) throw unsupportedYaml('a block scalar (`|` or `>`)');
-    if (/^&[A-Za-z0-9_]/.test(value)) throw unsupportedYaml('a YAML anchor (`&`)');
-    if (/^\*[A-Za-z0-9_]/.test(value)) throw unsupportedYaml('a YAML alias (`*`)');
+    // Match an anchor/alias in any NODE position: at the value start OR right
+    // after a flow opener/separator (`[`, `{`, `,`) or a flow-map colon — so
+    // `networks: [*net]` and `{n: *net}` are caught too, not just `x: *net`.
+    // The trailing name char keeps this off scalar `&`/`*` (env URLs, globs like
+    // `*.log`), which never start an anchor/alias name.
+    if (/(^|[[{,:]\s*)&[A-Za-z0-9_]/.test(value)) throw unsupportedYaml('a YAML anchor (`&`)');
+    if (/(^|[[{,:]\s*)\*[A-Za-z0-9_]/.test(value)) throw unsupportedYaml('a YAML alias (`*`)');
   }
 }
 
@@ -333,12 +354,18 @@ export function parseYaml(input: string): ComposeDoc {
   rejectUnsupportedYaml(lines);
   let pos = 0;
 
-  function parseNode(indent: number): unknown {
+  // Cap the mutual recursion (parseNode ↔ parseMapping/parseSequence) so a deeply
+  // nested (malformed or hostile) compose file cannot exhaust the stack (CWE-674).
+  const MAX_DEPTH = 64;
+  function parseNode(indent: number, depth: number): unknown {
+    if (depth > MAX_DEPTH) {
+      throw new Error(`YAML nesting exceeds ${MAX_DEPTH} levels; refusing to parse this compose file.`);
+    }
     if (pos >= lines.length || lines[pos].indent < indent) return null;
-    return isSeqItem(lines[pos].text) ? parseSequence(indent) : parseMapping(indent);
+    return isSeqItem(lines[pos].text) ? parseSequence(indent, depth) : parseMapping(indent, depth);
   }
 
-  function parseMapping(indent: number): Record<string, unknown> {
+  function parseMapping(indent: number, depth: number): Record<string, unknown> {
     const map: Record<string, unknown> = {};
     while (pos < lines.length && lines[pos].indent === indent && !isSeqItem(lines[pos].text)) {
       const { text } = lines[pos];
@@ -353,7 +380,7 @@ export function parseYaml(input: string): ComposeDoc {
       if (rest !== '') {
         map[key] = parseScalar(rest);
       } else if (pos < lines.length && lines[pos].indent > indent) {
-        map[key] = parseNode(lines[pos].indent);
+        map[key] = parseNode(lines[pos].indent, depth + 1);
       } else {
         map[key] = null;
       }
@@ -361,19 +388,19 @@ export function parseYaml(input: string): ComposeDoc {
     return map;
   }
 
-  function parseSequence(indent: number): unknown[] {
+  function parseSequence(indent: number, depth: number): unknown[] {
     const arr: unknown[] = [];
     while (pos < lines.length && lines[pos].indent === indent && isSeqItem(lines[pos].text)) {
       const afterDash = lines[pos].text.replace(/^-\s*/, '');
       if (afterDash === '') {
         pos++;
-        arr.push(pos < lines.length && lines[pos].indent > indent ? parseNode(lines[pos].indent) : null);
+        arr.push(pos < lines.length && lines[pos].indent > indent ? parseNode(lines[pos].indent, depth + 1) : null);
       } else if (findKeyColon(afterDash) >= 0) {
         // Inline map item: "- key: value". Re-interpret the remainder as a
         // mapping that starts at a virtual indent past the dash.
         const virtualIndent = indent + (lines[pos].text.length - afterDash.length);
         lines[pos] = { indent: virtualIndent, text: afterDash };
-        arr.push(parseMapping(virtualIndent));
+        arr.push(parseMapping(virtualIndent, depth + 1));
       } else {
         arr.push(parseScalar(afterDash));
         pos++;
@@ -382,7 +409,7 @@ export function parseYaml(input: string): ComposeDoc {
     return arr;
   }
 
-  const root = parseNode(lines.length ? lines[0].indent : 0);
+  const root = parseNode(lines.length ? lines[0].indent : 0, 0);
   return (root && typeof root === 'object' ? root : {}) as ComposeDoc;
 }
 
@@ -600,7 +627,19 @@ export async function runMigrate(opts: MigrateOptions): Promise<void> {
   console.log(`Marked network:  ${bold(result.markedNetwork)}`);
   console.log(`Wired services:  ${result.services.length ? result.services.map(bold).join(', ') : dim('(none)')}`);
   for (const w of result.warnings) console.log(yellow(`[!] ${w}`));
+  for (const b of result.blockers) console.log(red(`[x] ${b}`));
   console.log();
+
+  // Fail closed: these blockers mean the migrated service would keep a direct
+  // route to the internet, so writing the override and reporting success would
+  // be misleading. Refuse unless the operator explicitly overrides with --force.
+  if (result.blockers.length > 0 && !opts.force) {
+    throw new Error(
+      `Refusing to write the override: the migration would leave a direct internet path ` +
+        `(${result.blockers.length} blocker(s) above). Fix your compose file, or re-run with ` +
+        `--force to generate it anyway.`,
+    );
+  }
 
   const overrideText =
     '# Generated by `huddle migrate` — do NOT edit by hand; re-run the command instead.\n' +
