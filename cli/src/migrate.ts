@@ -305,6 +305,11 @@ function stripComment(line: string): string {
   return line;
 }
 
+// Shared depth cap for both the reader (parseNode ↔ parseMapping/parseSequence)
+// and the writer (dumpYaml ↔ dumpInlineOrBlock). Real compose trees are only a
+// few levels deep; a much larger cap still forecloses stack-exhaustion (CWE-674).
+const MAX_YAML_DEPTH = 64;
+
 function unsupportedYaml(feature: string): Error {
   return new Error(
     `the compose file uses ${feature}, which \`huddle migrate\`'s built-in YAML reader does ` +
@@ -356,10 +361,9 @@ export function parseYaml(input: string): ComposeDoc {
 
   // Cap the mutual recursion (parseNode ↔ parseMapping/parseSequence) so a deeply
   // nested (malformed or hostile) compose file cannot exhaust the stack (CWE-674).
-  const MAX_DEPTH = 64;
   function parseNode(indent: number, depth: number): unknown {
-    if (depth > MAX_DEPTH) {
-      throw new Error(`YAML nesting exceeds ${MAX_DEPTH} levels; refusing to parse this compose file.`);
+    if (depth > MAX_YAML_DEPTH) {
+      throw new Error(`YAML nesting exceeds ${MAX_YAML_DEPTH} levels; refusing to parse this compose file.`);
     }
     if (pos >= lines.length || lines[pos].indent < indent) return null;
     return isSeqItem(lines[pos].text) ? parseSequence(indent, depth) : parseMapping(indent, depth);
@@ -441,7 +445,11 @@ function parseScalar(raw: string): unknown {
     const map: Record<string, unknown> = {};
     for (const part of splitFlow(value.slice(1, -1))) {
       const colon = findKeyColon(part);
-      if (colon < 0) continue;
+      // Fail closed: a flow-map entry we cannot split into `key: value` (e.g. the
+      // compact `{networks:[dev, public]}` form, where the colon has no following
+      // space) must NOT be silently dropped — that would omit the service from the
+      // generated override and leave it on its original, un-filtered network.
+      if (colon < 0) throw unsupportedYaml('a compact flow-mapping entry (`{key:value}` without a space after the colon)');
       map[unquote(part.slice(0, colon).trim())] = parseScalar(part.slice(colon + 1).trim());
     }
     return map;
@@ -493,6 +501,13 @@ function unquote(value: string): string {
 
 /** Emits an object as YAML using the subset the reader understands. */
 export function dumpYaml(obj: unknown, indent = 0): string {
+  // `indent` doubles as the recursion depth (dumpYaml ↔ dumpInlineOrBlock each
+  // step it by one). Cap it so a pathologically nested object cannot exhaust the
+  // stack (CWE-674) — mirrors the MAX_DEPTH guard on the parse side. Legitimate
+  // compose trees are only a few levels deep.
+  if (indent > MAX_YAML_DEPTH) {
+    throw new Error(`YAML nesting exceeds ${MAX_YAML_DEPTH} levels; refusing to emit this override.`);
+  }
   const pad = '  '.repeat(indent);
   if (obj === null || obj === undefined) return '';
   if (Array.isArray(obj)) {

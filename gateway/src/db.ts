@@ -128,18 +128,19 @@ export function initDb(): void {
     db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
   }
 
-  // Domains are now stored canonically (lowercase) so the exact lookup and the
-  // wildcard match operate on the same form (finding #3). Migrate existing rows
-  // idempotently to lowercase BEFORE the dedup below, so that case variants
-  // (`GIST.github.com` vs `gist.github.com`) coincide and the dedup collapses
-  // them into a single row instead of colliding on the unique index.
-  db.exec('UPDATE rules SET domain = lower(domain) WHERE domain <> lower(domain)');
+  // Drop the legacy unique indexes FIRST. The lowercase migration below rewrites
+  // `GIST.github.com` -> `gist.github.com`, which would collide with an existing
+  // `gist.github.com` row while a stale (possibly case-sensitive) unique index is
+  // still in place — aborting initDb() and preventing the upgraded gateway from
+  // booting. Removing the constraints up front lets the UPDATE and the dedup run
+  // freely; the case-insensitive index is (re)created afterwards.
+  db.exec('DROP INDEX IF EXISTS idx_rules_domain_container');
+  db.exec('DROP INDEX IF EXISTS idx_rules_domain_container_path');
 
-  // Uniqueness now applies to (domain, container, path): multiple path rules per
-  // domain must be able to coexist. The old domain+container index is replaced.
-  // Cleaning up prevents a migration from crashing when old data accidentally
-  // contains multiple rows with the same unique key. NOCASE in the GROUP BY so
-  // the dedup uses the same case-insensitivity as the index.
+  // Collapse case variants BEFORE lowercasing so the survivors are unique per
+  // (domain, container, path) even case-insensitively. NOCASE in the GROUP BY so
+  // `GIST.github.com` and `gist.github.com` coincide and only MAX(id) is kept;
+  // this also prevents the lowercase UPDATE below from creating duplicates.
   db.exec(`
     DELETE FROM rules
     WHERE id NOT IN (
@@ -148,9 +149,14 @@ export function initDb(): void {
       GROUP BY domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, '')
     )
   `);
-  db.exec('DROP INDEX IF EXISTS idx_rules_domain_container');
-  // The old index could still exist without NOCASE; rebuild it case-insensitively.
-  db.exec('DROP INDEX IF EXISTS idx_rules_domain_container_path');
+
+  // Domains are now stored canonically (lowercase) so the exact lookup and the
+  // wildcard match operate on the same form (finding #3). With the old indexes
+  // gone and case variants already deduped, this rewrite can no longer collide.
+  db.exec('UPDATE rules SET domain = lower(domain) WHERE domain <> lower(domain)');
+
+  // Uniqueness now applies to (domain, container, path) case-insensitively:
+  // multiple path rules per domain must be able to coexist.
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_domain_container_path
        ON rules (domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, ''))`

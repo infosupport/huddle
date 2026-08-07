@@ -288,6 +288,13 @@ export async function execInContainer(containerName: string, cmd: string[], stdi
   return waitForExecExit(execCreate.Id);
 }
 
+// Fail-closed ceiling for a single exec-start. The sudo commands (chpasswd,
+// usermod, passwd) return near-instantly, so this only ever trips on a genuine
+// stall (unreachable/wedged daemon). Without it a stalled start would hang the
+// caller — and, in the expiry sweeper's per-container loop, block every later
+// expired grant from being re-locked. A bounded reject lets the caller move on.
+const EXEC_START_TIMEOUT_MS = 15_000;
+
 // POST /exec/<id>/start with the JSON options ONLY — stdin must not go in the
 // body (the daemon parses the body as JSON and rejects trailing bytes). On a 2xx
 // the connection is hijacked into a raw bidirectional stream; on a non-2xx we
@@ -310,6 +317,12 @@ function startExec(execId: string, stdin: string): Promise<void> {
         }
       },
     );
+    // Idle-timeout on the underlying socket: fires only if the start neither
+    // streams nor completes, converting an indefinite hang into a fail-closed
+    // error (surfaced via the 'error' handler below).
+    req.setTimeout(EXEC_START_TIMEOUT_MS, () => {
+      req.destroy(new Error(`exec start timed out after ${EXEC_START_TIMEOUT_MS}ms`));
+    });
     req.on('error', reject);
     req.end(startBody);
   });

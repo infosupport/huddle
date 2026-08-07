@@ -151,12 +151,22 @@ describe.skipIf(!sqliteAvailable)('sudo grants', () => {
       expect(getSudoGrant('c-actief')).toEqual({ until: 9_999_999 });
     });
 
-    it('also cleans up the grant row when the lock exec throws (container gone)', async () => {
+    it('keeps the (still-expired) grant row when the lock exec throws, so a later sweep retries', async () => {
       setSudoGrant('c-weg', 1000);
       const exec = async () => { throw new Error('no such container'); };
       const locked = await sg.sweepExpiredSudoGrants(exec, 2000 * 1000);
       expect(locked).toEqual([]);
-      expect(getSudoGrant('c-weg')).toBeUndefined();
+      // NOT dropped: the account may still be unlocked. The row stays expired so
+      // the next sweep re-locks it once the container is reachable again.
+      expect(getSudoGrant('c-weg')).toEqual({ until: 1000 });
+    });
+
+    it('keeps the grant row when the lock exec returns a non-zero exit', async () => {
+      setSudoGrant('c-fail', 1000);
+      const { exec } = makeExec(1);
+      const locked = await sg.sweepExpiredSudoGrants(exec, 2000 * 1000);
+      expect(locked).toEqual([]);
+      expect(getSudoGrant('c-fail')).toEqual({ until: 1000 });
     });
   });
 
@@ -169,11 +179,14 @@ describe.skipIf(!sqliteAvailable)('sudo grants', () => {
       expect(getSudoGrant(CID)).toBeUndefined();
     });
 
-    it('removes the grant even when the lock exec throws', async () => {
+    it('marks the grant expired (for a later sweep) when the lock exec throws', async () => {
       setSudoGrant(CID, 9_999_999);
       const exec = async () => { throw new Error('container gone'); };
-      await sg.revokeSudo(CID, exec);
-      expect(getSudoGrant(CID)).toBeUndefined();
+      await sg.revokeSudo(CID, exec, 5000 * 1000); // nowMs → nowSec 5000
+      // NOT dropped (that would strand an unlocked account); set to expired-now so
+      // the sweeper re-locks it and the UI immediately shows it as inactive.
+      expect(getSudoGrant(CID)).toEqual({ until: 5000 });
+      expect(getExpiredSudoGrants(5000)).toContain(CID);
     });
 
     it('getAllSudoGrants returns all grants as a map', () => {

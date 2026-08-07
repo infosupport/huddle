@@ -79,15 +79,29 @@ export async function grantSudo(
   return { password, until };
 }
 
-// Revoke admin access immediately: lock the account (best-effort — the container
-// may already be gone) and delete the grant row regardless.
-export async function revokeSudo(containerName: string, exec: ContainerExec): Promise<void> {
+// Revoke admin access immediately: lock the account and drop the grant row. Only
+// remove the row once the lock actually succeeded — otherwise a container that is
+// stopped/paused/unreachable would keep its unlocked `noot` account and working
+// password while the UI shows the grant as gone. On a failed lock we instead mark
+// the grant expired so the sweeper re-locks it the moment the container is
+// exec-able again (and the UI immediately shows it as inactive).
+export async function revokeSudo(
+  containerName: string,
+  exec: ContainerExec,
+  now: number = Date.now(),
+): Promise<void> {
+  let lockedOk = false;
   try {
-    await exec(containerName, lockCmd(), '');
+    const res = await exec(containerName, lockCmd(), '');
+    lockedOk = res.exitCode === 0;
   } catch {
-    /* container may have disappeared — clean up the grant anyway */
+    /* container stopped/unreachable — fall through to the retry path below */
   }
-  deleteSudoGrant(containerName);
+  if (lockedOk) {
+    deleteSudoGrant(containerName);
+  } else {
+    setSudoGrant(containerName, Math.floor(now / 1000));
+  }
 }
 
 // Active sweep: lock every container with an expired grant and clean up the row.
@@ -102,13 +116,20 @@ export async function sweepExpiredSudoGrants(
   const expired = getExpiredSudoGrants(nowSec);
   const locked: string[] = [];
   for (const containerName of expired) {
+    let lockedOk = false;
     try {
       const res = await exec(containerName, lockCmd(), '');
-      if (res.exitCode === 0) locked.push(containerName);
+      lockedOk = res.exitCode === 0;
     } catch {
-      /* container gone/unreachable — clean up anyway */
+      /* container stopped/unreachable — keep the row so a later sweep retries */
     }
-    deleteSudoGrant(containerName);
+    // Only drop the grant once the account is actually locked again. Deleting the
+    // row after a failed lock would strand an unlocked `noot` account with a live
+    // password; leaving the (still-expired) row makes the next sweep retry it.
+    if (lockedOk) {
+      locked.push(containerName);
+      deleteSudoGrant(containerName);
+    }
   }
   return locked;
 }

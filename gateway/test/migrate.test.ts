@@ -127,6 +127,21 @@ describe('parseYaml (minimal compose reader)', () => {
     for (let i = 0; i < 200; i++) y += '  '.repeat(i) + `k${i}:\n`;
     expect(() => parseYaml(y)).toThrow(/nesting exceeds/i);
   });
+
+  it('rejects a compact flow-mapping entry fail-closed instead of dropping the service', () => {
+    // `{networks:[dev, public]}` (no space after the colon) must NOT be silently
+    // parsed as `{}` — that would omit the service from the override and leave it
+    // on its original, un-filtered network. Refuse rather than mis-parse.
+    expect(() => parseYaml('services:\n  web: {networks:[dev, public]}\n')).toThrow(/does not support/i);
+    // The spaced form stays supported.
+    expect(() => parseYaml('services:\n  web: {networks: [dev, public]}\n')).not.toThrow();
+  });
+
+  it('caps dump recursion depth (CWE-674) symmetrically with the parser', () => {
+    let obj: Record<string, unknown> = { leaf: 1 };
+    for (let i = 0; i < 200; i++) obj = { nested: obj };
+    expect(() => dumpYaml(obj)).toThrow(/nesting exceeds/i);
+  });
 });
 
 describe('marked-network detection', () => {
