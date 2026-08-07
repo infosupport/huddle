@@ -9,17 +9,18 @@ export interface ContainerRuntime {
   /** Name of the default bridge network ('bridge' for Docker, 'podman' for Podman). */
   defaultNetwork: string;
   /**
-   * Draait de engine in een VM (Podman machine, Docker Desktop) i.p.v. native op
-   * de host? Bepaalt of bind-sources zoals /tmp/dc-sockets in de VM aangemaakt
-   * moeten worden: Docker Desktop maakt een ontbrekende source zelf aan, Podman
-   * niet — dan moeten we hem via `podman machine ssh` in de VM aanmaken.
+   * Does the engine run in a VM (Podman machine, Docker Desktop) instead of
+   * natively on the host? Determines whether bind-sources such as
+   * /tmp/dc-sockets must be created inside the VM: Docker Desktop creates a
+   * missing source itself, Podman does not — then we have to create it inside
+   * the VM via `podman machine ssh`.
    */
   isRemote: boolean;
   /**
-   * Extra `--security-opt` vlaggen voor de huddle-container. Rootless Podman
-   * geeft zijn socket een SELinux-label; zonder `label=disable` mag het
-   * (SELinux-confined) huddle-proces de socket niet benaderen. Docker heeft dit
-   * niet nodig (leeg).
+   * Extra `--security-opt` flags for the huddle container. Rootless Podman
+   * gives its socket a SELinux label; without `label=disable` the
+   * (SELinux-confined) huddle process is not allowed to access the socket.
+   * Docker does not need this (empty).
    */
   securityOpts: string[];
 }
@@ -38,12 +39,12 @@ function isAvailable(runtime: RuntimeName): boolean {
 }
 
 /**
- * Bepaalt de ECHTE engine achter een commando, of undefined als de engine niet
- * bereikbaar is. Vertrouw niet op de commandonaam: `docker` is vaak een
- * symlink/shim naar Podman (podman-docker) en Podman emuleert dan zelfs
- * `docker --version`. Podman's `info` kent daarentegen het veld
- * Host.ServiceIsRemote; Docker's info-schema niet. Dat is een betrouwbaar
- * onderscheid dat ook via de shim werkt.
+ * Determines the REAL engine behind a command, or undefined if the engine is
+ * not reachable. Do not trust the command name: `docker` is often a
+ * symlink/shim to Podman (podman-docker), and Podman then even emulates
+ * `docker --version`. Podman's `info`, on the other hand, has the field
+ * Host.ServiceIsRemote; Docker's info schema does not. That is a reliable
+ * distinction that also works through the shim.
  */
 function detectEngine(command: RuntimeName): RuntimeName | undefined {
   if (commandOutput(`${command} info --format "{{.Host.ServiceIsRemote}}"`) !== undefined) {
@@ -66,10 +67,58 @@ function dockerSocketPath(): string {
   return process.platform === 'win32' ? '//var/run/docker.sock' : '/var/run/docker.sock';
 }
 
+/**
+ * Extracts the unix socket path from the JSON of `docker context inspect`. The
+ * active context determines which engine the `docker` command talks to; Rancher
+ * Desktop (dockerd/moby mode) sets a `rancher-desktop` context whose
+ * `Endpoints.docker.Host` points to `unix:///<home>/.rd/docker.sock` instead of
+ * the default `/var/run/docker.sock`.
+ *
+ * Pure function so we can test the parsing in isolation. Returns `null` for
+ * non-parsable input or a non-unix endpoint (npipe:// on Windows,
+ * tcp:// / ssh:// remote), because those cannot be bind-mounted as a file path.
+ */
+export function parseDockerContextSocket(json: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  // `docker context inspect` returns an array; one context is one element.
+  const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+  const host = (entry as { Endpoints?: { docker?: { Host?: unknown } } } | null | undefined)
+    ?.Endpoints?.docker?.Host;
+  if (typeof host !== 'string' || !host.startsWith('unix://')) return null;
+  const path = host.slice('unix://'.length);
+  if (!path.startsWith('/')) return null;
+  // The returned path is interpolated into a `docker run -v "<path>:..."` shell
+  // command (init.ts), where it is DOUBLE-QUOTED. The `Host` from `docker context
+  // inspect` is attacker-influenceable (whoever can create/activate a docker
+  // context controls the value), so restrict it to characters that occur in a real
+  // socket path: allow spaces (legal in e.g. macOS `/Users/First Last/.rd/...`)
+  // but never the metacharacters that stay dangerous inside double quotes
+  // ($, backtick, ", \) or the command separators (;, |, &, (), newline).
+  if (!/^[A-Za-z0-9._/ -]+$/.test(path)) return null;
+  return path;
+}
+
+/** Recognizes the Rancher Desktop socket path (dockerd/moby mode): `~/.rd/docker.sock`. */
+export function isRancherDesktopSocket(socketPath: string | null | undefined): boolean {
+  return typeof socketPath === 'string' && /(^|\/)\.rd\/docker\.sock$/.test(socketPath);
+}
+
+/** Socket path of the active docker context, or undefined if it cannot be queried. */
+function dockerContextSocket(): string | undefined {
+  const json = commandOutput('docker context inspect');
+  if (!json) return undefined;
+  return parseDockerContextSocket(json) ?? undefined;
+}
+
 function podmanIsRemote(): boolean {
-  // Op macOS/Windows draait Podman altijd in een `podman machine`-VM; ook op
-  // Linux kan de client op een remote socket wijzen. `ServiceIsRemote` is de
-  // gezaghebbende bron.
+  // On macOS/Windows Podman always runs in a `podman machine` VM; on Linux too
+  // the client can point at a remote socket. `ServiceIsRemote` is the
+  // authoritative source.
   return commandOutput(`podman info --format "{{.Host.ServiceIsRemote}}"`) === 'true';
 }
 
@@ -83,12 +132,21 @@ function buildRuntime(name: RuntimeName): ContainerRuntime {
       securityOpts: ['label=disable'],
     };
   }
+  // Rancher Desktop (dockerd/moby mode) looks like an ordinary Docker engine,
+  // but the socket is not at /var/run/docker.sock: the active docker context
+  // points to `~/.rd/docker.sock`. Follow that context so we bind-mount the
+  // correct socket; otherwise we fall back to the default location (real native
+  // Docker, Docker Desktop). Rancher Desktop runs the engine in a VM (Lima/WSL)
+  // on EVERY platform, so it is always 'remote'.
+  const contextSocket = dockerContextSocket();
+  const isRancher = isRancherDesktopSocket(contextSocket);
   return {
     name,
-    socketPath: dockerSocketPath(),
+    socketPath: isRancher ? contextSocket! : dockerSocketPath(),
     defaultNetwork: 'bridge',
-    // Docker Desktop (macOS/Windows) draait in een VM; native Docker op Linux niet.
-    isRemote: process.platform !== 'linux',
+    // Docker Desktop (macOS/Windows) and Rancher Desktop run in a VM; native
+    // Docker on Linux does not.
+    isRemote: isRancher || process.platform !== 'linux',
     securityOpts: [],
   };
 }
@@ -114,9 +172,9 @@ export function resolveRuntime(explicit?: string): ContainerRuntime {
     return buildRuntime(name);
   }
 
-  // Auto-detectie: kijk eerst achter het `docker`-commando (dat een Podman-shim
-  // kan zijn), daarna naar `podman`. Zo wint een echte Docker-engine als die er
-  // is, maar herkennen we Podman ook als het zich als `docker` voordoet.
+  // Auto-detection: first look behind the `docker` command (which may be a
+  // Podman shim), then at `podman`. This way a real Docker engine wins if there
+  // is one, but we also recognize Podman when it poses as `docker`.
   const detected = detectEngine('docker') ?? detectEngine('podman');
   if (detected) return buildRuntime(detected);
 
