@@ -1,11 +1,12 @@
 import { Component, inject, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/api.service';
+import { IconComponent } from '../../shared/components/icon/icon.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, IconComponent],
   template: `
     <div class="page-header">
       <h1>Settings</h1>
@@ -114,6 +115,38 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
         </form>
       </details>
     </div>
+
+    <div class="card card--new">
+      <div class="tmd-head">
+        <span class="tmd-folder"><app-icon name="folder" [size]="26" /></span>
+        <h2 class="tmd-title">
+          Team-managed defaults (extension &amp; firewall rules)
+          <span class="pill pill--new">NEW</span>
+        </h2>
+      </div>
+
+      <div class="field-row tmd-cols">
+        <div class="field">
+          <label>Extensions folder</label>
+          <p class="hint">Path to folder containing extension definitions (read on startup &amp; reload).</p>
+          <div class="tmd-input-row">
+            <input [(ngModel)]="resources.extensionsFolder" name="extensionsFolder"
+                   placeholder="/path/to/extensions" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn btn-ghost" (click)="saveFolders()" [disabled]="savingFolders()">Reload</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Firewall rules folder</label>
+          <p class="hint">Path to folder containing firewall rules (read on startup &amp; reload).</p>
+          <div class="tmd-input-row">
+            <input [(ngModel)]="resources.firewallRulesFolder" name="firewallRulesFolder"
+                   placeholder="/path/to/firewall_rules" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn btn-ghost" (click)="reloadFirewallFolder()" [disabled]="savingFolders()">Reload</button>
+          </div>
+        </div>
+      </div>
+      @if (folderNote()) { <span class="saved-note">{{ folderNote() }}</span> }
+    </div>
   `,
   styles: [`
     :host { display: contents; }
@@ -139,17 +172,33 @@ import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/a
     .add-form { margin-top: 16px; }
     .add-form summary { cursor: pointer; color: var(--accent); font-size: 0.9em; padding: 4px 0; }
     .add-mapping-form { margin-top: 12px; }
+
+    /* Team-managed defaults (#69) */
+    .card--new { border: 1px solid var(--accent); }
+    .tmd-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+    .tmd-folder { display: inline-flex; align-items: center; justify-content: center; color: var(--accent); }
+    .tmd-title { display: flex; align-items: center; gap: 10px; margin: 0; }
+    .pill--new { background: var(--info-soft, #e6f0ff); color: var(--info, #2f6feb); font-size: 0.62em; font-weight: 700; letter-spacing: 0.04em; padding: 3px 7px; border-radius: 999px; text-transform: uppercase; }
+    .tmd-cols { gap: 40px; }
+    .tmd-cols .field { min-width: 260px; }
+    .tmd-input-row { display: flex; gap: 10px; align-items: stretch; }
+    .tmd-input-row input { flex: 1; }
+    .btn-ghost { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 0.9em; }
+    .btn-ghost:hover { background: var(--surface-hover); }
+    .btn-ghost:disabled { opacity: 0.5; cursor: default; }
   `]
 })
 export class SettingsComponent implements OnInit {
   private api = inject(ApiService);
 
-  resources: HuddleSettings = { defaultMemory: '', defaultCpus: '' };
+  resources: HuddleSettings = { defaultMemory: '', defaultCpus: '', extensionsFolder: '', firewallRulesFolder: '' };
   mappings = signal<FolderMapping[]>([]);
   error = signal<string | null>(null);
   savingResources = signal(false);
   savedResources = signal(false);
   addingMapping = signal(false);
+  savingFolders = signal(false);
+  folderNote = signal<string | null>(null);
 
   newMapping = { name: '', host_path: '', volume_name: '', container_path: '' };
   newMappingReadOnly = false;
@@ -176,6 +225,56 @@ export class SettingsComponent implements OnInit {
     this.api.saveSettings(this.resources).subscribe({
       next: () => { this.savingResources.set(false); this.savedResources.set(true); },
       error: (e) => { this.savingResources.set(false); this.error.set(e.message); },
+    });
+  }
+
+  // Save both folder paths. They are written into the mounted ~/.huddle/config.json
+  // and only take effect once the CLI re-mounts them — so tell the operator to
+  // restart. Used by the Extensions-folder Reload button too.
+  saveFolders(): void {
+    this.savingFolders.set(true);
+    this.folderNote.set(null);
+    this.error.set(null);
+    this.api.saveSettings({
+      extensionsFolder: this.resources.extensionsFolder,
+      firewallRulesFolder: this.resources.firewallRulesFolder,
+    }).subscribe({
+      next: (res) => {
+        this.savingFolders.set(false);
+        if (res.persisted === false) {
+          this.folderNote.set('Could not save — the CLI config is not mounted into Huddle. Run `huddle restart` on the host first.');
+        } else {
+          this.folderNote.set('Saved to config. Run `huddle restart` on the host to (re)mount the folder(s).');
+        }
+      },
+      error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
+    });
+  }
+
+  // Save the folder paths, then re-read whatever is currently mounted.
+  reloadFirewallFolder(): void {
+    this.savingFolders.set(true);
+    this.folderNote.set(null);
+    this.error.set(null);
+    this.api.saveSettings({
+      extensionsFolder: this.resources.extensionsFolder,
+      firewallRulesFolder: this.resources.firewallRulesFolder,
+    }).subscribe({
+      next: () => {
+        this.api.reloadFirewallRulesFolder().subscribe({
+          next: (r) => {
+            this.savingFolders.set(false);
+            if (!r.mounted) {
+              this.folderNote.set('Saved to config, but the folder is not mounted into Huddle yet — run `huddle restart` on the host, then Reload.');
+            } else {
+              const errs = r.errors.length ? `, ${r.errors.length} error(s)` : '';
+              this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)${errs}`);
+            }
+          },
+          error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
+        });
+      },
+      error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
     });
   }
 

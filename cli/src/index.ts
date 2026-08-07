@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
-import { runFirewallList, runFirewallAdd, runFirewallDelete } from './firewall';
+import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { resolveImages } from './images';
@@ -23,9 +23,9 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'migrate', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -103,6 +103,8 @@ Usage:
   huddle start [options] [folder]    Explicitly start a devcontainer
   huddle init [options]              Pull the Huddle + devcontainer base images and
                                      start them via Docker or Podman
+  huddle restart                     Recreate the gateway (e.g. to mount a changed
+                                     team firewall-rules folder)
   huddle migrate [folder]            Wire an existing docker-compose devcontainer
                                      behind Huddle by generating an override file
   huddle firewall list [options]     Show firewall requests
@@ -111,6 +113,14 @@ Usage:
                                      supported: *.example.com and /path/*)
   huddle firewall delete <id>        Delete a firewall rule by id (or domain;
                                      narrow with --container)
+  huddle firewall export [options]   Export firewall rules as JSON
+  huddle firewall import <file>      Import firewall rules from a JSON file
+  huddle firewall group list         List firewall groups (#69)
+  huddle firewall group export <name>  Export a group as JSON (--out <file>)
+  huddle firewall group import <file>  Import a group (--replace to mirror)
+  huddle firewall group apply <name>   Apply a group (--container <id> or global)
+  huddle firewall folder set <path>  Set the team-managed rules folder
+  huddle firewall folder reload      Re-read the team-managed rules folder
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -141,6 +151,8 @@ Migrate options:
 Firewall options:
   -i, --interactive                  Interactively approve/deny (list)
   --container <name>                 Filter by (list) / scope to (add) a container
+                                     (or __global__). On import: remap all rules
+                                     to this scope
   --status <requested|allow|deny>    Filter by status (default: requested)
 
 Firewall add options:
@@ -148,6 +160,11 @@ Firewall add options:
                                      a trailing * spans deeper segments
                                      (e.g. /_packaging/*/nuget/v3/*)
   --deny                             Create a block rule (default: allow)
+
+Firewall export/import options:
+  --out <file>                       Write export to a file (default: stdout)
+  --replace                          Import in replace mode: wipe the target
+                                     scope first (default: merge/upsert)
 
 Global options:
   --url <url>                        Huddle URL (default: http://localhost:3000)
@@ -220,6 +237,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'restart') {
+    // Stop + recreate the gateway (runInit does `rm -f` first) so changed team
+    // folders get mounted. The portal writes the paths straight into the mounted
+    // ~/.huddle/config.json, so runInit already reads the latest values here.
+    const initOpts = { runtime: flagString(flags, 'runtime') };
+    ensureCliForChannel(process.argv.slice(2));
+    await runInit(initOpts, resolveImages());
+    return;
+  }
+
   if (cmd === 'experiment') {
     const subCmd = sub ?? 'status';
     if (subCmd === 'use') {
@@ -256,6 +283,32 @@ async function main(): Promise<void> {
         target: positional[2],
         container: flagString(flags, 'container'),
       });
+    } else if (subCmd === 'export') {
+      await runFirewallExport({
+        container: flagString(flags, 'container'),
+        out: flagString(flags, 'out'),
+      });
+    } else if (subCmd === 'import') {
+      const file = positional[2];
+      if (!file) {
+        console.error('Usage: huddle firewall import <file> [--replace] [--container <id>]');
+        process.exit(1);
+      }
+      await runFirewallImport({
+        file,
+        replace: flagBool(flags, 'replace'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'group' || subCmd === 'groups') {
+      await runFirewallGroup({
+        action: positional[2],
+        arg: positional[3],
+        out: flagString(flags, 'out'),
+        replace: flagBool(flags, 'replace'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'folder') {
+      await runFirewallFolder({ action: positional[2], path: positional[3] });
     } else {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
       process.exit(1);

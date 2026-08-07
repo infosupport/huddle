@@ -8,10 +8,14 @@ import { Grant, GrantMap } from '../models/grant.model';
 import { DockerActionCatalog, DockerActionPolicies, DockerActionPolicyResult } from '../models/docker-action.model';
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
+import { FirewallGroup, GroupDetail, ImportGroupResult } from '../models/group.model';
 
 export interface HuddleSettings {
   defaultMemory: string;
   defaultCpus: string;
+  extensionsFolder: string;
+  firewallRulesFolder: string;
+  hostConfigMounted?: boolean;
 }
 
 export interface ApprovedHostPort {
@@ -94,13 +98,71 @@ export class ApiService {
     return this.handle(this.http.post<Rule>('/api/rules', body));
   }
 
+  // ── Rules export / import (#69) ────────────────────────────────────────────
+  exportRules(container?: string): Observable<unknown> {
+    const params: Record<string, string> = {};
+    if (container) params['container'] = container;
+    return this.handle(this.http.get('/api/rules/export', { params }));
+  }
+
+  importRules(body: unknown): Observable<{ imported: number; updated: number; skipped: number }> {
+    return this.handle(
+      this.http.post<{ imported: number; updated: number; skipped: number }>('/api/rules/import', body),
+    );
+  }
+
+  // ── Firewall groups (#69) ──────────────────────────────────────────────────
+  getGroups(): Observable<FirewallGroup[]> {
+    return this.handle(this.http.get<FirewallGroup[]>('/api/groups'));
+  }
+
+  getGroup(id: number): Observable<GroupDetail> {
+    return this.handle(this.http.get<GroupDetail>(`/api/groups/${id}`));
+  }
+
+  createGroup(name: string, description = '', shared = false): Observable<FirewallGroup> {
+    return this.handle(this.http.post<FirewallGroup>('/api/groups', { name, description, shared }));
+  }
+
+  updateGroup(id: number, patch: { name?: string; description?: string; shared?: boolean }): Observable<FirewallGroup> {
+    return this.handle(this.http.put<FirewallGroup>(`/api/groups/${id}`, patch));
+  }
+
+  deleteGroup(id: number): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${id}`));
+  }
+
+  assignRuleToGroup(groupId: number, ruleId: number): Observable<{ ok: true }> {
+    return this.handle(this.http.post<{ ok: true }>(`/api/groups/${groupId}/rules`, { rule_id: ruleId }));
+  }
+
+  removeRuleFromGroup(groupId: number, ruleId: number): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${groupId}/rules/${ruleId}`));
+  }
+
+  applyGroup(groupId: number, container: string | null): Observable<{ ok: true; applied: number; updated: number }> {
+    return this.handle(this.http.post<{ ok: true; applied: number; updated: number }>(`/api/groups/${groupId}/apply`, { container }));
+  }
+
+  exportGroup(groupId: number): Observable<unknown> {
+    return this.handle(this.http.get(`/api/groups/${groupId}/export`));
+  }
+
+  importGroup(envelope: unknown, mode: 'merge' | 'replace' = 'merge'): Observable<ImportGroupResult> {
+    return this.handle(this.http.post<ImportGroupResult>('/api/groups/import', { mode, envelope }));
+  }
+
+  reloadFirewallRulesFolder(): Observable<{ folder: string | null; mounted: boolean; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/firewall-rules-folder/reload', {}));
+  }
+
   getContainerDetail(name: string): Observable<ContainerDetail> {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
-  // Ephemeral sudo grant: 'noot' starts locked without a password. These endpoints
-  // grant/show/revoke temporary admin access. The password is returned only once
-  // (from grantSudo); status never returns a password.
+  // Ephemeral sudo grant: 'noot' starts locked without a password. These
+  // endpoints grant/show/revoke temporary admin access. The password is
+  // returned only once (on grantSudo); status never returns a password.
   getSudoGrant(name: string): Observable<{ active: boolean; until: number | null }> {
     return this.handle(this.http.get<{ active: boolean; until: number | null }>(`/api/docker/containers/${name}/sudo-grant`));
   }
@@ -212,8 +274,8 @@ export class ApiService {
     return this.handle(this.http.get<HuddleSettings>('/api/settings'));
   }
 
-  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean }> {
-    return this.handle(this.http.post<{ ok: boolean }>('/api/settings', values));
+  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean; restartRequired?: boolean; persisted?: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean; restartRequired?: boolean; persisted?: boolean }>('/api/settings', values));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; path?: string; limit?: number }): Observable<AuditLog[]> {
