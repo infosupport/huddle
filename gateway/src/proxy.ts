@@ -111,6 +111,17 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
 // then we reconstruct the handshake response byte-for-byte back to the client
 // (rawHeaders preserves exact casing + order of Sec-WebSocket-Accept etc.) and
 // connect both sockets. Every Upgrade is thus forwarded transparently.
+// Reconstruct an HTTP status line + headers byte-for-byte from an upstream
+// response, preserving exact header casing/order (rawHeaders). Shared by the
+// 101-handshake relay and the non-101 response relay in forwardUpgrade.
+function formatHttpHead(res: http.IncomingMessage): string {
+  const lines = [`HTTP/1.1 ${res.statusCode} ${res.statusMessage}`];
+  for (let i = 0; i < res.rawHeaders.length; i += 2) {
+    lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`);
+  }
+  return lines.join('\r\n') + '\r\n\r\n';
+}
+
 function forwardUpgrade(
   secure: boolean,
   options: https.RequestOptions,
@@ -157,19 +168,15 @@ function forwardUpgrade(
   upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
     clearHandshakeTimer();
     // Reconstruct the 101 handshake byte-for-byte back to the client.
-    const lines = [`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}`];
-    for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
-      lines.push(`${upstreamRes.rawHeaders[i]}: ${upstreamRes.rawHeaders[i + 1]}`);
-    }
     try {
-      clientSocket.write(lines.join('\r\n') + '\r\n\r\n');
-      if (upstreamHead && upstreamHead.length) clientSocket.write(upstreamHead);
+      clientSocket.write(formatHttpHead(upstreamRes));
+      if (upstreamHead.length) clientSocket.write(upstreamHead);
     } catch {
       try { upstreamSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
       return;
     }
     // Bytes the client already sent after its handshake: forward them first, then pipe.
-    if (clientHead && clientHead.length) upstreamSocket.write(clientHead);
+    if (clientHead.length) upstreamSocket.write(clientHead);
     upstreamSocket.pipe(clientSocket);
     clientSocket.pipe(upstreamSocket);
     const teardown = () => {
@@ -186,11 +193,7 @@ function forwardUpgrade(
   // back to the client and close — fail-closed with respect to the tunnel.
   upstreamReq.on('response', (upstreamRes) => {
     clearHandshakeTimer();
-    const lines = [`HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage}`];
-    for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
-      lines.push(`${upstreamRes.rawHeaders[i]}: ${upstreamRes.rawHeaders[i + 1]}`);
-    }
-    try { clientSocket.write(lines.join('\r\n') + '\r\n\r\n'); } catch { /* best-effort: peer socket may already be closed */ }
+    try { clientSocket.write(formatHttpHead(upstreamRes)); } catch { /* best-effort: peer socket may already be closed */ }
     upstreamRes.on('data', (c: Buffer) => { try { clientSocket.write(c); } catch { /* best-effort: peer socket may already be closed */ } });
     upstreamRes.on('end', () => { try { clientSocket.end(); } catch { /* best-effort: peer socket may already be closed */ } });
     upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
@@ -245,7 +248,8 @@ function handleTokenExchangeResponse(
         // 'unknown' fallback anymore. A null container yields a non-redeemable
         // placeholder (fail-closed).
         json.access_token = storeTokenExchange(containerId, json.access_token as string);
-        console.log(`[token-exchange] placeholder issued for container ${containerId}`);
+        // (No log line here: the audit entry below already records that an
+        // exchange happened, with the placeholder value redacted.)
         outBuf = Buffer.from(JSON.stringify(json));
         delete outHeaders['content-encoding'];
         delete outHeaders['transfer-encoding'];
