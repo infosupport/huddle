@@ -30,6 +30,7 @@ let db: typeof import('../src/db').db;
 
 let upstream: WebSocketServer;
 let upstreamPort = 0;
+let lastUpstreamHeaders: Record<string, any> = {};
 
 let proxy: http.Server;
 let proxyPort = 0;
@@ -120,7 +121,8 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
 
     // Upstream: real ws echo server.
     upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    upstream.on('connection', (socket) => {
+    upstream.on('connection', (socket, req) => {
+      lastUpstreamHeaders = req.headers;
       socket.on('message', (data) => socket.send(data.toString()));
     });
     await new Promise<void>((r) => upstream.once('listening', () => r()));
@@ -162,6 +164,31 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     expect(echoed).toBe('hello huddle');
   });
 
+  it('strips + redacts Proxy-Authorization and records the handshake result in the audit log', async () => {
+    db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    lastUpstreamHeaders = {};
+    const echoed = await new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${upstreamPort}/echo`, {
+        createConnection: proxyCreateConnection(upstreamPort, proxyPort),
+        headers: { 'Proxy-Authorization': 'Basic c3VwZXItc2VjcmV0' },
+      } as any);
+      ws.on('open', () => ws.send('hi'));
+      ws.on('message', (d) => { ws.close(); resolve(d.toString()); });
+      ws.on('error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    expect(echoed).toBe('hi');
+    // The reusable proxy credential must NOT reach upstream…
+    expect(lastUpstreamHeaders['proxy-authorization']).toBeUndefined();
+    // …and the audit row must be completed (101) with the credential redacted.
+    const row = db.prepare(
+      `SELECT res_status, req_headers FROM audit_log WHERE action = 'allow' AND domain = '127.0.0.1' ORDER BY id DESC LIMIT 1`
+    ).get() as { res_status: number | null; req_headers: string | null };
+    expect(row.res_status).toBe(101);
+    expect(row.req_headers ?? '').not.toContain('c3VwZXItc2VjcmV0');
+    expect(row.req_headers ?? '').toContain('<redacted>');
+  });
+
   it('rejects an upgrade to a disallowed host/path (403)', async () => {
     // No allow rule → checkRule returns 'requested' → fail-closed rejected.
     const result = await wsExpectRejected('/echo');
@@ -187,12 +214,13 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
       });
       c.on('data', (d) => {
         buf += d.toString();
-        const m = buf.match(/^HTTP\/1\.1 (\d{3})/);
+        const m = buf.match(/^HTTP\/1\.1 (\d{3} [^\r\n]+)/);
         if (m) { clearTimeout(guard); try { c.destroy(); } catch {} resolve(m[1]); }
       });
       c.on('error', (e) => { clearTimeout(guard); reject(e); });
     });
-    expect(status).toBe('400'); // refused, not forwarded as an upgrade
+    // Refused, not forwarded — and the status line is consistent (not "400 Forbidden").
+    expect(status).toBe('400 Bad Request');
   });
 
   it('cuts off a stalled upstream handshake (no socket-leak DoS)', async () => {

@@ -26,6 +26,21 @@ const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
 function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
 
+// Hop-by-hop proxy headers that must never reach upstream: proxy-connection and
+// the reusable proxy credential proxy-authorization.
+function stripProxyHeaders(h: http.OutgoingHttpHeaders): void {
+  delete h['proxy-connection'];
+  delete h['proxy-authorization'];
+}
+
+// Serialize request headers for the audit log with the reusable proxy credential
+// redacted, so it is never persisted in the network log.
+function auditReqHeaders(h: http.IncomingHttpHeaders): string {
+  return h['proxy-authorization'] === undefined
+    ? headersToJson(h)
+    : headersToJson({ ...h, 'proxy-authorization': '<redacted>' });
+}
+
 // RFC 7230 §3.3.2: Content-Length and Transfer-Encoding must not coexist.
 // Some OAuth/API servers send both; strip Content-Length when TE is present.
 function sanitizeResHeaders(h: http.IncomingHttpHeaders): http.IncomingHttpHeaders {
@@ -80,10 +95,17 @@ function send502(res: http.ServerResponse, message: string): void {
   res.end(body);
 }
 
+// Reason phrase per status so the status line is never self-contradictory
+// (e.g. "400 Forbidden"). rejectSocket serves both CONNECT and Upgrade denials.
+const REJECT_REASON: Record<number, string> = {
+  400: 'Bad Request', 403: 'Forbidden', 426: 'Upgrade Required',
+  502: 'Bad Gateway', 504: 'Gateway Timeout',
+};
+
 function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string, domain: string, containerId?: string | null): void {
   const body = JSON.stringify({
     error: 'REQUEST_BLOCKED_BY_HUDDLE',
-    message: 'This CONNECT request is blocked by Huddle security policy.',
+    message: 'This request is blocked by Huddle security policy.',
     blockedEndpoint: domain,
     reason: blockStatus === 'requested'
       ? 'This endpoint has not yet been approved for this devcontainer.'
@@ -93,7 +115,7 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
     huddlePortal: 'http://localhost:3000',
   });
   socket.write(
-    `HTTP/1.1 ${status} Forbidden\r\n` +
+    `HTTP/1.1 ${status} ${REJECT_REASON[status] ?? 'Forbidden'}\r\n` +
       `content-type: application/json\r\n` +
       `x-huddle-blocked: 1\r\n` +
       `content-length: ${Buffer.byteLength(body)}\r\n` +
@@ -144,13 +166,25 @@ function forwardUpgrade(
   options: https.RequestOptions,
   clientSocket: stream.Duplex,
   clientHead: Buffer,
+  auditId: number | null = null,
 ): void {
+  // Record the handshake outcome on the in-flight audit row exactly once, so an
+  // allowed upgrade never stays res_status=NULL in the network log. First
+  // terminal outcome wins — a later live-socket error must not overwrite the 101.
+  let audited = false;
+  const finishAudit = (resStatus: number | null) => {
+    if (audited || auditId === null) return;
+    audited = true;
+    updateAuditResponse(auditId, { resStatus });
+  };
+
   let upstreamReq: http.ClientRequest;
   try {
     // Same synchronous-throw risk as tryCreateUpstreamRequest (e.g.
     // ERR_UNESCAPED_CHARACTERS): fail per handshake, not per process.
     upstreamReq = secure ? https.request(options) : http.request(options);
   } catch {
+    finishAudit(502);
     try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
     return;
   }
@@ -177,6 +211,7 @@ function forwardUpgrade(
     if (settled) return;
     settled = true;
     destroyUpstream();
+    finishAudit(504);
     try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
   }, timeoutMs);
   handshakeTimer.unref?.();
@@ -184,6 +219,7 @@ function forwardUpgrade(
 
   upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
     clearHandshakeTimer();
+    finishAudit(upstreamRes.statusCode ?? 101);
     // Reconstruct the 101 handshake byte-for-byte back to the client.
     try {
       clientSocket.write(formatHttpHead(upstreamRes));
@@ -210,13 +246,14 @@ function forwardUpgrade(
   // back to the client and close — fail-closed with respect to the tunnel.
   upstreamReq.on('response', (upstreamRes) => {
     clearHandshakeTimer();
+    finishAudit(upstreamRes.statusCode ?? null);
     try { clientSocket.write(formatHttpHead(upstreamRes)); } catch { /* best-effort: peer socket may already be closed */ }
     upstreamRes.on('data', (c: Buffer) => { try { clientSocket.write(c); } catch { /* best-effort: peer socket may already be closed */ } });
     upstreamRes.on('end', () => { try { clientSocket.end(); } catch { /* best-effort: peer socket may already be closed */ } });
     upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   });
 
-  upstreamReq.on('error', () => { clearHandshakeTimer(); try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
+  upstreamReq.on('error', () => { clearHandshakeTimer(); finishAudit(502); try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   clientSocket.on('error', () => { clearHandshakeTimer(); destroyUpstream(); });
   upstreamReq.end();
 }
@@ -524,19 +561,20 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
-    logAudit({
+    const auditId = logAudit({
       containerId, domain: host, action: 'allow', ruleId: result.ruleId,
-      method: req.method ?? null, path: forwardPath, reqHeaders: headersToJson(req.headers),
+      method: req.method ?? null, path: forwardPath, reqHeaders: auditReqHeaders(req.headers),
     });
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
-    delete outgoingHeaders['proxy-connection'];
+    stripProxyHeaders(outgoingHeaders);
     const upstreamPort = target.port || 80;
     forwardUpgrade(
       false,
       { hostname: host, port: upstreamPort, method: req.method, path: forwardPath, headers: outgoingHeaders },
       clientSocket,
       head,
+      auditId,
     );
   });
 
@@ -874,7 +912,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         return;
       }
 
-      logAudit({
+      const auditId = logAudit({
         containerId,
         domain: hostname,
         port,
@@ -882,11 +920,11 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         ruleId: pathResult.ruleId,
         method: innerReq.method ?? null,
         path: innerReq.url ?? null,
-        reqHeaders: headersToJson(innerReq.headers),
+        reqHeaders: auditReqHeaders(innerReq.headers),
       });
 
       const upstreamHeaders = { ...innerReq.headers };
-      delete upstreamHeaders['proxy-connection'];
+      stripProxyHeaders(upstreamHeaders);
       forwardUpgrade(
         true,
         {
@@ -900,6 +938,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         },
         innerSocket,
         innerHead,
+        auditId,
       );
     });
     innerHttp.on('clientError', (_err, sock) => { try { sock.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
