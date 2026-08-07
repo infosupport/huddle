@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
-import { runFirewallList, runFirewallAdd } from './firewall';
+import { runFirewallList, runFirewallAdd, runFirewallDelete } from './firewall';
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { resolveImages } from './images';
@@ -109,6 +109,8 @@ Usage:
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
                                      supported: *.example.com and /path/*)
+  huddle firewall delete <id>        Delete a firewall rule by id (or domain;
+                                     narrow with --container)
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -247,6 +249,11 @@ async function main(): Promise<void> {
         domain: positional[2],
         path: flagString(flags, 'path'),
         deny: flagBool(flags, 'deny'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'delete' || subCmd === 'remove' || subCmd === 'rm') {
+      await runFirewallDelete({
+        target: positional[2],
         container: flagString(flags, 'container'),
       });
     } else {
