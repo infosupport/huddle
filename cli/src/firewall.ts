@@ -150,7 +150,11 @@ export async function runFirewallDelete(opts: FirewallDeleteOptions): Promise<vo
     if (opts.container) qs.set('container', opts.container);
     const query = qs.toString();
     const rules = await get<Rule[]>(`/api/rules${query ? `?${query}` : ''}`);
-    const matches = rules.filter((r) => r.domain === target);
+    // Hostnames are case-insensitive everywhere else in the firewall stack, so
+    // match the domain case-insensitively — a rule stored as `GitHub.com` must be
+    // deletable by typing `github.com`.
+    const needle = target.toLowerCase();
+    const matches = rules.filter((r) => r.domain.toLowerCase() === needle);
     if (matches.length === 0) {
       const scope = opts.container ? ` for container ${opts.container}` : '';
       throw new Error(`No firewall rule found for "${target}"${scope}.`);
