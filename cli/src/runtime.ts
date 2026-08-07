@@ -92,13 +92,14 @@ export function parseDockerContextSocket(json: string): string | null {
   if (typeof host !== 'string' || !host.startsWith('unix://')) return null;
   const path = host.slice('unix://'.length);
   if (!path.startsWith('/')) return null;
-  // The returned path is later interpolated UNquoted into a `docker run -v
-  // <path>:...` shell command (init.ts). The `Host` from `docker context
+  // The returned path is interpolated into a `docker run -v "<path>:..."` shell
+  // command (init.ts), where it is DOUBLE-QUOTED. The `Host` from `docker context
   // inspect` is attacker-influenceable (whoever can create/activate a docker
-  // context controls the value), so only allow characters that occur in a real
-  // socket path. This way a manipulated context cannot smuggle in shell
-  // metacharacters ($(), backticks, ;, |, spaces, ...) — command injection.
-  if (!/^[A-Za-z0-9._/-]+$/.test(path)) return null;
+  // context controls the value), so restrict it to characters that occur in a real
+  // socket path: allow spaces (legal in e.g. macOS `/Users/First Last/.rd/...`)
+  // but never the metacharacters that stay dangerous inside double quotes
+  // ($, backtick, ", \) or the command separators (;, |, &, (), newline).
+  if (!/^[A-Za-z0-9._/ -]+$/.test(path)) return null;
   return path;
 }
 

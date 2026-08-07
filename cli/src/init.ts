@@ -158,7 +158,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     ` -e HUDDLE_OPERATOR_TOKEN=${operatorToken}` +
     ` -p ${HOST_PORT}:3000` +
     ` -v ${VOLUME}:/data` +
-    ` -v ${runtime.socketPath}:/var/run/docker.sock` +
+    ` -v "${runtime.socketPath}:/var/run/docker.sock"` +
     ` -v "${hostTmpSockets}:/tmp/dc-sockets"` +
     homeMountFlag +
     fwMountFlag +
