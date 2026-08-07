@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "Node.js",
+    "description": "Node.js runtime downloads and release metadata.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "nodejs.org",         "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "nodejs.org",         "container_id": null, "status": "allow", "path_pattern": "/dist/*", "path_mode": 0, "expires_at": null },
+    { "domain": "raw.githubusercontent.com", "container_id": null, "status": "allow", "path_pattern": "/nodejs/*", "path_mode": 0, "expires_at": null }
+  ]
+}

@@ -15,6 +15,7 @@ import { buildPathDomains, excludePathModeRules } from '../../shared/components/
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
+import { FirewallGroupsPanelComponent } from '../firewall/firewall-groups-panel.component';
 import { BehaviorSubject, skip } from 'rxjs';
 
 interface DetailData {
@@ -39,7 +40,7 @@ interface PathRequestRow {
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent, FirewallGroupsPanelComponent],
   templateUrl: './container-detail.component.html',
   styleUrl: './container-detail.component.css',
 })
