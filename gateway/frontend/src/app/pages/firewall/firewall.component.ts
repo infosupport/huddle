@@ -11,6 +11,7 @@ import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
 import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { IconComponent } from '../../shared/components/icon/icon.component';
+import { FirewallGroupsPanelComponent } from './firewall-groups-panel.component';
 import { map } from 'rxjs';
 
 interface Toast { id: number; caption: string; text: string; tone: 'allow' | 'deny' | 'temp'; }
@@ -26,7 +27,7 @@ interface PathRequestRow {
 @Component({
   selector: 'app-firewall',
   standalone: true,
-  imports: [AsyncPipe, FormsModule, RelTimePipe, PieMenuComponent, PathAllowlistComponent, IconComponent],
+  imports: [AsyncPipe, FormsModule, RelTimePipe, PieMenuComponent, PathAllowlistComponent, IconComponent, FirewallGroupsPanelComponent],
   templateUrl: './firewall.component.html',
   styleUrl: './firewall.component.css',
 })
@@ -40,12 +41,12 @@ export class FirewallComponent {
   toasts: Toast[] = [];
   resolving = new Set<number>();
 
-  // Known containers for the scope choice in the "add custom rule" form.
+  // Known containers for the scope selection in the "add custom rule" form.
   containers$ = this.state.containers$;
 
   // ── "Add custom rule" form ──────────────────────────────────────────────────
-  // Lets the operator write their own rule with wildcards: `*.` in the domain
-  // and `*` in the path pattern (e.g. an Azure DevOps feed with a rotating GUID).
+  // Lets the operator write a rule themselves with wildcards: `*.` in the domain
+  // and `*` in the path pattern (e.g. an Azure DevOps feed with a changing GUID).
   showAddForm = false;
   addSubmitting = false;
   newDomain = '';
@@ -226,6 +227,48 @@ export class FirewallComponent {
         this.pushToast(domain, err.message || 'Could not add rule', 'deny');
       },
     });
+  }
+
+  // ── Export / import (#69) ──────────────────────────────────────────────────
+  exportRules(): void {
+    this.api.exportRules().subscribe({
+      next: (doc) => {
+        const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `huddle-firewall-rules-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.pushToast('Firewall rules', 'Exported to JSON', 'allow');
+      },
+      error: (err) => this.pushToast('Export failed', err.message ?? 'Error', 'deny'),
+    });
+  }
+
+  onImportFile(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ''; // allow selecting the same file again
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let doc: Record<string, unknown>;
+      try {
+        doc = JSON.parse(String(reader.result)) as Record<string, unknown>;
+      } catch {
+        this.pushToast('Import failed', 'Not valid JSON', 'deny');
+        return;
+      }
+      this.api.importRules({ ...doc, mode: 'merge' }).subscribe({
+        next: (res) => {
+          this.pushToast('Firewall rules', `Imported: ${res.imported} added, ${res.updated} updated`, 'allow');
+          this.state.loadAll();
+        },
+        error: (err) => this.pushToast('Import failed', err.message ?? 'Error', 'deny'),
+      });
+    };
+    reader.readAsText(file);
   }
 
   enablePathMode(rule: Rule): void { this.api.setPathMode(rule.id, true).subscribe(() => this.state.loadAll()); }

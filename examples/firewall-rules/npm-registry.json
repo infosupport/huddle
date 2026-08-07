@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "NPM Registry",
+    "description": "npm registry in path mode: blocked at the root, only the listed package/scope paths pass. Add a rule per scope or package you need.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "deny", "path_pattern": null, "path_mode": 1, "expires_at": null },
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "allow", "path_pattern": "/@types/*", "path_mode": 0, "expires_at": null },
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "allow", "path_pattern": "/@angular/*", "path_mode": 0, "expires_at": null },
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "allow", "path_pattern": "/typescript/*", "path_mode": 0, "expires_at": null }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "GitHub",
+    "description": "GitHub web, API, raw content, release/asset downloads and the container registry.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "github.com",                 "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "api.github.com",             "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "raw.githubusercontent.com",  "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "codeload.github.com",        "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "objects.githubusercontent.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "github.githubassets.com",    "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "ghcr.io",                    "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}
