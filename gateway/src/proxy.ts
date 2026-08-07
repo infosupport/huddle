@@ -122,6 +122,23 @@ function formatHttpHead(res: http.IncomingMessage): string {
   return lines.join('\r\n') + '\r\n\r\n';
 }
 
+// A genuine WebSocket handshake is a GET carrying `Upgrade: websocket`, a
+// `Connection` list that includes `upgrade`, and a Sec-WebSocket-Key (RFC 6455).
+// ONLY such requests may take the raw upgrade path. Node routes *any* request
+// with Upgrade headers to the 'upgrade' event, so without this gate a client
+// could send e.g. `POST /v1/oauth/token` with `Upgrade: websocket` and have it
+// forwarded verbatim — skipping the normal request pipeline and its response
+// scrubbing (handleTokenExchangeResponse), leaking the real bearer token to the
+// container. Non-handshake "upgrades" are refused so they fall to no path at all.
+function isWebSocketHandshake(method: string | undefined, headers: http.IncomingHttpHeaders): boolean {
+  if ((method ?? '').toUpperCase() !== 'GET') return false;
+  if (String(headers['upgrade'] ?? '').toLowerCase() !== 'websocket') return false;
+  const connection = String(headers['connection'] ?? '').toLowerCase();
+  if (!connection.split(',').some((t) => t.trim() === 'upgrade')) return false;
+  const key = headers['sec-websocket-key'];
+  return typeof key === 'string' && key.length > 0;
+}
+
 function forwardUpgrade(
   secure: boolean,
   options: https.RequestOptions,
@@ -475,6 +492,18 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     }
     const forwardPath = `${target.pathname}${target.search}`;
 
+    // Only a genuine WebSocket handshake may use the raw upgrade path; a request
+    // that merely carries Upgrade headers (e.g. POST to an OAuth token endpoint)
+    // must fall through to nothing here, not bypass the request pipeline/scrubbing.
+    if (!isWebSocketHandshake(req.method, req.headers)) {
+      logAudit({
+        containerId, domain: host, action: 'deny', ruleId: null,
+        method: req.method ?? null, path: forwardPath, resStatus: 400,
+      });
+      rejectSocket(clientSocket, 400, 'deny', host, containerId);
+      return;
+    }
+
     // No legitimate WebSocket endpoint on huddle itself → always fail-closed.
     if (host === 'huddle') {
       logAudit({
@@ -807,6 +836,18 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // path enforcement as the request handler above: decide on the decoded
     // form, forward the original encoded bytes.
     innerHttp.on('upgrade', (innerReq, innerSocket, innerHead) => {
+      // Only a genuine WebSocket handshake may take the raw upgrade path. A
+      // non-WS "upgrade" (e.g. POST /v1/oauth/token with Upgrade: websocket)
+      // would otherwise be forwarded verbatim and skip handleTokenExchangeResponse,
+      // leaking the real bearer token to the container. Fail closed.
+      if (!isWebSocketHandshake(innerReq.method, innerReq.headers)) {
+        logAudit({
+          containerId, domain: hostname, port, action: 'deny', ruleId: null,
+          method: innerReq.method ?? null, path: innerReq.url ?? null, resStatus: 400,
+        });
+        rejectSocket(innerSocket, 400, 'deny', hostname, containerId);
+        return;
+      }
       const rawUrl = innerReq.url ?? '/';
       const qi = rawUrl.indexOf('?');
       const rawPathPart = qi === -1 ? rawUrl : rawUrl.slice(0, qi);

@@ -168,6 +168,33 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     expect(result).toBe('http:403');
   });
 
+  it('refuses a non-WebSocket "upgrade" so it cannot bypass the request pipeline', async () => {
+    // Attack: a client sends POST /v1/oauth/token with Upgrade: websocket to an
+    // allowed host. Node routes it to the 'upgrade' event; if the proxy forwarded
+    // it as an upgrade, it would skip handleTokenExchangeResponse and leak the real
+    // bearer token. The handshake gate must refuse it (400) before dialing upstream.
+    db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    const status = await new Promise<string>((resolve, reject) => {
+      const c = net.connect(proxyPort, '127.0.0.1');
+      let buf = '';
+      const guard = setTimeout(() => { try { c.destroy(); } catch {} reject(new Error('timeout')); }, 4000);
+      c.on('connect', () => {
+        c.write(
+          `POST http://127.0.0.1:${upstreamPort}/v1/oauth/token HTTP/1.1\r\n` +
+          `Host: 127.0.0.1:${upstreamPort}\r\n` +
+          `Connection: Upgrade\r\nUpgrade: websocket\r\nContent-Length: 0\r\n\r\n`
+        );
+      });
+      c.on('data', (d) => {
+        buf += d.toString();
+        const m = buf.match(/^HTTP\/1\.1 (\d{3})/);
+        if (m) { clearTimeout(guard); try { c.destroy(); } catch {} resolve(m[1]); }
+      });
+      c.on('error', (e) => { clearTimeout(guard); reject(e); });
+    });
+    expect(status).toBe('400'); // refused, not forwarded as an upgrade
+  });
+
   it('cuts off a stalled upstream handshake (no socket-leak DoS)', async () => {
     // Host allowed, but upstream never completes the handshake. Without the
     // handshake timeout the client socket stays open indefinitely (Node's server
