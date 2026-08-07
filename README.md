@@ -70,6 +70,7 @@ Two servers run in the same process:
 - Containers can *request* access; operators approve or reject via the UI
 - HTTP: full request/response logged in the network log
 - HTTPS: tunneled through CONNECT (contents not intercepted)
+- WebSocket: `ws://` and `wss://` upgrades are transparently proxied and subject to the same firewall rules (host and path) as regular requests — so tools like the OpenAI Codex CLI connect without falling back to slow HTTPS retries
 
 ### Docker Socket Proxy
 - Every devcontainer gets its own Unix socket at `/tmp/dc-sockets/<name>/docker.sock`; the per-container *directory* is mounted into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the socket. A file mount of the socket itself would keep seeing the dead old inode after a Huddle restart; a directory mount does not. The old flat path `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created before this change.
