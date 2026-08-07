@@ -168,9 +168,11 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
     lastUpstreamHeaders = {};
     const echoed = await new Promise<string>((resolve, reject) => {
+      // Low-entropy, obviously-fake marker (NOT a real credential): we only assert
+      // it is stripped from upstream and redacted from the audit log.
       const ws = new WebSocket(`ws://127.0.0.1:${upstreamPort}/echo`, {
         createConnection: proxyCreateConnection(upstreamPort, proxyPort),
-        headers: { 'Proxy-Authorization': 'Basic c3VwZXItc2VjcmV0' },
+        headers: { 'Proxy-Authorization': 'Basic not-a-real-proxy-cred' },
       } as any);
       ws.on('open', () => ws.send('hi'));
       ws.on('message', (d) => { ws.close(); resolve(d.toString()); });
@@ -185,7 +187,7 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
       `SELECT res_status, req_headers FROM audit_log WHERE action = 'allow' AND domain = '127.0.0.1' ORDER BY id DESC LIMIT 1`
     ).get() as { res_status: number | null; req_headers: string | null };
     expect(row.res_status).toBe(101);
-    expect(row.req_headers ?? '').not.toContain('c3VwZXItc2VjcmV0');
+    expect(row.req_headers ?? '').not.toContain('not-a-real-proxy-cred');
     expect(row.req_headers ?? '').toContain('<redacted>');
   });
 
