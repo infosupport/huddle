@@ -8,7 +8,20 @@ import fs from 'fs';
 
 const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
-const INTERNAL_NET = 'devcontainer-net';
+/**
+ * The shared, internal network that `huddle init` creates (`--internal`, so it
+ * has no route to the internet of its own). Devcontainers attach to it to reach
+ * the Huddle proxy — it is the only way out. Exported so `huddle migrate` can
+ * point an existing Compose project at the exact same network.
+ */
+export const INTERNAL_NET = 'devcontainer-net';
+/**
+ * Directory on the Docker ENGINE host where the gateway serves each
+ * devcontainer's filtered Docker socket (`<HOST_SOCKET_DIR>/<container_name>`).
+ * Kept in sync with SOCKET_DIR in gateway/src/docker.ts. Exported so
+ * `huddle migrate` can generate the matching bind mount.
+ */
+export const HOST_SOCKET_DIR = '/tmp/dc-sockets';
 const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
 
 export interface InitOptions {
@@ -91,7 +104,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // /tmp/dc-sockets on the engine host; mounting a Windows temp dir splits
   // gateway and devcontainers across two filesystems, and Unix sockets are
   // unreliable on such a drvfs/9p mount anyway.
-  const hostTmpSockets = '/tmp/dc-sockets';
+  const hostTmpSockets = HOST_SOCKET_DIR;
   if (runtime.isRemote) {
     if (runtime.name === 'podman') {
       // Podman does NOT create a missing bind source itself (unlike Docker
@@ -120,10 +133,10 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // SELinux-labeled proxy socket.
   const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
 
-  // Operator-token voor de control-plane-auth. Hergebruik het token uit de
-  // config (zodat een bestaande browser-sessie/CLI blijft werken over re-inits),
-  // anders genereer er één. We geven het aan de gateway mee via env én bewaren
-  // het lokaal zodat volgende `huddle`-commando's zich kunnen authenticeren.
+  // Operator token for control-plane auth. Reuse the token from the config (so an
+  // existing browser session/CLI keeps working across re-inits), otherwise
+  // generate one. We pass it to the gateway via env AND store it locally so that
+  // subsequent `huddle` commands can authenticate.
   const cfg = readConfig();
   const operatorToken =
     process.env.HUDDLE_OPERATOR_TOKEN?.trim() ||
@@ -162,9 +175,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
   console.log();
-  // Volledige auto-login-link: open deze en de portal logt je automatisch in met
-  // het operator-token (de frontend leest ?token=..., logt in en verwijdert het
-  // daarna uit de adresbalk). Zo hoef je niets te plakken.
+  // Full auto-login link: open it and the portal logs you in automatically with
+  // the operator token (the frontend reads ?token=..., logs in and then removes it
+  // from the address bar). This way you don't have to paste anything.
   const loginUrl = `http://localhost:${HOST_PORT}/?token=${encodeURIComponent(operatorToken)}`;
   console.log(bold('Open the portal (auto-login link):'));
   console.log(green(`    ${loginUrl}`));
