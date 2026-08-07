@@ -7,6 +7,7 @@ import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
 import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
+import { ensurePathModeMarker } from './rules';
 import {
   listDevcontainers,
   inspectContainer,
@@ -415,6 +416,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // supplies mixed-case here.
       if (container_id === null && path_pattern === null && (status === 'allow' || status === 'deny')) {
         db.prepare(`DELETE FROM rules WHERE domain = ? COLLATE NOCASE AND status = 'requested' AND path_pattern IS NULL`).run(domain);
+      }
+      // A path-scoped rule is inert over HTTPS unless its domain is in path-mode
+      // (finding #6a): establish the host-only path_mode=1 marker so the CONNECT
+      // is admitted and the path rule can actually fire, matching the portal flow.
+      if (path_pattern !== null) {
+        ensurePathModeMarker(domain, container_id);
       }
       logAudit({ containerId: container_id, domain, action: `admin:rule-${status}`, ruleId: Number(info.lastInsertRowid) });
       notifyStateChanged();
