@@ -21,6 +21,16 @@ export function initDb(): void {
       container_id TEXT PRIMARY KEY,
       until INTEGER NOT NULL
     );
+    -- Ephemeral sudo grants: per container we remember ONLY when the admin
+    -- access to 'noot' expires (until, unix seconds). Deliberately NO password
+    -- (not even a hash) — the fresh password is shown to the UI exactly once and
+    -- then kept nowhere (finding #10). The sweeper uses this row to lock the
+    -- account again on expiry.
+    CREATE TABLE IF NOT EXISTS sudo_grants (
+      container_id TEXT PRIMARY KEY,
+      until INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
     CREATE TABLE IF NOT EXISTS docker_action_policies (
       container_id TEXT NOT NULL,
       action TEXT NOT NULL,
@@ -106,31 +116,30 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'path_pattern')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_pattern TEXT');
   }
-  // path_mode markeert een host-only regel als "pad-allowlist": het kale domein
-  // is dan dicht (status deny), maar onbekende subpaden worden als 'requested'
-  // opgevoerd zodat de operator ze één voor één kan toestaan.
+  // path_mode marks a host-only rule as a "path allowlist": the bare domain is
+  // then closed (status deny), but unknown subpaths are raised as 'requested' so
+  // the operator can allow them one by one.
   if (!cols.some(c => c.name === 'path_mode')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_mode INTEGER NOT NULL DEFAULT 0');
   }
-  // last_path bewaart het laatst geziene volledige pad dat een (gegroepeerde)
-  // requested-padregel triggerde, als concreet voorbeeld voor de operator.
+  // last_path stores the most recently seen full path that triggered a (grouped)
+  // requested path rule, as a concrete example for the operator.
   if (!cols.some(c => c.name === 'last_path')) {
     db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
   }
 
-  // Domeinen worden voortaan canoniek (lowercase) opgeslagen zodat de exacte
-  // lookup en de wildcard-match op dezelfde vorm werken (finding #3). Migreer
-  // bestaande rijen idempotent naar lowercase VÓÓR de dedup hieronder, zodat
-  // case-varianten (`GIST.github.com` vs `gist.github.com`) samenvallen en de
-  // dedup ze tot één rij terugbrengt in plaats van op de unieke index te botsen.
+  // Domains are now stored canonically (lowercase) so the exact lookup and the
+  // wildcard match operate on the same form (finding #3). Migrate existing rows
+  // idempotently to lowercase BEFORE the dedup below, so that case variants
+  // (`GIST.github.com` vs `gist.github.com`) coincide and the dedup collapses
+  // them into a single row instead of colliding on the unique index.
   db.exec('UPDATE rules SET domain = lower(domain) WHERE domain <> lower(domain)');
 
-  // Uniciteit geldt nu op (domain, container, pad): meerdere padregels per
-  // domein moeten naast elkaar kunnen bestaan. De oude domain+container index
-  // wordt vervangen.
-  // Opschonen voorkomt dat een migratie crasht wanneer oude data per ongeluk
-  // meerdere rijen met dezelfde unieke sleutel bevat. NOCASE in de GROUP BY
-  // zodat de dedup dezelfde hoofdletter-ongevoeligheid hanteert als de index.
+  // Uniqueness now applies to (domain, container, path): multiple path rules per
+  // domain must be able to coexist. The old domain+container index is replaced.
+  // Cleaning up prevents a migration from crashing when old data accidentally
+  // contains multiple rows with the same unique key. NOCASE in the GROUP BY so
+  // the dedup uses the same case-insensitivity as the index.
   db.exec(`
     DELETE FROM rules
     WHERE id NOT IN (
@@ -140,7 +149,7 @@ export function initDb(): void {
     )
   `);
   db.exec('DROP INDEX IF EXISTS idx_rules_domain_container');
-  // De oude index kon nog zonder NOCASE bestaan; herbouw hem case-insensitief.
+  // The old index could still exist without NOCASE; rebuild it case-insensitively.
   db.exec('DROP INDEX IF EXISTS idx_rules_domain_container_path');
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_domain_container_path
@@ -216,9 +225,43 @@ export function getAllGrants(): Record<string, { until: number }> {
   return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
 }
 
-// ── Docker action policies (fijnmazige rechten per actie) ────────────────────
-// Alleen expliciete overrides staan in de db; ontbreekt een rij, dan geldt de
-// default uit de actie-catalogus (docker-actions.ts).
+// ── Ephemeral sudo grants ────────────────────────────────────────────────────
+// Mirrors the docker_grants helpers, but separate from them: a sudo grant
+// governs the temporary admin password on the 'noot' user inside the container,
+// not the socket proxy. No (plaintext or hashed) password is ever stored.
+
+export function setSudoGrant(containerId: string, until: number): void {
+  db.prepare(`INSERT INTO sudo_grants (container_id, until) VALUES (?, ?)
+              ON CONFLICT(container_id) DO UPDATE SET until = excluded.until`)
+    .run(containerId, until);
+}
+
+export function getSudoGrant(containerId: string): { until: number } | undefined {
+  return db.prepare(`SELECT until FROM sudo_grants WHERE container_id = ?`)
+    .get(containerId) as { until: number } | undefined;
+}
+
+export function deleteSudoGrant(containerId: string): void {
+  db.prepare(`DELETE FROM sudo_grants WHERE container_id = ?`).run(containerId);
+}
+
+export function getAllSudoGrants(): Record<string, { until: number }> {
+  const rows = db.prepare(`SELECT container_id, until FROM sudo_grants`).all() as
+    { container_id: string; until: number }[];
+  return Object.fromEntries(rows.map((r) => [r.container_id, { until: r.until }]));
+}
+
+// All grants whose until is on or before `nowSec` — the sweeper locks these
+// containers and cleans up the row.
+export function getExpiredSudoGrants(nowSec: number): string[] {
+  const rows = db.prepare(`SELECT container_id FROM sudo_grants WHERE until <= ?`)
+    .all(nowSec) as { container_id: string }[];
+  return rows.map((r) => r.container_id);
+}
+
+// ── Docker action policies (fine-grained permissions per action) ─────────────
+// Only explicit overrides are stored in the db; if a row is missing, the default
+// from the action catalog (docker-actions.ts) applies.
 
 export function getActionPolicy(containerId: string, action: string): boolean | null {
   const row = db.prepare(
@@ -268,9 +311,9 @@ export interface AuditEntry {
   resBody?: string | null;
 }
 
-// Insert één audit-rij. Geeft het nieuwe row-id terug (of null bij fout) zodat
-// een in-flight request meteen gelogd kan worden en later via
-// updateAuditResponse aangevuld met de response.
+// Insert a single audit row. Returns the new row id (or null on error) so an
+// in-flight request can be logged immediately and later completed with the
+// response via updateAuditResponse.
 export function logAudit(entry: AuditEntry): number | null {
   try {
     const info = insertAudit().run(
@@ -300,8 +343,8 @@ export interface AuditResponse {
   resBody?: string | null;
 }
 
-// Vul de response-velden (en de inmiddels volledig gebufferde req_body) aan op
-// een eerder ingevoegde in-flight audit-rij.
+// Fill in the response fields (and the now fully buffered req_body) on a
+// previously inserted in-flight audit row.
 export function updateAuditResponse(id: number, r: AuditResponse): void {
   try {
     if (!_updateAudit) _updateAudit = db.prepare(
@@ -440,18 +483,18 @@ export function createFolderMapping(m: Omit<FolderMapping, 'id'>): number {
   return Number(result.lastInsertRowid);
 }
 
-// De kolommen die via update gewijzigd mogen worden. De TS-`Partial<>` is enkel
-// een compile-time garantie — op runtime komt `m` rechtstreeks uit de request-
-// body. Zonder deze allowlist werden de JSON-sleutels ongefilterd als SQL-
-// identifiers geïnterpoleerd, wat SQL-injectie via een geprepareerde sleutel
-// mogelijk maakte (finding #9, bv. `container_path = (SELECT ...), name`).
+// The columns that may be changed via update. The TS `Partial<>` is only a
+// compile-time guarantee — at runtime `m` comes straight from the request body.
+// Without this allowlist the JSON keys were interpolated unfiltered as SQL
+// identifiers, which made SQL injection via a crafted key possible (finding #9,
+// e.g. `container_path = (SELECT ...), name`).
 const FOLDER_MAPPING_COLUMNS: ReadonlyArray<keyof Omit<FolderMapping, 'id'>> = [
   'name', 'host_path', 'volume_name', 'container_path', 'read_only', 'enabled', 'sort_order',
 ];
 
-// Valideer de update-sleutels tegen de kolom-allowlist. Puur (geen DB) zodat de
-// SQL-injectie-afweer (finding #9) los testbaar is. Retourneert de toegestane
-// sleutels; gooit op elke onbekende sleutel (fail-closed).
+// Validate the update keys against the column allowlist. Pure (no DB) so the
+// SQL-injection defense (finding #9) is testable in isolation. Returns the
+// allowed keys; throws on any unknown key (fail-closed).
 export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
   const allowed = FOLDER_MAPPING_COLUMNS as ReadonlyArray<string>;
   const unknown = Object.keys(m).filter(k => !allowed.includes(k));
@@ -462,8 +505,8 @@ export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMap
 }
 
 export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
-  // Alleen bekende kolommen accepteren; sleutels worden zo nooit uit caller-input
-  // in de SQL-tekst gezet.
+  // Only accept known columns; this way keys are never placed into the SQL text
+  // from caller input.
   const keys = validateFolderMappingKeys(m);
   if (keys.length === 0) return;
   const fields = keys.map(k => `${k} = ?`).join(', ');

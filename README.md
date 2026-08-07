@@ -58,7 +58,7 @@ Two servers run in the same process:
 |-----------|---------------|
 | **No direct internet** | Traffic flows through the Huddle Gateway with firewall approvals — no container talks to the external network directly. |
 | **Docker proxy socket** | No full Docker socket, but controlled Docker actions through a per-container proxy with a label policy. |
-| **No root user** | A safer default user; `sudo` is only possible in a controlled way through Huddle. |
+| **No root user** | A safer default user; `sudo` is only possible in a controlled way through Huddle. The admin user `noot` is locked by default and only gets a fresh, time-boxed password when you grant admin access — no standing admin credentials. |
 
 ---
 
@@ -94,6 +94,17 @@ Two servers run in the same process:
 - Commit a running container to a snapshot image
 - Force-remove a container including network cleanup
 - A per-container Docker socket proxy is created automatically on start
+
+### Admin access (sudo)
+Each managed container has two users: `vscode` (the normal dev user, **without** sudo) and `noot` (administrator **with** sudo). Instead of a permanent admin password, Huddle uses an **ephemeral per-grant model**:
+
+- `noot` is created **locked** (in the sudo/wheel group, but with no usable password) when the container is built — there are no standing admin credentials.
+- On the container detail page (**Noot** tab) you **grant admin access** for a chosen duration (5–120 min). Huddle generates a fresh random password, sets it on `noot` via `chpasswd` (over stdin, never a shell argument) and unlocks the account.
+- The password is shown **exactly once** in the UI and is never stored (not even hashed) or retrievable again.
+- When the timer expires, an active sweeper **locks `noot` again** inside the container (and you can **Revoke** early). Because locking must happen inside the container, expiry is not passive — the gateway sweeps every 30 seconds.
+- All `sudo` actions are still forwarded to the network log.
+
+This closes security-review finding **#10** (plaintext admin credentials retrievable over the operator API). The old `GET /api/docker/containers/:name/credentials` endpoint is replaced by `GET/POST/DELETE /api/docker/containers/:name/sudo-grant` (status / grant / revoke).
 
 ### Network log
 - Every proxied HTTP request is logged (container, domain, method, path, status, headers, body — truncated at 20 KB)
@@ -322,6 +333,9 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/grants` | List active Docker socket grants |
 | PUT | `/api/authz/grants/:container` | Grant Docker access (body: `{ minutes }`) |
 | DELETE | `/api/authz/grants/:container` | Revoke Docker access |
+| GET | `/api/docker/containers/:name/sudo-grant` | Admin-access status (`{ active, until }`) — never returns a password |
+| POST | `/api/docker/containers/:name/sudo-grant` | Grant ephemeral admin access (body: `{ minutes }`); returns the one-time password `{ password, until }` |
+| DELETE | `/api/docker/containers/:name/sudo-grant` | Revoke admin access (locks `noot` immediately) |
 | GET | `/api/authz/docker-actions` | Action catalog (kind, group, label, default) |
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
