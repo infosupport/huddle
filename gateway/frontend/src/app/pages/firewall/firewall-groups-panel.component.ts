@@ -6,6 +6,7 @@ import { FirewallGroup } from '../../core/models/group.model';
 import { Rule } from '../../core/models/rule.model';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
+import { forkJoin, Observable } from 'rxjs';
 
 type Bucket = number | 'all' | 'ungrouped';
 type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
@@ -122,13 +123,33 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
               </div>
             </div>
 
+            @if (selectedCount() > 0) {
+              <div class="grp__bulk">
+                <span class="grp__bulk-n">{{ selectedCount() }} selected</span>
+                <button type="button" class="btn btn-ghost btn--sm" (click)="bulkExport()"><app-icon name="download" [size]="14" /> Export</button>
+                <div class="grp__bulk-menu">
+                  <button type="button" class="btn btn-ghost btn--sm" [disabled]="!groups().length" (click)="bulkGroupMenu.set(!bulkGroupMenu())"><app-icon name="layers" [size]="14" /> Add to group</button>
+                  @if (bulkGroupMenu()) {
+                    <div class="grp__menu">
+                      @for (g of groups(); track g.id) { <button type="button" (click)="bulkAssign(g.id)">{{ g.name }}</button> }
+                    </div>
+                  }
+                </div>
+                <button type="button" class="btn btn-ghost btn--sm" (click)="bulkPathMode()">Path mode</button>
+                <button type="button" class="btn btn-ghost btn--sm" (click)="bulkFlip()">Flip allow/deny</button>
+                <button type="button" class="btn btn-ghost btn--sm grp__bulk-del" (click)="bulkDelete()"><app-icon name="trash" [size]="14" /> Delete</button>
+                <button type="button" class="btn btn-ghost btn--sm grp__bulk-clear" (click)="clearSelection()">Clear</button>
+              </div>
+            }
+
             <table class="data-table grp__table">
               <thead>
-                <tr><th>Type</th><th>Domain / path</th><th>Path mode</th><th>Match</th><th>Actions</th><th>Group</th><th>Added</th><th>Added by</th><th></th></tr>
+                <tr><th class="grp__chk"><input type="checkbox" [checked]="allVisibleSelected()" (change)="toggleSelectAll()" title="Select all" /></th><th>Type</th><th>Domain / path</th><th>Path mode</th><th>Match</th><th>Actions</th><th>Group</th><th>Added</th><th>Added by</th><th></th></tr>
               </thead>
               <tbody>
                 @for (r of rows(); track r.id) {
-                  <tr [class.grp__tr--open]="expanded() === r.id">
+                  <tr [class.grp__tr--open]="expanded() === r.id" [class.grp__tr--sel]="isSelected(r.id)">
+                    <td class="grp__chk"><input type="checkbox" [checked]="isSelected(r.id)" (change)="toggleSelect(r.id)" /></td>
                     <td class="grp__type"><app-icon name="globe" [size]="16" /></td>
                     <td class="grp__dom">{{ r.domain }}</td>
                     <td class="grp__pm">
@@ -174,7 +195,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                   </tr>
                   @if (isPath(r) && expanded() === r.id) {
                     <tr class="grp__paths-row">
-                      <td colspan="9">
+                      <td colspan="10">
                         <div class="grp__paths">
                           <div class="grp__paths-head">Allowed paths</div>
                           @for (p of allowedPaths(r); track p.id) {
@@ -194,7 +215,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                     </tr>
                   }
                 } @empty {
-                  <tr><td colspan="9" class="grp__empty">No rules here yet.</td></tr>
+                  <tr><td colspan="10" class="grp__empty">No rules here yet.</td></tr>
                 }
               </tbody>
             </table>
@@ -249,7 +270,17 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__apply select { padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); }
     .grp__del-group:hover { border-color: var(--danger); color: var(--danger); }
 
+    .grp__bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 8px 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--radius-sm); }
+    .grp__bulk-n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); margin-right: 4px; }
+    .grp__bulk-menu { position: relative; }
+    .grp__bulk-menu .grp__menu { left: 0; right: auto; }
+    .grp__bulk-del:hover { border-color: var(--danger); color: var(--danger); }
+    .grp__bulk-clear { margin-left: auto; }
+
     .grp__table { width: 100%; }
+    .grp__chk { width: 34px; text-align: center; }
+    .grp__chk input { cursor: pointer; }
+    .grp__tr--sel > td { background: var(--accent-soft); }
     .grp__type { color: var(--text-muted); }
     .grp__dom { font-family: 'Space Grotesk', monospace; }
     .grp__pm { white-space: nowrap; }
@@ -310,6 +341,10 @@ export class FirewallGroupsPanelComponent implements OnInit {
   openMenu = signal<number | null>(null);
   expanded = signal<number | null>(null);
 
+  // Bulk selection over the visible rows.
+  selected = signal<Set<number>>(new Set());
+  bulkGroupMenu = signal(false);
+
   query = signal('');
   newName = '';
   applyScope = '';
@@ -364,6 +399,15 @@ export class FirewallGroupsPanelComponent implements OnInit {
     return [...rs].sort((a, b) => a.domain.localeCompare(b.domain));
   });
 
+  // Selection is scoped to what is visible: acting only ever touches the rows the
+  // operator can currently see (respecting bucket/status/search filters).
+  selectedRows = computed(() => this.rows().filter((r) => this.selected().has(r.id)));
+  selectedCount = computed(() => this.selectedRows().length);
+  allVisibleSelected = computed(() => {
+    const rs = this.rows();
+    return rs.length > 0 && rs.every((r) => this.selected().has(r.id));
+  });
+
   // Count rules per group ONCE per domainRules() change (a computed memoizes it),
   // so the template's per-group countFor() is an O(1) lookup instead of O(rules).
   private groupCounts = computed(() => {
@@ -400,7 +444,7 @@ export class FirewallGroupsPanelComponent implements OnInit {
   }
   reloadAfterMutation(): void { this.state.loadAll(); this.loadGroups(); }
 
-  selectBucket(id: Bucket): void { this.selectedId.set(id); this.creating.set(false); }
+  selectBucket(id: Bucket): void { this.selectedId.set(id); this.creating.set(false); this.clearSelection(); }
   toggleExpand(id: number): void { this.expanded.set(this.expanded() === id ? null : id); }
 
   onPathMode(r: Rule, ev: Event): void {
@@ -519,6 +563,89 @@ export class FirewallGroupsPanelComponent implements OnInit {
   deleteRule(r: Rule): void {
     this.openMenu.set(null);
     this.api.deleteRule(r.id).subscribe({ next: () => this.reloadAfterMutation(), error: (e) => this.note.set(e.message) });
+  }
+
+  // ── Bulk selection & actions ────────────────────────────────────────────────
+  isSelected(id: number): boolean { return this.selected().has(id); }
+  toggleSelect(id: number): void {
+    const s = new Set(this.selected());
+    s.has(id) ? s.delete(id) : s.add(id);
+    this.selected.set(s);
+  }
+  toggleSelectAll(): void {
+    const rs = this.rows();
+    const s = new Set(this.selected());
+    if (rs.every((r) => s.has(r.id))) rs.forEach((r) => s.delete(r.id));
+    else rs.forEach((r) => s.add(r.id));
+    this.selected.set(s);
+  }
+  clearSelection(): void { this.selected.set(new Set()); this.bulkGroupMenu.set(false); }
+
+  // Run one API call per selected row in parallel, then refresh once.
+  private bulkRun(calls: Observable<unknown>[], msg: string): void {
+    if (!calls.length) return;
+    forkJoin(calls).subscribe({
+      next: () => { this.note.set(msg); this.clearSelection(); this.reloadAfterMutation(); },
+      error: (e) => this.note.set(e.message),
+    });
+  }
+
+  bulkDelete(): void {
+    const rows = this.selectedRows();
+    if (!rows.length || !confirm(`Delete ${rows.length} rule(s)?`)) return;
+    this.bulkRun(rows.map((r) => this.api.deleteRule(r.id) as unknown as Observable<unknown>), `Deleted ${rows.length} rule(s)`);
+  }
+  bulkAssign(groupId: number): void {
+    this.bulkGroupMenu.set(false);
+    const rows = this.selectedRows();
+    this.bulkRun(rows.map((r) => this.api.assignRuleToGroup(groupId, r.id)), `Added ${rows.length} rule(s) to "${this.groupName(groupId)}"`);
+  }
+  bulkPathMode(): void {
+    const rows = this.selectedRows().filter((r) => !this.isPath(r));
+    if (!rows.length) { this.note.set('No convertible rows selected (already path mode).'); return; }
+    this.bulkRun(rows.map((r) => this.api.setPathMode(r.id, true)), `Enabled path mode on ${rows.length} domain(s)`);
+  }
+  bulkFlip(): void {
+    const rows = this.selectedRows().filter((r) => !this.isPath(r));
+    if (!rows.length) { this.note.set('No allow/deny rows selected to flip.'); return; }
+    this.bulkRun(
+      rows.map((r) => this.api.updateRule(r.id, r.status === 'allow' ? 'deny' : 'allow')),
+      `Flipped ${rows.length} rule(s)`,
+    );
+  }
+
+  // Export the selected rows as the same JSON envelope the flat export uses. For a
+  // selected path-mode domain we also include its allowed sub-paths, so the export
+  // is self-contained (otherwise the domain would import back blocked-at-root).
+  bulkExport(): void {
+    const rows = this.selectedRows();
+    if (!rows.length) return;
+    const byId = new Map<number, Rule>();
+    for (const r of rows) {
+      byId.set(r.id, r);
+      if (this.isPath(r)) for (const p of this.allowedPaths(r)) byId.set(p.id, p);
+    }
+    const rules = [...byId.values()].map((r) => ({
+      domain: r.domain,
+      container_id: r.container_id,
+      status: r.status,
+      path_pattern: r.path_pattern ?? null,
+      path_mode: r.path_mode ?? 0,
+      expires_at: r.expires_at ?? null,
+    }));
+    this.download(
+      { version: 1, exported_at: Math.floor(Date.now() / 1000), rules },
+      `huddle-firewall-rules-${new Date().toISOString().slice(0, 10)}.json`,
+    );
+    this.note.set(`Exported ${rules.length} rule(s)`);
+  }
+
+  private download(doc: unknown, filename: string): void {
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
   }
 
   shortName(id: string): string { return id.replace(/^devcontainer-/, ''); }

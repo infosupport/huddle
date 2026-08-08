@@ -6,12 +6,23 @@ one group in the shared import/export envelope format. Point Huddle's
 own in Git) and every group loads automatically.
 
 ## Files
-| File | Group | What it allows |
-|------|-------|----------------|
-| `openai.json`       | OpenAI       | OpenAI / ChatGPT API + file domains |
-| `github.json`       | GitHub       | github.com, API, raw content, downloads, ghcr.io |
-| `nodejs.json`       | Node.js      | Node.js runtime downloads |
-| `npm-registry.json` | NPM Registry | npm package registry |
+| File | Group | Kind | Mode |
+|------|-------|------|------|
+| `openai.json`       | OpenAI       | General API — the whole host is the service | Allow |
+| `github.json`       | GitHub       | General dev service — web, API, raw content, downloads, ghcr.io | Allow |
+| `nodejs.json`       | Node.js      | Dependency downloads — everyone pulls runtimes from `/dist/` | **Path mode** |
+| `npm-registry.json` | NPM Registry | Dependency registry — everyone pulls packages by path | **Path mode** |
+
+### General vs. dependency URLs
+A rule of thumb for writing your own groups:
+
+- **General URL** — you need the *whole host* (an API or app you talk to, e.g.
+  `api.openai.com`, `github.com`). Use a plain **allow**.
+- **Dependency URL** — a shared registry/download host where *everyone fetches
+  their own things by path* (npm, PyPI, NuGet, Maven, a runtime's `/dist/`).
+  Prefer **path mode**: block the host at the root and allow only the specific
+  package/scope paths you need, so a compromised build can't pull arbitrary code
+  from the same host. See `npm-registry.json` and `nodejs.json`.
 
 ## Use it
 
