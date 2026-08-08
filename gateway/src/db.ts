@@ -199,6 +199,22 @@ export function initDb(): void {
     `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES ('huddle', NULL, 'allow')`
   ).run();
 
+  // Keep Huddle's own self-traffic rule in a dedicated "huddle" group so it is
+  // clearly separated from user/team rules in the portal. Idempotent: the group
+  // is created once (unique name) and the seeded rule is filed under it.
+  db.prepare(
+    `INSERT OR IGNORE INTO firewall_groups (name, description, shared, source)
+     VALUES ('huddle', 'Huddle self-traffic (gateway and portal). Managed by Huddle.', 0, 'system')`
+  ).run();
+  const huddleGroup = db
+    .prepare(`SELECT id FROM firewall_groups WHERE name = 'huddle' COLLATE NOCASE`)
+    .get() as { id: number } | undefined;
+  if (huddleGroup) {
+    db.prepare(
+      `UPDATE rules SET group_id = ? WHERE domain = 'huddle' AND container_id IS NULL AND group_id IS NULL`
+    ).run(huddleGroup.id);
+  }
+
   db.exec("DELETE FROM audit_log WHERE ts < unixepoch() - 604800");
 
   const count = (db.prepare("SELECT COUNT(*) as n FROM audit_log").get() as { n: number }).n;
