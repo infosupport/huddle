@@ -142,16 +142,24 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
               </div>
             }
 
+            <div class="grp__table-wrap">
             <table class="data-table grp__table">
               <thead>
-                <tr><th class="grp__chk"><input type="checkbox" [checked]="allVisibleSelected()" (change)="toggleSelectAll()" title="Select all" /></th><th>Type</th><th>Domain / path</th><th>Path mode</th><th>Match</th><th>Actions</th><th>Group</th><th>Added</th><th>Added by</th><th></th></tr>
+                <tr>
+                  <th class="grp__chk"><input type="checkbox" [checked]="allVisibleSelected()" (change)="toggleSelectAll()" title="Select all" /></th>
+                  <th class="grp__col-dom">Domain / path</th>
+                  <th class="grp__col-pm">Path mode</th>
+                  <th class="grp__col-match">Match</th>
+                  <th class="grp__col-act">Actions</th>
+                  <th class="grp__col-grp">Group</th>
+                  <th class="grp__col-menu"></th>
+                </tr>
               </thead>
               <tbody>
                 @for (r of rows(); track r.id) {
                   <tr [class.grp__tr--open]="expanded() === r.id" [class.grp__tr--sel]="isSelected(r.id)">
                     <td class="grp__chk"><input type="checkbox" [checked]="isSelected(r.id)" (change)="toggleSelect(r.id)" /></td>
-                    <td class="grp__type"><app-icon name="globe" [size]="16" /></td>
-                    <td class="grp__dom">{{ r.domain }}</td>
+                    <td class="grp__dom" [title]="r.domain">{{ r.domain }}</td>
                     <td class="grp__pm">
                       <select class="grp__pm-sel" [value]="isPath(r) ? 'specific' : 'all'" (change)="onPathMode(r, $event)">
                         <option value="all">All paths</option>
@@ -163,13 +171,11 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                         </button>
                       }
                     </td>
-                    <td>Root</td>
+                    <td class="grp__match">Root</td>
                     <td class="grp__act">
                       @if (isPath(r)) {
                         <span class="pill pill--path">Path mode</span>
                       } @else {
-                        <span class="tag tag--match">{{ r.status === 'deny' ? 'Deny /*' : 'Allow /*' }}</span>
-                        <span class="tag tag--dur">{{ r.expires_at ? 'Temporary' : 'Always' }}</span>
                         <span class="pill" [class.pill--allow]="r.status === 'allow'" [class.pill--deny]="r.status === 'deny'">{{ r.status === 'allow' ? 'Allowed' : 'Denied' }}</span>
                       }
                     </td>
@@ -177,8 +183,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                       @if (r.group_id != null) { <span class="grp__gtag">{{ groupName(r.group_id) }}</span> }
                       @else { <span class="grp__muted">—</span> }
                     </td>
-                    <td class="grp__muted">{{ r.updated_at | relTime }}</td>
-                    <td class="grp__muted">{{ r.added_by || 'you' }}</td>
                     <td class="grp__row-menu">
                       <button type="button" class="grp__dots" (click)="toggleMenu(r.id)">⋯</button>
                       @if (openMenu() === r.id) {
@@ -195,7 +199,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                   </tr>
                   @if (isPath(r) && expanded() === r.id) {
                     <tr class="grp__paths-row">
-                      <td colspan="10">
+                      <td colspan="7">
                         <div class="grp__paths">
                           <div class="grp__paths-head">Allowed paths</div>
                           @for (p of allowedPaths(r); track p.id) {
@@ -215,10 +219,11 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                     </tr>
                   }
                 } @empty {
-                  <tr><td colspan="10" class="grp__empty">No rules here yet.</td></tr>
+                  <tr><td colspan="7" class="grp__empty">No rules here yet.</td></tr>
                 }
               </tbody>
             </table>
+            </div>
             <div class="grp__foot"><span>{{ rows().length }} item{{ rows().length !== 1 ? 's' : '' }}</span></div>
           </div>
         </div>
@@ -277,18 +282,26 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__bulk-del:hover { border-color: var(--danger); color: var(--danger); }
     .grp__bulk-clear { margin-left: auto; }
 
-    .grp__table { width: 100%; }
+    /* Fixed layout so column widths come from the header and never re-flow per
+       row content — keeps rows aligned and stops them from jumping when the list
+       or filter changes. The domain column takes the remaining space. */
+    .grp__table-wrap { overflow-x: auto; }
+    .grp__table { width: 100%; table-layout: fixed; }
+    .grp__col-pm { width: 168px; }
+    .grp__col-match { width: 72px; }
+    .grp__col-act { width: 104px; }
+    .grp__col-grp { width: 128px; }
+    .grp__col-menu { width: 40px; }
+    .grp__table th, .grp__table td { overflow: hidden; text-overflow: ellipsis; }
     .grp__chk { width: 34px; text-align: center; }
     .grp__chk input { cursor: pointer; }
     .grp__tr--sel > td { background: var(--accent-soft); }
-    .grp__type { color: var(--text-muted); }
-    .grp__dom { font-family: 'Space Grotesk', monospace; }
+    .grp__dom { font-family: 'Space Grotesk', monospace; white-space: nowrap; }
+    .grp__match { color: var(--text-muted); font-size: 0.85em; }
     .grp__pm { white-space: nowrap; }
-    .grp__pm-sel { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
+    .grp__pm-sel { max-width: 130px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
     .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
-    .grp__act { display: flex; align-items: center; gap: 6px; }
-    .tag { font-size: 0.75em; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--border); color: var(--text-muted); background: var(--surface-2); white-space: nowrap; }
-    .tag--match { color: var(--text); }
+    .grp__act { white-space: nowrap; }
     .grp__gtag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); }
     .grp__muted { color: var(--text-muted); font-size: 0.85em; }
     .grp__empty { text-align: center; color: var(--text-muted); padding: 24px 0; }
@@ -306,7 +319,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__path-add { display: flex; gap: 8px; margin-top: 10px; }
     .grp__path-add input { flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 0.85em; }
 
-    .grp__row-menu { position: relative; text-align: right; }
+    .grp__row-menu { position: relative; text-align: right; overflow: visible; }
     .grp__dots { border: none; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 1.2em; padding: 0 6px; }
     .grp__menu { position: absolute; right: 0; top: 100%; z-index: 20; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; min-width: 180px; max-height: 320px; overflow: auto; }
     .grp__menu-label { padding: 8px 12px 4px; font-size: 0.72em; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
