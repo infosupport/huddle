@@ -132,7 +132,7 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
           <div class="tmd-input-row">
             <input [(ngModel)]="resources.extensionsFolder" name="extensionsFolder"
                    placeholder="/path/to/extensions" autocomplete="off" spellcheck="false">
-            <button type="button" class="btn btn-ghost" (click)="saveFolders()" [disabled]="savingFolders()">Reload</button>
+            <button type="button" class="btn btn-ghost" (click)="saveFolders()" [disabled]="savingFolders()">Save</button>
           </div>
         </div>
         <div class="field">

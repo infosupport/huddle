@@ -317,6 +317,12 @@ export class FirewallComponent {
   onBulkPie(actionId: string, requested: Rule[]): void {
     const rules = requested.filter((r) => this.pendingSel.has(r.id));
     if (!rules.length) return;
+    // Global allow/deny changes policy for ALL containers. Single-item actions go
+    // through the confirmation modal; keep an equivalent guard for the bulk path.
+    if (actionId === 'approve-all' || actionId === 'deny-all') {
+      const verb = actionId === 'approve-all' ? 'Allow' : 'Deny';
+      if (!confirm(`${verb} ${rules.length} request${rules.length !== 1 ? 's' : ''} globally — for ALL containers? This changes global firewall policy.`)) return;
+    }
     const now = Math.floor(Date.now() / 1000);
     const call = (r: Rule): Observable<unknown> => {
       switch (actionId) {
