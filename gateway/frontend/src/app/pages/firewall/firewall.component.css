@@ -326,3 +326,16 @@
 .fw-toast--deny  .fw-toast__icon { background: var(--danger-soft);  color: var(--danger); }
 .fw-toast--temp  .fw-toast__icon { background: var(--warning-soft); color: var(--warning); }
 @keyframes toastin { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Pending bulk selection ── */
+.req-row__chk { flex-shrink: 0; margin-right: 2px; cursor: pointer; width: 16px; height: 16px; }
+.req-row.is-selected { background: var(--accent-soft); }
+.req-bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.req-bulk__all { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--text-muted); cursor: pointer; }
+.req-bulk__all input { cursor: pointer; }
+.req-bulk__n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); margin-left: 4px; }
+.req-bulk__btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 0.8em; }
+.req-bulk__btn:hover { background: var(--surface-hover); }
+.req-bulk__btn--allow:hover { border-color: var(--success); color: var(--success); }
+.req-bulk__btn--deny:hover { border-color: var(--danger); color: var(--danger); }
+.req-bulk__btn--clear { margin-left: auto; color: var(--text-muted); }

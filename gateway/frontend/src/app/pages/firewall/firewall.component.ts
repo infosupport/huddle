@@ -12,7 +12,7 @@ import { PathAllowlistComponent } from '../../shared/components/path-allowlist/p
 import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { FirewallGroupsPanelComponent } from './firewall-groups-panel.component';
-import { map } from 'rxjs';
+import { map, forkJoin, Observable } from 'rxjs';
 
 interface Toast { id: number; caption: string; text: string; tone: 'allow' | 'deny' | 'temp'; }
 
@@ -40,6 +40,11 @@ export class FirewallComponent {
   searchQuery = '';
   toasts: Toast[] = [];
   resolving = new Set<number>();
+
+  // Bulk selection over the pending inbox (domain requests + path sub-requests),
+  // keyed by rule id. A plain Set (like `resolving`) — mutated on the same click
+  // events that drive change detection.
+  pendingSel = new Set<number>();
 
   // Known containers for the scope selection in the "add custom rule" form.
   containers$ = this.state.containers$;
@@ -278,5 +283,55 @@ export class FirewallComponent {
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
     this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => this.state.loadAll());
+  }
+
+  // ── Pending bulk selection & actions ────────────────────────────────────────
+  private pendingIds(vm: { requested: Rule[]; pathRequested: PathRequestRow[] }): number[] {
+    return [...vm.requested.map((r) => r.id), ...vm.pathRequested.map((p) => p.rule.id)];
+  }
+  pendingChecked(id: number): boolean { return this.pendingSel.has(id); }
+  togglePending(id: number): void {
+    this.pendingSel.has(id) ? this.pendingSel.delete(id) : this.pendingSel.add(id);
+  }
+  pendingAllChecked(vm: { requested: Rule[]; pathRequested: PathRequestRow[] }): boolean {
+    const ids = this.pendingIds(vm);
+    return ids.length > 0 && ids.every((i) => this.pendingSel.has(i));
+  }
+  togglePendingAll(vm: { requested: Rule[]; pathRequested: PathRequestRow[] }): void {
+    const ids = this.pendingIds(vm);
+    if (ids.every((i) => this.pendingSel.has(i))) ids.forEach((i) => this.pendingSel.delete(i));
+    else ids.forEach((i) => this.pendingSel.add(i));
+  }
+  pendingSelectedCount(vm: { requested: Rule[]; pathRequested: PathRequestRow[] }): number {
+    return this.pendingIds(vm).filter((i) => this.pendingSel.has(i)).length;
+  }
+  clearPending(): void { this.pendingSel.clear(); }
+
+  // Bulk-resolve the selected pending requests. Same operations as a single
+  // request's pie menu (allow / deny, per-rule or global, or dismiss).
+  bulkPending(
+    vm: { requested: Rule[]; pathRequested: PathRequestRow[] },
+    action: 'allow' | 'deny' | 'allow-global' | 'deny-global' | 'dismiss',
+  ): void {
+    const ids = this.pendingIds(vm).filter((i) => this.pendingSel.has(i));
+    if (!ids.length) return;
+    const call = (id: number): Observable<unknown> => {
+      switch (action) {
+        case 'allow':        return this.api.resolveRule(id, 'allow', 'rule');
+        case 'allow-global': return this.api.resolveRule(id, 'allow', 'global');
+        case 'deny':         return this.api.resolveRule(id, 'deny', 'rule');
+        case 'deny-global':  return this.api.resolveRule(id, 'deny', 'global');
+        case 'dismiss':      return this.api.deleteRule(id) as unknown as Observable<unknown>;
+      }
+    };
+    forkJoin(ids.map(call)).subscribe({
+      next: () => {
+        this.pendingSel.clear();
+        this.state.loadAll();
+        const tone: Toast['tone'] = action.startsWith('deny') ? 'deny' : action === 'dismiss' ? 'deny' : 'allow';
+        this.pushToast(`${ids.length} request${ids.length !== 1 ? 's' : ''}`, action === 'dismiss' ? 'Dismissed' : `${action.replace('-', ' ')}ed`, tone);
+      },
+      error: (e) => this.pushToast('Bulk action failed', e.message ?? 'Error', 'deny'),
+    });
   }
 }
