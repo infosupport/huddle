@@ -379,24 +379,42 @@ export function reloadFirewallRulesFolder(): FolderReloadSummary {
     return summary;
   }
 
-  // All files valid → drop the previous startup-folder state (rules then groups,
-  // so removed files disappear; only source='startup-folder' rows are touched)
-  // and import the fresh set.
-  const clear = db.transaction(() => {
-    db.prepare(`DELETE FROM rules WHERE source = 'startup-folder'`).run();
-    db.prepare(`DELETE FROM firewall_groups WHERE source = 'startup-folder'`).run();
-  });
-  clear();
-
-  for (const { file, env } of parsed) {
-    try {
-      const res = importGroupEnvelope(env, { mode: 'replace', source: 'startup-folder', addedBy: 'team-folder' });
-      summary.groups++;
-      summary.imported += res.imported;
-      summary.updated += res.updated;
-    } catch (err) {
-      summary.errors.push({ file, message: (err as Error).message });
-    }
+  // All files parsed → apply ATOMICALLY: clear the previous startup-folder state
+  // and import the fresh set inside a single transaction. Import can still throw
+  // at runtime (e.g. a folder group name colliding with a manual/system group),
+  // so wrapping clear+import together means any such failure rolls the whole
+  // thing back and preserves the last-good policy instead of leaving it
+  // half-cleared. (Only source='startup-folder' rows are ever deleted.)
+  try {
+    const apply = db.transaction(() => {
+      db.prepare(`DELETE FROM rules WHERE source = 'startup-folder'`).run();
+      db.prepare(`DELETE FROM firewall_groups WHERE source = 'startup-folder'`).run();
+      for (const { file, env } of parsed) {
+        try {
+          const res = importGroupEnvelope(env, { mode: 'replace', source: 'startup-folder', addedBy: 'team-folder' });
+          summary.groups++;
+          summary.imported += res.imported;
+          summary.updated += res.updated;
+        } catch (err) {
+          throw new Error(`${file}: ${(err as Error).message}`);
+        }
+      }
+    });
+    apply();
+  } catch (err) {
+    // Rolled back — nothing was changed, the last-good policy is preserved.
+    summary.groups = 0;
+    summary.imported = 0;
+    summary.updated = 0;
+    summary.errors.push({ file: '(reload aborted)', message: (err as Error).message });
+    logAudit({
+      containerId: null,
+      domain: 'firewall',
+      action: 'admin:folder-reload-aborted',
+      path: `mount=${mount} files=${summary.files} error=${(err as Error).message} (previous policy kept)`,
+    });
+    notifyStateChanged();
+    return summary;
   }
 
   logAudit({
