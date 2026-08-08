@@ -2,18 +2,19 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { saveCredentials, getSetting, listFolderMappings } from './db';
+import { getSetting, listFolderMappings } from './db';
+import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
-// De CLI geeft de gedetecteerde container-engine door via HUDDLE_RUNTIME. Bij
-// (rootless) Podman is de per-container proxy-socket SELinux-gelabeld; een
-// SELinux-confined devcontainer mag hem dan niet benaderen. `label=disable` op
-// de devcontainer heft die confinement op zodat DOCKER_HOST/de socket werken.
-// (Docker/Docker Desktop hebben dit niet nodig.)
+// The CLI passes the detected container engine via HUDDLE_RUNTIME. On (rootless)
+// Podman the per-container proxy socket is SELinux-labeled; a SELinux-confined
+// devcontainer is then not allowed to access it. `label=disable` on the
+// devcontainer lifts that confinement so DOCKER_HOST/the socket work.
+// (Docker/Docker Desktop do not need this.)
 const CONTAINER_RUNTIME = process.env.HUDDLE_RUNTIME ?? 'docker';
 const RUNTIME_SECURITY_OPT: string[] = CONTAINER_RUNTIME === 'podman' ? ['label=disable'] : [];
 
@@ -100,10 +101,9 @@ export interface DevcontainerInfo {
   huddleInNetwork: boolean;
 }
 
-// Set van dc-net-* netwerken waar de huddle-container zelf in zit. Wordt
-// gebruikt om per devcontainer te detecteren of huddle nog aan zijn dc-net is
-// gekoppeld (na een herstart van de container kan deze koppeling sneuvelen
-// als het netwerk opnieuw is aangemaakt).
+// Set of dc-net-* networks the huddle container itself is on. Used to detect per
+// devcontainer whether huddle is still attached to its dc-net (after a container
+// restart this attachment can break if the network was recreated).
 export async function getHuddleNetworks(): Promise<Set<string>> {
   try {
     const inspect = await dockerRequest('GET', '/containers/huddle/json');
@@ -264,6 +264,118 @@ export async function execContainerOutput(containerId: string, cmd: string[]): P
   });
 }
 
+// Run a command (execve array, NO shell) as root in the container and pipe
+// `stdin` to the process. Used by the sudo-grant flow to feed `chpasswd` the
+// password via stdin — never as a shell argument (no injection, not visible in
+// the process list). Returns the exit code (from exec inspect) so the caller can
+// decide fail-closed.
+//
+// Important: the body of POST /exec/<id>/start contains ONLY the JSON options.
+// The daemon parses that body as JSON and rejects trailing bytes after it — so
+// stdin must NOT be included there. On an attached exec the daemon hijacks the
+// connection into a raw bidirectional stream; stdin goes over that socket and is
+// closed with a half-close (FIN) so the process (chpasswd) sees EOF and stops.
+export async function execInContainer(containerName: string, cmd: string[], stdin: string): Promise<ExecResult> {
+  const path = `/containers/${encodeURIComponent(containerName)}/exec`;
+  const execCreate = await dockerRequest('POST', path, execCreateSpec(cmd, stdin));
+  await startExec(execCreate.Id, stdin);
+  return waitForExecExit(execCreate.Id);
+}
+
+// The exec spec for a root, no-shell command. AttachStdin only when there is
+// input to send, so a no-stdin exec never opens a half-closed write side.
+function execCreateSpec(cmd: string[], stdin: string): Record<string, unknown> {
+  return {
+    AttachStdin: stdin.length > 0,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
+    Cmd: cmd,
+    User: 'root',
+  };
+}
+
+// Fail-closed ceiling for a single exec-start. The sudo commands (chpasswd,
+// usermod, passwd) return near-instantly, so this only ever trips on a genuine
+// stall (unreachable/wedged daemon). Without it a stalled start would hang the
+// caller — and, in the expiry sweeper's per-container loop, block every later
+// expired grant from being re-locked. A bounded reject lets the caller move on.
+const EXEC_START_TIMEOUT_MS = 15_000;
+
+// POST /exec/<id>/start with the JSON options ONLY — stdin must not go in the
+// body (the daemon parses the body as JSON and rejects trailing bytes). On a 2xx
+// the connection is hijacked into a raw bidirectional stream; on a non-2xx we
+// fail closed with the error body so a failed start never looks like "exit null".
+function startExec(execId: string, stdin: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const startBody = JSON.stringify({ Detach: false, Tty: false });
+    const req = http.request(
+      {
+        socketPath: '/var/run/docker.sock',
+        method: 'POST',
+        path: `/exec/${execId}/start`,
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
+      },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          rejectStartError(res, reject);
+        } else {
+          pumpHijackedStream(res, stdin, resolve, reject);
+        }
+      },
+    );
+    // Idle-timeout on the underlying socket: fires only if the start neither
+    // streams nor completes, converting an indefinite hang into a fail-closed
+    // error (surfaced via the 'error' handler below).
+    req.setTimeout(EXEC_START_TIMEOUT_MS, () => {
+      req.destroy(new Error(`exec start timed out after ${EXEC_START_TIMEOUT_MS}ms`));
+    });
+    req.on('error', reject);
+    req.end(startBody);
+  });
+}
+
+// Collect a non-2xx exec-start response body and reject with it (fail closed).
+function rejectStartError(res: http.IncomingMessage, reject: (err: Error) => void): void {
+  let raw = '';
+  res.on('data', (c: Buffer) => { raw += c.toString(); });
+  res.on('end', () => reject(new Error(`exec start → ${res.statusCode}: ${raw}`)));
+  res.on('error', reject);
+}
+
+// Feed stdin over the hijacked raw stream and half-close (FIN) so the process
+// gets EOF, then drain the multiplexed stdout/stderr until the daemon closes it.
+function pumpHijackedStream(
+  res: http.IncomingMessage,
+  stdin: string,
+  resolve: () => void,
+  reject: (err: Error) => void,
+): void {
+  if (stdin.length > 0) {
+    res.socket.write(Buffer.from(stdin, 'utf8'));
+    res.socket.end();
+  }
+  res.on('data', () => { /* ignore multiplexed stdout/stderr */ });
+  res.on('end', () => resolve());
+  res.on('error', reject);
+}
+
+// Poll the exec inspect until the process has exited. The stream close usually
+// means ExitCode is already set; some daemons/platforms (e.g. WSL2) reap just
+// after the stream close, so poll briefly instead of reporting null right away.
+async function waitForExecExit(execId: string): Promise<ExecResult> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const info = await dockerRequest('GET', `/exec/${execId}/json`);
+    if (typeof info.ExitCode === 'number' && info.Running !== true) {
+      return { exitCode: info.ExitCode };
+    }
+    if (info.Running !== true) break; // done but no numeric code → null
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const final = await dockerRequest('GET', `/exec/${execId}/json`);
+  return { exitCode: typeof final.ExitCode === 'number' ? final.ExitCode : null };
+}
+
 export async function commitContainer(containerId: string, imageName: string): Promise<string> {
   const [repo, tag = 'latest'] = imageName.split(':');
   // Inherit the IDE label from the source container so the snapshot is filterable per IDE.
@@ -365,15 +477,15 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
 
 export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
-  // Koppelt de gateway zelf een (internal) devcontainer-net bij, dan zet Podman
-  // de aardvark-DNS van dat net vooraan in resolv.conf — die faalt op externe
-  // namen. Herstel de volgorde zodat egress blijft werken (zie dns-egress.ts).
+  // When the gateway itself attaches to an (internal) devcontainer-net, Podman
+  // puts that net's aardvark DNS at the front of resolv.conf — which fails on
+  // external names. Restore the order so egress keeps working (see dns-egress.ts).
   if (containerName === 'huddle') await sanitizeResolvConf();
 }
 
 export async function disconnectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/disconnect`, { Container: containerName });
-  // Ook een disconnect laat Podman resolv.conf opnieuw genereren.
+  // A disconnect also makes Podman regenerate resolv.conf.
   if (containerName === 'huddle') await sanitizeResolvConf();
 }
 
@@ -396,11 +508,11 @@ export async function cleanupContainerNetwork(containerName: string): Promise<vo
   try { await deleteNetwork(netName); } catch {}
 }
 
-// Seed de gedeelde AI-CLI-volumes met de image-defaults wanneer het volume nog
-// leeg is. De named volumes verbergen de COPY's uit de Dockerfile, dus zonder
-// deze stap mist een vers volume CLAUDE.md/AGENTS.md/agents enz. `cp -rn`
-// overschrijft nooit bestaande bestanden, dus een al ingelogd/geconfigureerd
-// volume blijft ongemoeid.
+// Seed the shared AI-CLI volumes with the image defaults when the volume is still
+// empty. The named volumes hide the COPYs from the Dockerfile, so without this
+// step a fresh volume is missing CLAUDE.md/AGENTS.md/agents etc. `cp -rn` never
+// overwrites existing files, so an already-logged-in/configured volume stays
+// untouched.
 function buildFolderMappingSeedScript(containerPaths: string[]): string {
   if (containerPaths.length === 0) return '';
   const pairs = containerPaths
@@ -410,7 +522,7 @@ function buildFolderMappingSeedScript(containerPaths: string[]): string {
       return `"${rel}:${defaultsRel}"`;
     })
     .join(' ');
-  return `# Seed volume-gemounte AI CLI-instellingen vanuit de image-defaults bij leeg volume.
+  return `# Seed volume-mounted AI CLI settings from the image defaults when the volume is empty.
 for pair in ${pairs}; do
   dest="/home/vscode/\${pair%%:*}"
   src="/home/vscode/\${pair##*:}"
@@ -423,52 +535,70 @@ for pair in ${pairs}; do
 done`;
 }
 
-// Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
-// (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
-// Gedeeld tussen het JetBrains- en het VS Code-startscript.
-const DOCKER_SOCK_SYMLINK = `# Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
-# (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
+// Docker access goes via the socket in the mounted directory /var/run/huddle
+// (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
+// Shared between the JetBrains and VS Code startup scripts.
+const DOCKER_SOCK_SYMLINK = `# Docker access goes via the socket in the mounted directory /var/run/huddle
+# (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
-// Finding #15 (IDE-kanaal, VS Code Remote + JetBrains Gateway): het attach-kanaal
-// loopt over `docker exec`/stdio en wordt door NOCH de egress-proxy NOCH de
-// socket-proxy gezien. Het echte host-token komt NOOIT als bestand binnen; VS
-// Code laat de container het on-demand ophalen. De werkelijke route (bevestigd
-// live) is een git `credential.helper` die bij attach in ZOWEL /etc/gitconfig ALS
-// de van de host gekopieerde ~/.gitconfig wordt gezet:
+// Create the admin user `noot` in the sudo/wheel group, but LOCKED and without a
+// usable password. Deliberately no password is set here: that only happens per
+// grant (ephemeral, see sudo-grant.ts) and is locked again afterwards. Idempotent
+// — a second run (or a container from before this version with a standing
+// password) is also brought to the locked state. Shared between the JetBrains and
+// VS Code startup scripts so both stay in sync.
+const NOOT_LOCKED_SETUP = `# Admin user 'noot': in the sudo group but LOCKED by default (no standing
+# password). Huddle sets a fresh password per grant temporarily and locks again.
+export DEBIAN_FRONTEND=noninteractive
+command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
+id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
+usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+# Lock + expiry: a freshly created account is already locked ('!'), but this also
+# covers upgrades of containers that previously had a standing password.
+usermod -L noot 2>/dev/null || true
+passwd -l noot 2>/dev/null || true
+passwd -e noot 2>/dev/null || true`;
+
+// Finding #15 (IDE channel, VS Code Remote + JetBrains Gateway): the attach
+// channel goes over `docker exec`/stdio and is seen by NEITHER the egress proxy
+// NOR the socket proxy. The real host token NEVER arrives as a file; VS Code has
+// the container fetch it on-demand. The actual route (confirmed live) is a git
+// `credential.helper` that on attach is set in BOTH /etc/gitconfig AND the
+// ~/.gitconfig copied from the host:
 //     helper = !… node /tmp/vscode-remote-containers-<id>.js git-credential-helper …
-// die via de algemene remote-containers IPC-socket de host-credential-helper
-// aanroept. (Oudere VS Code gebruikte GIT_ASKPASS + /tmp/vscode-git-*.sock; die
-// dekken we ook nog af.) We knippen het op drie niveaus:
-//   1. env-scrub voor ELKE shell — /etc/profile.d (login) én /etc/bash.bashrc
-//      (interactive non-login; wat de VS Code-terminal standaard sourcet). Dekt
-//      de GIT_ASKPASS-variant.
-//   2. de git `credential.helper` die naar de remote-containers-helper wijst
-//      strippen uit /etc/gitconfig én ~/.gitconfig — dít is de daadwerkelijke
-//      route. Value-regex 'vscode-remote-containers' zodat een door de gebruiker
-//      zélf gezette helper blijft staan.
-//   3. de doorgestuurde GPG-agent-socket(s) (~/.gnupg/S.gpg-agent*) weghalen —
-//      daarmee vervalt commit-signing met de host-GPG-key.
-//   4. de oude askpass-sockets opruimen (voor VS Code-versies die die nog maken).
-// De remote-containers IPC-socket zelf NIET verwijderen: die is multiplexed met
-// de hele Remote-sessie; strippen we de helper, dan heeft git er toch geen route
-// meer naartoe. Een guard draait de hele container-levensduur, want de helper/
-// sockets verschijnen pas bij attach (ná dit script) en keren terug bij reconnect.
-const IDE_CRED_SCRUB = `# Finding #15: ontneem de untrusted container de door de IDE doorgestuurde
-# host-credentials (git-token via credential.helper/askpass, SSH-agent, GPG).
+// which calls the host credential helper via the general remote-containers IPC
+// socket. (Older VS Code used GIT_ASKPASS + /tmp/vscode-git-*.sock; we still cover
+// those too.) We cut it at three levels:
+//   1. env-scrub for EVERY shell — /etc/profile.d (login) and /etc/bash.bashrc
+//      (interactive non-login; what the VS Code terminal sources by default).
+//      Covers the GIT_ASKPASS variant.
+//   2. strip the git `credential.helper` pointing at the remote-containers helper
+//      from /etc/gitconfig and ~/.gitconfig — THIS is the actual route. Value
+//      regex 'vscode-remote-containers' so a helper set by the user themselves
+//      stays in place.
+//   3. remove the forwarded GPG agent socket(s) (~/.gnupg/S.gpg-agent*) — this
+//      disables commit signing with the host GPG key.
+//   4. clean up the old askpass sockets (for VS Code versions that still make them).
+// Do NOT remove the remote-containers IPC socket itself: it is multiplexed with
+// the entire Remote session; if we strip the helper, git has no route to it
+// anyway. A guard runs for the whole container lifetime, because the helper/
+// sockets only appear on attach (after this script) and return on reconnect.
+const IDE_CRED_SCRUB = `# Finding #15: strip the untrusted container of the host credentials forwarded
+# by the IDE (git token via credential.helper/askpass, SSH agent, GPG).
 SCRUB_VARS='GIT_ASKPASS SSH_AUTH_SOCK SSH_AGENT_PID GPG_AGENT_INFO GPG_TTY VSCODE_GIT_ASKPASS_NODE VSCODE_GIT_ASKPASS_MAIN VSCODE_GIT_ASKPASS_EXTRA_ARGS VSCODE_GIT_IPC_HANDLE'
 SCRUB_LINE="unset \$SCRUB_VARS"
 printf '%s\\n' "\$SCRUB_LINE" > /etc/profile.d/99-huddle-scrub-ide-creds.sh
 chmod 644 /etc/profile.d/99-huddle-scrub-ide-creds.sh
-# Interactive non-login shells (o.a. de VS Code-terminal) lezen /etc/profile.d
-# NIET; /etc/bash.bashrc is daar de plek.
+# Interactive non-login shells (e.g. the VS Code terminal) do NOT read
+# /etc/profile.d; /etc/bash.bashrc is the place for that.
 grep -qF "\$SCRUB_LINE" /etc/bash.bashrc 2>/dev/null || printf '%s\\n' "\$SCRUB_LINE" >> /etc/bash.bashrc
-# ~/.gnupg moet bestaan (mode 700) zodat de inotify-watch erop kan starten, ook
-# als de IDE de GPG-socket pas later neerzet.
+# ~/.gnupg must exist (mode 700) so the inotify watch on it can start, even if
+# the IDE only places the GPG socket later.
 install -d -m 700 -o vscode -g vscode /home/vscode/.gnupg 2>/dev/null || true
-# Credential-guard: strip de doorgestuurde git-credential-helper + ruim de
-# GPG-agent- en oude askpass-sockets op. Idempotent, zodat een herhaalde run
-# niets herschrijft.
+# Credential guard: strip the forwarded git credential helper + clean up the
+# GPG agent and old askpass sockets. Idempotent, so a repeated run rewrites
+# nothing.
 _huddle_cred_guard() {
   for cfg in /etc/gitconfig /home/vscode/.gitconfig; do
     [ -f "\$cfg" ] && git config --file "\$cfg" --unset-all credential.helper 'vscode-remote-containers' 2>/dev/null || true
@@ -476,9 +606,9 @@ _huddle_cred_guard() {
   rm -f /home/vscode/.gnupg/S.gpg-agent /home/vscode/.gnupg/S.gpg-agent.* 2>/dev/null || true
   find /tmp -maxdepth 1 \\( -name 'vscode-git-*.sock' -o -name 'vscode-ssh-auth-*.sock' \\) -delete 2>/dev/null || true
 }
-_huddle_cred_guard   # ruim op wat er bij attach al stond
+_huddle_cred_guard   # clean up what was already there on attach
 if command -v inotifywait >/dev/null 2>&1; then
-  # Reageer meteen als de IDE de helper/sockets (opnieuw) neerzet (race ~sub-ms).
+  # React immediately if the IDE places the helper/sockets (again) (race ~sub-ms).
   ( inotifywait -q -m -e create -e modify -e moved_to --format '%f' /tmp /etc /home/vscode /home/vscode/.gnupg 2>/dev/null | while IFS= read -r f; do
       case "\$f" in gitconfig|.gitconfig|S.gpg-agent|S.gpg-agent.*|vscode-git-*.sock|vscode-ssh-auth-*.sock) _huddle_cred_guard ;; esac
     done ) &
@@ -488,7 +618,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -501,13 +631,13 @@ mkdir -p /.jbdevcontainer/config/JetBrains
 if [ -n "$IDEA_DIR" ]; then
   printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
 else
-  # IDE nog niet in dist/ (lege gedeelde volume op nieuwe machine).
-  # deploy:true laat IntelliJ de backend zelf downloaden en installeren.
-  # Na die eerste deploy staat de IDE in de volume en werkt alles daarna normaal.
-  echo "[jb-config] IDE niet gevonden in dist/, host-config met deploy:true schrijven zodat IntelliJ de backend installeert"
+  # IDE not yet in dist/ (empty shared volume on a new machine).
+  # deploy:true lets IntelliJ download and install the backend itself.
+  # After that first deploy the IDE is in the volume and everything works normally.
+  echo "[jb-config] IDE not found in dist/, writing host-config with deploy:true so IntelliJ installs the backend"
   printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"true"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" > /.jbdevcontainer/config/JetBrains/host-config.json
-  # Achtergrond-watcher: zodra IntelliJ de IDE heeft geïnstalleerd, importeer de
-  # Huddle CA alsnog in het JBR-keystore (de huddle-ca.crt is dan al aangemaakt).
+  # Background watcher: once IntelliJ has installed the IDE, import the Huddle CA
+  # into the JBR keystore after all (the huddle-ca.crt has been created by then).
   ( i=0
     while [ $i -lt 60 ]; do
       INST=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
@@ -541,8 +671,8 @@ iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j AC
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
-# Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
-# tools die niet uit de system store lezen (node).
+# Install huddle's MITM CA in the system trust store + set env vars for tools
+# that do not read from the system store (node).
 mkdir -p /usr/local/share/ca-certificates
 echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
 chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
@@ -552,13 +682,13 @@ chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 ${IDE_CRED_SCRUB}
 
-# De JetBrains-IDE (IntelliJ/Rider) draait op de JBR, een eigen JVM die TLS niet
-# tegen de system store of NODE_EXTRA_CA_CERTS valideert maar tegen z'n eigen
-# cacerts-keystore. Zonder import hieronder weigert de IDE het MITM-leaf-cert en
-# sterft de handshake, waardoor IDE-HTTPS (bv. api.github.com) alleen als lege
-# CONNECT-tunnel in de audit log belandt. Default keystore-wachtwoord: changeit.
-# Sla over als IDE nog niet in dist/ staat (eerste connect op nieuwe machine);
-# IntelliJ importeert de CA zelf na de eerste deployment.
+# The JetBrains IDE (IntelliJ/Rider) runs on the JBR, its own JVM that validates
+# TLS not against the system store or NODE_EXTRA_CA_CERTS but against its own
+# cacerts keystore. Without the import below the IDE rejects the MITM leaf cert and
+# the handshake dies, so IDE HTTPS (e.g. api.github.com) ends up in the audit log
+# only as an empty CONNECT tunnel. Default keystore password: changeit.
+# Skip if the IDE is not yet in dist/ (first connect on a new machine); IntelliJ
+# imports the CA itself after the first deployment.
 if [ -n "$IDEA_DIR" ]; then
 JBR_KEYTOOL="$IDEA_PATH/jbr/bin/keytool"
 JBR_CACERTS="$IDEA_PATH/jbr/lib/security/cacerts"
@@ -574,12 +704,7 @@ else
 fi
 fi
 
-# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
-export DEBIAN_FRONTEND=noninteractive
-command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:${password}" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+${NOOT_LOCKED_SETUP}
 
 # Fix workspace permissions
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
@@ -602,7 +727,7 @@ touch /tmp/sudo-audit.log
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
 
-# Start IDE backend in background; sla over als IDE nog niet in dist/ staat
+# Start IDE backend in background; skip if the IDE is not yet in dist/
 if [ -n "$IDEA_DIR" ]; then
 nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
 fi
@@ -610,26 +735,26 @@ fi
 `;
 }
 
-// ── vsc-config.sh — VS Code-variant ─────────────────────────────────────────
-// Zelfde firewall/sudo/audit-setup als de JB-flow, maar zónder JB host-config en
-// zónder remote-dev-server: VS Code installeert zijn eigen backend (VS Code Server)
-// bij het attachen. Houd dit in sync met de vscode-branch in huddle.ps1.
-// Machine-level VS Code Remote-instellingen die het IDE-kanaal hardenen
-// (finding #15). Het VS Code-Remote-kanaal loopt over `docker exec`/stdio en
-// wordt NOCH door de egress-proxy NOCH door de socket-proxy gezien — het is een
-// derde brug tussen host en (untrusted) container. Zonder deze policy erft een
-// in-container terminal (waar een AI-agent draait) de door VS Code doorgestuurde
-// host-credentials, en draait een aanvaller-gecontroleerde `tasks.json`
-// automatisch bij het openen van de map. Deze settings sluiten dat:
-//   - terminal.integrated.env.linux → null de doorgestuurde credential-env, zodat
-//     terminals/agents GIT_ASKPASS / SSH_AUTH_SOCK / GPG e.d. niet meer zien
-//     (VS Code's eigen git-integratie via de extension-host blijft werken).
-//   - task.allowAutomaticTasks=off → geen folderOpen-autorun.
-//   - security.workspace.trust.* → open mappen starten in Restricted Mode.
-//   - terminal.integrated.allowLocalTerminal=false → blokkeer het openen van een
-//     HOST-terminal vanuit het remote-venster (newLocal).
-// Volledig dichttimmeren vereist dat Huddle de attach zelf beheert (managed
-// devcontainer.json met copyGitConfig:false); dit is de container-side laag.
+// ── vsc-config.sh — VS Code variant ─────────────────────────────────────────
+// Same firewall/sudo/audit setup as the JB flow, but WITHOUT JB host-config and
+// WITHOUT remote-dev-server: VS Code installs its own backend (VS Code Server) on
+// attach. Keep this in sync with the vscode branch in huddle.ps1.
+// Machine-level VS Code Remote settings that harden the IDE channel (finding #15).
+// The VS Code Remote channel goes over `docker exec`/stdio and is seen by NEITHER
+// the egress proxy NOR the socket proxy — it is a third bridge between host and
+// (untrusted) container. Without this policy an in-container terminal (where an AI
+// agent runs) inherits the host credentials forwarded by VS Code, and an
+// attacker-controlled `tasks.json` runs automatically when the folder is opened.
+// These settings close that off:
+//   - terminal.integrated.env.linux → nulls the forwarded credential env, so
+//     terminals/agents no longer see GIT_ASKPASS / SSH_AUTH_SOCK / GPG etc.
+//     (VS Code's own git integration via the extension host keeps working).
+//   - task.allowAutomaticTasks=off → no folderOpen autorun.
+//   - security.workspace.trust.* → opened folders start in Restricted Mode.
+//   - terminal.integrated.allowLocalTerminal=false → block opening a HOST terminal
+//     from the remote window (newLocal).
+// Fully locking this down requires Huddle to manage the attach itself (managed
+// devcontainer.json with copyGitConfig:false); this is the container-side layer.
 export function buildVscodeMachineSettings(): Record<string, unknown> {
   return {
     'security.workspace.trust.enabled': true,
@@ -638,7 +763,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
     'security.workspace.trust.emptyWindow': false,
     'task.allowAutomaticTasks': 'off',
     'terminal.integrated.allowLocalTerminal': false,
-    // null verwijdert de variabele uit de terminal-omgeving.
+    // null removes the variable from the terminal environment.
     'terminal.integrated.env.linux': {
       GIT_ASKPASS: null,
       VSCODE_GIT_ASKPASS_NODE: null,
@@ -652,7 +777,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string): string {
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -668,8 +793,8 @@ iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j AC
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
-# Installeer huddle's MITM-CA in de system trust store + zet env-vars voor
-# tools die niet uit de system store lezen (node, java).
+# Install huddle's MITM CA in the system trust store + set env vars for tools
+# that do not read from the system store (node, java).
 mkdir -p /usr/local/share/ca-certificates
 echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
 chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
@@ -679,12 +804,7 @@ chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 ${IDE_CRED_SCRUB}
 
-# Install sudo + passwd if missing (update index first; base image wipes /var/lib/apt/lists)
-export DEBIAN_FRONTEND=noninteractive
-command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
-id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
-echo "noot:${password}" | chpasswd
-usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+${NOOT_LOCKED_SETUP}
 
 # Fix workspace permissions
 mkdir -p "${containerWorkspace}" 2>/dev/null || true
@@ -693,9 +813,9 @@ chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
 ${seedScript}
 
-# Finding #15: harden het VS Code Remote IDE-kanaal met machine-level settings.
-# Attach-to-running-container leest deze uit ~/.vscode-server/data/Machine/ (en
-# de insiders-variant). We schrijven ze voor de attach zodat ze meteen gelden.
+# Finding #15: harden the VS Code Remote IDE channel with machine-level settings.
+# Attach-to-running-container reads these from ~/.vscode-server/data/Machine/ (and
+# the insiders variant). We write them before the attach so they apply immediately.
 for VSCODE_HOME in /home/vscode/.vscode-server /home/vscode/.vscode-server-insiders; do
   mkdir -p "$VSCODE_HOME/data/Machine"
   echo '${settingsB64}' | base64 -d > "$VSCODE_HOME/data/Machine/settings.json"
@@ -781,15 +901,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const { imageName, workspaceDir, containerName, containerWorkspace, presentableName } = params;
   const ideName = params.ideName ?? 'intellij';
   const empty = params.empty === true;
-  // VS Code installeert zijn eigen backend (VS Code Server) bij het attachen: geen
-  // JB host-config, geen RemoteDev-distro-volume, geen remote-dev-server launch.
+  // VS Code installs its own backend (VS Code Server) on attach: no JB host-config,
+  // no RemoteDev distro volume, no remote-dev-server launch.
   const isVscode = ideName === 'vscode';
   const devcontainerId = crypto.randomUUID().replace(/-/g, '');
   const backend = ideName === 'rider' ? 'Rider' : isVscode ? 'VSCode' : 'IntelliJ';
   const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
-
-  const password = crypto.randomBytes(12).toString('base64url');
 
   try {
     const existing = await inspectContainer(containerName);
@@ -811,7 +929,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   try {
     await connectNetwork(netName, 'huddle');
   } catch (err: any) {
-    // Al gekoppeld is geen fout. Docker en Podman formuleren dit verschillend:
+    // Already connected is not an error. Docker and Podman word this differently:
     // Docker → "already exists in network", Podman → "network is already connected".
     const msg = String(err.message);
     if (!msg.includes('already exists in network') && !msg.includes('already connected')) throw err;
@@ -830,8 +948,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
   await createContainerProxy(containerName, SOCKET_DIR);
 
-  // JB-specifieke env (host-config pad, JBR/RemoteDev data, java-proxy) slaan we
-  // over voor VS Code; de proxy- en user-env blijven gelijk.
+  // JB-specific env (host-config path, JBR/RemoteDev data, java-proxy) is skipped
+  // for VS Code; the proxy and user env stay the same.
   const env = [
     '_CONTAINER_USER=vscode',
     '_CONTAINER_USER_HOME=/home/vscode',
@@ -841,26 +959,26 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     'https_proxy=http://huddle:80',
     'HTTP_PROXY=http://huddle:80',
     'HTTPS_PROXY=http://huddle:80',
-    // Loopback mag nooit via de proxy: die kan de loopback van de container
-    // zelf niet bereiken. De bracketed vorm `[::1]` staat er expliciet bij
-    // omdat .NET/Aspire's DCP zijn targets als `http://[::1]:<port>` adresseert
-    // en NO_PROXY letterlijk tegen die bracketed host matcht (issue #12).
+    // Loopback must never go via the proxy: it cannot reach the container's own
+    // loopback. The bracketed form `[::1]` is included explicitly because
+    // .NET/Aspire's DCP addresses its targets as `http://[::1]:<port>` and
+    // NO_PROXY matches literally against that bracketed host (issue #12).
     'no_proxy=localhost,127.0.0.1,::1,[::1]',
     'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
-    // CA-trust op container-niveau zodat ELK proces de MITM-CA vertrouwt — niet
-    // alleen login-shells die /etc/profile.d sourcen. Zonder dit valideren tools
-    // die door de IDE/non-login-shell gestart worden tegen hun eigen bundle,
-    // weigeren ze het leaf-cert en zie je enkel een lege CONNECT-tunnel.
-    // NODE_EXTRA_CA_CERTS = los huddle-cert (Node voegt het toe aan z'n bundle).
-    // SSL_CERT_FILE/REQUESTS_CA_BUNDLE = de gecombineerde system-bundle (huddle
-    // + alle normale roots) die update-ca-certificates regenereert, zodat TLS
-    // naar niet-geïntercepte hosts blijft werken.
+    // CA trust at the container level so EVERY process trusts the MITM CA — not
+    // only login shells that source /etc/profile.d. Without this, tools started by
+    // the IDE/non-login shell validate against their own bundle, reject the leaf
+    // cert and you see only an empty CONNECT tunnel.
+    // NODE_EXTRA_CA_CERTS = standalone huddle cert (Node adds it to its bundle).
+    // SSL_CERT_FILE/REQUESTS_CA_BUNDLE = the combined system bundle (huddle + all
+    // normal roots) that update-ca-certificates regenerates, so TLS to
+    // non-intercepted hosts keeps working.
     'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
     'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
     'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
-    // De docker-proxy-socket zit in de gemounte directory /var/run/huddle (zie
-    // Mounts). DOCKER_HOST laat docker/compose/SDK's hem daar vinden; voor tools
-    // die het defaultpad hardcoden legt het config-script ook een symlink op
+    // The docker proxy socket is in the mounted directory /var/run/huddle (see
+    // Mounts). DOCKER_HOST lets docker/compose/SDKs find it there; for tools that
+    // hardcode the default path the config script also places a symlink at
     // /var/run/docker.sock.
     'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
     ...(isVscode ? [] : [
@@ -874,7 +992,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const folderMounts = buildFolderMounts(containerName);
 
-  // De RemoteDev-distro-volume is JB-only; VS Code heeft hem niet nodig.
+  // The RemoteDev distro volume is JB-only; VS Code does not need it.
   const mounts = [
     ...folderMounts,
     ...(isVscode ? [] : [{
@@ -888,11 +1006,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Target: containerWorkspace,
     }]),
     {
-      // Mount de per-container socket-DIRECTORY, niet het socket-bestand zelf:
-      // een file-bind pint de inode en wijst na een huddle-herstart (unlink +
-      // nieuwe socket) voorgoed naar de dode oude socket. Via de directory ziet
-      // de container altijd de actuele socket; DOCKER_HOST (env) en de symlink
-      // /var/run/docker.sock (config-script) wijzen ernaar.
+      // Mount the per-container socket DIRECTORY, not the socket file itself: a
+      // file bind pins the inode and after a huddle restart (unlink + new socket)
+      // points forever at the dead old socket. Via the directory the container
+      // always sees the current socket; DOCKER_HOST (env) and the symlink
+      // /var/run/docker.sock (config script) point to it.
       Type: 'bind',
       Source: `${SOCKET_DIR}/${containerName}`,
       Target: '/var/run/huddle',
@@ -931,17 +1049,18 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const containerPaths = folderMounts.map(m => m.Target);
   const seedScript = buildFolderMappingSeedScript(containerPaths);
 
-  // Run config script via exec — VS Code-variant zonder JB host-config/backend.
+  // Run config script via exec — VS Code variant without JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), seedScript)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), seedScript);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
 
-  saveCredentials(containerName, password);
+  // No standing password anymore: 'noot' is created locked. Admin access now goes
+  // via an ephemeral sudo grant (POST /api/docker/containers/:name/sudo-grant).
 
   return id;
 }

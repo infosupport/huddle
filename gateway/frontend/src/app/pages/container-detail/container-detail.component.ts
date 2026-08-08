@@ -155,7 +155,18 @@ export class ContainerDetailComponent implements OnInit {
 
   detail$ = new BehaviorSubject<DetailData | null>(null);
   error$ = new BehaviorSubject<string | null>(null);
-  credentials: { password: string; createdAt: number } | null = null;
+  // Ephemeral sudo grant. `sudoUntil` = unix seconds at which the grant expires
+  // (null = no active grant). `sudoPassword` is only set right after a grant — it
+  // comes from the server only once and is never fetched again.
+  sudoUntil: number | null = null;
+  sudoPassword: string | null = null;
+  // Client-side expiry timer: mirrors the server-side sweep so the "Active" state
+  // and the one-time password clear the instant the grant lapses, even if the page
+  // is left open and idle. Torn down on destroy.
+  private sudoExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+  sudoMinutes = 15;
+  sudoBusy = false;
+  sudoError = '';
   passwordVisible = false;
   copied = false;
   activeTab: DetailTab = 'firewall';
@@ -174,22 +185,78 @@ export class ContainerDetailComponent implements OnInit {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
     this.load();
     this.loadPorts();
-    // Deze pagina toont zijn eigen detail$ (getContainerDetail), los van de
-    // globale state.rules$. Zonder deze koppeling verscheen een nieuw firewall-
-    // request pas na een handmatige refresh. rules$ wordt door de WS, de
-    // voorgrond-poll (StateService) én elke allow/deny (incl. de gedeelde "For
-    // everyone"-bevestigingsmodal, die state.loadAll() aanroept) ververst;
-    // herlaad het lokale detail daarop mee.
-    // skip(1): de BehaviorSubject vuurt meteen bij subscribe — die eerste emit
-    // dekt de load() hierboven al, dus alleen latere wijzigingen triggeren een
-    // herlaad.
+    // This page shows its own detail$ (getContainerDetail), separate from the
+    // global state.rules$. Without this link a new firewall request only appeared
+    // after a manual refresh. rules$ is refreshed by the WS, the foreground poll
+    // (StateService) and every allow/deny (including the shared "For everyone"
+    // confirmation modal, which calls state.loadAll()); reload the local detail
+    // along with it.
+    // skip(1): the BehaviorSubject fires immediately on subscribe — that first emit
+    // already covers the load() above, so only later changes trigger a reload.
     this.state.rules$
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
-    this.api.getContainerCredentials(this.name).subscribe({
-      next: (c) => this.credentials = c,
-      error: () => this.credentials = null,
+    this.loadSudoGrant();
+    this.destroyRef.onDestroy(() => this.clearSudoExpiryTimer());
+  }
+
+  get sudoActive(): boolean { return this.sudoUntil != null && this.sudoUntil > this.nowTs; }
+
+  loadSudoGrant(): void {
+    this.api.getSudoGrant(this.name).subscribe({
+      next: (g) => { this.setSudoUntil(g.active ? g.until : null); },
+      error: () => { this.setSudoUntil(null); },
     });
+  }
+
+  grantSudo(): void {
+    this.sudoBusy = true;
+    this.sudoError = '';
+    this.sudoPassword = null;
+    this.api.grantSudo(this.name, this.sudoMinutes).subscribe({
+      next: (r) => {
+        this.sudoBusy = false;
+        this.setSudoUntil(r.until);
+        this.sudoPassword = r.password; // show once
+        this.passwordVisible = true;
+      },
+      error: (err) => { this.sudoBusy = false; this.sudoError = err.message; },
+    });
+  }
+
+  revokeSudo(): void {
+    this.sudoBusy = true;
+    this.sudoError = '';
+    this.api.revokeSudo(this.name).subscribe({
+      next: () => { this.sudoBusy = false; this.setSudoUntil(null); this.sudoPassword = null; },
+      error: (err) => { this.sudoBusy = false; this.sudoError = err.message; },
+    });
+  }
+
+  // Set the grant expiry and (re)arm the client-side timer. When the grant lapses
+  // we drop the active state and wipe the (now server-invalidated) one-time
+  // password from the screen — no manual refresh or poll needed.
+  private setSudoUntil(until: number | null): void {
+    this.sudoUntil = until;
+    this.clearSudoExpiryTimer();
+    if (until == null) return;
+    const ms = (until - this.nowTs) * 1000;
+    if (ms <= 0) { this.expireSudoGrant(); return; }
+    this.sudoExpiryTimer = setTimeout(() => this.expireSudoGrant(), ms);
+  }
+
+  private expireSudoGrant(): void {
+    this.clearSudoExpiryTimer();
+    this.sudoUntil = null;
+    this.sudoPassword = null;
+    this.passwordVisible = false;
+  }
+
+  private clearSudoExpiryTimer(): void {
+    if (this.sudoExpiryTimer != null) {
+      clearTimeout(this.sudoExpiryTimer);
+      this.sudoExpiryTimer = null;
+    }
   }
 
   loadPorts(): void {
@@ -249,8 +316,8 @@ export class ContainerDetailComponent implements OnInit {
   }
 
   copyPassword(): void {
-    if (!this.credentials) return;
-    navigator.clipboard.writeText(this.credentials.password).then(() => {
+    if (!this.sudoPassword) return;
+    navigator.clipboard.writeText(this.sudoPassword).then(() => {
       this.copied = true;
       setTimeout(() => { this.copied = false; }, 2000);
     });

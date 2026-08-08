@@ -58,7 +58,7 @@ Two servers run in the same process:
 |-----------|---------------|
 | **No direct internet** | Traffic flows through the Huddle Gateway with firewall approvals — no container talks to the external network directly. |
 | **Docker proxy socket** | No full Docker socket, but controlled Docker actions through a per-container proxy with a label policy. |
-| **No root user** | A safer default user; `sudo` is only possible in a controlled way through Huddle. |
+| **No root user** | A safer default user; `sudo` is only possible in a controlled way through Huddle. The admin user `noot` is locked by default and only gets a fresh, time-boxed password when you grant admin access — no standing admin credentials. |
 
 ---
 
@@ -70,6 +70,7 @@ Two servers run in the same process:
 - Containers can *request* access; operators approve or reject via the UI
 - HTTP: full request/response logged in the network log
 - HTTPS: tunneled through CONNECT (contents not intercepted)
+- WebSocket: `ws://` and `wss://` upgrades are transparently proxied and subject to the same firewall rules (host and path) as regular requests — so tools like the OpenAI Codex CLI connect without falling back to slow HTTPS retries
 
 ### Docker Socket Proxy
 - Every devcontainer gets its own Unix socket at `/tmp/dc-sockets/<name>/docker.sock`; the per-container *directory* is mounted into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the socket. A file mount of the socket itself would keep seeing the dead old inode after a Huddle restart; a directory mount does not. The old flat path `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created before this change.
@@ -94,6 +95,17 @@ Two servers run in the same process:
 - Commit a running container to a snapshot image
 - Force-remove a container including network cleanup
 - A per-container Docker socket proxy is created automatically on start
+
+### Admin access (sudo)
+Each managed container has two users: `vscode` (the normal dev user, **without** sudo) and `noot` (administrator **with** sudo). Instead of a permanent admin password, Huddle uses an **ephemeral per-grant model**:
+
+- `noot` is created **locked** (in the sudo/wheel group, but with no usable password) when the container is built — there are no standing admin credentials.
+- On the container detail page (**Noot** tab) you **grant admin access** for a chosen duration (5–120 min). Huddle generates a fresh random password, sets it on `noot` via `chpasswd` (over stdin, never a shell argument) and unlocks the account.
+- The password is shown **exactly once** in the UI and is never stored (not even hashed) or retrievable again.
+- When the timer expires, an active sweeper **locks `noot` again** inside the container (and you can **Revoke** early). Because locking must happen inside the container, expiry is not passive — the gateway sweeps every 30 seconds.
+- All `sudo` actions are still forwarded to the network log.
+
+This closes security-review finding **#10** (plaintext admin credentials retrievable over the operator API). The old `GET /api/docker/containers/:name/credentials` endpoint is replaced by `GET/POST/DELETE /api/docker/containers/:name/sudo-grant` (status / grant / revoke).
 
 ### Network log
 - Every proxied HTTP request is logged (container, domain, method, path, status, headers, body — truncated at 20 KB)
@@ -148,6 +160,29 @@ After that, you start devcontainers directly from a project directory:
 ```bash
 huddle
 ```
+
+### Rancher Desktop
+
+Huddle works with [Rancher Desktop](https://rancherdesktop.io/) as long as it runs
+in **dockerd (moby)** mode — the `containerd`/`nerdctl` backend is *not* supported,
+because it does not expose a Docker-compatible engine or socket. Switch the container
+engine to `dockerd (moby)` under **Preferences → Container Engine**.
+
+In dockerd mode Rancher Desktop looks like a normal Docker engine, so `huddle init`
+auto-detects it (`--runtime docker`, which is also the default). The one difference
+is the socket location: Rancher Desktop puts its Docker socket at `~/.rd/docker.sock`
+instead of `/var/run/docker.sock`. Huddle reads the active `docker context` and
+mounts that socket automatically — no extra configuration needed. Rancher Desktop
+runs the engine inside a VM on every OS, so Huddle treats it as a remote engine (as
+it does Docker Desktop).
+
+If auto-detection ever fails, make sure the `rancher-desktop` context is active
+(`docker context use rancher-desktop`) and that `docker info` works, then re-run
+`huddle init --runtime docker`.
+
+> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used for
+> the per-container proxy sockets) into its VM. The defaults cover this, but if you
+> customized the VM's mounts you may need to add those paths back.
 
 ---
 
@@ -206,6 +241,22 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 
 ---
 
+## Migrating an existing Dev Container / Compose project
+
+Already have a `docker-compose.yml` + `devcontainer.json` and want to keep it while routing it
+through Huddle? Mark the network your services share with `huddle.network: "true"` and run:
+
+```bash
+huddle migrate
+```
+
+This generates a `docker-compose.huddle.yml` override that attaches your services to Huddle's
+internal network and injects the proxy env vars and CA path — your own files stay untouched.
+See [docs/migrate-devcontainers.md](docs/migrate-devcontainers.md) for the convention, an
+example, and the exact steps.
+
+---
+
 ## Managing the firewall
 
 Blocked requests are visible in the web UI under **Firewall**. Via the CLI:
@@ -216,6 +267,43 @@ huddle firewall list -i      # interactive mode
 ```
 
 When a devcontainer tries to reach a blocked domain, the request appears on the Firewall page. From there you can allow the domain (permanently or temporarily) or reject it — per container or globally.
+
+### Custom rules and wildcards
+
+Besides triaging incoming requests, you can author your own rules up front — from the
+**Firewall** page (**Add rule**) or the CLI. Both the domain and an optional path
+pattern support wildcards:
+
+- **Domain wildcard** — a `*.` prefix matches any subdomain (but not the bare host).
+  For example `*.pkgs.dev.azure.com` matches `myorg.pkgs.dev.azure.com` but not
+  `pkgs.dev.azure.com`.
+- **Path wildcard** — a `*` in the path pattern matches any run of characters *within
+  a single segment* (it never crosses a `/`). A **trailing** `*` keeps the classic
+  prefix behaviour and spans deeper segments (`/foo/*` also matches `/foo/a/b`).
+
+This solves the Azure DevOps NuGet case, where every request carries a fresh feed GUID
+in the middle of the path so per-request approvals never match. Author one broad rule
+instead:
+
+```bash
+# Allow a whole Azure DevOps NuGet feed, GUID and endpoint wildcarded
+huddle firewall add "*.pkgs.dev.azure.com" --path "/_packaging/*/nuget/v3/*"
+
+# Deny a specific path on a domain, scoped to one container
+huddle firewall add example.com --path "/admin/*" --deny --container devcontainer-myapp
+```
+
+`huddle firewall add` options:
+
+| Option | Description |
+|--------|-------------|
+| `<domain>` | Domain to match (supports a leading `*.` wildcard). Required. |
+| `--path <pattern>` | Optional path pattern (supports `*` wildcards as described above). |
+| `--deny` | Create a block rule (default is allow). |
+| `--container <id>` | Scope the rule to one container (default is global). |
+
+Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
+`/foo/..%2fsecret`) can never slip through a wildcard allow.
 
 ---
 
@@ -322,6 +410,9 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/grants` | List active Docker socket grants |
 | PUT | `/api/authz/grants/:container` | Grant Docker access (body: `{ minutes }`) |
 | DELETE | `/api/authz/grants/:container` | Revoke Docker access |
+| GET | `/api/docker/containers/:name/sudo-grant` | Admin-access status (`{ active, until }`) — never returns a password |
+| POST | `/api/docker/containers/:name/sudo-grant` | Grant ephemeral admin access (body: `{ minutes }`); returns the one-time password `{ password, until }` |
+| DELETE | `/api/docker/containers/:name/sudo-grant` | Revoke admin access (locks `noot` immediately) |
 | GET | `/api/authz/docker-actions` | Action catalog (kind, group, label, default) |
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
@@ -428,6 +519,7 @@ There are two ways an `experiment-<nr>` build gets published:
 |---------|----------|
 | `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)). |
 | `huddle init` finds no runtime | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`. |
+| Rancher Desktop not detected | Use **dockerd (moby)** mode (not `containerd`), activate the context with `docker context use rancher-desktop`, verify `docker info` works, then re-run `huddle init --runtime docker`. |
 | Web UI not reachable at `http://localhost:3000` | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host. |
 | Devcontainer can't reach a domain | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`. |
 | JetBrains Gateway doesn't see the container right away | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready. |
@@ -449,6 +541,11 @@ network infrastructure.
 **Does Huddle work with Podman?**
 Yes. `huddle init` automatically detects Docker or Podman; you can force it with
 `--runtime` or the `HUDDLE_RUNTIME` env var.
+
+**Does Huddle work with Rancher Desktop?**
+Yes, in **dockerd (moby)** mode (not `containerd`/`nerdctl`). Huddle auto-detects it
+as Docker and reads the `~/.rd/docker.sock` socket from the active docker context.
+See [Rancher Desktop](#rancher-desktop) under Getting Started.
 
 **Does Huddle intercept HTTPS traffic?**
 HTTP requests are logged in full. HTTPS is tunneled through `CONNECT`; its
