@@ -160,13 +160,9 @@ export function findMarkedNetworks(compose: ComposeDoc): string[] {
  * Throws on hard configuration errors (no/ambiguous marked network); collects
  * softer problems in `warnings`.
  */
-export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): AnalysisResult {
-  const caPath = opts.caPath ?? DEFAULT_CA_PATH;
-  const internalNet = opts.internalNet ?? INTERNAL_NET;
-  const socketDir = opts.socketDir ?? HOST_SOCKET_DIR;
-  const warnings: string[] = [];
-  const blockers: string[] = [];
-
+// Exactly one network must carry the huddle.network label. Zero or more than one
+// is a hard error the operator must resolve before a safe override can be built.
+function resolveMarkedNetwork(compose: ComposeDoc): string {
   const marked = findMarkedNetworks(compose);
   if (marked.length === 0) {
     throw new Error(
@@ -177,22 +173,89 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
   if (marked.length > 1) {
     throw new Error(`Multiple networks marked with \`${HUDDLE_NETWORK_LABEL}\`: ${marked.join(', ')}. Mark exactly one.`);
   }
-  const markedNetwork = marked[0];
+  return marked[0];
+}
 
-  // Pick a key for the injected egress network that collides with NOTHING: not
-  // an existing network, and not the marked network itself (otherwise the two
-  // keys in the service's `networks` map below collapse into one and the egress
-  // net is silently never added). Keep suffixing until it is unique.
+// Pick a key for the injected egress network that collides with NOTHING: not an
+// existing network, and not the marked network itself (otherwise the two keys in
+// the service's `networks` map collapse into one and the egress net is silently
+// never added). Keep suffixing until it is unique.
+function pickHuddleNetKey(compose: ComposeDoc, markedNetwork: string, preferred: string): string {
   const taken = new Set(Object.keys(compose.networks ?? {}));
   taken.add(markedNetwork);
-  let huddleNetKey = opts.huddleNetKey ?? HUDDLE_NET_KEY;
-  if (taken.has(huddleNetKey)) {
+  let key = preferred;
+  if (taken.has(key)) {
     let n = 0;
     do {
-      huddleNetKey = n === 0 ? `${HUDDLE_NET_KEY}-egress` : `${HUDDLE_NET_KEY}-egress-${n}`;
+      key = n === 0 ? `${HUDDLE_NET_KEY}-egress` : `${HUDDLE_NET_KEY}-egress-${n}`;
       n++;
-    } while (taken.has(huddleNetKey));
+    } while (taken.has(key));
   }
+  return key;
+}
+
+interface InjectContext {
+  markedNetwork: string;
+  huddleNetKey: string;
+  caPath: string;
+  socketDir: string;
+  dockerSocket: boolean;
+}
+
+// Build the override entry for a single service: keep it on the marked network,
+// add the Huddle egress network + proxy env, and (with --docker-socket) mount the
+// filtered Docker socket. Any second, non-internal network is flagged as a
+// blocker — it would be an unfiltered route out that bypasses Huddle.
+function buildInjectedService(
+  svc: ComposeService,
+  name: string,
+  compose: ComposeDoc,
+  ctx: InjectContext,
+  warnings: string[],
+  blockers: string[],
+): ComposeService {
+  for (const netKey of serviceNetworkKeys(svc)) {
+    if (netKey === ctx.markedNetwork) continue;
+    const def = (compose.networks?.[netKey] ?? {}) as ComposeNetwork;
+    if (!isTruthy(def.internal)) {
+      blockers.push(
+        `Service "${name}" is also on network "${netKey}", which is not internal. ` +
+          'Remove it or make it internal — a second non-internal network bypasses Huddle.',
+      );
+    }
+  }
+
+  const injected: ComposeService = {
+    // Keep the service on its own network AND add the Huddle egress network.
+    // Map form is robust regardless of Compose's list merge semantics.
+    networks: { [ctx.markedNetwork]: null, [ctx.huddleNetKey]: null },
+    environment: huddleProxyEnv(ctx.caPath, ctx.dockerSocket),
+  };
+
+  if (ctx.dockerSocket) {
+    const cn = svc.container_name;
+    if (!cn) {
+      warnings.push(
+        `Service "${name}" has no \`container_name\`, so the filtered Docker socket cannot be mounted ` +
+          'at a stable path. Set a fixed container_name or drop --docker-socket for this service.',
+      );
+    } else {
+      injected.volumes = [`${ctx.socketDir}/${cn}:/var/run/huddle`];
+    }
+  }
+
+  return injected;
+}
+
+export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): AnalysisResult {
+  const caPath = opts.caPath ?? DEFAULT_CA_PATH;
+  const internalNet = opts.internalNet ?? INTERNAL_NET;
+  const socketDir = opts.socketDir ?? HOST_SOCKET_DIR;
+  const warnings: string[] = [];
+  const blockers: string[] = [];
+
+  const markedNetwork = resolveMarkedNetwork(compose);
+  const huddleNetKey = pickHuddleNetKey(compose, markedNetwork, opts.huddleNetKey ?? HUDDLE_NET_KEY);
 
   // Guardrail: the marked network must be internal, otherwise it already has a
   // route to the internet and would bypass the firewall/proxy.
@@ -212,43 +275,11 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
     warnings.push(`No service is attached to the marked network "${markedNetwork}"; the override wires nothing.`);
   }
 
+  const ctx: InjectContext = { markedNetwork, huddleNetKey, caPath, socketDir, dockerSocket: !!opts.dockerSocket };
   const overrideServices: Record<string, ComposeService> = {};
   for (const name of services) {
     const svc = (compose.services?.[name] ?? {}) as ComposeService;
-
-    // Guardrail: warn if the service also sits on another network that is not
-    // internal — that would be a second, unfiltered route out.
-    for (const netKey of serviceNetworkKeys(svc)) {
-      if (netKey === markedNetwork) continue;
-      const def = (compose.networks?.[netKey] ?? {}) as ComposeNetwork;
-      if (!isTruthy(def.internal)) {
-        blockers.push(
-          `Service "${name}" is also on network "${netKey}", which is not internal. ` +
-            'Remove it or make it internal — a second non-internal network bypasses Huddle.',
-        );
-      }
-    }
-
-    const injected: ComposeService = {
-      // Keep the service on its own network AND add the Huddle egress network.
-      // Map form is robust regardless of Compose's list merge semantics.
-      networks: { [markedNetwork]: null, [huddleNetKey]: null },
-      environment: huddleProxyEnv(caPath, !!opts.dockerSocket),
-    };
-
-    if (opts.dockerSocket) {
-      const cn = svc.container_name;
-      if (!cn) {
-        warnings.push(
-          `Service "${name}" has no \`container_name\`, so the filtered Docker socket cannot be mounted ` +
-            'at a stable path. Set a fixed container_name or drop --docker-socket for this service.',
-        );
-      } else {
-        injected.volumes = [`${socketDir}/${cn}:/var/run/huddle`];
-      }
-    }
-
-    overrideServices[name] = injected;
+    overrideServices[name] = buildInjectedService(svc, name, compose, ctx, warnings, blockers);
   }
 
   const override: ComposeDoc = {

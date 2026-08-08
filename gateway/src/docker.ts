@@ -276,16 +276,23 @@ export async function execContainerOutput(containerId: string, cmd: string[]): P
 // connection into a raw bidirectional stream; stdin goes over that socket and is
 // closed with a half-close (FIN) so the process (chpasswd) sees EOF and stops.
 export async function execInContainer(containerName: string, cmd: string[], stdin: string): Promise<ExecResult> {
-  const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
+  const path = `/containers/${encodeURIComponent(containerName)}/exec`;
+  const execCreate = await dockerRequest('POST', path, execCreateSpec(cmd, stdin));
+  await startExec(execCreate.Id, stdin);
+  return waitForExecExit(execCreate.Id);
+}
+
+// The exec spec for a root, no-shell command. AttachStdin only when there is
+// input to send, so a no-stdin exec never opens a half-closed write side.
+function execCreateSpec(cmd: string[], stdin: string): Record<string, unknown> {
+  return {
     AttachStdin: stdin.length > 0,
     AttachStdout: true,
     AttachStderr: true,
     Tty: false,
     Cmd: cmd,
     User: 'root',
-  });
-  await startExec(execCreate.Id, stdin);
-  return waitForExecExit(execCreate.Id);
+  };
 }
 
 // Fail-closed ceiling for a single exec-start. The sudo commands (chpasswd,

@@ -160,6 +160,10 @@ export class ContainerDetailComponent implements OnInit {
   // comes from the server only once and is never fetched again.
   sudoUntil: number | null = null;
   sudoPassword: string | null = null;
+  // Client-side expiry timer: mirrors the server-side sweep so the "Active" state
+  // and the one-time password clear the instant the grant lapses, even if the page
+  // is left open and idle. Torn down on destroy.
+  private sudoExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   sudoMinutes = 15;
   sudoBusy = false;
   sudoError = '';
@@ -193,14 +197,15 @@ export class ContainerDetailComponent implements OnInit {
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
     this.loadSudoGrant();
+    this.destroyRef.onDestroy(() => this.clearSudoExpiryTimer());
   }
 
   get sudoActive(): boolean { return this.sudoUntil != null && this.sudoUntil > this.nowTs; }
 
   loadSudoGrant(): void {
     this.api.getSudoGrant(this.name).subscribe({
-      next: (g) => { this.sudoUntil = g.active ? g.until : null; },
-      error: () => { this.sudoUntil = null; },
+      next: (g) => { this.setSudoUntil(g.active ? g.until : null); },
+      error: () => { this.setSudoUntil(null); },
     });
   }
 
@@ -211,7 +216,7 @@ export class ContainerDetailComponent implements OnInit {
     this.api.grantSudo(this.name, this.sudoMinutes).subscribe({
       next: (r) => {
         this.sudoBusy = false;
-        this.sudoUntil = r.until;
+        this.setSudoUntil(r.until);
         this.sudoPassword = r.password; // show once
         this.passwordVisible = true;
       },
@@ -223,9 +228,35 @@ export class ContainerDetailComponent implements OnInit {
     this.sudoBusy = true;
     this.sudoError = '';
     this.api.revokeSudo(this.name).subscribe({
-      next: () => { this.sudoBusy = false; this.sudoUntil = null; this.sudoPassword = null; },
+      next: () => { this.sudoBusy = false; this.setSudoUntil(null); this.sudoPassword = null; },
       error: (err) => { this.sudoBusy = false; this.sudoError = err.message; },
     });
+  }
+
+  // Set the grant expiry and (re)arm the client-side timer. When the grant lapses
+  // we drop the active state and wipe the (now server-invalidated) one-time
+  // password from the screen — no manual refresh or poll needed.
+  private setSudoUntil(until: number | null): void {
+    this.sudoUntil = until;
+    this.clearSudoExpiryTimer();
+    if (until == null) return;
+    const ms = (until - this.nowTs) * 1000;
+    if (ms <= 0) { this.expireSudoGrant(); return; }
+    this.sudoExpiryTimer = setTimeout(() => this.expireSudoGrant(), ms);
+  }
+
+  private expireSudoGrant(): void {
+    this.clearSudoExpiryTimer();
+    this.sudoUntil = null;
+    this.sudoPassword = null;
+    this.passwordVisible = false;
+  }
+
+  private clearSudoExpiryTimer(): void {
+    if (this.sudoExpiryTimer != null) {
+      clearTimeout(this.sudoExpiryTimer);
+      this.sudoExpiryTimer = null;
+    }
   }
 
   loadPorts(): void {
