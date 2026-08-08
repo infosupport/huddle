@@ -16,7 +16,7 @@ import { ContainerTerminalComponent } from '../../shared/components/container-te
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
 import { FirewallGroupsPanelComponent } from '../firewall/firewall-groups-panel.component';
-import { BehaviorSubject, skip } from 'rxjs';
+import { BehaviorSubject, skip, forkJoin, Observable } from 'rxjs';
 
 interface DetailData {
   inspect: any;
@@ -314,6 +314,48 @@ export class ContainerDetailComponent implements OnInit {
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
     this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
+  }
+
+  // ── Pending bulk selection & actions (this container's inbox) ────────────────
+  pendingSel = new Set<number>();
+  private pendingIds(requested: Rule[], pathReq: PathRequestRow[]): number[] {
+    return [...requested.map((r) => r.id), ...pathReq.map((p) => p.rule.id)];
+  }
+  pendingChecked(id: number): boolean { return this.pendingSel.has(id); }
+  togglePending(id: number): void {
+    this.pendingSel.has(id) ? this.pendingSel.delete(id) : this.pendingSel.add(id);
+  }
+  pendingAllChecked(requested: Rule[], pathReq: PathRequestRow[]): boolean {
+    const ids = this.pendingIds(requested, pathReq);
+    return ids.length > 0 && ids.every((i) => this.pendingSel.has(i));
+  }
+  togglePendingAll(requested: Rule[], pathReq: PathRequestRow[]): void {
+    const ids = this.pendingIds(requested, pathReq);
+    if (ids.every((i) => this.pendingSel.has(i))) ids.forEach((i) => this.pendingSel.delete(i));
+    else ids.forEach((i) => this.pendingSel.add(i));
+  }
+  pendingSelectedCount(requested: Rule[], pathReq: PathRequestRow[]): number {
+    return this.pendingIds(requested, pathReq).filter((i) => this.pendingSel.has(i)).length;
+  }
+  clearPending(): void { this.pendingSel.clear(); }
+
+  bulkPending(
+    requested: Rule[],
+    pathReq: PathRequestRow[],
+    action: 'allow' | 'deny' | 'allow-global' | 'deny-global' | 'dismiss',
+  ): void {
+    const ids = this.pendingIds(requested, pathReq).filter((i) => this.pendingSel.has(i));
+    if (!ids.length) return;
+    const call = (id: number): Observable<unknown> => {
+      switch (action) {
+        case 'allow':        return this.api.resolveRule(id, 'allow', 'rule');
+        case 'allow-global': return this.api.resolveRule(id, 'allow', 'global');
+        case 'deny':         return this.api.resolveRule(id, 'deny', 'rule');
+        case 'deny-global':  return this.api.resolveRule(id, 'deny', 'global');
+        case 'dismiss':      return this.api.deleteRule(id) as unknown as Observable<unknown>;
+      }
+    };
+    forkJoin(ids.map(call)).subscribe(() => { this.pendingSel.clear(); this.state.loadAll(); this.load(); });
   }
 
   copyPassword(): void {

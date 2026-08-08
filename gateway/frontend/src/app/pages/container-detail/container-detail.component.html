@@ -125,8 +125,24 @@
             <span>No pending requests.</span>
           </div>
         } @else {
+          <div class="req-bulk">
+            <label class="req-bulk__all">
+              <input type="checkbox" [checked]="pendingAllChecked(requested, pathReq)" (change)="togglePendingAll(requested, pathReq)" />
+              Select all
+            </label>
+            @if (pendingSelectedCount(requested, pathReq) > 0) {
+              <span class="req-bulk__n">{{ pendingSelectedCount(requested, pathReq) }} selected</span>
+              <button type="button" class="req-bulk__btn req-bulk__btn--allow" (click)="bulkPending(requested, pathReq, 'allow')">Allow</button>
+              <button type="button" class="req-bulk__btn req-bulk__btn--allow" (click)="bulkPending(requested, pathReq, 'allow-global')">Allow global</button>
+              <button type="button" class="req-bulk__btn req-bulk__btn--deny" (click)="bulkPending(requested, pathReq, 'deny')">Deny</button>
+              <button type="button" class="req-bulk__btn req-bulk__btn--deny" (click)="bulkPending(requested, pathReq, 'deny-global')">Deny global</button>
+              <button type="button" class="req-bulk__btn" (click)="bulkPending(requested, pathReq, 'dismiss')">Dismiss</button>
+              <button type="button" class="req-bulk__btn req-bulk__btn--clear" (click)="clearPending()">Clear</button>
+            }
+          </div>
           @for (r of requested; track r.id) {
-            <div class="req-row">
+            <div class="req-row" [class.is-selected]="pendingChecked(r.id)">
+              <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(r.id)" (change)="togglePending(r.id)" />
               <div class="req-row__icon"><app-icon name="globe" [size]="17" /></div>
               <div class="req-row__info">
                 <div class="req-row__domain">{{ r.domain }}</div>
@@ -141,7 +157,8 @@
           }
           <!-- Path sub-requests from path-mode domains -->
           @for (row of pathReq; track row.rule.id) {
-            <div class="req-row">
+            <div class="req-row" [class.is-selected]="pendingChecked(row.rule.id)">
+              <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(row.rule.id)" (change)="togglePending(row.rule.id)" />
               <div class="req-row__icon req-row__icon--path"><app-icon name="file-text" [size]="17" /></div>
               <div class="req-row__info">
                 <div class="req-row__domain">
