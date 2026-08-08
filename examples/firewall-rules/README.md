@@ -9,7 +9,7 @@ own in Git) and every group loads automatically.
 | File | Group | Kind | Mode |
 |------|-------|------|------|
 | `openai.json`       | OpenAI       | General API — the whole host is the service | Allow |
-| `github.json`       | GitHub       | General dev service — web, API, raw content, downloads, ghcr.io | Allow |
+| `github.json`       | GitHub       | Dependency source — repos/API/raw/codeload/ghcr, per org | **Path mode** |
 | `nodejs.json`       | Node.js      | Dependency downloads — everyone pulls runtimes from `/dist/` | **Path mode** |
 | `npm-registry.json` | NPM Registry | Dependency registry — everyone pulls packages by path | **Path mode** |
 
@@ -17,12 +17,13 @@ own in Git) and every group loads automatically.
 A rule of thumb for writing your own groups:
 
 - **General URL** — you need the *whole host* (an API or app you talk to, e.g.
-  `api.openai.com`, `github.com`). Use a plain **allow**.
-- **Dependency URL** — a shared registry/download host where *everyone fetches
-  their own things by path* (npm, PyPI, NuGet, Maven, a runtime's `/dist/`).
-  Prefer **path mode**: block the host at the root and allow only the specific
-  package/scope paths you need, so a compromised build can't pull arbitrary code
-  from the same host. See `npm-registry.json` and `nodejs.json`.
+  `api.openai.com`). Use a plain **allow**.
+- **Dependency URL** — a shared registry/download/source host where *everyone
+  fetches their own things by path* (npm, PyPI, NuGet, Maven, a runtime's
+  `/dist/`, or GitHub repos/orgs). Prefer **path mode**: block the host at the
+  root and allow only the specific package/scope/org paths you need, so a
+  compromised build can't pull arbitrary code from the same host. See
+  `npm-registry.json`, `nodejs.json` and `github.json` (org-scoped).
 
 ## Use it
 

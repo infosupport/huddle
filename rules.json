@@ -1,0 +1,4670 @@
+{
+  "version": 1,
+  "exported_at": 1785861261,
+  "rules": [
+    {
+      "domain": "*.pkgs.dev.azure.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "172.28.0.4",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "172.28.0.5",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "172.28.0.7",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "account.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "analytics.services.jetbrains.com",
+      "container_id": null,
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.anthropic.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/graphql/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/rate_limit/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/repos/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/repos/infosupport/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/user/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/graphql/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.github.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/user/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "api.jetbrains.ai",
+      "container_id": null,
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "app.aikido.dev",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "download-cdn.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "download.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "downloads.claude.ai",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "downloads.marketplace.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "echo.websocket.events",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "echo.websocket.org",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "elasticsearch",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "example.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "fonts.googleapis.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "frameworks.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/FrankDeGroot/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ThijsBaan/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/WiseLibs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/anthropics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/api/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/infosupport/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/rhysd/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/api/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "github.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/woutersvermeulen-netizen/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "google.be",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "google.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "http-intake.logs.us5.datadoghq.com",
+      "container_id": null,
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "huddle",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "junie.jetbrains.com",
+      "container_id": null,
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "nodejs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "nodejs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/download/release/v24.18.0/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "platform.claude.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "plugins.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "postman-echo.com",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "postman-echo.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/get*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "postman-echo.com",
+      "container_id": "devcontainer-huddle",
+      "status": "requested",
+      "path_pattern": "/headers/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "pypi.org",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/JetBrains/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/anthropics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-isks",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-socialekaart",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": "/anthropics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-trouw",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/JetBrains/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "raw.githubusercontent.com",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/anthropics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/-/npm/v1/security/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@anthropic-ai/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@babel/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@bcoe/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@fastify/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@isaacs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@jridgewell/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@lukeed/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@oxc-project/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@pinojs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@rolldown/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@standard-schema/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@types/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@vitest/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/@web-types/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/abstract-logging/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/adm-zip/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ajv-formats/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ajv/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/assertion-error/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ast-v8-to-istanbul/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/atomic-sleep/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/avvio/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/balanced-match/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/base64-js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/better-sqlite3/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/bindings/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/bl/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/brace-expansion/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/buffer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/chai/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/chownr/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/content-disposition/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/convert-source-map/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/cookie/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/cross-spawn/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/decompress-response/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/deep-extend/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/depd/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/dequal/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/detect-libc/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/end-of-stream/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/es-module-lexer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/escape-html/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/estree-walker/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/expand-template/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/expect-type/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fast-decode-uri-component/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fast-deep-equal/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fast-json-stringify/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fast-querystring/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fast-uri/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fastify-plugin/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fastify/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fastq/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fdir/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/file-uri-to-path/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/find-my-way/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/foreground-child/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/fs-constants/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/github-from-package/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/glob/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/has-flag/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/html-escaper/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/http-errors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ieee754/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/inherits/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ini/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ipaddr.js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/isexe/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/istanbul-lib-coverage/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/istanbul-lib-report/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/istanbul-reports/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/jackspeak/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/js-tokens/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/js-yaml/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/json-schema-ref-resolver/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/json-schema-traverse/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/light-my-request/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/lightningcss-linux-x64-gnu/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/lightningcss-linux-x64-musl/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/lightningcss/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/lru-cache/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/magic-string/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/magicast/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/make-dir/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/mime/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/mimic-response/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/minimatch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/minimist/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/minipass/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/mkdirp-classic/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/nanoid/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/napi-build-utils/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/node-abi/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/node-forge/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/npm/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/obug/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/on-exit-leak-free/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/once/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/package-json-from-dist/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/path-key/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/path-scurry/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/pathe/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/picocolors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/picomatch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/pino-abstract-transport/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/pino-std-serializers/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/pino/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/postcss/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/prebuild-install/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/process-warning/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/pump/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/quick-format-unescaped/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/rc/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/readable-stream/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/real-require/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/require-from-string/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ret/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/reusify/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/rfdc/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/rolldown/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/safe-buffer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/safe-regex2/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/safe-stable-stringify/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/secure-json-parse/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/semver/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/set-cookie-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/setprototypeof/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/shebang-command/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/shebang-regex/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/siginfo/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/signal-exit/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/simple-concat/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/simple-get/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/sonic-boom/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/source-map-js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/split2/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/stackback/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/statuses/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/std-env/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/string_decoder/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/strip-json-comments/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/supports-color/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tar-fs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tar-stream/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/thread-stream/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tinybench/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tinyexec/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tinyglobby/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tinyrainbow/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/toad-cache/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/toidentifier/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tsc",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/tunnel-agent/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/typescript/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/undici-types/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/util-deprecate/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/vite/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/vitest/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/which/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/why-is-node-running/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/wrappy/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/ws/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-isks",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-socialekaart",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": "/@anthropic-ai/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/-/npm/v1/security/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@acemir/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@algolia/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@ampproject/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@angular-devkit/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@angular/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@anthropic-ai/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@asamuzakjp/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@babel/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@csstools/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@esbuild/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@exodus/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@hono/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@inquirer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@isaacs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@istanbuljs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@jridgewell/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@listr2/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@lmdb/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@modelcontextprotocol/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@msgpackr-extract/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@napi-rs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@npmcli/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@oxc-project/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@parcel/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@rolldown/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@rollup/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@schematics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@sigstore/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@standard-schema/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@tufjs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@types/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@vitejs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@vitest/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/@yarnpkg/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/abbrev/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/accepts/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/agent-base/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ajv-formats/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ajv/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/algoliasearch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ansi-escapes/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ansi-regex/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ansi-styles/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/assertion-error/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/baseline-browser-mapping/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/beasties/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/bidi-js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/body-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/boolbase/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/browserslist/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/buffer-from/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/bytes/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cacache/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/call-bind-apply-helpers/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/call-bound/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/caniuse-lite/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/chai/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/chalk/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/chardet/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/chokidar/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/chownr/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cli-cursor/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cli-spinners/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cli-truncate/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cli-width/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cliui/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/color-convert/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/color-name/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/colorette/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/content-disposition/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/content-type/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/convert-source-map/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cookie-signature/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cookie/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cross-spawn/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/css-select/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/css-tree/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/css-what/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/cssstyle/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/data-urls/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/debug/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/decimal.js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/depd/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/detect-libc/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/dom-serializer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/domelementtype/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/domhandler/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/domutils/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/dunder-proto/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ee-first/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/electron-to-chromium/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/emoji-regex/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/encodeurl/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/encoding/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/entities/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/env-paths/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/environment/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/err-code/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/es-define-property/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/es-errors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/es-module-lexer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/es-object-atoms/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/esbuild/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/escalade/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/escape-html/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/estree-walker/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/etag/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/eventemitter3/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/eventsource-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/eventsource/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/expect-type/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/exponential-backoff/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/express-rate-limit/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/express/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/fast-deep-equal/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/fast-uri/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/fdir/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/finalhandler/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/forwarded/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/fresh/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/fs-minipass/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/function-bind/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/gensync/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/get-caller-file/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/get-east-asian-width/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/get-intrinsic/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/get-proto/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/glob-to-regexp/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/glob/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/gopd/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/graceful-fs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/has-symbols/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/hasown/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/hono/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/hosted-git-info/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/html-encoding-sniffer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/htmlparser2/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/http-cache-semantics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/http-errors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/http-proxy-agent/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/https-proxy-agent/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/iconv-lite/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ignore-walk/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/immutable/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/imurmurhash/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/inherits/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ini/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ip-address/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ipaddr.js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-core-module/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-extglob/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-fullwidth-code-point/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-glob/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-interactive/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-potential-custom-element-name/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-promise/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/is-unicode-supported/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/isexe/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/istanbul-lib-coverage/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/istanbul-lib-instrument/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/jose/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/js-tokens/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/jsdom/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/jsesc/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/json-parse-even-better-errors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/json-schema-traverse/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/json-schema-typed/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/json5/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/jsonc-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/jsonparse/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/listr2/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/lmdb/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/log-symbols/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/log-update/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/lru-cache/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/magic-string/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/make-fetch-happen/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/math-intrinsics/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/mdn-data/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/media-typer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/merge-descriptors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/mime-db/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/mime-types/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/mimic-function/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minimatch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minipass-collect/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minipass-fetch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minipass-flush/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minipass-pipeline/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minipass-sized/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minipass/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/minizlib/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/mrmime/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ms/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/msgpackr-extract/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/msgpackr/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/mute-stream/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/nanoid/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/negotiator/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/node-addon-api/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/node-gyp-build-optional-packages/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/node-gyp/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/node-releases/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/nopt/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-bundled/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-install-checks/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-normalize-package-bin/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-package-arg/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-packlist/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-pick-manifest/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/npm-registry-fetch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/nth-check/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/object-assign/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/object-inspect/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/obug/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/on-finished/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/once/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/onetime/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ora/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ordered-binary/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/p-map/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/pacote/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/parse5-html-rewriting-stream/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/parse5-sax-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/parse5/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/parseurl/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/path-key/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/path-parse/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/path-scurry/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/path-to-regexp/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/pathe/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/picocolors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/picomatch/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/piscina/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/pkce-challenge/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/postcss-media-query-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/postcss/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/proc-log/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/promise-retry/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/proxy-addr/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/punycode/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/qs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/range-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/raw-body/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/readdirp/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/reflect-metadata/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/require-from-string/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/resolve/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/restore-cursor/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/retry/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/rfdc/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/rolldown/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/rollup/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/router/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/rxjs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/safer-buffer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/sass/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/saxes/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/semver/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/send/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/serve-static/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/setprototypeof/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/shebang-command/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/shebang-regex/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/side-channel-list/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/side-channel-map/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/side-channel-weakmap/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/side-channel/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/siginfo/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/signal-exit/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/sigstore/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/slice-ansi/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/smart-buffer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/socks-proxy-agent/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/socks/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/source-map-js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/source-map-support/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/source-map/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/spdx-correct/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/spdx-exceptions/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/spdx-expression-parse/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/spdx-license-ids/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ssri/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/stackback/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/statuses/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/std-env/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/stdin-discarder/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/string-width/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/strip-ansi/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/supports-preserve-symlinks-flag/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/symbol-tree/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tar/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tinybench/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tinyexec/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tinyglobby/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tinyrainbow/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tldts-core/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tldts/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/toidentifier/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tough-cookie/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tr46/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tslib/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/tuf-js/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/type-is/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/typescript/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/undici/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/unique-filename/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/unique-slug/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/unpipe/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/update-browserslist-db/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/validate-npm-package-license/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/validate-npm-package-name/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/vary/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/vite/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/vitest/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/w3c-xmlserializer/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/watchpack/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/weak-lru-cache/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/webidl-conversions/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/whatwg-mimetype/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/whatwg-url/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/which/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/why-is-node-running/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/wrap-ansi/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/wrappy/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/ws/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/xml-name-validator/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/xmlchars/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/y18n/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/yallist/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/yargs-parser/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/yargs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/yoctocolors-cjs/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/yoctocolors/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/zod-to-json-schema/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouw",
+      "status": "allow",
+      "path_pattern": "/zod/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/@anthropic-ai/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "registry.npmjs.org",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "allow",
+      "path_pattern": "/jszip",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "release-assets.githubusercontent.com",
+      "container_id": "devcontainer-huddle",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "release-assets.githubusercontent.com",
+      "container_id": "devcontainer-huddle",
+      "status": "allow",
+      "path_pattern": "/github-production-release-asset/*",
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "repo.maven.apache.org",
+      "container_id": "devcontainer-trouw",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "resources.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "schemastore.org",
+      "container_id": "devcontainer-isks",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "schemastore.org",
+      "container_id": "devcontainer-trouwapplicatie",
+      "status": "deny",
+      "path_pattern": null,
+      "path_mode": 1,
+      "expires_at": null
+    },
+    {
+      "domain": "socialekaart-postgres",
+      "container_id": "devcontainer-socialekaart",
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "updates-check.europe-west1-gke.intellij.net",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "vulnerability-search.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    },
+    {
+      "domain": "www.jetbrains.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    }
+  ]
+}
