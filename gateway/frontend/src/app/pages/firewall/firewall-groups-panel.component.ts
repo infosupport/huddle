@@ -35,7 +35,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
           </div>
           <div class="grp__actions">
             <button type="button" class="btn btn-ghost" (click)="importInput.click()"><app-icon name="upload" [size]="15" /> Import</button>
-            <button type="button" class="btn btn-ghost" [disabled]="!selectedGroup()" (click)="exportSelected()"><app-icon name="download" [size]="15" /> Export</button>
+            <button type="button" class="btn btn-ghost" (click)="exportSelected()"><app-icon name="download" [size]="15" /> Export</button>
             <button type="button" class="btn btn-ghost" [class.on]="showAdd()" (click)="showAdd.set(!showAdd())"><app-icon name="plus" [size]="15" /> Add rule</button>
             <button type="button" class="btn btn--accent" (click)="startCreate()"><app-icon name="layers" [size]="15" /> New group</button>
             <input #importInput type="file" accept="application/json,.json" hidden (change)="onImportFile($event)" />
@@ -506,20 +506,26 @@ export class FirewallGroupsPanelComponent implements OnInit {
     });
   }
 
+  // Top-bar Export. With a group selected it exports that group (server envelope,
+  // incl. path sub-paths). With no group ("All rules"/"Ungrouped") it exports the
+  // current view — so exporting is never blocked just because nothing is grouped.
   exportSelected(): void {
     const g = this.selectedGroup();
-    if (!g) return;
-    this.api.exportGroup(g.id).subscribe({
-      next: (doc) => {
-        const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `huddle-group-${g.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`;
-        a.click(); URL.revokeObjectURL(url);
-        this.note.set(`Exported "${g.name}"`);
-      },
-      error: (e) => this.note.set(e.message),
-    });
+    if (g) {
+      this.api.exportGroup(g.id).subscribe({
+        next: (doc) => {
+          this.download(doc, `huddle-group-${g.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`);
+          this.note.set(`Exported "${g.name}"`);
+        },
+        error: (e) => this.note.set(e.message),
+      });
+      return;
+    }
+    const rows = this.rows();
+    if (!rows.length) { this.note.set('Nothing to export in this view.'); return; }
+    const label = this.selectedId() === 'ungrouped' ? 'ungrouped' : 'all';
+    this.download(this.rulesEnvelope(rows), `huddle-firewall-rules-${label}-${new Date().toISOString().slice(0, 10)}.json`);
+    this.note.set(`Exported ${rows.length} rule(s)`);
   }
 
   onImportFile(event: Event): void {
@@ -620,6 +626,15 @@ export class FirewallGroupsPanelComponent implements OnInit {
   bulkExport(): void {
     const rows = this.selectedRows();
     if (!rows.length) return;
+    const doc = this.rulesEnvelope(rows);
+    this.download(doc, `huddle-firewall-rules-${new Date().toISOString().slice(0, 10)}.json`);
+    this.note.set(`Exported ${doc.rules.length} rule(s)`);
+  }
+
+  // Build the flat rules envelope from a set of domain rows. For a path-mode
+  // domain its allowed sub-paths are pulled in too, so the export is
+  // self-contained (otherwise the domain re-imports blocked at the root).
+  private rulesEnvelope(rows: Rule[]): { version: number; exported_at: number; rules: unknown[] } {
     const byId = new Map<number, Rule>();
     for (const r of rows) {
       byId.set(r.id, r);
@@ -633,11 +648,7 @@ export class FirewallGroupsPanelComponent implements OnInit {
       path_mode: r.path_mode ?? 0,
       expires_at: r.expires_at ?? null,
     }));
-    this.download(
-      { version: 1, exported_at: Math.floor(Date.now() / 1000), rules },
-      `huddle-firewall-rules-${new Date().toISOString().slice(0, 10)}.json`,
-    );
-    this.note.set(`Exported ${rules.length} rule(s)`);
+    return { version: 1, exported_at: Math.floor(Date.now() / 1000), rules };
   }
 
   private download(doc: unknown, filename: string): void {
