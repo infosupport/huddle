@@ -1,4 +1,4 @@
-import { execSync, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
@@ -28,25 +28,21 @@ export interface InitOptions {
   runtime?: string;
 }
 
-function run(cmd: string): void {
-  execSync(cmd, { stdio: 'inherit' });
-}
-
-function runSilent(cmd: string): boolean {
-  try {
-    execSync(cmd, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Run a binary with an argv array — NO shell. Values that originate from config
 // (team-folder paths, which are writable via `huddle firewall folder set` and the
 // authenticated settings API) must never be interpolated into a shell string, or
 // a path containing `$()`/quotes would execute on the host. Used for `docker run`.
 function runArgs(file: string, args: string[]): void {
   execFileSync(file, args, { stdio: 'inherit' });
+}
+
+function runArgsSilent(file: string, args: string[]): boolean {
+  try {
+    execFileSync(file, args, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -60,7 +56,7 @@ function pullBaseImages(rt: string, images: string[]): void {
   for (const image of images) {
     console.log(dim(`  Pulling ${image}`));
     try {
-      run(`${rt} pull ${image}`);
+      runArgs(rt, ['pull', image]);
     } catch {
       failed.push(image);
       console.log(yellow(`  [!] Could not pull ${image} — the gateway will build it later if needed.`));
@@ -92,18 +88,18 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     console.log(dim(`HUDDLE_NO_PULL=1 → skipping pull, using local image ${IMAGE}`));
   } else {
     console.log(dim(`Pulling ${IMAGE}`));
-    run(`${rt} pull ${IMAGE}`);
+    runArgs(rt, ['pull', IMAGE]);
     pullBaseImages(rt, images.baseImages.map((b) => b.image));
   }
 
   console.log(dim(`Volume: ${VOLUME}`));
-  runSilent(`${rt} volume inspect ${VOLUME}`) || run(`${rt} volume create ${VOLUME}`);
+  runArgsSilent(rt, ['volume', 'inspect', VOLUME]) || runArgs(rt, ['volume', 'create', VOLUME]);
 
   console.log(dim(`Network: ${INTERNAL_NET}`));
-  runSilent(`${rt} network inspect ${INTERNAL_NET}`) || run(`${rt} network create --internal ${INTERNAL_NET}`);
+  runArgsSilent(rt, ['network', 'inspect', INTERNAL_NET]) || runArgs(rt, ['network', 'create', '--internal', INTERNAL_NET]);
 
   console.log(dim(`Removing old container if it exists`));
-  runSilent(`${rt} rm -f ${CONTAINER}`);
+  runArgsSilent(rt, ['rm', '-f', CONTAINER]);
 
   console.log(dim(`Socket directory: /tmp/dc-sockets`));
   // The mount SOURCE must be the path on the Docker ENGINE host (on Windows:
@@ -119,7 +115,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
       // Desktop) and fails with "statfs: no such file or directory". So create
       // the directory explicitly in the machine VM; the socket lives there too.
       console.log(dim(`  (Podman: creating ${hostTmpSockets} in the machine VM)`));
-      if (!runSilent(`podman machine ssh "mkdir -p ${hostTmpSockets}"`)) {
+      if (!runArgsSilent('podman', ['machine', 'ssh', `mkdir -p ${hostTmpSockets}`])) {
         console.log(yellow(`[!] Could not create ${hostTmpSockets} in the Podman VM.`));
       }
     } else {
@@ -188,7 +184,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // resolv.conf on Podman with that network's internal aardvark-DNS; the
   // gateway cleans that up itself (see dns-egress.ts / the startup sanitize in
   // index.ts).
-  runSilent(`${rt} network connect ${INTERNAL_NET} ${CONTAINER}`);
+  runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
