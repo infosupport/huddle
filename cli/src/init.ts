@@ -1,8 +1,8 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import crypto from 'crypto';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
-import { ResolvedImages, gatewayEnvFlags } from './images';
+import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, writeConfig, CONFIG_DIR } from './config';
 import fs from 'fs';
 
@@ -39,6 +39,14 @@ function runSilent(cmd: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Run a binary with an argv array — NO shell. Values that originate from config
+// (team-folder paths, which are writable via `huddle firewall folder set` and the
+// authenticated settings API) must never be interpolated into a shell string, or
+// a path containing `$()`/quotes would execute on the host. Used for `docker run`.
+function runArgs(file: string, args: string[]): void {
+  execFileSync(file, args, { stdio: 'inherit' });
 }
 
 /**
@@ -130,8 +138,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // The gateway is engine-agnostic (talks the Docker-compatible API on the
   // mounted socket), but does need to know it's Podman: it then sets
   // `--security-opt label=disable` on every devcontainer so it can reach the
-  // SELinux-labeled proxy socket.
-  const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
+  // SELinux-labeled proxy socket. (Applied as argv below via runtime.securityOpts.)
 
   // Operator token for control-plane auth. Reuse the token from the config (so an
   // existing browser session/CLI keeps working across re-inits), otherwise
@@ -157,28 +164,25 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // path so the gateway reads it without knowing the host path. Read-only.
   const fwFolder = cfg.firewallRulesFolder?.trim();
   const extFolder = cfg.extensionsFolder?.trim();
-  const homeMountFlag = ` -v "${CONFIG_DIR}:/huddle-home:rw" -e HUDDLE_HOME_DIR=/huddle-home`;
-  const fwMountFlag = fwFolder ? ` -v "${fwFolder}:/firewall-rules:ro"` : '';
-  const extMountFlag = extFolder ? ` -v "${extFolder}:/extensions:ro"` : '';
   if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
   if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
-  run(
-    `${rt} run -d` +
-    ` --name ${CONTAINER}` +
-    ` --network ${runtime.defaultNetwork}` +
-    securityOptFlags +
-    ` -e HUDDLE_RUNTIME=${runtime.name}` +
-    ` -e HUDDLE_OPERATOR_TOKEN=${operatorToken}` +
-    ` -p ${HOST_PORT}:3000` +
-    ` -v ${VOLUME}:/data` +
-    ` -v "${runtime.socketPath}:/var/run/docker.sock"` +
-    ` -v "${hostTmpSockets}:/tmp/dc-sockets"` +
-    homeMountFlag +
-    fwMountFlag +
-    extMountFlag +
-    gatewayEnvFlags(images) +
-    ` ${IMAGE}`,
-  );
+  // Build the container command as an argv array (runArgs → execFileSync, no
+  // shell). The folder paths below come from config and are operator-writable via
+  // the settings API, so they must never reach a shell as a string.
+  const dockerArgs: string[] = ['run', '-d', '--name', CONTAINER, '--network', runtime.defaultNetwork];
+  for (const opt of runtime.securityOpts) dockerArgs.push('--security-opt', opt);
+  dockerArgs.push('-e', `HUDDLE_RUNTIME=${runtime.name}`);
+  dockerArgs.push('-e', `HUDDLE_OPERATOR_TOKEN=${operatorToken}`);
+  dockerArgs.push('-p', `${HOST_PORT}:3000`);
+  dockerArgs.push('-v', `${VOLUME}:/data`);
+  dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
+  dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
+  dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
+  if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:ro`);
+  if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
+  dockerArgs.push(...gatewayEnvArgs(images));
+  dockerArgs.push(IMAGE);
+  runArgs(rt, dockerArgs);
 
   // Attaching devcontainer-net after the container has started pollutes
   // resolv.conf on Podman with that network's internal aardvark-DNS; the

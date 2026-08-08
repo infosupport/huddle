@@ -624,7 +624,10 @@ export class FirewallGroupsPanelComponent implements OnInit {
     const rows = this.selectedRows().filter((r) => !this.isPath(r));
     if (!rows.length) { this.note.set('No allow/deny rows selected to flip.'); return; }
     this.bulkRun(
-      rows.map((r) => this.api.updateRule(r.id, r.status === 'allow' ? 'deny' : 'allow')),
+      // Preserve each rule's existing expiry — omitting it makes the backend
+      // default expires_at to null, which would silently turn a temporary rule
+      // into a permanent one when flipped.
+      rows.map((r) => this.api.updateRule(r.id, r.status === 'allow' ? 'deny' : 'allow', r.expires_at ?? undefined)),
       `Flipped ${rows.length} rule(s)`,
     );
   }

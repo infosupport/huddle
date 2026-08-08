@@ -553,8 +553,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const runImport = db.transaction(() => {
       if (mode === 'replace') {
         // 'replace' replaces exactly the scopes we are importing (global and/or
-        // specific containers), not the whole table.
-        const scopes = new Set(effective.map((r) => r.container_id));
+        // specific containers), not the whole table. When an explicit ?container
+        // scope override is given, delete THAT scope even if the document is
+        // empty — otherwise importing an empty ruleset to clear a scope would
+        // delete nothing and 'replace' would silently fail open.
+        const scopes: Set<string | null> =
+          scopeOverride !== undefined
+            ? new Set<string | null>([scopeOverride])
+            : new Set<string | null>(effective.map((r) => r.container_id));
         for (const s of scopes) {
           if (s === null) db.prepare(`DELETE FROM rules WHERE container_id IS NULL`).run();
           else db.prepare(`DELETE FROM rules WHERE container_id = ?`).run(s);
@@ -576,6 +582,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
           insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode);
           imported++;
         }
+      }
+      // A path-scoped rule is inert over HTTPS unless its domain is in path-mode
+      // (finding #6a): establish the host-only path_mode=1 marker for every
+      // (domain, container) that received a path rule, exactly as the single-rule
+      // create path does — otherwise imported path rules are denied at CONNECT.
+      const markered = new Set<string>();
+      for (const r of effective) {
+        if (!r.path_pattern) continue;
+        const mk = `${r.domain.toLowerCase()}\n${r.container_id ?? ''}`;
+        if (markered.has(mk)) continue;
+        markered.add(mk);
+        ensurePathModeMarker(r.domain, r.container_id);
       }
     });
 
@@ -1214,8 +1232,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // firewall-rules-folder endpoint, so startup does not print it.
   try {
     reloadFirewallRulesFolder();
-  } catch {
-    // best-effort startup load; a failure is reflected in the folder-status endpoint
+  } catch (err) {
+    // best-effort startup load; the live folder status is also surfaced on demand
+    // via the folder-status endpoint, but surface the failure in the logs too.
+    console.warn(`[firewall] startup folder reload failed: ${(err as Error).message}`);
   }
 
   // Serve an extension's static frontend assets from

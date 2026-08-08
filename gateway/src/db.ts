@@ -595,7 +595,9 @@ export function listGroups(): FirewallGroupWithCount[] {
 }
 
 export function getGroup(id: number): FirewallGroup | undefined {
-  return db.prepare('SELECT * FROM firewall_groups WHERE id = ?').get(id) as FirewallGroup | undefined;
+  return db.prepare(
+    'SELECT id, name, description, shared, source, created_at, updated_at FROM firewall_groups WHERE id = ?'
+  ).get(id) as FirewallGroup | undefined;
 }
 
 export function getGroupByName(name: string): FirewallGroup | undefined {

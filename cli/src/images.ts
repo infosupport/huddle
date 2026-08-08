@@ -44,13 +44,17 @@ export function resolveImages(): ResolvedImages {
 }
 
 /**
- * `-e` flags for the gateway container. During an experiment (or with an
- * explicit override) the gateway must start devcontainers from the same
- * base images the CLI just pulled.
+ * `-e KEY=val` argv pairs for the gateway container. During an experiment (or
+ * with an explicit override) the gateway must start devcontainers from the same
+ * base images the CLI just pulled. Returned as an argv array (not a shell
+ * string) so init can spawn `docker run` without a shell.
  */
-export function gatewayEnvFlags(resolved: ResolvedImages): string {
-  return resolved.baseImages
-    .filter((b) => b.gatewayEnv && (resolved.experiment !== undefined || process.env[b.gatewayEnv]))
-    .map((b) => ` -e ${b.gatewayEnv}=${b.image}`)
-    .join('');
+export function gatewayEnvArgs(resolved: ResolvedImages): string[] {
+  const args: string[] = [];
+  for (const b of resolved.baseImages) {
+    if (b.gatewayEnv && (resolved.experiment !== undefined || process.env[b.gatewayEnv])) {
+      args.push('-e', `${b.gatewayEnv}=${b.image}`);
+    }
+  }
+  return args;
 }
