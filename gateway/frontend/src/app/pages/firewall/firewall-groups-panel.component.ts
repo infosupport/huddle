@@ -149,7 +149,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                   <th class="grp__chk"><input type="checkbox" [checked]="allVisibleSelected()" (change)="toggleSelectAll()" title="Select all" /></th>
                   <th class="grp__col-dom">Domain / path</th>
                   <th class="grp__col-pm">Path mode</th>
-                  <th class="grp__col-match">Match</th>
                   <th class="grp__col-act">Actions</th>
                   <th class="grp__col-grp">Group</th>
                   <th class="grp__col-menu"></th>
@@ -171,7 +170,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                         </button>
                       }
                     </td>
-                    <td class="grp__match">Root</td>
                     <td class="grp__act">
                       @if (isPath(r)) {
                         <span class="pill pill--path">Path mode</span>
@@ -199,7 +197,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                   </tr>
                   @if (isPath(r) && expanded() === r.id) {
                     <tr class="grp__paths-row">
-                      <td colspan="7">
+                      <td colspan="6">
                         <div class="grp__paths">
                           <div class="grp__paths-head">Allowed paths</div>
                           @for (p of allowedPaths(r); track p.id) {
@@ -219,7 +217,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                     </tr>
                   }
                 } @empty {
-                  <tr><td colspan="7" class="grp__empty">No rules here yet.</td></tr>
+                  <tr><td colspan="6" class="grp__empty">No rules here yet.</td></tr>
                 }
               </tbody>
             </table>
@@ -288,7 +286,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__table-wrap { overflow-x: auto; }
     .grp__table { width: 100%; table-layout: fixed; }
     .grp__col-pm { width: 168px; }
-    .grp__col-match { width: 72px; }
     .grp__col-act { width: 104px; }
     .grp__col-grp { width: 128px; }
     .grp__col-menu { width: 40px; }
@@ -297,7 +294,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__chk input { cursor: pointer; }
     .grp__tr--sel > td { background: var(--accent-soft); }
     .grp__dom { font-family: 'Space Grotesk', monospace; white-space: nowrap; }
-    .grp__match { color: var(--text-muted); font-size: 0.85em; }
     .grp__pm { white-space: nowrap; }
     .grp__pm-sel { max-width: 130px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
     .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
