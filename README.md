@@ -13,7 +13,10 @@ Huddle is a security gateway that shields devcontainers from the external networ
 Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a shielded environment. Execution is isolated; the portal stays in control of what goes in and out.
 
 <p align="center">
-  <img src="docs/images/huddle-portal.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-portal-dark.png">
+    <img src="docs/images/huddle-portal-light.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
+  </picture>
 </p>
 
 ## 🚀 Quick start
@@ -43,7 +46,10 @@ Huddle addresses two major risks of modern, AI-assisted development:
 - **Developing safely *against* AI-amplified attacks** — supply-chain attacks are getting smarter, faster, and multi-stage. Huddle intercepts outbound traffic and blocks anything that isn't explicitly allowed.
 
 <p align="center">
-  <img src="docs/images/huddle-risks.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-risks-dark.png">
+    <img src="docs/images/huddle-risks-light.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+  </picture>
 </p>
 
 ## Architecture
@@ -68,7 +74,10 @@ Two servers run in the same process:
 | API + UI | 3000 | REST API, Angular frontend, WebSocket push |
 
 <p align="center">
-  <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-gateway-dark.png">
+    <img src="docs/images/huddle-gateway-light.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
+  </picture>
 </p>
 
 ### Three security principles
