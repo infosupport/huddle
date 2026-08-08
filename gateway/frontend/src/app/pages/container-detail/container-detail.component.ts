@@ -316,46 +316,67 @@ export class ContainerDetailComponent implements OnInit {
     this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
   }
 
-  // ── Pending bulk selection & actions (this container's inbox) ────────────────
+  // ── Pending selection (per section: domain requests vs path requests) ────────
   pendingSel = new Set<number>();
-  private pendingIds(requested: Rule[], pathReq: PathRequestRow[]): number[] {
-    return [...requested.map((r) => r.id), ...pathReq.map((p) => p.rule.id)];
-  }
   pendingChecked(id: number): boolean { return this.pendingSel.has(id); }
   togglePending(id: number): void {
     this.pendingSel.has(id) ? this.pendingSel.delete(id) : this.pendingSel.add(id);
   }
-  pendingAllChecked(requested: Rule[], pathReq: PathRequestRow[]): boolean {
-    const ids = this.pendingIds(requested, pathReq);
-    return ids.length > 0 && ids.every((i) => this.pendingSel.has(i));
-  }
-  togglePendingAll(requested: Rule[], pathReq: PathRequestRow[]): void {
-    const ids = this.pendingIds(requested, pathReq);
+  private allChecked(ids: number[]): boolean { return ids.length > 0 && ids.every((i) => this.pendingSel.has(i)); }
+  private toggleAll(ids: number[]): void {
     if (ids.every((i) => this.pendingSel.has(i))) ids.forEach((i) => this.pendingSel.delete(i));
     else ids.forEach((i) => this.pendingSel.add(i));
   }
-  pendingSelectedCount(requested: Rule[], pathReq: PathRequestRow[]): number {
-    return this.pendingIds(requested, pathReq).filter((i) => this.pendingSel.has(i)).length;
-  }
-  clearPending(): void { this.pendingSel.clear(); }
+  private selectedCount(ids: number[]): number { return ids.filter((i) => this.pendingSel.has(i)).length; }
 
-  bulkPending(
-    requested: Rule[],
-    pathReq: PathRequestRow[],
-    action: 'allow' | 'deny' | 'allow-global' | 'deny-global' | 'dismiss',
-  ): void {
-    const ids = this.pendingIds(requested, pathReq).filter((i) => this.pendingSel.has(i));
-    if (!ids.length) return;
-    const call = (id: number): Observable<unknown> => {
-      switch (action) {
-        case 'allow':        return this.api.resolveRule(id, 'allow', 'rule');
-        case 'allow-global': return this.api.resolveRule(id, 'allow', 'global');
-        case 'deny':         return this.api.resolveRule(id, 'deny', 'rule');
-        case 'deny-global':  return this.api.resolveRule(id, 'deny', 'global');
-        case 'dismiss':      return this.api.deleteRule(id) as unknown as Observable<unknown>;
+  domainAllChecked(rs: Rule[]): boolean { return this.allChecked(rs.map((r) => r.id)); }
+  toggleDomainAll(rs: Rule[]): void { this.toggleAll(rs.map((r) => r.id)); }
+  domainSelectedCount(rs: Rule[]): number { return this.selectedCount(rs.map((r) => r.id)); }
+  pathAllChecked(rows: PathRequestRow[]): boolean { return this.allChecked(rows.map((p) => p.rule.id)); }
+  togglePathAll(rows: PathRequestRow[]): void { this.toggleAll(rows.map((p) => p.rule.id)); }
+  pathSelectedCount(rows: PathRequestRow[]): number { return this.selectedCount(rows.map((p) => p.rule.id)); }
+
+  private afterBulk(ids: number[]): void {
+    ids.forEach((i) => this.pendingSel.delete(i));
+    this.state.loadAll();
+    this.load();
+  }
+
+  // Bulk pie for domain requests — same config/actions as a single row (pieConfig).
+  onBulkPie(actionId: string, requested: Rule[]): void {
+    const rules = requested.filter((r) => this.pendingSel.has(r.id));
+    if (!rules.length) return;
+    const now = Math.floor(Date.now() / 1000);
+    const call = (r: Rule): Observable<unknown> => {
+      switch (actionId) {
+        case 'approve':     return this.api.resolveRule(r.id, 'allow', 'rule');
+        case 'approve-all': return this.api.resolveRule(r.id, 'allow', 'global');
+        case 'temp':        return this.api.resolveRule(r.id, 'allow', 'rule', now + 5 * 60);
+        case 'temp-10':     return this.api.resolveRule(r.id, 'allow', 'rule', now + 10 * 60);
+        case 'later':       return this.api.deleteRule(r.id) as unknown as Observable<unknown>;
+        case 'deny':        return this.api.resolveRule(r.id, 'deny', 'rule');
+        case 'deny-all':    return this.api.resolveRule(r.id, 'deny', 'global');
+        case 'pathmode':    return this.api.setPathMode(r.id, true);
+        default:            return this.api.resolveRule(r.id, 'allow', 'rule');
       }
     };
-    forkJoin(ids.map(call)).subscribe(() => { this.pendingSel.clear(); this.state.loadAll(); this.load(); });
+    forkJoin(rules.map(call)).subscribe(() => this.afterBulk(rules.map((r) => r.id)));
+  }
+
+  // Bulk pie for path sub-requests — mirrors pieConfigPath / onPathPieAction.
+  onBulkPathPie(actionId: string, pathReq: PathRequestRow[]): void {
+    const rows = pathReq.filter((p) => this.pendingSel.has(p.rule.id));
+    if (!rows.length) return;
+    const call = (row: PathRequestRow): Observable<unknown> => {
+      switch (actionId) {
+        case 'path-allow':  return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);
+        case 'path-prefix': return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, this.toPrefix(row.path_pattern));
+        case 'path-deny':   return this.api.resolveRule(row.rule.id, 'deny', 'rule', undefined, row.path_pattern);
+        case 'path-later':  return this.api.deleteRule(row.rule.id) as unknown as Observable<unknown>;
+        default:            return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);
+      }
+    };
+    forkJoin(rows.map(call)).subscribe(() => this.afterBulk(rows.map((p) => p.rule.id)));
   }
 
   copyPassword(): void {
