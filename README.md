@@ -16,6 +16,25 @@ Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a s
   <img src="docs/images/huddle-portal.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
 </p>
 
+## 🚀 Quick start
+
+> **Requirements:** Docker or Podman and Node.js 18+. Huddle's packages are public — no GitHub token or registry login needed.
+
+```bash
+# 1 — install the CLI
+npm install -g @infosupport/huddle-cli
+
+# 2 — start Huddle (pulls the image, auto-detects Docker/Podman)
+huddle init            # portal → http://localhost:3000
+
+# 3 — launch a devcontainer from your project directory
+huddle                 # IntelliJ (default) · --ide vscode · --ide rider
+```
+
+Open **http://localhost:3000** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
+
+---
+
 ## Why Huddle?
 
 Huddle addresses two major risks of modern, AI-assisted development:
