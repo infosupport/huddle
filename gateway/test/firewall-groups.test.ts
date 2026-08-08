@@ -98,7 +98,9 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     expect(again.applied).toBe(0);
     expect(again.updated).toBe(2);
     const scoped = dbMod.db.prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-x'").get() as { n: number };
-    expect(scoped.n).toBe(2);
+    // 2 applied members + the host-only path-mode marker auto-established for
+    // files.openai.com (its rule is path-scoped), so it is admitted over HTTPS.
+    expect(scoped.n).toBe(3);
   });
 
   it('export/apply of a path-mode group include its ungrouped allowed sub-paths', () => {

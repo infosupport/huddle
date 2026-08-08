@@ -20,6 +20,7 @@ import {
   type FirewallGroup,
 } from './db';
 import { notifyStateChanged } from './events';
+import { ensurePathModeMarker } from './rules';
 
 export const GROUP_ENVELOPE_VERSION = 1;
 export const GROUP_ENVELOPE_KIND = 'huddle-firewall-group';
@@ -228,6 +229,18 @@ export function importGroupEnvelope(
         imported++;
       }
     }
+    // Path-scoped rules are inert over HTTPS unless their domain is in path-mode:
+    // establish the host-only path_mode=1 marker for each (domain, container) that
+    // got a path rule, mirroring the flat import and single-rule create paths.
+    // Idempotent — a marker already present in the envelope is left as-is.
+    const markered = new Set<string>();
+    for (const r of env.rules) {
+      if (!r.path_pattern) continue;
+      const mk = `${r.domain.toLowerCase()}\n${r.container_id ?? ''}`;
+      if (markered.has(mk)) continue;
+      markered.add(mk);
+      ensurePathModeMarker(r.domain, r.container_id);
+    }
     group = getGroup(groupId)!;
   });
   tx();
@@ -302,6 +315,15 @@ export function applyGroup(
         insertRule.run(m.domain, container, m.status, m.expires_at, m.path_pattern, m.path_mode, addedBy);
         applied++;
       }
+    }
+    // Ensure the host-only path-mode marker exists in the target scope for every
+    // applied path rule, so path-scoped rules are admitted over HTTPS CONNECT.
+    const markered = new Set<string>();
+    for (const m of members) {
+      if (!m.path_pattern) continue;
+      if (markered.has(m.domain.toLowerCase())) continue;
+      markered.add(m.domain.toLowerCase());
+      ensurePathModeMarker(m.domain, container);
     }
   });
   tx();
