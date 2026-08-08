@@ -225,6 +225,14 @@ export async function runFirewallExport(opts: FirewallExportOptions): Promise<vo
   }
 }
 
+// Read + JSON-parse a file with uniform, actionable errors. Shared by both
+// import paths (flat rules and groups).
+function readJsonFile<T = unknown>(file: string): T {
+  let raw: string;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { throw new Error(`Cannot read ${file}`); }
+  try { return JSON.parse(raw) as T; } catch { throw new Error(`${file} is not valid JSON`); }
+}
+
 export interface FirewallImportOptions {
   file: string;
   replace?: boolean;
@@ -232,18 +240,7 @@ export interface FirewallImportOptions {
 }
 
 export async function runFirewallImport(opts: FirewallImportOptions): Promise<void> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(opts.file, 'utf8');
-  } catch {
-    throw new Error(`Cannot read ${opts.file}`);
-  }
-  let doc: { rules?: unknown };
-  try {
-    doc = JSON.parse(raw) as { rules?: unknown };
-  } catch {
-    throw new Error(`${opts.file} is not valid JSON`);
-  }
+  const doc = readJsonFile<{ rules?: unknown }>(opts.file);
 
   const mode = opts.replace ? 'replace' : 'merge';
   const qs = new URLSearchParams();
@@ -312,10 +309,7 @@ export async function runFirewallGroup(opts: FirewallGroupOptions): Promise<void
   if (action === 'import') {
     const file = (opts.arg ?? '').trim();
     if (!file) throw new Error('Usage: huddle firewall group import <file> [--replace]');
-    let raw: string;
-    try { raw = fs.readFileSync(file, 'utf8'); } catch { throw new Error(`Cannot read ${file}`); }
-    let envelope: unknown;
-    try { envelope = JSON.parse(raw); } catch { throw new Error(`${file} is not valid JSON`); }
+    const envelope = readJsonFile(file);
     const mode = opts.replace ? 'replace' : 'merge';
     const res = await post<{ group: FirewallGroup; imported: number; updated: number; skipped: number }>(
       '/api/groups/import',

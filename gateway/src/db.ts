@@ -204,7 +204,7 @@ export function initDb(): void {
   // is created once (unique name) and the seeded rule is filed under it.
   db.prepare(
     `INSERT OR IGNORE INTO firewall_groups (name, description, shared, source)
-     VALUES ('huddle', 'Huddle self-traffic (gateway and portal). Managed by Huddle.', 0, 'system')`
+     VALUES ('huddle', 'Huddle self-traffic (gateway and portal). Managed by Huddle.', 0, 'manual')`
   ).run();
   const huddleGroup = db
     .prepare(`SELECT id FROM firewall_groups WHERE name = 'huddle' COLLATE NOCASE`)
