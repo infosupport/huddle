@@ -346,6 +346,12 @@ export class ContainerDetailComponent implements OnInit {
   onBulkPie(actionId: string, requested: Rule[]): void {
     const rules = requested.filter((r) => this.pendingSel.has(r.id));
     if (!rules.length) return;
+    // Global allow/deny changes policy for ALL containers, beyond this one. Match
+    // the confirmation the single-item global actions use.
+    if (actionId === 'approve-all' || actionId === 'deny-all') {
+      const verb = actionId === 'approve-all' ? 'Allow' : 'Deny';
+      if (!confirm(`${verb} ${rules.length} request${rules.length !== 1 ? 's' : ''} globally — for ALL containers? This changes global firewall policy.`)) return;
+    }
     const now = Math.floor(Date.now() / 1000);
     const call = (r: Rule): Observable<unknown> => {
       switch (actionId) {

@@ -106,7 +106,7 @@ export function validateGroupEnvelope(raw: unknown): GroupEnvelope {
 
 function findRuleStmt() {
   return db.prepare(
-    `SELECT id FROM rules
+    `SELECT id, source FROM rules
       WHERE domain = ? COLLATE NOCASE
         AND COALESCE(container_id, '') = COALESCE(?, '')
         AND COALESCE(path_pattern, '') = COALESCE(?, '')`,
@@ -182,6 +182,14 @@ export function importGroupEnvelope(
     const existingGroup = getGroupByName(env.group.name);
     let groupId: number;
     if (existingGroup) {
+      // A team-folder reload must never hijack a manually-created (or system)
+      // group: rewriting its source to 'startup-folder' would make the next
+      // reload delete it. Refuse and let the caller report it instead.
+      if (source === 'startup-folder' && existingGroup.source !== 'startup-folder') {
+        throw new Error(
+          `a ${existingGroup.source} group named "${env.group.name}" already exists — not overwriting it from the team folder`,
+        );
+      }
       groupId = existingGroup.id;
       updateGroup(groupId, {
         description: env.group.description ?? existingGroup.description,
@@ -208,8 +216,11 @@ export function importGroupEnvelope(
       const key = `${r.domain.toLowerCase()} ${r.container_id ?? ''} ${r.path_pattern ?? ''}`;
       if (seen.has(key)) { skipped++; continue; }
       seen.add(key);
-      const existing = find.get(r.domain, r.container_id, r.path_pattern) as { id: number } | undefined;
+      const existing = find.get(r.domain, r.container_id, r.path_pattern) as { id: number; source: string } | undefined;
       if (existing) {
+        // Folder reload must not adopt a manually-created rule (that would
+        // reclassify it as startup-folder and delete it on the next reload).
+        if (source === 'startup-folder' && existing.source !== 'startup-folder') { skipped++; continue; }
         updateRule.run(r.status, r.expires_at, r.path_mode, groupId, source, existing.id);
         updated++;
       } else {
@@ -344,20 +355,41 @@ export function reloadFirewallRulesFolder(): FolderReloadSummary {
     return summary;
   }
 
-  // Drop the previous startup-folder state first (rules then groups), so removed
-  // files disappear. Only source='startup-folder' rows are touched.
+  // Read + validate EVERY file before touching the live policy. A single
+  // malformed/unreadable file must not wipe the last-good team rules, so if any
+  // file fails to parse we abort here — leaving the previous startup-folder state
+  // intact — and report what to fix.
+  const parsed: { file: string; env: GroupEnvelope }[] = [];
+  for (const file of entries) {
+    summary.files++;
+    const full = path.join(mount, file);
+    try {
+      parsed.push({ file, env: validateGroupEnvelope(JSON.parse(fs.readFileSync(full, 'utf8'))) });
+    } catch (err) {
+      summary.errors.push({ file, message: (err as Error).message });
+    }
+  }
+  if (summary.errors.length > 0) {
+    logAudit({
+      containerId: null,
+      domain: 'firewall',
+      action: 'admin:folder-reload-aborted',
+      path: `mount=${mount} files=${summary.files} errors=${summary.errors.length} (previous policy kept)`,
+    });
+    return summary;
+  }
+
+  // All files valid → drop the previous startup-folder state (rules then groups,
+  // so removed files disappear; only source='startup-folder' rows are touched)
+  // and import the fresh set.
   const clear = db.transaction(() => {
     db.prepare(`DELETE FROM rules WHERE source = 'startup-folder'`).run();
     db.prepare(`DELETE FROM firewall_groups WHERE source = 'startup-folder'`).run();
   });
   clear();
 
-  for (const file of entries) {
-    summary.files++;
-    const full = path.join(mount, file);
+  for (const { file, env } of parsed) {
     try {
-      const raw = fs.readFileSync(full, 'utf8');
-      const env = validateGroupEnvelope(JSON.parse(raw));
       const res = importGroupEnvelope(env, { mode: 'replace', source: 'startup-folder', addedBy: 'team-folder' });
       summary.groups++;
       summary.imported += res.imported;
