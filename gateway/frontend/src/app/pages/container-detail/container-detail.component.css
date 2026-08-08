@@ -253,18 +253,18 @@
   background: var(--surface-2);
 }
 
-/* ── Pending bulk selection ── */
+/* ── Pending: per-type sections + bulk selection ── */
 .req-row__chk { flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
 .req-row.is-selected { background: var(--accent-soft); }
-.req-bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
-.req-bulk__all { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--text-muted); cursor: pointer; }
-.req-bulk__all input { cursor: pointer; }
-.req-bulk__n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); margin-left: 4px; }
-.req-bulk__btn { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 0.8em; }
-.req-bulk__btn:hover { background: var(--surface-hover); }
-.req-bulk__btn--allow:hover { border-color: var(--success); color: var(--success); }
-.req-bulk__btn--deny:hover { border-color: var(--danger); color: var(--danger); }
-.req-bulk__btn--clear { margin-left: auto; color: var(--text-muted); }
+.req-group + .req-group { margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+.req-group__head { display: flex; align-items: center; gap: 10px; padding: 4px 10px 8px; }
+.req-group__sel { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.req-group__sel input { cursor: pointer; width: 16px; height: 16px; }
+.req-group__title { font-size: 0.95em; font-weight: 600; color: var(--text); }
+.req-group__title .em { color: var(--accent); font-style: normal; }
+.req-group__n { font-size: 0.78em; font-weight: 600; color: var(--text-dim); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.req-group__bulk { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.req-bulk__n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); }
 
 .req-row__icon {
   width: 34px;

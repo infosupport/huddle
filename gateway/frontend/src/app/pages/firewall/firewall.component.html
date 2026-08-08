@@ -46,64 +46,83 @@
           <span>No requests waiting for review.</span>
         </div>
       } @else {
-        <!-- Bulk selection toolbar -->
-        <div class="req-bulk">
-          <label class="req-bulk__all">
-            <input type="checkbox" [checked]="pendingAllChecked(vm)" (change)="togglePendingAll(vm)" />
-            Select all
-          </label>
-          @if (pendingSelectedCount(vm) > 0) {
-            <span class="req-bulk__n">{{ pendingSelectedCount(vm) }} selected</span>
-            <button type="button" class="req-bulk__btn req-bulk__btn--allow" (click)="bulkPending(vm, 'allow')">Allow</button>
-            <button type="button" class="req-bulk__btn req-bulk__btn--allow" (click)="bulkPending(vm, 'allow-global')">Allow global</button>
-            <button type="button" class="req-bulk__btn req-bulk__btn--deny" (click)="bulkPending(vm, 'deny')">Deny</button>
-            <button type="button" class="req-bulk__btn req-bulk__btn--deny" (click)="bulkPending(vm, 'deny-global')">Deny global</button>
-            <button type="button" class="req-bulk__btn" (click)="bulkPending(vm, 'dismiss')">Dismiss</button>
-            <button type="button" class="req-bulk__btn req-bulk__btn--clear" (click)="clearPending()">Clear</button>
-          }
-        </div>
-        <!-- Domain requests -->
-        @for (r of vm.requested; track r.id) {
-          <div class="req-row" [class.is-resolving]="resolving.has(r.id)" [class.is-selected]="pendingChecked(r.id)">
-            <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(r.id)" (change)="togglePending(r.id)" />
-            <div class="req-row__icon">
-              <app-icon name="globe" [size]="18" />
-            </div>
-            <div class="req-row__info">
-              <div class="req-row__domain">{{ r.domain }}</div>
-              <div class="req-row__meta">
-                <span class="req-row__tag">{{ shortContainer(r.container_id) }}</span>
-                <span><b>{{ r.request_count }}</b> request{{ r.request_count !== 1 ? 's' : '' }}</span>
-                <span class="sep">·</span>
-                <span>last {{ r.last_seen | relTime }}</span>
-              </div>
-            </div>
-            <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
-          </div>
-        }
-        <!-- Path sub-requests -->
-        @for (row of vm.pathRequested; track row.rule.id) {
-          <div class="req-row" [class.is-resolving]="resolving.has(row.rule.id)" [class.is-selected]="pendingChecked(row.rule.id)">
-            <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(row.rule.id)" (change)="togglePending(row.rule.id)" />
-            <div class="req-row__icon req-row__icon--path">
-              <app-icon name="file-text" [size]="18" />
-            </div>
-            <div class="req-row__info">
-              <div class="req-row__domain">
-                <span class="req-row__host">{{ row.domain }}</span>{{ row.path_pattern }}
-              </div>
-              <div class="req-row__meta">
-                <span class="req-row__tag req-row__tag--path">path</span>
-                <span class="req-row__tag">{{ shortContainer(row.rule.container_id) }}</span>
-                <span><b>{{ row.rule.request_count }}</b> request{{ row.rule.request_count !== 1 ? 's' : '' }}</span>
-                <span class="sep">·</span>
-                <span>last {{ row.rule.last_seen | relTime }}</span>
-              </div>
-              @if (row.last_path) {
-                <div class="req-row__sample">{{ row.last_path }}</div>
+        <!-- ── Domain (normal) requests ── -->
+        @if (vm.requested.length > 0) {
+          <div class="req-group">
+            <div class="req-group__head">
+              <label class="req-group__sel">
+                <input type="checkbox" [checked]="domainAllChecked(vm.requested)" (change)="toggleDomainAll(vm.requested)" />
+                <span class="req-group__title">Domain <span class="em">requests</span></span>
+                <span class="req-group__n">{{ vm.requested.length }}</span>
+              </label>
+              @if (domainSelectedCount(vm.requested) > 0) {
+                <div class="req-group__bulk">
+                  <span class="req-bulk__n">{{ domainSelectedCount(vm.requested) }} selected</span>
+                  <app-pie-menu [config]="pieConfig" (action)="onBulkPie($event, vm.requested)" />
+                </div>
               }
             </div>
-            <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+            @for (r of vm.requested; track r.id) {
+              <div class="req-row" [class.is-resolving]="resolving.has(r.id)" [class.is-selected]="pendingChecked(r.id)">
+                <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(r.id)" (change)="togglePending(r.id)" />
+                <div class="req-row__icon">
+                  <app-icon name="globe" [size]="18" />
+                </div>
+                <div class="req-row__info">
+                  <div class="req-row__domain">{{ r.domain }}</div>
+                  <div class="req-row__meta">
+                    <span class="req-row__tag">{{ shortContainer(r.container_id) }}</span>
+                    <span><b>{{ r.request_count }}</b> request{{ r.request_count !== 1 ? 's' : '' }}</span>
+                    <span class="sep">·</span>
+                    <span>last {{ r.last_seen | relTime }}</span>
+                  </div>
+                </div>
+                <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
+              </div>
+            }
+          </div>
+        }
+
+        <!-- ── Path requests ── -->
+        @if (vm.pathRequested.length > 0) {
+          <div class="req-group">
+            <div class="req-group__head">
+              <label class="req-group__sel">
+                <input type="checkbox" [checked]="pathAllChecked(vm.pathRequested)" (change)="togglePathAll(vm.pathRequested)" />
+                <span class="req-group__title">Path <span class="em">requests</span></span>
+                <span class="req-group__n">{{ vm.pathRequested.length }}</span>
+              </label>
+              @if (pathSelectedCount(vm.pathRequested) > 0) {
+                <div class="req-group__bulk">
+                  <span class="req-bulk__n">{{ pathSelectedCount(vm.pathRequested) }} selected</span>
+                  <app-pie-menu [config]="pieConfigPath" (action)="onBulkPathPie($event, vm.pathRequested)" />
+                </div>
+              }
+            </div>
+            @for (row of vm.pathRequested; track row.rule.id) {
+              <div class="req-row" [class.is-resolving]="resolving.has(row.rule.id)" [class.is-selected]="pendingChecked(row.rule.id)">
+                <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(row.rule.id)" (change)="togglePending(row.rule.id)" />
+                <div class="req-row__icon req-row__icon--path">
+                  <app-icon name="file-text" [size]="18" />
+                </div>
+                <div class="req-row__info">
+                  <div class="req-row__domain">
+                    <span class="req-row__host">{{ row.domain }}</span>{{ row.path_pattern }}
+                  </div>
+                  <div class="req-row__meta">
+                    <span class="req-row__tag req-row__tag--path">path</span>
+                    <span class="req-row__tag">{{ shortContainer(row.rule.container_id) }}</span>
+                    <span><b>{{ row.rule.request_count }}</b> request{{ row.rule.request_count !== 1 ? 's' : '' }}</span>
+                    <span class="sep">·</span>
+                    <span>last {{ row.rule.last_seen | relTime }}</span>
+                  </div>
+                  @if (row.last_path) {
+                    <div class="req-row__sample">{{ row.last_path }}</div>
+                  }
+                </div>
+                <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+              </div>
+            }
           </div>
         }
       }
