@@ -839,12 +839,46 @@ touch /tmp/sudo-audit.log
 `;
 }
 
-function toLinuxPath(p: string): string {
+/**
+ * Where the engine's host filesystem is mounted, as seen from INSIDE the
+ * Docker engine's own mount namespace (not the gateway container's). A bind
+ * mount `Source` is resolved by the engine, so it must use whichever prefix
+ * that engine recognizes:
+ *  - 'wsl2-native': dockerd runs directly inside a WSL2 distro (no Docker
+ *    Desktop) — that distro auto-mounts Windows drives at `/mnt/<drive>`.
+ *  - 'docker-desktop': dockerd runs inside Docker Desktop's own hidden
+ *    utility VM, which exposes Windows drives at
+ *    `/run/desktop/mnt/host/<drive>` instead (issue #93).
+ */
+export type WindowsMountStyle = 'wsl2-native' | 'docker-desktop';
+
+/**
+ * Detects which of the above styles the connected engine uses, by asking it
+ * directly — Docker Desktop's `/info` reports the literal
+ * `OperatingSystem: "Docker Desktop"`, while a native dockerd (including one
+ * installed straight into a WSL2 distro) reports its real Linux distro name.
+ * Not cached: this only runs once per container start, alongside several
+ * other one-off Docker API calls already made there, so the negligible cost
+ * of asking again isn't worth the complexity of invalidating a cache if the
+ * engine behind the socket ever changes.
+ */
+export async function detectWindowsMountStyle(): Promise<WindowsMountStyle> {
+  try {
+    const info = await dockerRequest('GET', '/info');
+    return info?.OperatingSystem === 'Docker Desktop' ? 'docker-desktop' : 'wsl2-native';
+  } catch {
+    return 'wsl2-native';
+  }
+}
+
+export function toLinuxPath(p: string, style: WindowsMountStyle = 'wsl2-native'): string {
   if (p.startsWith('/')) return p;
   const normalized = p.replace(/\\/g, '/');
   const match = normalized.match(/^([a-zA-Z]):\/(.*)/);
-  if (match) return `/mnt/${match[1].toLowerCase()}/${match[2]}`;
-  return p;
+  if (!match) return p;
+  const drive = match[1].toLowerCase();
+  const rest = match[2];
+  return style === 'docker-desktop' ? `/run/desktop/mnt/host/${drive}/${rest}` : `/mnt/${drive}/${rest}`;
 }
 
 interface FolderMount { Type: 'bind' | 'volume'; Source: string; Target: string; ReadOnly?: boolean; }
@@ -988,7 +1022,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     ]),
   ];
 
-  const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir), containerName);
+  const effectiveSource = empty
+    ? ''
+    : await ensureWorktree(toLinuxPath(workspaceDir, await detectWindowsMountStyle()), containerName);
 
   const folderMounts = buildFolderMounts(containerName);
 
