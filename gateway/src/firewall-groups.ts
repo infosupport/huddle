@@ -16,6 +16,7 @@ import {
   getGroup,
   getGroupByName,
   updateGroup,
+  listGroups,
   logAudit,
   type FirewallGroup,
 } from './db';
@@ -444,6 +445,118 @@ export function reloadFirewallRulesFolder(): FolderReloadSummary {
     domain: 'firewall',
     action: 'admin:folder-reload',
     path: `mount=${mount} files=${summary.files} groups=${summary.groups} imported=${summary.imported} errors=${summary.errors.length}`,
+  });
+  notifyStateChanged();
+  return summary;
+}
+
+// ── Write-back: sync the portal's groups OUT to the team folder (app → files) ────
+//
+// The reverse of reloadFirewallRulesFolder: writes every current group to the
+// folder as a `<slug>.json` envelope, so the folder mirrors what's in the portal.
+// Requires the folder to be mounted read-write (the CLI mounts it `:rw`; an older
+// gateway started with `:ro` needs `huddle restart` first — surfaced via the
+// per-file errors / writable flag). A synced group becomes folder-managed
+// (source='startup-folder') so the next reload updates it in place instead of
+// aborting on the "don't overwrite a manual group from the folder" guard.
+
+export interface FolderSyncSummary {
+  folder: string | null;
+  mounted: boolean;
+  writable: boolean;
+  written: number;
+  pruned: number;
+  files: { file: string; group: string }[];
+  errors: { file: string; message: string }[];
+}
+
+// Derive a filesystem-safe basename from a group name (lowercase, only [a-z0-9-]).
+function groupFileSlug(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'group';
+}
+
+export function syncGroupsToFolder(): FolderSyncSummary {
+  const mount = firewallRulesMount();
+  const summary: FolderSyncSummary = { folder: mount, mounted: false, writable: false, written: 0, pruned: 0, files: [], errors: [] };
+
+  let existing: string[] = [];
+  try {
+    existing = fs.readdirSync(mount).filter((f) => f.toLowerCase().endsWith('.json'));
+    summary.mounted = true;
+  } catch {
+    // Not mounted — the operator must set the folder + `huddle restart`.
+    return summary;
+  }
+
+  // Map each existing group-envelope file to the group name it holds, so a
+  // group's current file is overwritten in place even when its slug differs
+  // (e.g. an existing `nodejs.json` for the group "Node.js"). Files that don't
+  // parse as an envelope are left completely alone — never rewritten or pruned.
+  const fileByGroupName = new Map<string, string>();
+  for (const f of existing) {
+    try {
+      const env = validateGroupEnvelope(JSON.parse(fs.readFileSync(path.join(mount, f), 'utf8')));
+      fileByGroupName.set(env.group.name.toLowerCase(), f);
+    } catch {
+      /* not a recognisable group envelope — leave it untouched */
+    }
+  }
+
+  const allGroups = listGroups();
+  const currentNames = new Set(allGroups.map((g) => g.name.toLowerCase()));
+  const usedFiles = new Set<string>();
+
+  // Re-tag a written group (and its member rules) as folder-managed in one shot.
+  const retag = db.transaction((groupId: number) => {
+    db.prepare(`UPDATE firewall_groups SET source = 'startup-folder', updated_at = unixepoch() WHERE id = ?`).run(groupId);
+    db.prepare(`UPDATE rules SET source = 'startup-folder' WHERE group_id = ?`).run(groupId);
+  });
+
+  for (const g of allGroups) {
+    const env = exportGroup(g.id);
+    if (!env) continue;
+    const lname = g.name.toLowerCase();
+    let file = fileByGroupName.get(lname);
+    if (!file) {
+      // No file holds this group yet — mint one from its slug, avoiding a clash
+      // with any existing or already-written file this run.
+      const base = groupFileSlug(g.name);
+      file = `${base}.json`;
+      let n = 2;
+      while (existing.includes(file) || usedFiles.has(file)) file = `${base}-${n++}.json`;
+    }
+    usedFiles.add(file);
+    try {
+      fs.writeFileSync(path.join(mount, file), JSON.stringify(env, null, 2) + '\n');
+      summary.writable = true;
+      summary.written++;
+      summary.files.push({ file, group: g.name });
+      retag(g.id);
+    } catch (err) {
+      // A read-only mount fails every write here; the caller reports how to fix.
+      summary.errors.push({ file, message: (err as Error).message });
+    }
+  }
+
+  // Prune envelope files whose group no longer exists so the folder mirrors the
+  // current set — otherwise a group deleted in the portal would resurrect on the
+  // next reload. Only recognised envelopes are ever removed; unrelated files stay.
+  for (const [lname, f] of fileByGroupName) {
+    if (currentNames.has(lname) || usedFiles.has(f)) continue;
+    try {
+      fs.unlinkSync(path.join(mount, f));
+      summary.pruned++;
+    } catch (err) {
+      summary.errors.push({ file: f, message: (err as Error).message });
+    }
+  }
+
+  logAudit({
+    containerId: null,
+    domain: 'firewall',
+    action: 'admin:folder-sync',
+    path: `mount=${mount} written=${summary.written} pruned=${summary.pruned} errors=${summary.errors.length}`,
   });
   notifyStateChanged();
   return summary;

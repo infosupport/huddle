@@ -156,6 +156,10 @@ export class ApiService {
     return this.handle(this.http.post<any>('/api/firewall-rules-folder/reload', {}));
   }
 
+  syncFirewallRulesFolder(): Observable<{ folder: string | null; mounted: boolean; writable: boolean; written: number; pruned: number; files: { file: string; group: string }[]; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/firewall-rules-folder/sync', {}));
+  }
+
   getContainerDetail(name: string): Observable<ContainerDetail> {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }

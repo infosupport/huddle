@@ -121,6 +121,7 @@ Usage:
   huddle firewall group apply <name>   Apply a group (--container <id> or global)
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
+  huddle firewall folder sync        Write the portal's groups back to the folder
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release

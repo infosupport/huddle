@@ -1,4 +1,4 @@
-import { Component, inject, signal, computed, Input, OnInit } from '@angular/core';
+import { Component, inject, signal, computed, Input, OnInit, HostListener } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../core/services/api.service';
 import { StateService } from '../../core/services/state.service';
@@ -36,6 +36,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
           <div class="grp__actions">
             <button type="button" class="btn btn-ghost" (click)="importInput.click()"><app-icon name="upload" [size]="15" /> Import</button>
             <button type="button" class="btn btn-ghost" (click)="exportSelected()"><app-icon name="download" [size]="15" /> Export</button>
+            <button type="button" class="btn btn-ghost" [disabled]="syncing()" (click)="syncToFolder()"><app-icon name="refresh" [size]="15" /> {{ syncing() ? 'Syncing…' : 'Sync to folder' }}</button>
             <button type="button" class="btn btn-ghost" [class.on]="showAdd()" (click)="showAdd.set(!showAdd())"><app-icon name="plus" [size]="15" /> Add rule</button>
             <button type="button" class="btn btn--accent" (click)="startCreate()"><app-icon name="layers" [size]="15" /> New group</button>
             <input #importInput type="file" accept="application/json,.json" hidden (change)="onImportFile($event)" />
@@ -142,7 +143,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
               </div>
             }
 
-            <div class="grp__table-wrap">
+            <div class="grp__table-wrap" (scroll)="openMenu.set(null)">
             <table class="data-table grp__table">
               <thead>
                 <tr>
@@ -182,9 +183,9 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                       @else { <span class="grp__muted">—</span> }
                     </td>
                     <td class="grp__row-menu">
-                      <button type="button" class="grp__dots" (click)="toggleMenu(r.id)">⋯</button>
+                      <button type="button" class="grp__dots" (click)="toggleMenu(r.id, $event)">⋯</button>
                       @if (openMenu() === r.id) {
-                        <div class="grp__menu">
+                        <div class="grp__menu grp__menu--fixed" [style.top.px]="menuPos()?.top" [style.right.px]="menuPos()?.right">
                           @if (groups().length) {
                             <div class="grp__menu-label">Add to group</div>
                             @for (g of groups(); track g.id) { <button type="button" (click)="assign(r, g.id)">{{ g.name }}</button> }
@@ -285,7 +286,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
        or filter changes. The domain column takes the remaining space. */
     .grp__table-wrap { overflow-x: auto; }
     .grp__table { width: 100%; table-layout: fixed; }
-    .grp__col-pm { width: 168px; }
+    .grp__col-pm { width: 208px; }
     .grp__col-act { width: 104px; }
     .grp__col-grp { width: 128px; }
     .grp__col-menu { width: 40px; }
@@ -295,7 +296,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__tr--sel > td { background: var(--accent-soft); }
     .grp__dom { font-family: 'Space Grotesk', monospace; white-space: nowrap; }
     .grp__pm { white-space: nowrap; }
-    .grp__pm-sel { max-width: 130px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
+    .grp__pm-sel { max-width: 168px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
     .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
     .grp__act { white-space: nowrap; }
     .grp__gtag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); }
@@ -315,9 +316,15 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__path-add { display: flex; gap: 8px; margin-top: 10px; }
     .grp__path-add input { flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 0.85em; }
 
-    .grp__row-menu { position: relative; text-align: right; overflow: visible; }
+    /* No overflow override needed here: the menu is position:fixed (below), so it
+       is never clipped by this cell's overflow:hidden. A plain '.grp__row-menu'
+       overflow rule would lose to '.grp__table td' on specificity anyway. */
+    .grp__row-menu { position: relative; text-align: right; }
     .grp__dots { border: none; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 1.2em; padding: 0 6px; }
     .grp__menu { position: absolute; right: 0; top: 100%; z-index: 20; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; min-width: 180px; max-height: 320px; overflow: auto; }
+    /* Row menus render fixed to the viewport so the table's overflow-x scroll
+       container can't clip them (overflow-x:auto forces overflow-y to auto too). */
+    .grp__menu--fixed { position: fixed; z-index: 1000; }
     .grp__menu-label { padding: 8px 12px 4px; font-size: 0.72em; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
     .grp__menu button { text-align: left; padding: 8px 12px; border: none; background: transparent; cursor: pointer; color: var(--text); font-size: 0.88em; }
     .grp__menu button:hover { background: var(--surface-hover); }
@@ -347,7 +354,9 @@ export class FirewallGroupsPanelComponent implements OnInit {
   creating = signal(false);
   showAdd = signal(false);
   adding = signal(false);
+  syncing = signal(false);
   openMenu = signal<number | null>(null);
+  menuPos = signal<{ top: number; right: number } | null>(null);
   expanded = signal<number | null>(null);
 
   // Bulk selection over the visible rows.
@@ -537,6 +546,31 @@ export class FirewallGroupsPanelComponent implements OnInit {
     this.note.set(`Exported ${rows.length} rule(s)`);
   }
 
+  // Write every group back out to the team-managed folder so the folder mirrors
+  // what's in the portal (app → files). Synced groups become folder-managed.
+  syncToFolder(): void {
+    this.syncing.set(true);
+    this.api.syncFirewallRulesFolder().subscribe({
+      next: (r) => {
+        this.syncing.set(false);
+        if (!r.mounted) {
+          this.note.set('No firewall rules folder mounted — set one in Settings and run `huddle restart`.');
+          return;
+        }
+        if (r.written === 0 && r.errors.length > 0) {
+          this.note.set('Could not write to the folder — it may still be mounted read-only. Run `huddle restart` to remount it writable.');
+          return;
+        }
+        const parts = [`Synced ${r.written} group(s) to the folder`];
+        if (r.pruned > 0) parts.push(`${r.pruned} stale file(s) removed`);
+        if (r.errors.length > 0) parts.push(`${r.errors.length} error(s)`);
+        this.note.set(parts.join(' · '));
+        this.reloadAfterMutation();
+      },
+      error: (e) => { this.syncing.set(false); this.note.set('Sync failed: ' + e.message); },
+    });
+  }
+
   onImportFile(event: Event): void {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
@@ -565,7 +599,21 @@ export class FirewallGroupsPanelComponent implements OnInit {
     });
   }
 
-  toggleMenu(id: number): void { this.openMenu.set(this.openMenu() === id ? null : id); }
+  toggleMenu(id: number, ev: Event): void {
+    ev.stopPropagation();
+    if (this.openMenu() === id) { this.openMenu.set(null); return; }
+    // Anchor the fixed menu to the button's bottom-right so it escapes the
+    // table's overflow-x scroll container instead of being clipped by it.
+    const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    this.menuPos.set({ top: Math.round(rect.bottom + 4), right: Math.round(window.innerWidth - rect.right) });
+    this.openMenu.set(id);
+  }
+
+  // A fixed-positioned menu would linger with a stale position, so dismiss it on
+  // any outside click, scroll or resize.
+  @HostListener('document:click') onDocClick(): void { if (this.openMenu() !== null) this.openMenu.set(null); }
+  @HostListener('window:scroll') @HostListener('window:resize') onViewportChange(): void { this.openMenu.set(null); }
+
   assign(r: Rule, groupId: number): void {
     this.openMenu.set(null);
     this.api.assignRuleToGroup(groupId, r.id).subscribe({ next: () => this.reloadAfterMutation(), error: (e) => this.note.set(e.message) });
