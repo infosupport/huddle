@@ -12,6 +12,7 @@ import {
   applyGroup,
   validateGroupEnvelope,
   reloadFirewallRulesFolder,
+  syncGroupsToFolder,
 } from './firewall-groups';
 import { readHostConfig, setHostFolder, hostConfigAvailable } from './host-config';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
@@ -748,6 +749,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // Manual reload of the team-managed firewall-rules folder.
   app.post('/api/firewall-rules-folder/reload', async () => {
     return reloadFirewallRulesFolder();
+  });
+
+  // Write the portal's groups back out to the team-managed folder (app → files),
+  // mirroring the current group set. Needs the folder mounted read-write; a
+  // gateway started with the old read-only mount reports write errors until
+  // `huddle restart` remounts it.
+  app.post('/api/firewall-rules-folder/sync', async () => {
+    return syncGroupsToFolder();
   });
 
   app.get('/api/containers', async () => {

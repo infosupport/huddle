@@ -375,5 +375,25 @@ export async function runFirewallFolder(opts: FirewallFolderOptions): Promise<vo
     return;
   }
 
-  throw new Error(`Unknown folder action: ${action}. Use show | set | reload.`);
+  if (action === 'sync') {
+    // Write the portal's groups back out to the folder (app → files).
+    const res = await post<{ folder: string | null; mounted: boolean; writable: boolean; written: number; pruned: number; files: { file: string; group: string }[]; errors: { file: string; message: string }[] }>(
+      '/api/firewall-rules-folder/sync',
+      {},
+    );
+    if (!res.mounted) {
+      console.log(dim('No firewall rules folder mounted. Set one with `huddle firewall folder set <path>` and run `huddle restart`.'));
+      return;
+    }
+    if (res.written === 0 && res.errors.length > 0) {
+      console.error(red('[!] Could not write to the folder — it may still be mounted read-only. Run `huddle restart` to remount it writable.'));
+      for (const e of res.errors) console.error(red(`  [!] ${e.file}: ${e.message}`));
+      return;
+    }
+    console.log(green(`[OK] Synced: ${res.written} group(s) written, ${res.pruned} stale file(s) removed, ${res.errors.length} error(s)`));
+    for (const e of res.errors) console.error(red(`  [!] ${e.file}: ${e.message}`));
+    return;
+  }
+
+  throw new Error(`Unknown folder action: ${action}. Use show | set | reload | sync.`);
 }

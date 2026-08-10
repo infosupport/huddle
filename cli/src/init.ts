@@ -157,7 +157,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // Team-managed folders (#69). Bind the CLI config dir (~/.huddle) read-write so
   // the gateway/portal read and write the folder paths there (config.json is the
   // single source of truth), then bind each configured team folder to a FIXED
-  // path so the gateway reads it without knowing the host path. Read-only.
+  // path so the gateway reads it without knowing the host path. The firewall-rules
+  // folder is bound read-write so the portal's "Sync to folder" can write the
+  // groups back out; extensions stay read-only (loaded, never written).
   const fwFolder = cfg.firewallRulesFolder?.trim();
   const extFolder = cfg.extensionsFolder?.trim();
   if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
@@ -174,7 +176,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
   dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
-  if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:ro`);
+  if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
   if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
   dockerArgs.push(...gatewayEnvArgs(images));
   dockerArgs.push(IMAGE);
