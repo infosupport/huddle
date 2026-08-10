@@ -271,15 +271,15 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     //   1. via de egress-proxy (default: curlrc/http_proxy wijst naar huddle:80)
     //      → de self-traffic-gate van de proxy weigert alles behalve de
     //        audit-ingest met 403, de request bereikt de API nooit;
-    //   2. direct naar :3000 (iptables staat al het TCP-verkeer naar het
+    //   2. direct naar :24842 (iptables staat al het TCP-verkeer naar het
     //      huddle-IP toe) → daar is het operator-token de barrière: 401.
     it('proxy blokkeert self-traffic naar de management-API (→ 403)', () => {
-      const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules');
+      const code = curlStatusIn(E2E_NAME, 'http://huddle:24842/api/rules');
       expect(code).toBe('403');
     });
 
     it('directe management-API-call zonder operator-token krijgt 401', () => {
-      const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules', `--noproxy '*'`);
+      const code = curlStatusIn(E2E_NAME, 'http://huddle:24842/api/rules', `--noproxy '*'`);
       expect(code).toBe('401');
     });
 
@@ -287,7 +287,7 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       const r = execIn(
         E2E_NAME,
         `curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' ` +
-        `-d '{"container":"${E2E_NAME}","entry":"e2e-test"}' http://huddle:3000/api/audit/sudo`,
+        `-d '{"container":"${E2E_NAME}","entry":"e2e-test"}' http://huddle:24842/api/audit/sudo`,
       );
       expect(r.stdout.trim()).toBe('200');
     });

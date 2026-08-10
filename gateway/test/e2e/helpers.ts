@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 // ── Config (overschrijfbaar via env) ────────────────────────────────────────
-export const HUDDLE_URL = process.env.HUDDLE_URL ?? 'http://localhost:3000';
+export const HUDDLE_URL = process.env.HUDDLE_URL ?? 'http://localhost:24842';
 export const E2E_IMAGE  = process.env.HUDDLE_E2E_IMAGE ?? 'ghcr.io/infosupport/base-devimage-vscode';
 export const E2E_IDE    = process.env.HUDDLE_E2E_IDE ?? 'vscode';
 export const E2E_NAME   = process.env.HUDDLE_E2E_NAME ?? 'devcontainer-e2e-boundary';
@@ -39,7 +39,7 @@ export function containerRunning(name: string): boolean {
   return r.status === 0 && r.stdout.trim() === 'true';
 }
 
-// ── Huddle management API (admin, vanaf de host op :3000) ────────────────────
+// ── Huddle management API (admin, vanaf de host op :24842) ────────────────────
 // De API eist een operator-token (auth.ts); geef de gateway-onder-test hetzelfde
 // token via HUDDLE_OPERATOR_TOKEN, dan authenticeren de helpers daarmee.
 async function api(method: string, path: string, body?: unknown): Promise<any> {

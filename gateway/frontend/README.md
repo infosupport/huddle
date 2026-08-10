@@ -1,6 +1,6 @@
 # Huddle DMZ Portal — Frontend
 
-Angular 21 SPA served by the gateway on port 3000. See the [gateway README](../README.md) for the full project overview.
+Angular 21 SPA served by the gateway on port 24842. See the [gateway README](../README.md) for the full project overview.
 
 ## Pages
 
@@ -22,6 +22,6 @@ Angular 21 SPA served by the gateway on port 3000. See the [gateway README](../R
 
 ```bash
 npm install
-ng serve        # dev server on :4200, proxies /api/* to :3000
+ng serve        # dev server on :4200, proxies /api/* to :24842
 ng build        # production build → ../dist/ui/browser/
 ```

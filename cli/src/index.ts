@@ -150,7 +150,7 @@ Firewall add options:
   --deny                             Create a block rule (default: allow)
 
 Global options:
-  --url <url>                        Huddle URL (default: http://localhost:3000)
+  --url <url>                        Huddle URL (default: http://localhost:24842)
                                      Or via the HUDDLE_URL env var
   --help, -h                         Show help
   --version, -v                      Show version (as published to
@@ -181,7 +181,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL ?? 'http://localhost:3000';
+  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL ?? 'http://localhost:24842';
   setBaseUrl(url);
 
   const startsWithExistingPath = cmd !== undefined && !COMMANDS.has(cmd) && fs.existsSync(path.resolve(cmd));

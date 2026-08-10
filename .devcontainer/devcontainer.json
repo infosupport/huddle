@@ -17,7 +17,7 @@
   // Haal de Huddle-MITM-CA op naar een user-eigen pad (zonder root). Loopt direct
   // naar de Huddle-API (huddle staat in NO_PROXY). Lukt het niet, dan tunnelt de
   // proxy HTTPS alsnog ongeïntercepteerd — de devcontainer werkt gewoon door.
-  "postCreateCommand": "curl -fsS http://huddle:3000/api/tls/ca.crt -o $HOME/.huddle-ca.crt && echo 'Huddle CA opgehaald -> $HOME/.huddle-ca.crt' || echo 'Huddle CA niet opgehaald (HTTPS wordt getunneld, geen MITM)'",
+  "postCreateCommand": "curl -fsS http://huddle:24842/api/tls/ca.crt -o $HOME/.huddle-ca.crt && echo 'Huddle CA opgehaald -> $HOME/.huddle-ca.crt' || echo 'Huddle CA niet opgehaald (HTTPS wordt getunneld, geen MITM)'",
 
   "customizations": {
     "vscode": {

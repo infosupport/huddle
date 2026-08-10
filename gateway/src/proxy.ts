@@ -74,9 +74,9 @@ function send403(res: http.ServerResponse, domain: string, status: string, conta
     reason: status === 'requested'
       ? 'This endpoint has not yet been approved for this devcontainer.'
       : 'This endpoint is denied by a firewall rule.',
-    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
+    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:24842) before this request can continue.',
     devcontainerId: containerId ?? undefined,
-    huddlePortal: 'http://localhost:3000',
+    huddlePortal: 'http://localhost:24842',
   });
   res.writeHead(403, {
     'content-type': 'application/json',
@@ -110,9 +110,9 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
     reason: blockStatus === 'requested'
       ? 'This endpoint has not yet been approved for this devcontainer.'
       : 'This endpoint is denied by a firewall rule.',
-    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
+    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:24842) before this request can continue.',
     devcontainerId: containerId ?? undefined,
-    huddlePortal: 'http://localhost:3000',
+    huddlePortal: 'http://localhost:24842',
   });
   socket.write(
     `HTTP/1.1 ${status} ${REJECT_REASON[status] ?? 'Forbidden'}\r\n` +
@@ -384,7 +384,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     if (host === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
       const allowed =
-        (target.port === '3000' && req.method === 'POST' && normPath === '/api/audit/sudo');
+        (target.port === '24842' && req.method === 'POST' && normPath === '/api/audit/sudo');
       if (!allowed) {
         logAudit({
           containerId,
@@ -449,7 +449,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       });
     };
 
-    // MCP traffic to huddle always via the API port (3000), not the proxy port (80).
+    // MCP traffic to huddle always via the API port (24842), not the proxy port (80).
     const upstreamPort = target.port || 80;
 
     const upstream = tryCreateUpstreamRequest(() => http.request(
@@ -745,9 +745,9 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           reason: pathResult.status === 'requested'
             ? 'This path has not yet been approved for this devcontainer.'
             : 'This path is denied by a firewall rule.',
-          actionRequired: 'The user must approve this path in the Huddle portal (http://huddle:3000) before this request can continue.',
+          actionRequired: 'The user must approve this path in the Huddle portal (http://huddle:24842) before this request can continue.',
           devcontainerId: containerId ?? undefined,
-          huddlePortal: 'http://localhost:3000',
+          huddlePortal: 'http://localhost:24842',
         });
         innerRes.writeHead(403, {
           'content-type': 'application/json',

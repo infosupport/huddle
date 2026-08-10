@@ -1,6 +1,6 @@
 import { operatorToken } from './config';
 
-let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? 'http://localhost:3000');
+let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? 'http://localhost:24842');
 
 export class ApiError extends Error {
   constructor(

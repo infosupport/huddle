@@ -5,8 +5,8 @@ import { IncomingMessage } from 'http';
 
 // ── Operator-authenticatie voor de control plane ────────────────────────────
 // Root-cause van de "missing auth"-cluster (findings #4/#5/#9/#10/#11/#13): de
-// enige toegangscontrole op :3000 was een source-IP-gate. Omdat de gateway een
-// container is die via `-p 3000:3000` gepubliceerd wordt, arriveren de operator
+// enige toegangscontrole op :24842 was een source-IP-gate. Omdat de gateway een
+// container is die via `-p 24842:24842` gepubliceerd wordt, arriveren de operator
 // (browser + CLI) én een LAN-/sibling-aanvaller met HETZELFDE bridge-gateway-IP
 // — source-IP kan ze principieel niet scheiden. Alleen een gedeeld operator-
 // token doet dat. Dit is bewust minimaal (geen sessie-store): de cookie/bearer
@@ -59,7 +59,7 @@ export function getOperatorToken(): string {
   }
   cachedToken = generated;
   console.log(
-    `\n[auth] Operator token generated. Log in to the portal (http://localhost:3000) with:\n\n    ${generated}\n\n` +
+    `\n[auth] Operator token generated. Log in to the portal (http://localhost:24842) with:\n\n    ${generated}\n\n` +
     `Set HUDDLE_OPERATOR_TOKEN to choose a fixed token.\n`
   );
   return generated;

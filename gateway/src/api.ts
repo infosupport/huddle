@@ -50,7 +50,7 @@ import {
   EXT_DIR,
 } from './extensions/registry';
 
-const API_PORT = 3000;
+const API_PORT = 24842;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
 
 type RuleStatus = 'requested' | 'allow' | 'deny';

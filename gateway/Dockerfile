@@ -29,5 +29,5 @@ COPY package.json ./
 COPY extensions ./extensions
 ENV DB_PATH=/data/huddle.db
 ENV EXT_DIR=/app/extensions
-EXPOSE 80 3000
+EXPOSE 80 24842
 CMD ["node", "dist/index.js"]

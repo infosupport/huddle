@@ -66,7 +66,7 @@ export interface AnalysisResult {
 // ─────────────────────────────────────────────────────────────────────────────
 // Egress wiring that gets injected (mirrors the working .devcontainer example,
 // which issue-66-reply.md calls the source of truth). `huddle` stays in NO_PROXY
-// so the direct CA fetch to huddle:3000 does not loop through the proxy on :80.
+// so the direct CA fetch to huddle:24842 does not loop through the proxy on :80.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function huddleProxyEnv(caPath: string, dockerSocket: boolean): Record<string, string> {
@@ -722,7 +722,7 @@ function printNextSteps(composeFile: string, outPath: string, caPath: string, do
   console.log('  2. Fetch the Huddle CA inside the container. Add to your devcontainer.json:');
   console.log(
     cyan(
-      `       "postCreateCommand": "curl -fsS http://huddle:3000/api/tls/ca.crt -o ${caPath} || echo 'CA not fetched (HTTPS tunnelled, no MITM)'"`,
+      `       "postCreateCommand": "curl -fsS http://huddle:24842/api/tls/ca.crt -o ${caPath} || echo 'CA not fetched (HTTPS tunnelled, no MITM)'"`,
     ),
   );
   console.log(dim(`     (Adjust ${caPath} to your remoteUser's home if it differs; pass --ca-path to change it.)`));

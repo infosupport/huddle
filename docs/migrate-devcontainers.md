@@ -70,7 +70,7 @@ This writes `docker-compose.huddle.yml` next to your compose file. For each serv
 marked network it adds, in the override only:
 
 * the proxy env vars — `HTTP_PROXY` / `HTTPS_PROXY` (+ lowercase) `= http://huddle:80`;
-* `NO_PROXY` including `huddle` (so the direct CA fetch to `huddle:3000` skips the proxy);
+* `NO_PROXY` including `huddle` (so the direct CA fetch to `huddle:24842` skips the proxy);
 * `NODE_EXTRA_CA_CERTS` pointing at the CA path;
 * a second network, `huddle`, that maps to the existing `devcontainer-net`
   (`external: true`) — your own `development` network is left untouched.
@@ -113,7 +113,7 @@ to finish:
    (`huddle` is in `NO_PROXY`, so the call goes directly to the Huddle API):
 
    ```jsonc
-   "postCreateCommand": "curl -fsS http://huddle:3000/api/tls/ca.crt -o /home/vscode/.huddle-ca.crt || echo 'CA not fetched (HTTPS tunnelled, no MITM)'"
+   "postCreateCommand": "curl -fsS http://huddle:24842/api/tls/ca.crt -o /home/vscode/.huddle-ca.crt || echo 'CA not fetched (HTTPS tunnelled, no MITM)'"
    ```
 
    Use the home of your `remoteUser`; pass `--ca-path` to `huddle migrate` if it differs

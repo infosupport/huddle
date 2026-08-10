@@ -22,7 +22,7 @@ export const INTERNAL_NET = 'devcontainer-net';
  * `huddle migrate` can generate the matching bind mount.
  */
 export const HOST_SOCKET_DIR = '/tmp/dc-sockets';
-const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
+const HOST_PORT = process.env.HUDDLE_PORT ?? '24842';
 
 export interface InitOptions {
   runtime?: string;
@@ -158,7 +158,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     securityOptFlags +
     ` -e HUDDLE_RUNTIME=${runtime.name}` +
     ` -e HUDDLE_OPERATOR_TOKEN=${operatorToken}` +
-    ` -p ${HOST_PORT}:3000` +
+    ` -p ${HOST_PORT}:24842` +
     ` -v ${VOLUME}:/data` +
     ` -v "${runtime.socketPath}:/var/run/docker.sock"` +
     ` -v "${hostTmpSockets}:/tmp/dc-sockets"` +

@@ -80,16 +80,16 @@ describe('isAuthenticated', () => {
 
 describe('isAllowedOrigin (CSWSH-verdediging, finding #4)', () => {
   it('geen Origin (niet-browser) → toegestaan (auth-check blijft gelden)', () => {
-    expect(isAllowedOrigin(undefined, 'localhost:3000')).toBe(true);
+    expect(isAllowedOrigin(undefined, 'localhost:24842')).toBe(true);
   });
   it('same-origin → toegestaan', () => {
-    expect(isAllowedOrigin('http://localhost:3000', 'localhost:3000')).toBe(true);
+    expect(isAllowedOrigin('http://localhost:24842', 'localhost:24842')).toBe(true);
   });
   it('cross-origin (aanvaller-pagina) → geweigerd', () => {
-    expect(isAllowedOrigin('https://evil.example.com', 'localhost:3000')).toBe(false);
+    expect(isAllowedOrigin('https://evil.example.com', 'localhost:24842')).toBe(false);
   });
   it('onparseerbare Origin → geweigerd', () => {
-    expect(isAllowedOrigin('not a url', 'localhost:3000')).toBe(false);
+    expect(isAllowedOrigin('not a url', 'localhost:24842')).toBe(false);
   });
 });
 

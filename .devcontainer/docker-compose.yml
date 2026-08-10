@@ -23,7 +23,7 @@ services:
 
     # ── Alle egress verplicht via de Huddle-proxy ───────────────────────────────
     # Het interne netwerk heeft geen eigen internettoegang; dit is de enige uitweg.
-    # `huddle` staat in NO_PROXY zodat directe calls naar de Huddle-API (poort 3000)
+    # `huddle` staat in NO_PROXY zodat directe calls naar de Huddle-API (poort 24842)
     # en het ophalen van de CA niet door de proxy (poort 80) hoeven.
     environment:
       HTTP_PROXY: http://huddle:80

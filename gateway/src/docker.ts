@@ -722,7 +722,7 @@ chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
 touch /tmp/sudo-audit.log
 ( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
     [ -z "\$line" ] && continue
-    curl -sf -X POST "http://huddle:3000/api/audit/sudo" \\
+    curl -sf -X POST "http://huddle:24842/api/audit/sudo" \\
       -H "Content-Type: application/json" \\
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
@@ -831,7 +831,7 @@ chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
 touch /tmp/sudo-audit.log
 ( tail -F /tmp/sudo-audit.log 2>/dev/null | while IFS= read -r line; do
     [ -z "\$line" ] && continue
-    curl -sf -X POST "http://huddle:3000/api/audit/sudo" \\
+    curl -sf -X POST "http://huddle:24842/api/audit/sudo" \\
       -H "Content-Type: application/json" \\
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
