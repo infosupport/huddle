@@ -170,6 +170,57 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     expect(survives.n).toBe(1);
   });
 
+  it('syncs groups out to the folder (app → files), mirrors the set, and re-tags them folder-managed', () => {
+    // A manually-created group + rules (source stays 'manual' until synced).
+    groups.importGroupEnvelope(groups.validateGroupEnvelope(envOpenAI()), { source: 'manual' });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-sync-'));
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+
+    const res = groups.syncGroupsToFolder();
+    expect(res.mounted).toBe(true);
+    expect(res.writable).toBe(true);
+    expect(res.written).toBe(1);
+    expect(res.files[0]).toMatchObject({ group: 'OpenAI', file: 'openai.json' });
+    // The written file is a valid envelope round-trip.
+    const env = groups.validateGroupEnvelope(JSON.parse(fs.readFileSync(path.join(dir, 'openai.json'), 'utf8')));
+    expect(env.group.name).toBe('OpenAI');
+    expect(env.rules).toHaveLength(2);
+    // The synced group is now folder-managed, so a follow-up reload updates it in
+    // place instead of aborting on the "don't overwrite a manual group" guard.
+    expect(dbMod.getGroupByName('OpenAI')!.source).toBe('startup-folder');
+    const reloaded = groups.reloadFirewallRulesFolder();
+    expect(reloaded.errors).toHaveLength(0);
+    expect(reloaded.groups).toBe(1);
+
+    // Now drop an unrelated (non-envelope) file, delete the group and re-sync:
+    // the group's envelope file is pruned so the folder mirrors the current set,
+    // while the unrelated file is left untouched.
+    fs.writeFileSync(path.join(dir, 'notes.json'), '{"just":"data"}');
+    dbMod.deleteGroup(dbMod.getGroupByName('OpenAI')!.id);
+    const res2 = groups.syncGroupsToFolder();
+    expect(res2.written).toBe(0);
+    expect(res2.pruned).toBe(1);
+    expect(fs.existsSync(path.join(dir, 'openai.json'))).toBe(false);
+    expect(fs.existsSync(path.join(dir, 'notes.json'))).toBe(true);
+  });
+
+  it('reports write errors instead of throwing when the folder is read-only', () => {
+    groups.importGroupEnvelope(groups.validateGroupEnvelope(envOpenAI()), { source: 'manual' });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-ro-'));
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    fs.chmodSync(dir, 0o500); // r-x: readable/listable but not writable
+    try {
+      const res = groups.syncGroupsToFolder();
+      // Root ignores mode bits; skip the assertion there rather than flake.
+      if (process.getuid && process.getuid() === 0) return;
+      expect(res.mounted).toBe(true);
+      expect(res.written).toBe(0);
+      expect(res.errors.length).toBeGreaterThan(0);
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+  });
+
   it('validateGroupEnvelope is fail-closed', () => {
     expect(() => groups.validateGroupEnvelope({ rules: [] } as any)).toThrow(/group.name/);
     expect(() => groups.validateGroupEnvelope({ group: { name: 'X' } } as any)).toThrow(/rules must be an array/);
