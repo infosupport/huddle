@@ -6,6 +6,8 @@ import { bold, green, cyan, dim } from './utils';
 export interface StartOptions {
   ide: string;
   workspace?: string;
+  mounts?: { name: string; path: string }[];
+  context?: string;
   name?: string;
   image?: string;
   empty: boolean;
@@ -24,12 +26,42 @@ interface StartResponse {
 
 export async function runStart(opts: StartOptions): Promise<void> {
   const ide = parseIde(opts.ide);
-  const workspaceDir = opts.empty ? undefined : resolveWorkspace(opts.workspace);
-  const baseName = opts.empty ? 'empty' : path.basename(workspaceDir!);
+  const hasMounts = !!opts.mounts && opts.mounts.length > 0;
+  if (hasMounts && opts.workspace) {
+    throw new Error('Cannot combine --workspace with --mount; use --mount for every folder instead.');
+  }
+  if (hasMounts && opts.empty) {
+    throw new Error('Cannot combine --empty with --mount.');
+  }
+
+  const resolvedMounts = hasMounts
+    ? opts.mounts!.map((m) => ({ name: validateMountName(m.name), path: resolveWorkspace(m.path) }))
+    : undefined;
+  if (resolvedMounts) {
+    const seen = new Set<string>();
+    for (const m of resolvedMounts) {
+      if (seen.has(m.name)) throw new Error(`Duplicate --mount name: ${m.name}`);
+      seen.add(m.name);
+    }
+  }
+
+  const contextMount = opts.context?.trim() || undefined;
+  if (contextMount && !hasMounts) {
+    throw new Error('--context requires at least one --mount.');
+  }
+  if (contextMount && !resolvedMounts!.some((m) => m.name === contextMount)) {
+    throw new Error(`--context "${contextMount}" does not match any --mount name.`);
+  }
+
+  const workspaceDir = opts.empty || hasMounts ? undefined : resolveWorkspace(opts.workspace);
+  const baseName = opts.empty ? 'empty' : hasMounts ? resolvedMounts![0].name : path.basename(workspaceDir!);
   const containerName = opts.name ? validateContainerName(opts.name) : defaultContainerName(baseName);
 
   console.log(`Starting ${bold(containerName)} with ${bold(ide)}...`);
   if (workspaceDir) console.log(dim(`Workspace: ${workspaceDir}`));
+  if (resolvedMounts) {
+    for (const m of resolvedMounts) console.log(dim(`Mount ${m.name}: ${m.path}${m.name === contextMount ? ' (context)' : ''}`));
+  }
 
   let imageName = opts.image;
   if (!imageName) {
@@ -44,6 +76,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
     ideName: IdeName;
     empty?: boolean;
     workspaceDir?: string;
+    mounts?: { name: string; path: string }[];
+    contextMount?: string;
   } = {
     imageName,
     containerName,
@@ -52,6 +86,9 @@ export async function runStart(opts: StartOptions): Promise<void> {
 
   if (opts.empty) {
     body.empty = true;
+  } else if (resolvedMounts) {
+    body.mounts = resolvedMounts;
+    if (contextMount) body.contextMount = contextMount;
   } else {
     body.workspaceDir = workspaceDir;
   }
@@ -103,6 +140,14 @@ function validateContainerName(name: string): string {
   const trimmed = name.trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(trimmed)) {
     throw new Error(`Invalid container name: ${name}`);
+  }
+  return trimmed;
+}
+
+function validateMountName(name: string): string {
+  const trimmed = (name ?? '').trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(trimmed)) {
+    throw new Error(`Invalid --mount name: "${name}". Use letters, digits, '-', '_' (used as the container subfolder name).`);
   }
   return trimmed;
 }
