@@ -1,7 +1,8 @@
 import { initDb } from './db';
 import { createProxyServer } from './proxy';
 import { createApiServer } from './api';
-import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
+import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
+import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
@@ -65,11 +66,27 @@ async function initContainerIptables(): Promise<void> {
   }
 }
 
+// Ephemeral sudo grants must be locked INTERNALLY in the container as soon as they
+// expire — expiry is therefore not passive. This active sweeper periodically locks
+// the 'noot' user in every container with an expired grant and cleans up the row.
+// Best-effort per container (a disappeared container leaves the rest untouched).
+const SUDO_SWEEP_INTERVAL_MS = 30_000;
+async function sweepSudoGrants(): Promise<void> {
+  try {
+    const locked = await sweepExpiredSudoGrants(execInContainer);
+    if (locked.length) console.log(`[sudo-grant] noot locked in ${locked.length} expired container(s)`);
+  } catch (err: any) {
+    console.error('[sudo-grant] sweep failed:', err.message);
+  }
+}
+setInterval(() => { void sweepSudoGrants(); }, SUDO_SWEEP_INTERVAL_MS);
+void sweepSudoGrants();
+
 initContainerProxies();
-// Reconnecten aan de devcontainer-netwerken vervuilt resolv.conf (Podman zet de
-// internal-net aardvark-DNS erin); sanitize erna zodat egress-DNS blijft werken,
-// óók als er (nog) geen devcontainers zijn. De settling-runs vangen bovendien de
-// devcontainer-net-connect op die `huddle init` pas ná de start uitvoert.
+// Reconnecting to the devcontainer networks pollutes resolv.conf (Podman puts the
+// internal-net aardvark DNS in it); sanitize afterwards so egress DNS keeps
+// working, even when there are (yet) no devcontainers. The settling runs also
+// catch the devcontainer-net connect that `huddle init` only performs after start.
 initContainerNetworks().finally(() => { void sanitizeResolvConf(); });
 scheduleSettlingSanitize();
 initContainerIptables();

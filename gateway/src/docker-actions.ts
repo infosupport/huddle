@@ -36,6 +36,11 @@ export const DOCKER_ACTIONS: DockerActionDef[] = [
   { action: 'container.remove',   kind: 'temporary', group: 'containers', label: 'Remove',     defaultEnabled: false },
   { action: 'container.update',   kind: 'temporary', group: 'containers', label: 'Update',     defaultEnabled: false },
   { action: 'container.exec',     kind: 'temporary', group: 'containers', label: 'Exec',       defaultEnabled: false },
+  // Attach is what foreground `docker run` / `docker attach` uses: it hijacks
+  // the connection into a raw bidirectional stdio stream. Same power class as
+  // exec (interactive access to a running container), hence temporary + off by
+  // default.
+  { action: 'container.attach',   kind: 'temporary', group: 'containers', label: 'Attach',     defaultEnabled: false },
   { action: 'image.pull',         kind: 'temporary', group: 'images',     label: 'Pull',       defaultEnabled: false },
   { action: 'image.build',        kind: 'temporary', group: 'images',     label: 'Build',      defaultEnabled: false },
   // Push verdient extra terughoudendheid bij het aanzetten: hij verlaat de
@@ -156,6 +161,8 @@ export function classifyRequest(method: string, p: string): string | null {
     if (/^\/containers\/[^/]+\/(json|top|archive)$/.test(p)) return 'container.inspect';
     if (/^\/containers\/[^/]+\/logs$/.test(p)) return 'container.logs';
     if (/^\/containers\/[^/]+\/stats$/.test(p)) return 'container.stats';
+    // WebSocket attach (docker attach over ws). The raw-TCP attach below is a POST.
+    if (/^\/containers\/[^/]+\/attach\/ws$/.test(p)) return 'container.attach';
     if (p === '/networks' || p === '/networks/json') return 'network.list';
     if (/^\/networks\/[^/]+$/.test(p)) return 'network.inspect';
     if (p === '/volumes') return 'volume.list';
@@ -174,6 +181,8 @@ export function classifyRequest(method: string, p: string): string | null {
     if (/^\/containers\/[^/]+\/update$/.test(p)) return 'container.update';
     if (/^\/containers\/[^/]+\/exec$/.test(p)) return 'container.exec';
     if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) return 'container.exec';
+    // Attach hijack used by foreground `docker run` and `docker attach`.
+    if (/^\/containers\/[^/]+\/attach$/.test(p)) return 'container.attach';
     if (p === '/build') return 'image.build';
     if (p === '/images/create') return 'image.pull';
     // Image-namen kunnen slashes bevatten (registry/repo), vandaar (.+).

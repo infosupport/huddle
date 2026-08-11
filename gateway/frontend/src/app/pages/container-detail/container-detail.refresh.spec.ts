@@ -9,11 +9,11 @@ import { StateService } from '../../core/services/state.service';
 import { ModalService } from '../../core/services/modal.service';
 import { Rule } from '../../core/models/rule.model';
 
-// Bug: op container-detail bleef een globaal afgehandelde ('For everyone')
-// requested-regel in de view staan tot een handmatige refresh, terwijl de
-// inline 'Allow' hem wél meteen liet verdwijnen. Oorzaak: de pagina toont zijn
-// eigen detail$ (getContainerDetail); de inline-acties riepen load() aan, maar
-// de gedeelde bevestigingsmodal ververste alleen state.rules$ — niet load().
+// Bug: on container-detail a globally handled ('For everyone') requested rule
+// stayed in the view until a manual refresh, while the inline 'Allow' did make it
+// disappear immediately. Cause: the page shows its own detail$ (getContainerDetail);
+// the inline actions called load(), but the shared confirmation modal only
+// refreshed state.rules$ — not load().
 describe('ContainerDetail refresh after global confirm', () => {
   function rule(over: Partial<Rule>): Rule {
     return {
@@ -32,7 +32,7 @@ describe('ContainerDetail refresh after global confirm', () => {
     api = {
       getContainerDetail: () => { detailCalls++; return of({ inspect: {}, rules: rulesNow.slice(), globalRules: [] }); },
       getApprovedPorts: () => of([]),
-      getContainerCredentials: () => of(null),
+      getSudoGrant: () => of({ active: false, until: null }),
       getContainers: () => of([]),
       getRules: () => of(rulesNow.slice()),
       getGrants: () => of({}),
@@ -53,8 +53,8 @@ describe('ContainerDetail refresh after global confirm', () => {
         ModalService,
       ],
     }).compileComponents();
-    // Vervang de zware template (child-componenten) door een lege — we testen
-    // gedrag, niet DOM.
+    // Replace the heavy template (child components) with an empty one — we test
+    // behavior, not DOM.
     TestBed.overrideComponent(ContainerDetailComponent, { set: { template: '' } });
   });
 
@@ -64,13 +64,13 @@ describe('ContainerDetail refresh after global confirm', () => {
     fixture.detectChanges(); // ngOnInit -> load() (call #1)
     expect(detailCalls).toBe(1);
 
-    // Simuleer 'For everyone' -> gedeelde modal -> confirm()
+    // Simulate 'For everyone' -> shared modal -> confirm()
     const modalFixture = TestBed.createComponent(ConfirmModalComponent);
     modal.openConfirm(rule({ id: 1, status: 'requested' }), 'allow');
     modalFixture.detectChanges();
     modalFixture.componentInstance.confirm();
 
-    // Zonder de fix bleef detailCalls op 1 en toonde de view de oude regel.
+    // Without the fix detailCalls stayed at 1 and the view showed the old rule.
     expect(detailCalls).toBe(2);
     expect(rulesNow.some(r => r.status === 'requested')).toBe(false);
   });

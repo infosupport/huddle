@@ -40,6 +40,19 @@ export class FirewallComponent {
   toasts: Toast[] = [];
   resolving = new Set<number>();
 
+  // Known containers for the scope choice in the "add custom rule" form.
+  containers$ = this.state.containers$;
+
+  // ── "Add custom rule" form ──────────────────────────────────────────────────
+  // Lets the operator write their own rule with wildcards: `*.` in the domain
+  // and `*` in the path pattern (e.g. an Azure DevOps feed with a rotating GUID).
+  showAddForm = false;
+  addSubmitting = false;
+  newDomain = '';
+  newPath = '';
+  newScope = '';                       // '' = global, otherwise container_id
+  newAction: 'allow' | 'deny' = 'allow';
+
   readonly pieConfig: PieMenuConfig = {
     families: [
       {
@@ -180,6 +193,40 @@ export class FirewallComponent {
   );
 
   reload(): void { this.state.loadAll(); }
+
+  toggleAddForm(): void {
+    this.showAddForm = !this.showAddForm;
+    if (!this.showAddForm) this.resetAddForm();
+  }
+
+  private resetAddForm(): void {
+    this.newDomain = '';
+    this.newPath = '';
+    this.newScope = '';
+    this.newAction = 'allow';
+  }
+
+  addCustomRule(): void {
+    const domain = this.newDomain.trim();
+    if (!domain || this.addSubmitting) return;
+    const path = this.newPath.trim() || null;
+    const containerId = this.newScope || null;
+    this.addSubmitting = true;
+    this.api.createRule(domain, containerId, this.newAction, path).subscribe({
+      next: () => {
+        const tone: Toast['tone'] = this.newAction === 'deny' ? 'deny' : 'allow';
+        this.pushToast(path ? `${domain}${path}` : domain, `Rule ${this.newAction}ed`, tone);
+        this.addSubmitting = false;
+        this.showAddForm = false;
+        this.resetAddForm();
+        this.state.loadAll();
+      },
+      error: (err: Error) => {
+        this.addSubmitting = false;
+        this.pushToast(domain, err.message || 'Could not add rule', 'deny');
+      },
+    });
+  }
 
   enablePathMode(rule: Rule): void { this.api.setPathMode(rule.id, true).subscribe(() => this.state.loadAll()); }
   allowRule(rule: Rule): void      { this.api.resolveRule(rule.id, 'allow').subscribe(() => this.state.loadAll()); }

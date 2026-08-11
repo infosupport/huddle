@@ -1,4 +1,4 @@
-import { get, post } from './api';
+import { get, post, del } from './api';
 import { bold, dim, green, red, cyan, promptKey, formatTime, printTable } from './utils';
 
 interface Rule {
@@ -85,6 +85,91 @@ async function reviewRule(rule: Rule, idx: number, total: number): Promise<void>
 
 async function resolveRule(rule: Rule, status: 'allow' | 'deny', scope: 'rule' | 'global'): Promise<void> {
   await post<Rule>(`/api/rules/${rule.id}/resolve`, { status, scope });
+}
+
+export interface FirewallAddOptions {
+  domain?: string;
+  path?: string;
+  deny: boolean;
+  container?: string;
+}
+
+// Creates a custom firewall rule. Supports wildcards: `*.` in the domain
+// (e.g. `*.pkgs.dev.azure.com`) and `*` in the path pattern (e.g.
+// `/_packaging/*/nuget/v3/*` for an Azure DevOps feed with a rotating
+// GUID). Defaults to 'allow'; with --deny a block rule. Without --container the
+// rule is global.
+export async function runFirewallAdd(opts: FirewallAddOptions): Promise<void> {
+  const domain = (opts.domain ?? '').trim();
+  if (!domain) {
+    throw new Error(
+      'Usage: huddle firewall add <domain> [--path <pattern>] [--deny] [--container <id>]'
+    );
+  }
+  const status: 'allow' | 'deny' = opts.deny ? 'deny' : 'allow';
+  const path = opts.path?.trim();
+
+  const body: Record<string, unknown> = {
+    domain,
+    container_id: opts.container ?? null,
+    status,
+  };
+  if (path) body.path_pattern = path;
+
+  const rule = await post<Rule>('/api/rules', body);
+  const target = formatTarget(rule);
+  const scope = rule.container_id ? `container: ${rule.container_id}` : 'global';
+  const verb = status === 'deny' ? red('Denied') : green('Allowed');
+  console.log(`${verb} ${bold(cyan(target))} ${dim(`(${scope})`)}`);
+}
+
+export interface FirewallDeleteOptions {
+  target?: string; // numeric rule id OR a domain
+  container?: string; // disambiguates when target is a domain
+}
+
+// Deletes a firewall rule. Accepts the numeric id shown by `firewall list`
+// (deleted directly) or a domain, which is resolved to a single rule id via a
+// lookup. `--container` narrows a domain match to one scope; an ambiguous
+// domain (multiple matching rules) is refused with the candidate ids so the
+// caller can re-run with an exact id.
+export async function runFirewallDelete(opts: FirewallDeleteOptions): Promise<void> {
+  const target = (opts.target ?? '').trim();
+  if (!target) {
+    throw new Error('Usage: huddle firewall delete <id-or-domain> [--container <id>]');
+  }
+
+  let id: number;
+  if (/^\d+$/.test(target)) {
+    id = Number(target);
+  } else {
+    // Domain form: list all rules (optionally scoped) and resolve to one id.
+    const qs = new URLSearchParams();
+    if (opts.container) qs.set('container', opts.container);
+    const query = qs.toString();
+    const rules = await get<Rule[]>(`/api/rules${query ? `?${query}` : ''}`);
+    // Hostnames are case-insensitive everywhere else in the firewall stack, so
+    // match the domain case-insensitively — a rule stored as `GitHub.com` must be
+    // deletable by typing `github.com`.
+    const needle = target.toLowerCase();
+    const matches = rules.filter((r) => r.domain.toLowerCase() === needle);
+    if (matches.length === 0) {
+      const scope = opts.container ? ` for container ${opts.container}` : '';
+      throw new Error(`No firewall rule found for "${target}"${scope}.`);
+    }
+    if (matches.length > 1) {
+      const ids = matches
+        .map((r) => `  ${r.id}  ${r.status.padEnd(9)} ${formatTarget(r)}  ${r.container_id ?? '(global)'}`)
+        .join('\n');
+      throw new Error(
+        `"${target}" matches ${matches.length} rules — delete by id (or narrow with --container):\n${ids}`
+      );
+    }
+    id = matches[0].id;
+  }
+
+  await del<{ ok: true }>(`/api/rules/${id}`);
+  console.log(`${green('Deleted')} rule ${bold(cyan(String(id)))}`);
 }
 
 function printRulesTable(rules: Rule[]): void {
