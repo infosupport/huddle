@@ -39,6 +39,7 @@ export class ContainersComponent {
   }
   scoreClass(s: number | null) { return s === null ? 'muted' : s > 70 ? 'green' : s > 40 ? 'yellow' : 'red'; }
   sourcesLeaf(c: Container) {
+    if (c.mounts?.length) return c.mounts.map(m => m.name).join(', ');
     const p = c.workspacePath || c.labels?.['com.intellij.devcontainer.sources.path'] || c.Labels?.['com.intellij.devcontainer.sources.path'] || '';
     return p ? p.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '—' : '—';
   }

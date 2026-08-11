@@ -21,15 +21,17 @@ import {
 interface ParsedArgs {
   positional: string[];
   flags: Record<string, string | boolean>;
+  mounts: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'context']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  const mounts: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -43,6 +45,23 @@ function parseArgs(argv: string[]): ParsedArgs {
       const eq = raw.indexOf('=');
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
       if (!name) throw new Error(`Invalid option: ${arg}`);
+
+      // Repeatable, unlike every other value flag (one `--mount name=path` per folder).
+      if (name === 'mount') {
+        let value: string;
+        if (eq >= 0) {
+          value = raw.slice(eq + 1);
+        } else {
+          const next = argv[i + 1];
+          if (next === undefined || next.startsWith('-')) {
+            throw new Error('Option --mount expects a value (name=path)');
+          }
+          value = next;
+          i++;
+        }
+        mounts.push(value);
+        continue;
+      }
 
       if (eq >= 0) {
         flags[name] = raw.slice(eq + 1);
@@ -79,7 +98,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     positional.push(arg);
   }
 
-  return { positional, flags };
+  return { positional, flags, mounts };
+}
+
+function parseMountFlag(raw: string): { name: string; path: string } {
+  const eq = raw.indexOf('=');
+  if (eq <= 0) throw new Error(`Invalid --mount value "${raw}", expected name=path`);
+  return { name: raw.slice(0, eq), path: raw.slice(eq + 1) };
 }
 
 function readVersion(): string {
@@ -136,6 +161,11 @@ Init options:
 Start options:
   --ide <intellij|rider|vscode>      IDE (default: intellij)
   --workspace <path>                 Workspace directory (default: current directory)
+  --mount <name>=<path>              Mount an additional folder under /workspaces/<name>
+                                     (repeatable; cannot combine with --workspace/--empty)
+  --context <name>                   Mark one --mount as the shared context folder; writes a
+                                     stub /workspaces/CLAUDE.md pointing at it (must match a
+                                     declared --mount name)
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
@@ -186,7 +216,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { positional, flags } = parsed;
+  const { positional, flags, mounts } = parsed;
   const [cmd, sub] = positional;
 
   if (flagBool(flags, 'version', 'v') || cmd === 'version') {
@@ -212,6 +242,8 @@ async function main(): Promise<void> {
     await runStart({
       ide: flagString(flags, 'ide') ?? 'intellij',
       workspace: flagString(flags, 'workspace') ?? startArgs[0],
+      mounts: mounts.length ? mounts.map(parseMountFlag) : undefined,
+      context: flagString(flags, 'context'),
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),

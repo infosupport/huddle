@@ -10,6 +10,7 @@ export interface Container {
   status: string;
   created: number;
   workspacePath?: string;
+  mounts?: { name: string; path: string; isContext?: boolean }[];
   presentableName?: string;
   inNetwork?: boolean;
   huddleInNetwork?: boolean;

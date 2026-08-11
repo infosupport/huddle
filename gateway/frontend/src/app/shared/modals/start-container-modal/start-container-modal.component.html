@@ -33,8 +33,38 @@
           Empty (clone manually)
         </label>
 
-        <label for="start-workspace">Workspace directory</label>
-        <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/my-project" [disabled]="empty" />
+        @if (!empty) {
+          <label class="empty-toggle">
+            <input type="checkbox" [ngModel]="mode === 'multi'" (ngModelChange)="toggleMultiMode()" />
+            Multiple folders (mounted side by side, each its own worktree)
+          </label>
+        }
+
+        @if (!empty && mode === 'single') {
+          <label for="start-workspace">Workspace directory</label>
+          <input id="start-workspace" type="text" [(ngModel)]="workspace" (ngModelChange)="onWorkspaceInput()" placeholder="C:/projects/my-project" />
+        }
+
+        @if (!empty && mode === 'multi') {
+          <label>Folders</label>
+          @for (m of mounts; track $index) {
+            <div class="mount-row">
+              <input type="text" [(ngModel)]="m.name" (ngModelChange)="onMountInput()" placeholder="name (e.g. backend)" />
+              <input type="text" [(ngModel)]="m.path" (ngModelChange)="onMountInput()" placeholder="C:/projects/my-repo" />
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                [class.btn-context-on]="contextMountIndex === $index"
+                (click)="toggleContext($index)"
+                title="Mark as shared AI/agent context folder">{{ contextMountIndex === $index ? '★' : '☆' }}</button>
+              <button type="button" class="btn btn-ghost btn-sm" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder">✕</button>
+            </div>
+          }
+          <button type="button" class="btn btn-ghost btn-sm" (click)="addMount()">+ Add folder</button>
+          @if (contextMountIndex !== null) {
+            <p class="mount-context-hint">A stub CLAUDE.md pointing at "{{ mounts[contextMountIndex].name || '…' }}" will be written to the shared workspace root.</p>
+          }
+        }
 
         <label for="start-name">Container name</label>
         <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-my-project" />

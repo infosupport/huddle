@@ -902,26 +902,67 @@ export async function createApiServer(): Promise<FastifyInstance> {
       .send(getCaCertPem());
   });
 
-  app.post<{ Body: { imageName: string; workspaceDir?: string; containerName: string; ideName?: string; empty?: boolean; presentableName?: string; memory?: string; cpus?: string } }>(
+  app.post<{ Body: {
+    imageName: string;
+    workspaceDir?: string;
+    mounts?: { name: string; path: string }[];
+    contextMount?: string;
+    containerName: string;
+    ideName?: string;
+    empty?: boolean;
+    presentableName?: string;
+    memory?: string;
+    cpus?: string;
+  } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const { imageName, workspaceDir, mounts, contextMount, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
-      if (!empty && !workspaceDir) {
-        return reply.code(400).send({ error: 'workspaceDir required when empty is not set' });
+      if (workspaceDir && mounts?.length) {
+        return reply.code(400).send({ error: 'Provide either workspaceDir or mounts, not both' });
+      }
+      if (!empty && !workspaceDir && !mounts?.length) {
+        return reply.code(400).send({ error: 'workspaceDir or mounts required when empty is not set' });
+      }
+      if (contextMount && !mounts?.length) {
+        return reply.code(400).send({ error: 'contextMount requires mounts' });
+      }
+      let normalizedMounts: { name: string; path: string }[] | undefined;
+      if (mounts?.length) {
+        try {
+          const seen = new Set<string>();
+          normalizedMounts = mounts.map((m) => {
+            const name = (m.name ?? '').trim();
+            if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
+              throw new Error(`Invalid mount name: "${m.name}"`);
+            }
+            if (seen.has(name)) throw new Error(`Duplicate mount name: ${name}`);
+            seen.add(name);
+            return { name, path: (m.path ?? '').replace(/\\/g, '/').replace(/\/$/, '') };
+          });
+        } catch (err: any) {
+          return reply.code(400).send({ error: err.message });
+        }
+      }
+      if (contextMount && !normalizedMounts!.some((m) => m.name === contextMount)) {
+        return reply.code(400).send({ error: `contextMount "${contextMount}" does not match any mount name` });
       }
       const fwd = (workspaceDir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
       const leaf = empty
         ? containerName.replace(/^devcontainer-/, '') || containerName
-        : (fwd.split('/').pop() ?? containerName);
+        : normalizedMounts
+          ? normalizedMounts[0].name
+          : (fwd.split('/').pop() ?? containerName);
       const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,
+        mounts: normalizedMounts,
+        contextMount: normalizedMounts ? contextMount : undefined,
         containerName,
-        containerWorkspace: `/workspaces/${leaf}`,
+        containerWorkspace: normalizedMounts ? '/workspaces' : `/workspaces/${leaf}`,
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
