@@ -25,8 +25,17 @@ huddle                 # start an IntelliJ devcontainer for the current director
 huddle ./project       # start for a specific directory
 huddle --ide rider
 huddle --ide vscode --name devcontainer-demo
+huddle --ide vscode --mount backend=../docker-corpa --mount frontend=../frontend-consolidated-real-estate-info --name corpa-dev
 huddle fw list
 huddle firewall list -i
+```
+
+`--mount <name>=<path>` mounts an additional folder, worktree-isolated like the main workspace, under `/workspaces/<name>` in the container. Repeatable — pass one per folder. Cannot be combined with `--workspace`/`--empty`; when at least one `--mount` is given, the container's shared workspace root becomes `/workspaces` instead of `/workspaces/<leaf>`.
+
+`--context <name>` marks one of the `--mount` folders as shared context (e.g. an AI-context/skills repo): Huddle writes a stub `/workspaces/CLAUDE.md` pointing at it, so an agent working in any of the other mounted repos picks it up as an ancestor file. `<name>` must match a declared `--mount` name; the stub is only written if `/workspaces/CLAUDE.md` doesn't already exist.
+
+```bash
+huddle --ide vscode --mount ai=../ai-context-repo --mount backend=../backend-repo --mount frontend=../frontend-repo --context ai --name corpa-dev
 ```
 
 Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
@@ -59,6 +68,7 @@ Main flags:
 ```text
 --ide <intellij|rider|vscode>
 --workspace <path>
+--mount <name>=<path>   (repeatable)
 --name <name>
 --image <image>
 --empty

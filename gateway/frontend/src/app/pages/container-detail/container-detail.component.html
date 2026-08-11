@@ -9,6 +9,7 @@
   @let net           = d.inspect.NetworkSettings?.Networks?.['dc-net-' + name] ?? d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
   @let ide           = cfg?.Labels?.['com.devcontainer.ide'] ?? '';
   @let workspace     = cfg?.Labels?.['com.intellij.devcontainer.workspace.path'] ?? '—';
+  @let mounts        = parseMounts(cfg?.Labels?.['com.intellij.devcontainer.mounts']);
   @let inNetwork     = !!net;
   @let huddleConn    = d.huddleInNetwork !== false;
   @let cRules        = excludePathMode(d.rules);
@@ -80,6 +81,16 @@
       <span class="cd-meta__label">Workspace</span>
       <span class="cd-meta__value" [title]="workspace">{{ workspace }}</span>
     </div>
+    @if (mounts.length) {
+      <div class="cd-meta__item">
+        <span class="cd-meta__label">Mounts</span>
+        <span class="cd-meta__value">
+          @for (m of mounts; track m.name; let last = $last) {
+            <span [title]="m.path">{{ m.name }}</span>@if (m.isContext) {<span class="cd-badge cd-badge--ok" style="padding:1px 6px;font-size:10px;margin:0 4px">AI context</span>}@if (!last) {<span>, </span>}
+          }
+        </span>
+      </div>
+    }
     <div class="cd-meta__item">
       <span class="cd-meta__label">Created</span>
       <span class="cd-meta__value">{{ d.inspect.Created | date:'dd-MM-yy HH:mm' }}</span>
