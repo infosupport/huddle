@@ -15,9 +15,11 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
 // standalone Firewall page (container = null → all rules) and the
 // container-detail view (container = <name> → that container + global). Every
 // rule in scope, organised by group (All rules / each group / Ungrouped), with
-// a rules/domains search, a status filter, and — consistent with the rest —
-// path-mode handled inline per domain (a "Path mode" column with an expandable
-// allowed-paths editor) instead of a separate view. Per-group import/export/apply.
+// a rules/domains search and a status filter. The "Action" column is merged:
+// an allow/deny rule shows its Allowed/Denied pill, a path-mode domain shows the
+// path control (all/specific select + expandable allowed-paths editor) in its
+// place. A "Container / Global" column shows each rule's scope. Allow↔deny and
+// path-mode toggling are done via the bulk actions. Per-group import/export/apply.
 @Component({
   selector: 'app-firewall-groups-panel',
   standalone: true,
@@ -149,8 +151,8 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                 <tr>
                   <th class="grp__chk"><input type="checkbox" [checked]="allVisibleSelected()" (change)="toggleSelectAll()" title="Select all" /></th>
                   <th class="grp__col-dom">Domain / path</th>
-                  <th class="grp__col-pm">Path mode</th>
-                  <th class="grp__col-act">Actions</th>
+                  <th class="grp__col-rule">Action</th>
+                  <th class="grp__col-scope">Container / Global</th>
                   <th class="grp__col-grp">Group</th>
                   <th class="grp__col-menu"></th>
                 </tr>
@@ -160,23 +162,22 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                   <tr [class.grp__tr--open]="expanded() === r.id" [class.grp__tr--sel]="isSelected(r.id)">
                     <td class="grp__chk"><input type="checkbox" [checked]="isSelected(r.id)" (change)="toggleSelect(r.id)" /></td>
                     <td class="grp__dom" [title]="r.domain">{{ r.domain }}</td>
-                    <td class="grp__pm">
-                      <select class="grp__pm-sel" [value]="isPath(r) ? 'specific' : 'all'" (change)="onPathMode(r, $event)">
-                        <option value="all">All paths</option>
-                        <option value="specific">Specific paths{{ isPath(r) ? ' (' + pathCount(r) + ')' : '' }}</option>
-                      </select>
+                    <td class="grp__rule">
                       @if (isPath(r)) {
+                        <select class="grp__pm-sel" [value]="'specific'" (change)="onPathMode(r, $event)">
+                          <option value="all">All paths</option>
+                          <option value="specific">Specific paths ({{ pathCount(r) }})</option>
+                        </select>
                         <button type="button" class="grp__pm-toggle" (click)="toggleExpand(r.id)">
                           <app-icon [name]="expanded() === r.id ? 'chevron-down' : 'chevron-right'" [size]="14" />
                         </button>
-                      }
-                    </td>
-                    <td class="grp__act">
-                      @if (isPath(r)) {
-                        <span class="pill pill--path">Path mode</span>
                       } @else {
                         <span class="pill" [class.pill--allow]="r.status === 'allow'" [class.pill--deny]="r.status === 'deny'">{{ r.status === 'allow' ? 'Allowed' : 'Denied' }}</span>
                       }
+                    </td>
+                    <td class="grp__scope">
+                      @if (r.container_id) { <span class="grp__stag" [title]="r.container_id">{{ shortName(r.container_id) }}</span> }
+                      @else { <span class="grp__stag grp__stag--global">Global</span> }
                     </td>
                     <td>
                       @if (r.group_id != null) { <span class="grp__gtag">{{ groupName(r.group_id) }}</span> }
@@ -239,7 +240,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .pill--new { background: var(--info-soft); color: var(--info); font-size: 0.6em; font-weight: 700; letter-spacing: .04em; padding: 3px 7px; border-radius: 999px; text-transform: uppercase; }
     .pill--shared { background: var(--accent-soft); color: var(--accent-strong); }
     .pill--folder { background: var(--info-soft); color: var(--info); }
-    .pill--path { background: var(--info-soft); color: var(--info); }
     .grp__note { margin: 12px 0 0; font-size: 0.85em; color: var(--text-muted); }
 
     .grp__add { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
@@ -286,8 +286,8 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
        or filter changes. The domain column takes the remaining space. */
     .grp__table-wrap { overflow-x: auto; }
     .grp__table { width: 100%; table-layout: fixed; }
-    .grp__col-pm { width: 208px; }
-    .grp__col-act { width: 104px; }
+    .grp__col-rule { width: 208px; }
+    .grp__col-scope { width: 150px; }
     .grp__col-grp { width: 128px; }
     .grp__col-menu { width: 40px; }
     .grp__table th, .grp__table td { overflow: hidden; text-overflow: ellipsis; }
@@ -295,10 +295,12 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__chk input { cursor: pointer; }
     .grp__tr--sel > td { background: var(--accent-soft); }
     .grp__dom { font-family: 'Space Grotesk', monospace; white-space: nowrap; }
-    .grp__pm { white-space: nowrap; }
+    .grp__rule { white-space: nowrap; }
     .grp__pm-sel { max-width: 168px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
     .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
-    .grp__act { white-space: nowrap; }
+    .grp__scope { white-space: nowrap; }
+    .grp__stag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted); font-family: 'Space Grotesk', monospace; }
+    .grp__stag--global { background: var(--info-soft); border-color: transparent; color: var(--info); font-family: inherit; }
     .grp__gtag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); }
     .grp__muted { color: var(--text-muted); font-size: 0.85em; }
     .grp__empty { text-align: center; color: var(--text-muted); padding: 24px 0; }
