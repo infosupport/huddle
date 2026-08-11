@@ -115,10 +115,10 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
+  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { name: string; path: string }[]; contextMount?: string; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
     return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
       imageName: params.image,
-      workspaceDir: params.workspace,
+      ...(params.mounts?.length ? { mounts: params.mounts, ...(params.contextMount ? { contextMount: params.contextMount } : {}) } : { workspaceDir: params.workspace }),
       containerName: params.containerName,
       ideName: params.ide,
       empty: params.empty === true,

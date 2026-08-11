@@ -94,10 +94,21 @@ export interface DevcontainerInfo {
   image: string;
   status: string;
   workspacePath: string;
+  mounts?: { name: string; path: string; isContext?: boolean }[];
   presentableName: string;
   created: number;
   inNetwork: boolean;
   huddleInNetwork: boolean;
+}
+
+function parseMountsLabel(raw: string | undefined): { name: string; path: string; isContext?: boolean }[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Set van dc-net-* netwerken waar de huddle-container zelf in zit. Wordt
@@ -130,6 +141,7 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
       image: c.Image,
       status: c.Status,
       workspacePath: c.Labels?.['com.intellij.devcontainer.sources.path'] ?? '',
+      mounts: parseMountsLabel(c.Labels?.['com.intellij.devcontainer.mounts']),
       presentableName: c.Labels?.['com.intellij.devcontainer.presentable.name'] ?? '',
       created: c.Created,
       inNetwork: Boolean(dcNet?.IPAddress),
@@ -423,6 +435,21 @@ for pair in ${pairs}; do
 done`;
 }
 
+// Genereert een stub /workspaces/CLAUDE.md die naar de gekozen context-mount
+// verwijst. /workspaces is de gedeelde parent van alle mounts, dus een agent
+// met cwd in eender welke sibling-mount pikt dit bestand op als ancestor
+// (zelfde manier waarop CLAUDE.md-discovery normaal al werkt). Nooit
+// overschrijven als het bestand al bestaat — zelfde "niet clobberen"-conventie
+// als buildFolderMappingSeedScript hierboven (cp -rn).
+function buildContextStubScript(containerWorkspace: string, contextMountName: string | undefined): string {
+  if (!contextMountName) return '';
+  return `# Wire the context mount into a stub CLAUDE.md at the shared workspace root.
+if [ ! -f "${containerWorkspace}/CLAUDE.md" ]; then
+  printf 'See /workspaces/%s for shared project context, skills, and conventions.\\n' "${contextMountName}" > "${containerWorkspace}/CLAUDE.md"
+  chown vscode:vscode "${containerWorkspace}/CLAUDE.md" 2>/dev/null || true
+fi`;
+}
+
 // Docker-toegang loopt via de socket in de gemounte directory /var/run/huddle
 // (zie DOCKER_HOST). Symlink het defaultpad voor tools die DOCKER_HOST negeren.
 // Gedeeld tussen het JetBrains- en het VS Code-startscript.
@@ -488,7 +515,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string): string {
+function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, password: string, caCertPem: string, seedScript: string, contextStubScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -588,6 +615,8 @@ chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
 ${seedScript}
 
+${contextStubScript}
+
 # Configure sudo audit logging
 mkdir -p /etc/sudoers.d
 printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
@@ -652,7 +681,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string): string {
+function buildVscodeConfigScript(containerWorkspace: string, containerName: string, password: string, caCertPem: string, seedScript: string, contextStubScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -692,6 +721,8 @@ chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
 chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
 ${seedScript}
+
+${contextStubScript}
 
 # Finding #15: harden het VS Code Remote IDE-kanaal met machine-level settings.
 # Attach-to-running-container leest deze uit ~/.vscode-server/data/Machine/ (en
@@ -748,9 +779,11 @@ function buildFolderMounts(containerName: string): FolderMount[] {
 
 export interface StartParams {
   imageName: string;
-  workspaceDir: string;     // host path, forward slashes; empty string when empty=true
+  workspaceDir: string;     // host path, forward slashes; empty string when empty=true or mounts is set
+  mounts?: { name: string; path: string }[]; // multiple named mounts; takes precedence over workspaceDir when set
+  contextMount?: string;    // name of the mount (from `mounts`) to wire in as shared AI/agent context
   containerName: string;
-  containerWorkspace: string; // /workspaces/<leaf>
+  containerWorkspace: string; // /workspaces/<leaf> for a single mount, /workspaces (shared parent) for multiple
   presentableName: string;
   ideName?: IdeName;
   empty?: boolean;
@@ -778,9 +811,10 @@ function parseCpuQuota(s: string): number {
 }
 
 export async function createAndStartContainer(params: StartParams): Promise<string> {
-  const { imageName, workspaceDir, containerName, containerWorkspace, presentableName } = params;
+  const { imageName, workspaceDir, mounts: mountParams, containerName, containerWorkspace, presentableName } = params;
   const ideName = params.ideName ?? 'intellij';
   const empty = params.empty === true;
+  const isMultiMount = !empty && !!mountParams?.length;
   // VS Code installeert zijn eigen backend (VS Code Server) bij het attachen: geen
   // JB host-config, geen RemoteDev-distro-volume, geen remote-dev-server launch.
   const isVscode = ideName === 'vscode';
@@ -870,7 +904,34 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     ]),
   ];
 
-  const effectiveSource = empty ? '' : await ensureWorktree(toLinuxPath(workspaceDir), containerName);
+  // Elke mount is een eigen git-repo (of geen repo — ensureWorktree valt dan
+  // terug op de padnaam zelf), dus elke mount krijgt zijn eigen worktree-call.
+  // Bij één mount is dat het klassieke gedrag; bij meerdere mounts wordt
+  // containerWorkspace de gedeelde parent ('/workspaces') en krijgt elke mount
+  // zijn eigen subfolder eronder — zelfde patroon als poc-corpa-ai's
+  // hand-rolled compose-bestand, wat maakt dat alleen deze mounts zichtbaar
+  // zijn in VS Code's file-explorer/Source Control, niets anders.
+  // contextMount wijst naar een van de mountParams (gevalideerd op de API-grens,
+  // gateway/src/api.ts); alleen zinvol in multi-mount mode.
+  const contextMountName = isMultiMount && params.contextMount && mountParams!.some(m => m.name === params.contextMount)
+    ? params.contextMount
+    : undefined;
+
+  const workspaceMounts: FolderMount[] = [];
+  let sourcesPathLabel = '';
+  if (!empty) {
+    if (isMultiMount) {
+      for (const m of mountParams!) {
+        const effectiveSource = await ensureWorktree(toLinuxPath(m.path), containerName);
+        workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: `${containerWorkspace}/${m.name}` });
+      }
+      sourcesPathLabel = mountParams![0].path;
+    } else {
+      const effectiveSource = await ensureWorktree(toLinuxPath(workspaceDir), containerName);
+      workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: containerWorkspace });
+      sourcesPathLabel = workspaceDir;
+    }
+  }
 
   const folderMounts = buildFolderMounts(containerName);
 
@@ -882,11 +943,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Source: 'jb_devcontainers_shared_volume',
       Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
     }]),
-    ...(empty ? [] : [{
-      Type: 'bind',
-      Source: effectiveSource,
-      Target: containerWorkspace,
-    }]),
+    ...workspaceMounts,
     {
       // Mount de per-container socket-DIRECTORY, niet het socket-bestand zelf:
       // een file-bind pint de inode en wijst na een huddle-herstart (unlink +
@@ -907,7 +964,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     Labels: {
       'com.intellij.devcontainer.id': devcontainerId,
       'com.intellij.devcontainer.presentable.name': presentableName,
-      'com.intellij.devcontainer.sources.path': empty ? '' : workspaceDir,
+      // Bij meerdere mounts staat hier enkel het primaire (eerste) mount-pad,
+      // voor backwards-compat met alles wat dit label als één string leest.
+      // De volledige lijst zit in het aparte 'mounts'-label hieronder.
+      'com.intellij.devcontainer.sources.path': empty ? '' : sourcesPathLabel,
+      ...(isMultiMount ? { 'com.intellij.devcontainer.mounts': JSON.stringify(
+        mountParams!.map(m => m.name === contextMountName ? { ...m, isContext: true } : m)
+      ) } : {}),
       'com.intellij.devcontainer.workspace.path': containerWorkspace,
       'com.intellij.devcontainer.model': modelJson,
       'com.devcontainer.ide': ideName,
@@ -930,11 +993,12 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const containerPaths = folderMounts.map(m => m.Target);
   const seedScript = buildFolderMappingSeedScript(containerPaths);
+  const contextStubScript = buildContextStubScript(containerWorkspace, contextMountName);
 
   // Run config script via exec — VS Code-variant zonder JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), seedScript)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), seedScript);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, password, getCaCertPem(), seedScript, contextStubScript)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, password, getCaCertPem(), seedScript, contextStubScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
