@@ -339,3 +339,6 @@
 .req-group__n { font-size: 0.78em; font-weight: 600; color: var(--text-dim); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
 .req-group__bulk { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 .req-bulk__n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); }
+/* Keep the radial fan-out inside the card: the bulk pie sits flush right, so give
+   it the same right margin the per-row pie has (see `.req-row app-pie-menu`). */
+.req-group__bulk app-pie-menu { flex-shrink: 0; margin-right: 56px; }
