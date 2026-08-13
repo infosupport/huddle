@@ -47,23 +47,20 @@
 
         @if (!empty && mode === 'multi') {
           <label>Folders</label>
+          <p class="mount-hint">Select where each folder should be placed inside the container.</p>
           @for (m of mounts; track $index) {
             <div class="mount-row">
-              <input type="text" [(ngModel)]="m.name" (ngModelChange)="onMountInput()" placeholder="name (e.g. backend)" />
-              <input type="text" [(ngModel)]="m.path" (ngModelChange)="onMountInput()" placeholder="C:/projects/my-repo" />
-              <button
-                type="button"
-                class="btn btn-ghost btn-sm"
-                [class.btn-context-on]="contextMountIndex === $index"
-                (click)="toggleContext($index)"
-                title="Mark as shared AI/agent context folder">{{ contextMountIndex === $index ? '★' : '☆' }}</button>
+              <input type="text" [(ngModel)]="m.hostPath" (ngModelChange)="onMountInput()" placeholder="C:/projects/my-repo/backend" />
+              <span class="mount-arrow">→</span>
+              <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onMountInput()" placeholder="/workspace/backend" />
               <button type="button" class="btn btn-ghost btn-sm" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder">✕</button>
             </div>
           }
           <button type="button" class="btn btn-ghost btn-sm" (click)="addMount()">+ Add folder</button>
-          @if (contextMountIndex !== null) {
-            <p class="mount-context-hint">A stub CLAUDE.md pointing at "{{ mounts[contextMountIndex].name || '…' }}" will be written to the shared workspace root.</p>
-          }
+
+          <label for="start-workspace-root">Open IDE at</label>
+          <input id="start-workspace-root" type="text" [(ngModel)]="containerWorkspace" (ngModelChange)="onWorkspaceRootInput()" placeholder="/workspace" />
+          <p class="mount-hint">Project root the IDE opens; the mounted folders show as its worktrees.</p>
         }
 
         <label for="start-name">Container name</label>

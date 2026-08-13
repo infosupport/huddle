@@ -6,8 +6,8 @@ import { bold, green, cyan, dim } from './utils';
 export interface StartOptions {
   ide: string;
   workspace?: string;
-  mounts?: { name: string; path: string }[];
-  context?: string;
+  mounts?: { hostPath: string; containerPath: string }[];
+  workspaceRoot?: string;
   name?: string;
   image?: string;
   empty: boolean;
@@ -35,32 +35,37 @@ export async function runStart(opts: StartOptions): Promise<void> {
   }
 
   const resolvedMounts = hasMounts
-    ? opts.mounts!.map((m) => ({ name: validateMountName(m.name), path: resolveWorkspace(m.path) }))
+    ? opts.mounts!.map((m) => ({ hostPath: resolveWorkspace(m.hostPath), containerPath: validateContainerPath(m.containerPath) }))
     : undefined;
   if (resolvedMounts) {
     const seen = new Set<string>();
     for (const m of resolvedMounts) {
-      if (seen.has(m.name)) throw new Error(`Duplicate --mount name: ${m.name}`);
-      seen.add(m.name);
+      if (seen.has(m.containerPath)) throw new Error(`Duplicate --mount container path: ${m.containerPath}`);
+      seen.add(m.containerPath);
     }
   }
 
-  const contextMount = opts.context?.trim() || undefined;
-  if (contextMount && !hasMounts) {
-    throw new Error('--context requires at least one --mount.');
+  const workspaceRoot = opts.workspaceRoot?.trim() || undefined;
+  if (workspaceRoot && !hasMounts) {
+    throw new Error('--workspace-root requires at least one --mount.');
   }
-  if (contextMount && !resolvedMounts!.some((m) => m.name === contextMount)) {
-    throw new Error(`--context "${contextMount}" does not match any --mount name.`);
+  if (workspaceRoot && !workspaceRoot.startsWith('/')) {
+    throw new Error(`--workspace-root must be an absolute container path: "${workspaceRoot}".`);
   }
 
   const workspaceDir = opts.empty || hasMounts ? undefined : resolveWorkspace(opts.workspace);
-  const baseName = opts.empty ? 'empty' : hasMounts ? resolvedMounts![0].name : path.basename(workspaceDir!);
+  const baseName = opts.empty
+    ? 'empty'
+    : hasMounts
+      ? (resolvedMounts![0].containerPath.split('/').filter(Boolean).pop() ?? 'workspace')
+      : path.basename(workspaceDir!);
   const containerName = opts.name ? validateContainerName(opts.name) : defaultContainerName(baseName);
 
   console.log(`Starting ${bold(containerName)} with ${bold(ide)}...`);
   if (workspaceDir) console.log(dim(`Workspace: ${workspaceDir}`));
   if (resolvedMounts) {
-    for (const m of resolvedMounts) console.log(dim(`Mount ${m.name}: ${m.path}${m.name === contextMount ? ' (context)' : ''}`));
+    for (const m of resolvedMounts) console.log(dim(`Mount ${m.hostPath} -> ${m.containerPath}`));
+    if (workspaceRoot) console.log(dim(`Open IDE at: ${workspaceRoot}`));
   }
 
   let imageName = opts.image;
@@ -76,8 +81,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
     ideName: IdeName;
     empty?: boolean;
     workspaceDir?: string;
-    mounts?: { name: string; path: string }[];
-    contextMount?: string;
+    mounts?: { hostPath: string; containerPath: string }[];
+    containerWorkspace?: string;
   } = {
     imageName,
     containerName,
@@ -88,7 +93,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     body.empty = true;
   } else if (resolvedMounts) {
     body.mounts = resolvedMounts;
-    if (contextMount) body.contextMount = contextMount;
+    if (workspaceRoot) body.containerWorkspace = workspaceRoot;
   } else {
     body.workspaceDir = workspaceDir;
   }
@@ -144,10 +149,10 @@ function validateContainerName(name: string): string {
   return trimmed;
 }
 
-function validateMountName(name: string): string {
-  const trimmed = (name ?? '').trim();
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(trimmed)) {
-    throw new Error(`Invalid --mount name: "${name}". Use letters, digits, '-', '_' (used as the container subfolder name).`);
+function validateContainerPath(path: string): string {
+  const trimmed = (path ?? '').replace(/\\/g, '/').replace(/\/+$/, '').trim();
+  if (!trimmed.startsWith('/')) {
+    throw new Error(`Invalid --mount container path: "${path}". Use an absolute path, e.g. /workspace/backend.`);
   }
   return trimmed;
 }

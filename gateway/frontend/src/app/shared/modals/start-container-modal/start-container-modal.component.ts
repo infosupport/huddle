@@ -6,7 +6,15 @@ import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 
-const MOUNT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+// Remembers the last-used multi-folder layout so the modal pre-fills it next time.
+const REMEMBER_KEY = 'huddle.start-modal.v1';
+
+interface RememberedLayout {
+  mode: 'single' | 'multi';
+  workspace: string;
+  mounts: { hostPath: string; containerPath: string }[];
+  containerWorkspace: string;
+}
 
 @Component({
   selector: 'app-start-container-modal',
@@ -15,11 +23,11 @@ const MOUNT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
   templateUrl: './start-container-modal.component.html',
   styles: [`
     .mount-row { display: flex; gap: .5rem; align-items: center; }
-    .mount-row input:first-child { flex: 0 0 35%; }
-    .mount-row input:nth-child(2) { flex: 1; }
+    .mount-row input:first-child { flex: 1; }
+    .mount-row .mount-arrow { flex: 0 0 auto; color: var(--text-muted); }
+    .mount-row input:nth-of-type(2) { flex: 1; }
     .mount-row .btn { flex: 0 0 auto; }
-    .btn-context-on { color: var(--warning, #d97706); }
-    .mount-context-hint { font-size: 12px; color: var(--text-muted); margin: -.25rem 0 .5rem; }
+    .mount-hint { font-size: 12px; color: var(--text-muted); margin: -.25rem 0 .5rem; }
   `]
 })
 export class StartContainerModalComponent {
@@ -33,8 +41,11 @@ export class StartContainerModalComponent {
   ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
   mode: 'single' | 'multi' = 'single';
   workspace = '';
-  mounts: { name: string; path: string }[] = [];
-  contextMountIndex: number | null = null;
+  mounts: { hostPath: string; containerPath: string }[] = [];
+  // The container path the IDE opens as its project root ("open at"). Editable;
+  // auto-suggested from the common parent of the mount targets until touched.
+  containerWorkspace = '';
+  workspaceRootTouched = false;
   containerName = '';
   nameTouched = false;
   empty = false;
@@ -58,13 +69,15 @@ export class StartContainerModalComponent {
     this.mode = 'single';
     this.workspace = '';
     this.mounts = [];
-    this.contextMountIndex = null;
+    this.containerWorkspace = '';
+    this.workspaceRootTouched = false;
     this.containerName = '';
     this.nameTouched = false;
     this.empty = false;
     this.error = '';
     this.status = '';
     this.loading = false;
+    this.restoreRemembered();
     this.loadImagesForIde();
   }
 
@@ -90,24 +103,19 @@ export class StartContainerModalComponent {
       if (this.mounts.length === 0) this.addMount();
     } else {
       this.mounts = [];
-      this.contextMountIndex = null;
+      this.containerWorkspace = '';
+      this.workspaceRootTouched = false;
     }
     this.updateAutoName();
   }
 
   addMount(): void {
-    this.mounts.push({ name: '', path: '' });
+    this.mounts.push({ hostPath: '', containerPath: '' });
   }
 
   removeMount(i: number): void {
     this.mounts.splice(i, 1);
-    if (this.contextMountIndex === i) this.contextMountIndex = null;
-    else if (this.contextMountIndex !== null && this.contextMountIndex > i) this.contextMountIndex--;
-    this.updateAutoName();
-  }
-
-  toggleContext(i: number): void {
-    this.contextMountIndex = this.contextMountIndex === i ? null : i;
+    this.onMountInput();
   }
 
   onWorkspaceInput(): void {
@@ -115,7 +123,32 @@ export class StartContainerModalComponent {
   }
 
   onMountInput(): void {
+    this.suggestWorkspaceRoot();
     this.updateAutoName();
+  }
+
+  onWorkspaceRootInput(): void {
+    this.workspaceRootTouched = true;
+  }
+
+  // Until the user edits the "open at" field, keep it in sync with the deepest
+  // common parent of the container paths typed so far.
+  private suggestWorkspaceRoot(): void {
+    if (this.workspaceRootTouched) return;
+    const targets = this.mounts.map(m => m.containerPath.trim()).filter(p => p.startsWith('/'));
+    this.containerWorkspace = targets.length ? this.commonParent(targets) : '';
+  }
+
+  private commonParent(paths: string[]): string {
+    const split = paths.map(p => p.split('/').filter(Boolean));
+    const first = split[0];
+    const shared: string[] = [];
+    for (let i = 0; i < first.length; i++) {
+      const seg = first[i];
+      if (split.every(parts => parts[i] === seg)) shared.push(seg);
+      else break;
+    }
+    return '/' + shared.join('/');
   }
 
   private updateAutoName(): void {
@@ -125,7 +158,7 @@ export class StartContainerModalComponent {
       return;
     }
     if (this.mode === 'multi') {
-      const leaf = (this.mounts[0]?.name ?? '').trim();
+      const leaf = (this.mounts[0]?.containerPath ?? '').split('/').filter(Boolean).pop() ?? '';
       this.containerName = leaf ? `devcontainer-${leaf}` : '';
       return;
     }
@@ -137,7 +170,8 @@ export class StartContainerModalComponent {
     if (this.empty) {
       this.workspace = '';
       this.mounts = [];
-      this.contextMountIndex = null;
+      this.containerWorkspace = '';
+      this.workspaceRootTouched = false;
       this.mode = 'single';
       if (!this.nameTouched && !this.containerName) {
         this.containerName = 'devcontainer-empty';
@@ -153,13 +187,14 @@ export class StartContainerModalComponent {
       if (this.mounts.length === 0) return 'Add at least one folder';
       const seen = new Set<string>();
       for (const m of this.mounts) {
-        const name = m.name.trim();
-        const path = m.path.trim();
-        if (!name || !path) return 'Every folder needs a name and a path';
-        if (!MOUNT_NAME_RE.test(name)) return `Invalid folder name: "${name}" (letters, digits, '-', '_' only)`;
-        if (seen.has(name)) return `Duplicate folder name: ${name}`;
-        seen.add(name);
+        const hostPath = m.hostPath.trim();
+        const containerPath = m.containerPath.trim();
+        if (!hostPath || !containerPath) return 'Every folder needs a host path and a container path';
+        if (!containerPath.startsWith('/')) return `Container path must be absolute: "${containerPath}"`;
+        if (seen.has(containerPath)) return `Duplicate container path: ${containerPath}`;
+        seen.add(containerPath);
       }
+      if (!this.containerWorkspace.trim().startsWith('/')) return 'Open the IDE at an absolute path (e.g. /workspace)';
       return null;
     }
     if (!this.workspace) return 'All fields are required';
@@ -178,17 +213,44 @@ export class StartContainerModalComponent {
       ide: this.ide,
       workspace: this.mode === 'single' ? this.workspace : '',
       mounts: isMulti
-        ? this.mounts.map(m => ({ name: m.name.trim(), path: m.path.trim() }))
+        ? this.mounts.map(m => ({ hostPath: m.hostPath.trim(), containerPath: m.containerPath.trim() }))
         : undefined,
-      contextMount: isMulti && this.contextMountIndex !== null
-        ? this.mounts[this.contextMountIndex].name.trim()
-        : undefined,
+      containerWorkspace: isMulti ? this.containerWorkspace.trim() : undefined,
       containerName: this.containerName,
       empty: this.empty,
     }).subscribe({
-      next: () => { this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
+      next: () => { this.remember(); this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },
     });
+  }
+
+  private remember(): void {
+    if (this.empty) return;
+    const layout: RememberedLayout = {
+      mode: this.mode,
+      workspace: this.workspace,
+      mounts: this.mounts.map(m => ({ hostPath: m.hostPath.trim(), containerPath: m.containerPath.trim() })),
+      containerWorkspace: this.containerWorkspace.trim(),
+    };
+    try { localStorage.setItem(REMEMBER_KEY, JSON.stringify(layout)); } catch { /* storage unavailable */ }
+  }
+
+  private restoreRemembered(): void {
+    let layout: RememberedLayout | null = null;
+    try {
+      const raw = localStorage.getItem(REMEMBER_KEY);
+      if (raw) layout = JSON.parse(raw) as RememberedLayout;
+    } catch { layout = null; }
+    if (!layout) return;
+    if (layout.mode === 'multi' && layout.mounts?.length) {
+      this.mode = 'multi';
+      this.mounts = layout.mounts.map(m => ({ hostPath: m.hostPath ?? '', containerPath: m.containerPath ?? '' }));
+      this.containerWorkspace = layout.containerWorkspace ?? '';
+      this.workspaceRootTouched = !!this.containerWorkspace;
+    } else if (layout.workspace) {
+      this.workspace = layout.workspace;
+    }
+    this.updateAutoName();
   }
 
   close(): void { this.modalService.closeStart(); }

@@ -24,7 +24,7 @@ interface ParsedArgs {
   mounts: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'context']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'help', 'version']);
 
@@ -46,7 +46,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
       if (!name) throw new Error(`Invalid option: ${arg}`);
 
-      // Repeatable, unlike every other value flag (one `--mount name=path` per folder).
+      // Repeatable, unlike every other value flag (one `--mount host=container` per folder).
       if (name === 'mount') {
         let value: string;
         if (eq >= 0) {
@@ -54,7 +54,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         } else {
           const next = argv[i + 1];
           if (next === undefined || next.startsWith('-')) {
-            throw new Error('Option --mount expects a value (name=path)');
+            throw new Error('Option --mount expects a value (host=container)');
           }
           value = next;
           i++;
@@ -101,10 +101,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { positional, flags, mounts };
 }
 
-function parseMountFlag(raw: string): { name: string; path: string } {
+function parseMountFlag(raw: string): { hostPath: string; containerPath: string } {
   const eq = raw.indexOf('=');
-  if (eq <= 0) throw new Error(`Invalid --mount value "${raw}", expected name=path`);
-  return { name: raw.slice(0, eq), path: raw.slice(eq + 1) };
+  if (eq <= 0) throw new Error(`Invalid --mount value "${raw}", expected host=container`);
+  return { hostPath: raw.slice(0, eq), containerPath: raw.slice(eq + 1) };
 }
 
 function readVersion(): string {
@@ -161,11 +161,11 @@ Init options:
 Start options:
   --ide <intellij|rider|vscode>      IDE (default: intellij)
   --workspace <path>                 Workspace directory (default: current directory)
-  --mount <name>=<path>              Mount an additional folder under /workspaces/<name>
+  --mount <host>=<container>         Mount a host folder at an absolute container path, e.g.
+                                     C:/projects/my-repo/backend=/workspace/backend
                                      (repeatable; cannot combine with --workspace/--empty)
-  --context <name>                   Mark one --mount as the shared context folder; writes a
-                                     stub /workspaces/CLAUDE.md pointing at it (must match a
-                                     declared --mount name)
+  --workspace-root <path>            Container path the IDE opens as project root when using
+                                     --mount (default: common parent of the mount targets)
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
       ide: flagString(flags, 'ide') ?? 'intellij',
       workspace: flagString(flags, 'workspace') ?? startArgs[0],
       mounts: mounts.length ? mounts.map(parseMountFlag) : undefined,
-      context: flagString(flags, 'context'),
+      workspaceRoot: flagString(flags, 'workspace-root'),
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),
