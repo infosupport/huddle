@@ -146,7 +146,7 @@ export class ContainerDetailComponent implements OnInit {
   pathDomains(rules: Rule[]) { return buildPathDomains(rules); }
   excludePathMode(rules: Rule[]) { return excludePathModeRules(rules); }
 
-  parseMounts(raw: string | undefined): { name: string; path: string; isContext?: boolean }[] {
+  parseMounts(raw: string | undefined): { hostPath: string; containerPath: string }[] {
     if (!raw) return [];
     try {
       const parsed = JSON.parse(raw);

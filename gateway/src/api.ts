@@ -89,6 +89,22 @@ interface ShareableRule {
   expires_at: number | null;
 }
 
+// Deepest directory that every given absolute path sits under (their longest
+// shared prefix at a path-segment boundary). Used to pick a sensible IDE project
+// root when several folders are mounted and no explicit "open at" is supplied.
+function commonParentPath(paths: string[]): string {
+  if (paths.length === 0) return '';
+  const split = paths.map((p) => p.split('/').filter(Boolean));
+  const first = split[0];
+  const shared: string[] = [];
+  for (let i = 0; i < first.length; i++) {
+    const seg = first[i];
+    if (split.every((parts) => parts[i] === seg)) shared.push(seg);
+    else break;
+  }
+  return '/' + shared.join('/');
+}
+
 export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
@@ -905,8 +921,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.post<{ Body: {
     imageName: string;
     workspaceDir?: string;
-    mounts?: { name: string; path: string }[];
-    contextMount?: string;
+    mounts?: { hostPath: string; containerPath: string }[];
+    containerWorkspace?: string;
     containerName: string;
     ideName?: string;
     empty?: boolean;
@@ -916,7 +932,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, contextMount, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -926,43 +942,48 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!empty && !workspaceDir && !mounts?.length) {
         return reply.code(400).send({ error: 'workspaceDir or mounts required when empty is not set' });
       }
-      if (contextMount && !mounts?.length) {
-        return reply.code(400).send({ error: 'contextMount requires mounts' });
-      }
-      let normalizedMounts: { name: string; path: string }[] | undefined;
+      // Each mount binds a host path at an explicit absolute container path; the
+      // container paths must be unique so two folders never land on the same target.
+      let normalizedMounts: { hostPath: string; containerPath: string }[] | undefined;
       if (mounts?.length) {
         try {
           const seen = new Set<string>();
           normalizedMounts = mounts.map((m) => {
-            const name = (m.name ?? '').trim();
-            if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
-              throw new Error(`Invalid mount name: "${m.name}"`);
-            }
-            if (seen.has(name)) throw new Error(`Duplicate mount name: ${name}`);
-            seen.add(name);
-            return { name, path: (m.path ?? '').replace(/\\/g, '/').replace(/\/$/, '') };
+            const hostPath = (m.hostPath ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+            const containerPath = (m.containerPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+            if (!hostPath) throw new Error('Every folder needs a host path');
+            if (!containerPath.startsWith('/')) throw new Error(`Container path must be absolute: "${m.containerPath}"`);
+            if (seen.has(containerPath)) throw new Error(`Duplicate container path: ${containerPath}`);
+            seen.add(containerPath);
+            return { hostPath, containerPath };
           });
         } catch (err: any) {
           return reply.code(400).send({ error: err.message });
         }
       }
-      if (contextMount && !normalizedMounts!.some((m) => m.name === contextMount)) {
-        return reply.code(400).send({ error: `contextMount "${contextMount}" does not match any mount name` });
-      }
       const fwd = (workspaceDir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
       const leaf = empty
         ? containerName.replace(/^devcontainer-/, '') || containerName
         : normalizedMounts
-          ? normalizedMounts[0].name
+          ? (normalizedMounts[0].containerPath.split('/').filter(Boolean).pop() ?? containerName)
           : (fwd.split('/').pop() ?? containerName);
+      // Multi-mount: the IDE opens the explicit "open at" root chosen in the modal.
+      // Fall back to the deepest common parent of the container paths (else /workspaces)
+      // when no override is supplied (e.g. an older CLI).
+      let multiWorkspace = (containerWorkspaceOverride ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+      if (normalizedMounts && !multiWorkspace) {
+        multiWorkspace = commonParentPath(normalizedMounts.map((m) => m.containerPath)) || '/workspaces';
+      }
+      if (normalizedMounts && !multiWorkspace.startsWith('/')) {
+        return reply.code(400).send({ error: `containerWorkspace must be absolute: "${containerWorkspaceOverride}"` });
+      }
       const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,
         mounts: normalizedMounts,
-        contextMount: normalizedMounts ? contextMount : undefined,
         containerName,
-        containerWorkspace: normalizedMounts ? '/workspaces' : `/workspaces/${leaf}`,
+        containerWorkspace: normalizedMounts ? multiWorkspace : `/workspaces/${leaf}`,
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
