@@ -85,8 +85,8 @@
       <div class="cd-meta__item">
         <span class="cd-meta__label">Mounts</span>
         <span class="cd-meta__value">
-          @for (m of mounts; track m.name; let last = $last) {
-            <span [title]="m.path">{{ m.name }}</span>@if (m.isContext) {<span class="cd-badge cd-badge--ok" style="padding:1px 6px;font-size:10px;margin:0 4px">AI context</span>}@if (!last) {<span>, </span>}
+          @for (m of mounts; track m.containerPath; let last = $last) {
+            <span [title]="m.hostPath">{{ m.containerPath }}</span>@if (!last) {<span>, </span>}
           }
         </span>
       </div>
