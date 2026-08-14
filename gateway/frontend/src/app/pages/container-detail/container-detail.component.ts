@@ -99,7 +99,7 @@ export class ContainerDetailComponent implements OnInit {
           path_pattern: r.path_pattern!,
           last_path: (r as any).last_path ?? null,
         })),
-    );
+    ).sort((a, b) => b.rule.last_seen - a.rule.last_seen);
   }
 
   onPathPieAction(actionId: string, row: PathRequestRow): void {
@@ -305,7 +305,7 @@ export class ContainerDetailComponent implements OnInit {
 
   allowRules(rules: Rule[]) { return rules.filter(r => r.status === 'allow'); }
   denyRules(rules: Rule[]) { return rules.filter(r => r.status === 'deny'); }
-  requestedRules(rules: Rule[]) { return rules.filter(r => r.status === 'requested'); }
+  requestedRules(rules: Rule[]) { return rules.filter(r => r.status === 'requested').sort((a, b) => b.last_seen - a.last_seen); }
   tempAllowRules(rules: Rule[]) {
     const now = Math.floor(Date.now() / 1000);
     return rules.filter(r => r.status === 'allow' && r.expires_at && r.expires_at > now);
