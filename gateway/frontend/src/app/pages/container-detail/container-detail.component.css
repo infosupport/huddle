@@ -334,6 +334,12 @@
   flex-shrink: 0;
   margin-right: 56px;
 }
+/* Keep the radial fan-out inside the card: the bulk pie sits flush right, so give
+   it the same right margin the per-row pie has above. */
+.req-group__bulk app-pie-menu {
+  flex-shrink: 0;
+  margin-right: 56px;
+}
 
 /* ===== Rule list ===== */
 .rule-list {
