@@ -14,6 +14,7 @@ import { reconcile } from './reconcile';
 import * as ops from './ops';
 import { isValidSandboxName } from './protocol';
 import { setKnownSandboxes } from './registry';
+import { matchDomain } from '../rules';
 
 const DEBOUNCE_MS = Number(process.env.HUDDLE_SBX_RECONCILE_DEBOUNCE_MS ?? '1500');
 const POLL_MS = Number(process.env.HUDDLE_SBX_INGEST_INTERVAL_MS ?? '20000');
@@ -71,6 +72,24 @@ export async function ingestPending(): Promise<number> {
     log('ingest skipped (policy log failed):', (err as Error).message);
     return 0;
   }
+  // Existing concrete decisions (allow/deny), global or per-sandbox. A blocked
+  // host already covered by one of these is NOT pending — e.g. a domain the
+  // operator DENIED (sbx blocks it, but it's a settled decision, not a request),
+  // or one covered by a global/wildcard rule. Only truly-undecided hosts pend.
+  const decided = db
+    .prepare(`SELECT domain, container_id FROM rules WHERE status IN ('allow','deny')`)
+    .all() as { domain: string; container_id: string | null }[];
+  const alreadyDecided = (host: string, sandbox: string): boolean => {
+    const h = host.toLowerCase();
+    for (const r of decided) {
+      if (r.container_id !== null && r.container_id !== sandbox) continue; // global or this sandbox
+      const pat = r.domain.toLowerCase();
+      if (pat === h) return true;
+      if (pat.startsWith('*.') && matchDomain(pat, h)) return true;
+    }
+    return false;
+  };
+
   let added = 0;
   for (const d of ops.parsePolicyLogJson(raw)) {
     // The log DOES tell us which box was blocked (vm_name) — file the pending
@@ -78,6 +97,7 @@ export async function ingestPending(): Promise<number> {
     // (Huddle's PROXY can't attribute a live request, but the LOG can; the proxy
     // side is handled by the fleet-merge in checkFleetRule.)
     if (!d.sandbox || !isValidSandboxName(d.sandbox)) continue;
+    if (alreadyDecided(d.domain, d.sandbox)) continue; // already allowed/denied → not pending
     const info = insertRequested.run(d.domain, d.sandbox);
     added += info.changes;
   }
