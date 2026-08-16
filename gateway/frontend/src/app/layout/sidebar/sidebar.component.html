@@ -7,23 +7,23 @@
   </div>
 
   <nav class="nav">
-    <a class="nav__item" routerLink="dashboard" routerLinkActive="nav__item--active">
+    <a class="nav__item" title="Dashboard" routerLink="dashboard" routerLinkActive="nav__item--active">
       <app-icon name="home" [size]="20" />
       <span>Dashboard</span>
     </a>
-    <a class="nav__item" routerLink="containers" routerLinkActive="nav__item--active">
-      <app-icon name="box" [size]="20" />
-      <span>Containers</span>
+    <a class="nav__item" title="Dev Environments" routerLink="dev-environments" routerLinkActive="nav__item--active">
+      <app-icon name="layers" [size]="20" />
+      <span>Dev Environments</span>
     </a>
-    <a class="nav__item" routerLink="firewall" routerLinkActive="nav__item--active">
+    <a class="nav__item" title="Firewall" routerLink="firewall" routerLinkActive="nav__item--active">
       <app-icon name="globe" [size]="20" />
       <span>Firewall</span>
     </a>
-    <a class="nav__item" routerLink="docker-access" routerLinkActive="nav__item--active">
+    <a class="nav__item" title="Docker permissions" routerLink="docker-access" routerLinkActive="nav__item--active">
       <app-icon name="anchor" [size]="20" />
       <span>Docker permissions</span>
     </a>
-<a class="nav__item" routerLink="network-log" routerLinkActive="nav__item--active">
+<a class="nav__item" title="Network log" routerLink="network-log" routerLinkActive="nav__item--active">
       <app-icon name="file-text" [size]="20" />
       <span>Network log</span>
     </a>
@@ -31,23 +31,23 @@
     @if (extensions().length > 0) {
       <div class="nav__section">Extensions</div>
       @for (ext of extensions(); track ext.id) {
-        <a class="nav__item nav__item--sub" [routerLink]="['/extensions/view', ext.id]" routerLinkActive="nav__item--active">
+        <a class="nav__item nav__item--sub" [title]="ext.name" [routerLink]="['/extensions/view', ext.id]" routerLinkActive="nav__item--active">
           <app-icon [name]="ext.icon || 'box'" [size]="18" />
           <span>{{ ext.name }}</span>
         </a>
       }
-      <a class="nav__item nav__item--manage" routerLink="extensions" routerLinkActive="nav__item--active">
+      <a class="nav__item nav__item--manage" title="Manage extensions" routerLink="extensions" routerLinkActive="nav__item--active">
         <app-icon name="settings" [size]="16" />
         <span>Manage extensions</span>
       </a>
     } @else {
-      <a class="nav__item" routerLink="extensions" routerLinkActive="nav__item--active">
+      <a class="nav__item" title="Extensions" routerLink="extensions" routerLinkActive="nav__item--active">
         <app-icon name="box" [size]="20" />
         <span>Extensions</span>
       </a>
     }
 
-    <a class="nav__item" routerLink="settings" routerLinkActive="nav__item--active">
+    <a class="nav__item" title="Settings" routerLink="settings" routerLinkActive="nav__item--active">
       <app-icon name="settings" [size]="20" />
       <span>Settings</span>
     </a>

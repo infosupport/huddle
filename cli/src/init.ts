@@ -5,6 +5,8 @@ import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
@@ -172,12 +174,33 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-e', `HUDDLE_RUNTIME=${runtime.name}`);
   dockerArgs.push('-e', `HUDDLE_OPERATOR_TOKEN=${operatorToken}`);
   dockerArgs.push('-p', `${HOST_PORT}:3000`);
+  // Docker Sandboxes (sbx, experimental): publish the gateway's dedicated sbx
+  // proxy port to host loopback so the host sbx daemon can forward sandbox egress
+  // to Huddle at http://localhost:<port>. Kept on 127.0.0.1 (local only). Must
+  // match the gateway's HUDDLE_SBX_PROXY_PORT (default 32768).
+  const sbxProxyPort = process.env.HUDDLE_SBX_PROXY_PORT?.trim() || '32768';
+  dockerArgs.push('-p', `127.0.0.1:${sbxProxyPort}:${sbxProxyPort}`);
+  dockerArgs.push('-e', `HUDDLE_SBX_PROXY_PORT=${sbxProxyPort}`);
   dockerArgs.push('-v', `${VOLUME}:/data`);
   dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
   dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
   if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
   if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
+  // Docker Sandboxes (sbx, experimental): the gateway can't run sbx itself (sbx
+  // runs on the host / on Windows). We bridge with a simple FILE MAILBOX over a
+  // shared folder — no sockets, no networking. The container's `sbx` (baked into
+  // the image) drops a request file here; a host watcher (bridge/sbx-watcher.sh)
+  // runs the real sbx and writes the response back. Mount that folder in and tell
+  // the gateway where it is. See run-sandbox-mode.sh + bridge/.
+  // The folder itself is created (with req/ res/) by run-sandbox-mode.sh, the host
+  // watcher, and the container-side mailbox client — so we don't mkdir here (a
+  // git-bash path like /c/Users/... resolves wrong under Windows node anyway).
+  const sbxBridgeHost =
+    process.env.HUDDLE_SBX_BRIDGE_WIN?.trim() || path.join(os.homedir(), '.huddle-sbx');
+  console.log(dim(`  Mounting sbx bridge folder:     ${sbxBridgeHost} -> /sbx-bridge`));
+  dockerArgs.push('-v', `${sbxBridgeHost}:/sbx-bridge`);
+  dockerArgs.push('-e', 'HUDDLE_SBX_BRIDGE=/sbx-bridge');
   dockerArgs.push(...gatewayEnvArgs(images));
   dockerArgs.push(IMAGE);
   runArgs(rt, dockerArgs);
@@ -190,6 +213,24 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));
+  console.log();
+
+  // Docker Sandboxes (sbx): auto-start the host bridge so the containerized
+  // gateway can drive sbx (create/list/exec/policy) over the mounted folder.
+  // Only when sbx is actually installed — otherwise it's a no-op the user
+  // doesn't need. Best-effort; never fails the init.
+  try {
+    const { resolveSbxBin, startBridge } = await import('./sbx-bridge');
+    const bin = resolveSbxBin();
+    const sbxPresent = (() => { try { execFileSync(bin, ['version'], { stdio: 'ignore', timeout: 15000 }); return true; } catch { return false; } })();
+    if (sbxPresent) {
+      startBridge({ quiet: false });
+    } else {
+      console.log(dim('  (sbx not found on PATH — sandbox bridge not started; install Docker Sandboxes to use sbx boxes)'));
+    }
+  } catch (err) {
+    console.log(dim(`  (could not start sbx bridge: ${(err as Error).message})`));
+  }
   console.log();
   // Full auto-login link: open it and the portal logs you in automatically with
   // the operator token (the frontend reads ?token=..., logs in and then removes it

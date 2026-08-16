@@ -27,6 +27,12 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package.json ./
 COPY extensions ./extensions
+# Docker Sandboxes (sbx): the in-container `sbx` is the file-mailbox client — it
+# forwards argv to the Windows watcher via the shared /sbx-bridge folder and
+# returns the real output. The gateway execs `sbx` exactly as if it were native.
+COPY sbx.sh /usr/local/bin/sbx
+RUN chmod +x /usr/local/bin/sbx
+ENV HUDDLE_SBX_BRIDGE=/sbx-bridge
 ENV DB_PATH=/data/huddle.db
 ENV EXT_DIR=/app/extensions
 EXPOSE 80 3000

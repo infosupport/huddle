@@ -161,7 +161,10 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                 @for (r of rows(); track r.id) {
                   <tr [class.grp__tr--open]="expanded() === r.id" [class.grp__tr--sel]="isSelected(r.id)">
                     <td class="grp__chk"><input type="checkbox" [checked]="isSelected(r.id)" (change)="toggleSelect(r.id)" /></td>
-                    <td class="grp__dom" [title]="r.domain">{{ r.domain }}</td>
+                    <td class="grp__dom" [title]="r.domain">
+                      <span class="grp__domname">{{ r.domain }}</span>
+                      <span class="grp__path">{{ r.path_pattern || '/' }}</span>
+                    </td>
                     <td class="grp__rule">
                       @if (isPath(r)) {
                         <select class="grp__pm-sel" [value]="'specific'" (change)="onPathMode(r, $event)">
@@ -179,7 +182,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                       @if (r.container_id) { <span class="grp__stag" [title]="r.container_id">{{ shortName(r.container_id) }}</span> }
                       @else { <span class="grp__stag grp__stag--global">Global</span> }
                     </td>
-                    <td>
+                    <td class="grp__grp">
                       @if (r.group_id != null) { <span class="grp__gtag">{{ groupName(r.group_id) }}</span> }
                       @else { <span class="grp__muted">—</span> }
                     </td>
@@ -246,20 +249,22 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__add-in, .grp__add select { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.88em; }
     .grp__add-in { flex: 1; min-width: 180px; }
 
-    .grp__body { display: grid; grid-template-columns: 240px 1fr; gap: 20px; margin-top: 18px; }
-    .grp__list { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--border); padding-right: 16px; }
+    /* Group buckets are a horizontal tab strip along the top (not a left column),
+       scrollable when they overflow — like the mockup. Detail sits below. */
+    .grp__body { display: flex; flex-direction: column; gap: 16px; margin-top: 18px; }
+    .grp__list { display: flex; flex-direction: row; align-items: stretch; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border); padding: 0; }
     .grp__search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); min-width: 240px; }
     .grp__search input { border: none; background: transparent; outline: none; color: var(--text); width: 100%; font-size: 0.88em; }
-    .grp__item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; border: none; background: transparent; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-size: 0.92em; text-align: left; }
-    .grp__item:hover { background: var(--surface-hover); }
-    .grp__item.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
-    .grp__item i { font-style: normal; color: var(--text-dim); font-size: 0.85em; }
-    .grp__item.on i { color: var(--accent-strong); }
-    .grp__item--ungrouped { color: var(--text-muted); }
-    .grp__additem { display: flex; align-items: center; gap: 6px; padding: 9px 12px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.88em; border-radius: var(--radius-sm); }
+    .grp__item { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 14px 9px; border: none; background: transparent; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; color: var(--text-muted); font-size: 0.9em; white-space: nowrap; }
+    .grp__item:hover { color: var(--text); }
+    .grp__item.on { color: var(--accent-strong); border-bottom-color: var(--accent); font-weight: 600; }
+    .grp__item i { font-style: normal; font-size: 0.76em; font-weight: 700; color: var(--text-dim); background: var(--surface-2); border-radius: 6px; padding: 1px 8px; }
+    .grp__item.on i { color: var(--accent-strong); background: var(--accent-soft); }
+    .grp__item--ungrouped span { color: var(--text-muted); }
+    .grp__additem { flex: 0 0 auto; align-self: center; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.85em; white-space: nowrap; }
     .grp__additem:hover { color: var(--accent); }
-    .grp__new { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-    .grp__new input { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); }
+    .grp__new { flex: 0 0 auto; align-self: center; display: flex; flex-direction: row; align-items: center; gap: 6px; padding: 4px 8px; }
+    .grp__new input { padding: 6px 9px; width: 150px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); }
     .grp__new-actions { display: flex; gap: 6px; }
 
     .grp__detail-head h3 { margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
@@ -281,24 +286,47 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__bulk-del:hover { border-color: var(--danger); color: var(--danger); }
     .grp__bulk-clear { margin-left: auto; }
 
-    /* Fixed layout so column widths come from the header and never re-flow per
-       row content — keeps rows aligned and stops them from jumping when the list
-       or filter changes. The domain column takes the remaining space. */
+    /* DESKTOP: the normal wide table — a column each for Domain/path, Action,
+       Container/Global, Group. Fixed layout so widths come from the header. The
+       domain wraps (long URLs never disappear). The compact stacked layout is
+       applied ONLY on small screens (media query below). */
     .grp__table-wrap { overflow-x: auto; }
     .grp__table { width: 100%; table-layout: fixed; }
-    .grp__col-rule { width: 208px; }
-    .grp__col-scope { width: 150px; }
-    .grp__col-grp { width: 128px; }
+    .grp__col-dom { width: auto; }
+    .grp__col-rule { width: 168px; }
+    .grp__col-scope { width: 132px; }
+    .grp__col-grp { width: 112px; }
     .grp__col-menu { width: 40px; }
     .grp__table th, .grp__table td { overflow: hidden; text-overflow: ellipsis; }
+    .grp__table td { vertical-align: middle; }
     .grp__chk { width: 34px; text-align: center; }
     .grp__chk input { cursor: pointer; }
     .grp__tr--sel > td { background: var(--accent-soft); }
-    .grp__dom { font-family: 'Space Grotesk', monospace; white-space: nowrap; }
+    .grp__dom { font-family: 'Space Grotesk', monospace; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.3; }
+    .grp__domname { display: block; font-weight: 600; }
+    .grp__path { display: none; margin-top: 2px; font-family: 'Space Grotesk', monospace; font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; }
     .grp__rule { white-space: nowrap; }
-    .grp__pm-sel { max-width: 168px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
-    .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
     .grp__scope { white-space: nowrap; }
+    .grp__pm-sel { max-width: 150px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
+    .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
+    /* SMALL SCREEN: collapse the table into the compact stacked list (the mockup).
+       Line 1 = checkbox + domain (+path) + ⋯ menu; line 2 = the action / scope /
+       group pills wrapped underneath. */
+    @media (max-width: 760px) {
+      .grp__table, .grp__table tbody, .grp__table tr, .grp__table td { display: block; }
+      .grp__table thead { display: none; }
+      .grp__table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+      .grp__table tr.grp__paths-row { display: block; padding: 0 0 10px; }
+      .grp__table td { padding: 0; border: none; overflow: visible; white-space: normal; text-overflow: clip; }
+      .grp__chk { order: 1; flex: 0 0 auto; width: auto; }
+      .grp__dom { order: 2; flex: 1 1 60%; }
+      .grp__row-menu { order: 3; flex: 0 0 auto; margin-left: auto; }
+      .grp__rule { order: 4; }
+      .grp__scope { order: 5; }
+      .grp__grp { order: 6; }
+      .grp__rule, .grp__scope, .grp__grp { flex: 0 0 auto; }
+      .grp__path { display: block; }
+    }
     .grp__stag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted); font-family: 'Space Grotesk', monospace; }
     .grp__stag--global { background: var(--info-soft); border-color: transparent; color: var(--info); font-family: inherit; }
     .grp__gtag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); }
@@ -338,7 +366,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .btn-ghost:disabled { opacity: .5; cursor: default; }
     .btn--sm { padding: 5px 10px; font-size: 0.8em; }
 
-    @media (max-width: 820px) { .grp__body { grid-template-columns: 1fr; } .grp__list { border-right: none; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 12px; } }
   `],
 })
 export class FirewallGroupsPanelComponent implements OnInit {

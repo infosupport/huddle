@@ -5,11 +5,14 @@ import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
 import { URL } from 'url';
-import { checkRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
+import { checkRule, checkFleetRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
+import { knownSandboxNames } from './sandbox/registry';
 import { resolveContainerByIp } from './docker';
+import { SBX_PROXY_PORT } from './sbx';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
+import { logIdentityProbe } from './identity-probe';
 
 const PROXY_PORT = 80;
 
@@ -335,6 +338,16 @@ function handleTokenExchangeResponse(
 // ephemeral port) so the path-forwarding behavior can be tested hermetically.
 export function createProxyServer(port: number = PROXY_PORT): http.Server {
   const server = http.createServer();
+  // Traffic on the dedicated sbx port comes from the sandbox FLEET. Huddle can't
+  // attribute a live request to a specific box, so those requests are evaluated
+  // against the MERGE of global + every sandbox's rules (checkFleetRule). sbx has
+  // already enforced per-box before forwarding, so allow-if-any-sandbox-allows is
+  // safe. See docs/ADR §5.
+  const isSbxProxy = port === SBX_PROXY_PORT;
+  // Rule evaluation for this server: per-container/global for the devcontainer
+  // proxy; fleet-merge for the sbx proxy. Path is host-level only for the fleet.
+  const evalRule = (host: string, containerId: string | null, path: string | null) =>
+    isSbxProxy ? checkFleetRule(host, knownSandboxNames()) : checkRule(host, containerId, path);
 
   server.on('request', async (req, res) => {
     // Extension server-side fetch is identified via the X-Huddle-Ext header
@@ -342,6 +355,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const containerId = extHeader
       ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
       : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    logIdentityProbe('request', req, req.socket.remoteAddress, containerId);
     const rawUrl = req.url || '';
 
     let target: URL;
@@ -400,7 +414,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       }
       ruleId = null;
     } else {
-      const result = checkRule(host, containerId, normPath);
+      const result = evalRule(host, containerId, normPath);
       if (result.status !== 'allow') {
         logAudit({
           containerId,
@@ -502,6 +516,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const containerId = extHeader
       ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
       : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    logIdentityProbe('upgrade', req, req.socket.remoteAddress, containerId);
     const rawUrl = req.url || '';
 
     let target: URL;
@@ -551,7 +566,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
-    const result = checkRule(host, containerId, normPath);
+    const result = evalRule(host, containerId, normPath);
     if (result.status !== 'allow') {
       logAudit({
         containerId, domain: host, action: result.status, ruleId: null,
@@ -579,9 +594,9 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   });
 
   server.on('connect', async (req, clientSocket, head) => {
-    const containerId = await resolveContainerByIp(
-      (clientSocket as net.Socket).remoteAddress ?? ''
-    );
+    const remoteAddress = (clientSocket as net.Socket).remoteAddress ?? '';
+    const containerId = await resolveContainerByIp(remoteAddress);
+    logIdentityProbe('connect', req, remoteAddress, containerId);
     const [rawHostname, portStr] = (req.url || '').split(':');
     const port = Number(portStr) || 443;
 
@@ -610,7 +625,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       rejectSocket(clientSocket, 403, 'deny', 'huddle', containerId);
       return;
     }
-    const { status, ruleId } = checkRule(hostname, containerId, null);
+    const { status, ruleId } = evalRule(hostname, containerId, null);
     // Path-allowlist domains are closed at the host level, but the CONNECT tunnel
     // must be open so that MITM sees the path after TLS termination and can enforce
     // per request (see the innerHttp handler). Only meaningful if we can
@@ -722,7 +737,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const pathResult = normPath === null
         ? { status: 'deny' as const, ruleId: null }
-        : checkRule(hostname, containerId, checkUrl);
+        : evalRule(hostname, containerId, checkUrl);
       // Block everything except 'allow': a 'deny' path rule, but also a not-yet-
       // reviewed subpath ('requested') of a path-allowlist domain —
       // fail-closed until the operator explicitly allows the path.
@@ -895,7 +910,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const pathResult = normPath === null
         ? { status: 'deny' as const, ruleId: null }
-        : checkRule(hostname, containerId, checkUrl);
+        : evalRule(hostname, containerId, checkUrl);
       if (pathResult.status !== 'allow') {
         logAudit({
           containerId,

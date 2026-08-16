@@ -1,4 +1,4 @@
-<a class="back-link" routerLink="/containers">← Containers</a>
+<a class="back-link" routerLink="/dev-environments">← Dev Environments</a>
 
 @if (error$ | async; as err) {
   <div class="card"><p style="padding:16px;color:var(--danger);margin:0">{{ err }}</p></div>
@@ -30,44 +30,62 @@
     <div class="cd-head__text">
       <h1>{{ shortName }}</h1>
       <div class="cd-head__badges">
-        @if (inNetwork) {
-          <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In network</span>
+        @if (isSandbox) {
+          <span class="cd-badge cd-badge--ok"><app-icon name="layers" [size]="11" /> Sandbox · microVM</span>
         } @else {
-          <span class="cd-badge cd-badge--warn">Rogue</span>
-        }
-        @if (huddleConn) {
-          <span class="cd-badge cd-badge--ok">Huddle connected</span>
-        } @else {
-          <span class="cd-badge cd-badge--warn">Huddle disconnected</span>
-        }
-        @if (d.airlocked) {
-          <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Airlock</span>
+          @if (inNetwork) {
+            <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In network</span>
+          } @else {
+            <span class="cd-badge cd-badge--warn">Rogue</span>
+          }
+          @if (huddleConn) {
+            <span class="cd-badge cd-badge--ok">Huddle connected</span>
+          } @else {
+            <span class="cd-badge cd-badge--warn">Huddle disconnected</span>
+          }
+          @if (d.airlocked) {
+            <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Airlock</span>
+          }
         }
       </div>
     </div>
     <div class="cd-head__actions">
-      @if (ide === 'vscode') {
+      @if (isSandbox) {
+        <a class="btn btn-ghost btn-sm" [href]="vscodeLink" title="Open in VS Code (Remote-SSH)">VS Code</a>
+        <a class="btn btn-ghost btn-sm" [href]="jetbrainsLink" title="Open in JetBrains Gateway">JetBrains</a>
+        <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()" title="Install Huddle's CA (fixes editor backend TLS)">Trust CA</button>
+        @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
+      } @else if (ide === 'vscode') {
         <span style="font-size:12px;color:var(--text-muted)">VS Code: Attach to Running Container</span>
       } @else {
         <button class="btn btn-ghost btn-sm" (click)="openIde()">Connect IDE</button>
         @if (ideLinkStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ ideLinkStatus }}</span> }
       }
-      <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
-      <button
-        class="btn btn-sm"
-        [class.btn-ghost]="!d.airlocked"
-        [style.background]="d.airlocked ? '#7c3aed' : ''"
-        [style.color]="d.airlocked ? '#fff' : ''"
-        [style.borderColor]="d.airlocked ? '#7c3aed' : ''"
-        (click)="toggleAirlock(!!d.airlocked)"
-        [title]="d.airlocked ? 'Airlock active — global rules ignored.' : 'Lock container.'">
-        <app-icon [name]="d.airlocked ? 'shield-check' : 'anchor'" [size]="14" />
-        {{ d.airlocked ? 'Airlock on' : 'Airlock' }}
-      </button>
+      @if (!isSandbox) {
+        <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
+        <button
+          class="btn btn-sm"
+          [class.btn-ghost]="!d.airlocked"
+          [style.background]="d.airlocked ? '#7c3aed' : ''"
+          [style.color]="d.airlocked ? '#fff' : ''"
+          [style.borderColor]="d.airlocked ? '#7c3aed' : ''"
+          (click)="toggleAirlock(!!d.airlocked)"
+          [title]="d.airlocked ? 'Airlock active — global rules ignored.' : 'Lock container.'">
+          <app-icon [name]="d.airlocked ? 'shield-check' : 'anchor'" [size]="14" />
+          {{ d.airlocked ? 'Airlock on' : 'Airlock' }}
+        </button>
+      }
     </div>
   </section>
 
   <!-- ── Meta strip ── -->
+  @if (isSandbox) {
+    <div class="card cd-meta">
+      <div class="cd-meta__item"><span class="cd-meta__label">Type</span><span class="cd-meta__value">Docker Sandbox (microVM)</span></div>
+      <div class="cd-meta__item"><span class="cd-meta__label">SSH</span><span class="cd-meta__value">{{ sshHost }}</span></div>
+      <div class="cd-meta__item"><span class="cd-meta__label">Enforcement</span><span class="cd-meta__value">network egress · Huddle proxy + synced sbx policy</span></div>
+    </div>
+  } @else {
   <div class="card cd-meta">
     <div class="cd-meta__item">
       <span class="cd-meta__label">Image</span>
@@ -106,6 +124,7 @@
       </div>
     }
   </div>
+  }
 
   <!-- ── Segmented tabs ── -->
   <div class="cd-tabs">
@@ -114,9 +133,11 @@
       Firewall
       @if (pendingCount > 0) { <i>{{ pendingCount }}</i> }
     </button>
-    <button [class.on]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
-    <button [class.on]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
-    <button [class.on]="activeTab === 'terminal'" (click)="setTab('terminal')">Terminal</button>
+    @if (!isSandbox) {
+      <button [class.on]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
+      <button [class.on]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
+    }
+    <button [class.on]="activeTab === 'terminal'" (click)="setTab('terminal')">{{ isSandbox ? 'Connect' : 'Terminal' }}</button>
   </div>
 
   <!-- ════════════════════════════════════════════ TAB: FIREWALL -->
@@ -127,7 +148,7 @@
     <section class="cd-sec">
       <div class="cd-sec__head">
         <h2 class="cd-sec__title">Pending <span class="em">requests</span></h2>
-        <p class="cd-sec__sub">— for this container</p>
+        <p class="cd-sec__sub">{{ isSandbox ? '— for this sandbox' : '— for this container' }}</p>
       </div>
       <div class="card req-card">
         @if (requested.length === 0 && pathReq.length === 0) {
@@ -153,8 +174,8 @@
                 }
               </div>
               @for (r of requested; track r.id) {
-                <div class="req-row" [class.is-selected]="pendingChecked(r.id)">
-                  <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(r.id)" (change)="togglePending(r.id)" />
+                <div class="req-row" [class.is-selected]="pendingChecked(r.id)" [class.is-busy]="isRuleBusy(r.id)">
+                  <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(r.id)" (change)="togglePending(r.id)" [disabled]="isRuleBusy(r.id)" />
                   <div class="req-row__icon"><app-icon name="globe" [size]="17" /></div>
                   <div class="req-row__info">
                     <div class="req-row__domain">{{ r.domain }}</div>
@@ -164,7 +185,11 @@
                       <span>{{ r.last_seen | relTime }}</span>
                     </div>
                   </div>
-                  <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
+                  @if (isRuleBusy(r.id)) {
+                    <span class="req-busy"><span class="spinner"></span> Applying…</span>
+                  } @else {
+                    <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
+                  }
                 </div>
               }
             </div>
@@ -187,8 +212,8 @@
                 }
               </div>
               @for (row of pathReq; track row.rule.id) {
-                <div class="req-row" [class.is-selected]="pendingChecked(row.rule.id)">
-                  <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(row.rule.id)" (change)="togglePending(row.rule.id)" />
+                <div class="req-row" [class.is-selected]="pendingChecked(row.rule.id)" [class.is-busy]="isRuleBusy(row.rule.id)">
+                  <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(row.rule.id)" (change)="togglePending(row.rule.id)" [disabled]="isRuleBusy(row.rule.id)" />
                   <div class="req-row__icon req-row__icon--path"><app-icon name="file-text" [size]="17" /></div>
                   <div class="req-row__info">
                     <div class="req-row__domain">
@@ -204,7 +229,11 @@
                       <div class="req-row__sample">{{ row.last_path }}</div>
                     }
                   </div>
-                  <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+                  @if (isRuleBusy(row.rule.id)) {
+                    <span class="req-busy"><span class="spinner"></span> Applying…</span>
+                  } @else {
+                    <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+                  }
                 </div>
               }
             </div>
@@ -213,7 +242,8 @@
       </div>
     </section>
 
-    <!-- All firewall rules for this container + global, organised by group (#69) -->
+    <!-- All firewall rules for this environment + global, organised by group (#69).
+         For a sandbox these are its own per-sandbox rules (synced to sbx). -->
     <app-firewall-groups-panel [container]="name" />
   }
 
@@ -342,11 +372,31 @@ sudo cat /tmp/sudo-audit.log</code></pre>
 
   <!-- ════════════════════════════════════════════ TAB: TERMINAL -->
   @if (activeTab === 'terminal') {
-    <div class="card">
-      <div class="card__head"><h2 class="card__title">Terminal</h2></div>
-      <div style="padding:0">
-        <app-container-terminal [container]="name"/>
+    @if (isSandbox) {
+      <div class="card" style="padding:18px">
+        <div class="card__head"><h2 class="card__title">Connect</h2></div>
+        <p style="font-size:13px;color:var(--text-muted);margin:.4rem 0 1rem">
+          Open this sandbox in your editor over SSH, or use a terminal. Click <b>Enable SSH</b> once, then use a link.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <a class="btn btn--accent btn-sm" [href]="vscodeLink">Open in VS Code</a>
+          <a class="btn btn--accent btn-sm" [href]="jetbrainsLink">Open in JetBrains</a>
+          <button class="btn btn-ghost btn-sm" (click)="sbxSshSetup()">Enable SSH</button>
+          <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()">Trust CA</button>
+          @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
+        </div>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:1rem 0 0">
+          Terminal from a shell: <code>ssh {{ sshHost }}</code>
+          &nbsp;·&nbsp; A browser terminal isn't available for sandboxes (they run on the host over the file-mailbox bridge) — connect over SSH instead.
+        </p>
       </div>
-    </div>
+    } @else {
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Terminal</h2></div>
+        <div style="padding:0">
+          <app-container-terminal [container]="name"/>
+        </div>
+      </div>
+    }
   }
 }

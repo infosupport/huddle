@@ -60,6 +60,75 @@ export interface FolderMapping {
   sort_order: number;
 }
 
+export interface SbxStatus {
+  available: boolean;
+  version: string;
+  error?: string;
+  socket: string | null;
+  upstreamUrl: string;
+  proxyPort: number;
+}
+
+export interface SbxStep {
+  label: string;
+  command: string;
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface SbxStartResult {
+  name: string;
+  ok: boolean;
+  upstreamUrl: string;
+  proxyPort: number;
+  steps: SbxStep[];
+}
+
+export interface SandboxInfo {
+  name: string;
+  status?: string;
+  raw?: string;
+}
+
+export interface SbxCommandResult {
+  name?: string;
+  ok: boolean;
+  code?: number;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface SbxReconcileAction {
+  op: 'create' | 'delete';
+  action: 'allow' | 'deny';
+  target: string;
+  scope: { kind: string; name?: string };
+  ok: boolean;
+  error?: string;
+}
+
+export interface SbxSkippedRule {
+  domain: string;
+  container_id: string | null;
+  reason: string;
+}
+
+export interface SbxReconcileReport {
+  ok: boolean;
+  dryRun: boolean;
+  desired: number;
+  created: number;
+  deleted: number;
+  failed: number;
+  actions: SbxReconcileAction[];
+  notProjected: SbxSkippedRule[];
+  skipped: SbxSkippedRule[];
+  sandboxes: string[];
+  error?: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private http = inject(HttpClient);
@@ -233,6 +302,37 @@ export class ApiService {
 
   resumeContainer(name: string): Observable<{ ok: boolean }> {
     return this.handle(this.http.post<{ ok: boolean }>(`/api/docker/containers/${encodeURIComponent(name)}/start`, {}));
+  }
+
+  // ── Docker Sandboxes (sbx) — experimental second box type ──────────────────
+  sbxStatus(): Observable<SbxStatus> {
+    return this.handle(this.http.get<SbxStatus>('/api/sbx/status'));
+  }
+
+  startSbx(body: { name?: string; agent?: string; workspace?: string } = {}): Observable<SbxStartResult> {
+    return this.handle(this.http.post<SbxStartResult>('/api/sbx/start', body));
+  }
+
+  listSbxSandboxes(): Observable<{ sandboxes: SandboxInfo[] }> {
+    return this.handle(this.http.get<{ sandboxes: SandboxInfo[] }>('/api/sbx/sandboxes'));
+  }
+
+  removeSbxSandbox(name: string, force = false): Observable<SbxCommandResult> {
+    const q = force ? '?force=1' : '';
+    return this.handle(this.http.delete<SbxCommandResult>(`/api/sbx/sandboxes/${encodeURIComponent(name)}${q}`));
+  }
+
+  sbxTrustCa(name: string): Observable<SbxCommandResult> {
+    return this.handle(this.http.post<SbxCommandResult>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/trust-ca`, {}));
+  }
+
+  sbxSshSetup(): Observable<SbxCommandResult> {
+    return this.handle(this.http.post<SbxCommandResult>('/api/sbx/ssh-setup', {}));
+  }
+
+  sbxReconcile(dryRun = false): Observable<SbxReconcileReport> {
+    const q = dryRun ? '?dryRun=1' : '';
+    return this.handle(this.http.post<SbxReconcileReport>(`/api/sbx/reconcile${q}`, {}));
   }
 
   setGrant(container: string, minutes: number): Observable<Grant> {
