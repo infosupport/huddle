@@ -53,6 +53,8 @@ import {
   type IdeName,
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
+import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor } from './sbx';
+import { scheduleReconcile, ingestPending } from './sandbox/auto-sync';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -136,6 +138,19 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
     if (!isAuthenticated(req.headers)) {
       reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
+    }
+  });
+
+  // Auto-sync (sbx mode): after any successful firewall-rule / group mutation, or
+  // a sandbox lifecycle change, (re)project Huddle's rules into sbx policy.
+  // Debounced + best-effort — a no-op when the sbx bridge isn't running.
+  app.addHook('onResponse', async (req, reply) => {
+    const m = req.method;
+    if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return;
+    if (reply.statusCode >= 400) return;
+    const p = (req.url ?? '').split('?')[0];
+    if (/^\/api\/(rules|groups)\b/.test(p) || /^\/api\/sbx\/(start|sandboxes)\b/.test(p)) {
+      scheduleReconcile(`${m} ${p}`);
     }
   });
 
@@ -1014,6 +1029,127 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
     }
   );
+
+  // ── Docker Sandboxes (sbx) — experimental second box type ─────────────────
+  // Start a microVM sandbox with Huddle as its upstream proxy. Minimal MVP:
+  // status tells the portal whether sbx is usable + which upstream/port Huddle
+  // exposes; start sets the upstream proxy and creates the sandbox, returning the
+  // per-step output so the first wall is visible in the UI.
+  app.get('/api/sbx/status', async () => {
+    const avail = await sbxAvailable();
+    return { ...avail, upstreamUrl: sbxUpstreamUrl(), proxyPort: SBX_PROXY_PORT };
+  });
+
+  app.post<{ Body: { name?: string; agent?: string; workspace?: string } }>(
+    '/api/sbx/start',
+    async (req, reply) => {
+      const name = (req.body?.name ?? '').trim() || `huddle-sbx-${Date.now().toString(36)}`;
+      // Sandbox names feed a no-shell execFile arg, but keep them tame anyway.
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+        return reply.code(400).send({ error: 'invalid sandbox name' });
+      }
+      const agent = typeof req.body?.agent === 'string' ? req.body.agent.trim() : undefined;
+      const workspace = typeof req.body?.workspace === 'string' ? req.body.workspace.trim() : undefined;
+      try {
+        const result = await startSandbox({ name, agent: agent || undefined, workspace: workspace || undefined });
+        logAudit({ containerId: null, domain: '-', action: `admin:sbx-start${result.ok ? '' : '-failed'}` });
+        return { name, ...result };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    }
+  );
+
+  // List the sandboxes the host sbx daemon currently knows about.
+  app.get('/api/sbx/sandboxes', async (_req, reply) => {
+    try {
+      return { sandboxes: await listSandboxes() };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Remove a sandbox (host-side `sbx rm [--force] <name>`).
+  app.delete<{ Params: { name: string }; Querystring: { force?: string } }>(
+    '/api/sbx/sandboxes/:name',
+    async (req, reply) => {
+      const name = req.params.name;
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+        return reply.code(400).send({ error: 'invalid sandbox name' });
+      }
+      const force = req.query?.force === '1' || req.query?.force === 'true';
+      try {
+        const exitCode = await removeSandbox(name, force);
+        logAudit({ containerId: null, domain: '-', action: `admin:sbx-rm${exitCode === 0 ? '' : '-failed'}` });
+        return { name, exitCode, ok: exitCode === 0 };
+      } catch (err: any) {
+        return reply.code(502).send({ error: err.message });
+      }
+    }
+  );
+
+  // Raw sbx policy log + parsed denied entries — diagnostics for the pending
+  // ingest (so we can see exactly what `sbx policy log --json` returns).
+  app.get<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/log', async (req, reply) => {
+    const name = req.params.name;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) return reply.code(400).send({ error: 'invalid sandbox name' });
+    try {
+      return await policyLogFor(name);
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Run the sbx → Huddle pending ingest on demand (also runs on a poller).
+  app.post('/api/sbx/ingest', async (_req, reply) => {
+    try {
+      return { added: await ingestPending() };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Install Huddle's CA into a sandbox so HTTPS through the MITM proxy is trusted
+  // (fixes JetBrains/VS Code backend downloads: curl "unable to get local issuer").
+  app.post<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/trust-ca', async (req, reply) => {
+    const name = req.params.name;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid sandbox name' });
+    }
+    try {
+      const step = await trustCa(name);
+      logAudit({ containerId: null, domain: '-', action: `admin:sbx-trust-ca${step.code === 0 ? '' : '-failed'}` });
+      return { name, ...step, ok: step.code === 0 };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // One-time SSH bridge setup so sandboxes are reachable at <name>.sbx for
+  // VS Code / JetBrains remote development (host-side `sbx setup ssh`).
+  app.post('/api/sbx/ssh-setup', async (_req, reply) => {
+    try {
+      const exitCode = await sshSetup();
+      logAudit({ containerId: null, domain: '-', action: `admin:sbx-ssh-setup${exitCode === 0 ? '' : '-failed'}` });
+      return { exitCode, ok: exitCode === 0 };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Reconcile Huddle's rules into sbx policy (one-way, Huddle = truth). Pass
+  // ?dryRun=1 to preview the projection without mutating sbx. Returns a full
+  // report incl. path rules that sbx cannot express (enforced at Huddle's proxy).
+  app.post<{ Querystring: { dryRun?: string } }>('/api/sbx/reconcile', async (req, reply) => {
+    const dryRun = req.query?.dryRun === '1' || req.query?.dryRun === 'true';
+    try {
+      const report = await reconcile({ dryRun });
+      logAudit({ containerId: null, domain: '-', action: `admin:sbx-reconcile${report.ok ? '' : '-partial'}` });
+      return report;
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
 
   // ── Docker access grants (persisted in SQLite) ────────────────────────────
 
