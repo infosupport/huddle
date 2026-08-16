@@ -174,6 +174,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                         <button type="button" class="grp__pm-toggle" (click)="toggleExpand(r.id)">
                           <app-icon [name]="expanded() === r.id ? 'chevron-down' : 'chevron-right'" [size]="14" />
                         </button>
+                        <span class="grp__pm-fleet" title="Path mode is fleet-wide for sandboxes: sbx can't filter paths, so the domain is allowed in every sandbox and Huddle enforces the paths at its proxy.">all sandboxes</span>
                       } @else {
                         <span class="pill" [class.pill--allow]="r.status === 'allow'" [class.pill--deny]="r.status === 'deny'">{{ r.status === 'allow' ? 'Allowed' : 'Denied' }}</span>
                       }
@@ -311,6 +312,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .grp__scope { white-space: nowrap; }
     .grp__pm-sel { max-width: 150px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 0.82em; }
     .grp__pm-toggle { border: none; background: transparent; cursor: pointer; color: var(--text-muted); padding: 0 4px; vertical-align: middle; }
+    .grp__pm-fleet { margin-left: 4px; font-size: 0.68em; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; background: var(--info-soft); color: var(--info); vertical-align: middle; white-space: nowrap; cursor: help; }
     /* SMALL SCREEN: collapse the table into the compact stacked list (the mockup).
        Line 1 = checkbox + domain (+path) + ⋯ menu; line 2 = the action / scope /
        group pills wrapped underneath. */

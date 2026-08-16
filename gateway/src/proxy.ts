@@ -345,9 +345,11 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   // safe. See docs/ADR §5.
   const isSbxProxy = port === SBX_PROXY_PORT;
   // Rule evaluation for this server: per-container/global for the devcontainer
-  // proxy; fleet-merge for the sbx proxy. Path is host-level only for the fleet.
+  // proxy; fleet-merge for the sbx proxy. For the fleet, PATH-MODE domains are
+  // handled globally (sbx allows the domain in every sandbox; Huddle enforces the
+  // paths here) — so the path is passed through.
   const evalRule = (host: string, containerId: string | null, path: string | null) =>
-    isSbxProxy ? checkFleetRule(host, knownSandboxNames()) : checkRule(host, containerId, path);
+    isSbxProxy ? checkFleetRule(host, knownSandboxNames(), path) : checkRule(host, containerId, path);
 
   server.on('request', async (req, res) => {
     // Extension server-side fetch is identified via the X-Huddle-Ext header

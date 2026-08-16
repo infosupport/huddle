@@ -398,8 +398,21 @@ export function checkRule(
 export function checkFleetRule(
   rawDomain: string,
   sandboxNames: Set<string>,
+  path: string | null = null,
 ): { status: RuleStatus; ruleId: number | null } {
   const domain = rawDomain.toLowerCase();
+
+  // PATH MODE is fleet-wide (GLOBAL) for sandboxes — sbx can't do paths, so the
+  // domain is allowed in every sandbox and Huddle enforces the paths here. If a
+  // GLOBAL path-mode marker exists for this host, delegate to the global path
+  // logic: admit the CONNECT tunnel (path still encrypted) so MITM can read the
+  // path, then per request allow the matched paths / file unknown subpaths as a
+  // global `requested`.
+  if (isPathMode(domain, null)) {
+    if (path === null) return { status: 'allow', ruleId: null };
+    return checkRule(domain, null, path);
+  }
+
   const { selectPerContainer, selectGlobal, selectWildcardPerContainer, selectWildcardGlobal, touchRule } = s();
   const now = Math.floor(Date.now() / 1000);
 

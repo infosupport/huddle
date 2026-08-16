@@ -33,10 +33,19 @@ describe('projectRules', () => {
     expect(skipped[0].reason).toMatch(/not a known sandbox/);
   });
 
-  it('does NOT project path-mode rules — reported as notProjected', () => {
+  it('path-mode rule → domain allowed FLEET-WIDE (sbx global); paths noted as Huddle-enforced', () => {
     const { desired, notProjected } = projectRules([row({ domain: 'files.io', container_id: 'box1', path_mode: 1 })], NOW, SANDBOXES);
-    expect(desired.size).toBe(0);
+    expect([...desired.values()]).toContainEqual({ action: 'allow', target: 'files.io', scope: { kind: 'global' } });
     expect(notProjected[0].reason).toMatch(/path rule/i);
+  });
+
+  it('multiple path rules for one domain → a single global allow', () => {
+    const { desired } = projectRules([
+      row({ domain: 'files.io', path_mode: 1 }),
+      row({ domain: 'files.io', path_pattern: '/a/*' }),
+      row({ domain: 'files.io', path_pattern: '/b/*' }),
+    ], NOW, SANDBOXES);
+    expect([...desired.values()].filter((r) => r.target === 'files.io')).toEqual([{ action: 'allow', target: 'files.io', scope: { kind: 'global' } }]);
   });
 
   it('skips requested / expired / invalid-target / internal-huddle rules', () => {
