@@ -251,20 +251,22 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
 
     /* Group buckets are a horizontal tab strip along the top (not a left column),
        scrollable when they overflow — like the mockup. Detail sits below. */
-    .grp__body { display: flex; flex-direction: column; gap: 16px; margin-top: 18px; }
-    .grp__list { display: flex; flex-direction: row; align-items: stretch; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border); padding: 0; }
+    /* DESKTOP: group buckets as a vertical side panel next to the detail. The
+       horizontal tab strip is applied ONLY on small screens (media query below). */
+    .grp__body { display: grid; grid-template-columns: 240px 1fr; gap: 20px; margin-top: 18px; }
+    .grp__list { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--border); padding-right: 16px; }
     .grp__search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); min-width: 240px; }
     .grp__search input { border: none; background: transparent; outline: none; color: var(--text); width: 100%; font-size: 0.88em; }
-    .grp__item { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 14px 9px; border: none; background: transparent; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; color: var(--text-muted); font-size: 0.9em; white-space: nowrap; }
-    .grp__item:hover { color: var(--text); }
-    .grp__item.on { color: var(--accent-strong); border-bottom-color: var(--accent); font-weight: 600; }
-    .grp__item i { font-style: normal; font-size: 0.76em; font-weight: 700; color: var(--text-dim); background: var(--surface-2); border-radius: 6px; padding: 1px 8px; }
-    .grp__item.on i { color: var(--accent-strong); background: var(--accent-soft); }
-    .grp__item--ungrouped span { color: var(--text-muted); }
-    .grp__additem { flex: 0 0 auto; align-self: center; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.85em; white-space: nowrap; }
+    .grp__item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; border: none; background: transparent; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); font-size: 0.92em; text-align: left; }
+    .grp__item:hover { background: var(--surface-hover); }
+    .grp__item.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+    .grp__item i { font-style: normal; color: var(--text-dim); font-size: 0.85em; }
+    .grp__item.on i { color: var(--accent-strong); }
+    .grp__item--ungrouped { color: var(--text-muted); }
+    .grp__additem { display: flex; align-items: center; gap: 6px; padding: 9px 12px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.88em; border-radius: var(--radius-sm); }
     .grp__additem:hover { color: var(--accent); }
-    .grp__new { flex: 0 0 auto; align-self: center; display: flex; flex-direction: row; align-items: center; gap: 6px; padding: 4px 8px; }
-    .grp__new input { padding: 6px 9px; width: 150px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); }
+    .grp__new { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+    .grp__new input { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); }
     .grp__new-actions { display: flex; gap: 6px; }
 
     .grp__detail-head h3 { margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
@@ -326,6 +328,18 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
       .grp__grp { order: 6; }
       .grp__rule, .grp__scope, .grp__grp { flex: 0 0 auto; }
       .grp__path { display: block; }
+
+      /* group buckets: vertical side panel → horizontal scrollable tab strip */
+      .grp__body { display: flex; flex-direction: column; gap: 14px; }
+      .grp__list { flex-direction: row; align-items: stretch; gap: 2px; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); padding-right: 0; }
+      .grp__item { flex: 0 0 auto; flex-direction: column; align-items: center; justify-content: flex-start; gap: 4px; padding: 8px 14px 9px; border-radius: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--text-muted); white-space: nowrap; }
+      .grp__item:hover { background: transparent; color: var(--text); }
+      .grp__item.on { background: transparent; color: var(--accent-strong); border-bottom-color: var(--accent); }
+      .grp__item i { font-size: 0.76em; font-weight: 700; background: var(--surface-2); border-radius: 6px; padding: 1px 8px; }
+      .grp__item.on i { color: var(--accent-strong); background: var(--accent-soft); }
+      .grp__additem { flex: 0 0 auto; align-self: center; }
+      .grp__new { flex-direction: row; align-items: center; align-self: center; padding: 4px 8px; }
+      .grp__new input { width: 150px; }
     }
     .grp__stag { font-size: 0.78em; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted); font-family: 'Space Grotesk', monospace; }
     .grp__stag--global { background: var(--info-soft); border-color: transparent; color: var(--info); font-family: inherit; }
