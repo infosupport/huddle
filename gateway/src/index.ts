@@ -7,6 +7,8 @@ import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
+import { SBX_PROXY_PORT, sbxUpstreamUrl } from './sbx';
+import { startAutoSync } from './sandbox/auto-sync';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -24,6 +26,16 @@ initDb();
 runSettingsMigration();
 initCa();
 createProxyServer();
+// Dedicated egress port for Docker Sandboxes (sbx) boxes. sbx cannot be pointed
+// at the per-container proxy topology, so it gets its own listener; the sbx
+// upstream proxy is set to this port when a sandbox is started (see sbx.ts).
+// Same proxy logic/firewall as :80 — just a stable endpoint Huddle "already opens"
+// so the host sbx daemon has somewhere to forward to.
+createProxyServer(SBX_PROXY_PORT);
+console.log(`[sbx] proxy port ${SBX_PROXY_PORT} open — upstream for sandboxes: ${sbxUpstreamUrl()}`);
+// Background sbx sync: auto-reconcile Huddle→sbx + ingest blocked requests as
+// pending (sbx→Huddle). Best-effort; no-op when the sbx bridge isn't running.
+startAutoSync();
 createApiServer().catch(err => {
   console.error('[api] failed to start', err);
   process.exit(1);

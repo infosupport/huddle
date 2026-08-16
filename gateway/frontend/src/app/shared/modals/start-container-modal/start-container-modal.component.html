@@ -4,10 +4,20 @@
   <div class="modal" (mousedown)="close()">
     <div class="modal-box" (mousedown)="$event.stopPropagation()">
       <div class="modal-header">
-        <h2>Start devcontainer</h2>
+        <h2>Create dev environment</h2>
         <button class="modal-close" (click)="close()">✕</button>
       </div>
       <div class="modal-body">
+        <div class="env-kind">
+          <button type="button" class="env-kind__opt" [class.on]="kind === 'sandbox'" (click)="setKind('sandbox')">
+            <b>Sandbox</b><span>microVM · Docker inside · network firewall</span>
+          </button>
+          <button type="button" class="env-kind__opt" [class.on]="kind === 'container'" (click)="setKind('container')">
+            <b>Devcontainer</b><span>container · Docker-socket policy</span>
+          </button>
+        </div>
+
+        @if (kind === 'container') {
         <label for="start-ide">IDE</label>
         <select id="start-ide" [(ngModel)]="ide" (ngModelChange)="onIdeChange()">
           <option value="intellij">IntelliJ IDEA</option>
@@ -84,6 +94,15 @@
 
         <label for="start-name">Container name</label>
         <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-my-project" />
+        } @else {
+          <label for="sbx-name">Name</label>
+          <input id="sbx-name" type="text" [(ngModel)]="sbxName" placeholder="auto (huddle-sbx-…)" />
+          <label for="sbx-agent">Agent</label>
+          <input id="sbx-agent" type="text" [(ngModel)]="sbxAgent" placeholder="claude" />
+          <label for="sbx-ws">Workspace</label>
+          <input id="sbx-ws" type="text" [(ngModel)]="sbxWorkspace" placeholder="host path, e.g. T:\projects\myrepo" />
+          <p class="mount-hint">Huddle becomes the sandbox's upstream proxy and its CA is installed automatically, so HTTPS + editor backends work.</p>
+        }
 
         @if (folderPickerOpen) {
           <app-folder-picker-modal [folders]="indexedFolders" [multiple]="true"
@@ -97,7 +116,9 @@
         @if (status) { <p class="form-status">{{ status }}</p> }
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary" [disabled]="loading" (click)="confirm()">Start</button>
+        <button class="btn btn-primary" [disabled]="loading" (click)="confirm()">
+          {{ loading ? 'Working…' : (kind === 'sandbox' ? 'Create sandbox' : 'Start devcontainer') }}
+        </button>
         <button class="btn btn-ghost" (click)="close()">Cancel</button>
       </div>
     </div>

@@ -645,3 +645,9 @@
 }
 .ports-form input[type=number] { width: 130px; }
 .ports-form input[type=text] { flex: 1; min-width: 140px; }
+
+/* Rule being applied: spinner replaces the pie-menu; row dims + locks. */
+.req-row.is-busy { opacity: .7; }
+.req-busy { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.req-busy .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--border-strong, rgba(128,128,128,.4)); border-top-color: var(--accent, #5865f2); border-radius: 50%; animation: cd-spin .7s linear infinite; }
+@keyframes cd-spin { to { transform: rotate(360deg); } }

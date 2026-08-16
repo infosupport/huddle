@@ -1,0 +1,115 @@
+<div class="page-header">
+  <h1>Sandboxes</h1>
+  <div class="actions">
+    <button class="btn btn-ghost btn-sm" (click)="sshSetup()" [disabled]="!!isBusy('__ssh__') || !ready()" title="Run 'sbx setup ssh' once so editors can connect at <name>.sbx">
+      {{ isBusy('__ssh__') || 'Enable SSH' }}
+    </button>
+    <button class="btn btn-ghost btn-sm" (click)="syncNow()" [disabled]="syncing() || !ready()" title="Sync Huddle rules into sbx now (also runs automatically)">
+      {{ syncing() ? 'Syncing…' : 'Sync rules' }}
+    </button>
+    <button class="btn btn--accent" (click)="showCreate.set(!showCreate())" [disabled]="!ready()">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      Create sandbox
+    </button>
+  </div>
+</div>
+
+<!-- compact status + guarantee -->
+<div class="sbx-meta">
+  @if (status(); as s) {
+    <span class="status" [ngClass]="s.available ? 'status--running' : 'status--stopped'">{{ s.available ? 'sbx ' + s.version : 'sbx unavailable' }}</span>
+  }
+  <span class="sep">·</span>
+  <span class="muted">Enforcement = network egress (not Docker-API). Domain rules sync per-sandbox; path rules stay fleet-wide at Huddle's proxy.</span>
+  @if (msgFor('__ssh__')) { <span class="sep">·</span> <span>{{ msgFor('__ssh__') }}</span> }
+</div>
+
+<!-- inline create form -->
+@if (showCreate()) {
+  <div class="card create">
+    <div class="create__row">
+      <label>Name <input type="text" [ngModel]="newName()" (ngModelChange)="newName.set($event)" placeholder="auto (huddle-sbx-…)" /></label>
+      <label>Agent <input type="text" [ngModel]="newAgent()" (ngModelChange)="newAgent.set($event)" placeholder="claude" /></label>
+      <label class="grow">Workspace <input type="text" [ngModel]="newWorkspace()" (ngModelChange)="newWorkspace.set($event)" placeholder="host path, e.g. T:\projects\myrepo" /></label>
+      <button class="btn btn--accent" (click)="create()" [disabled]="creating()">{{ creating() ? 'Creating…' : 'Create' }}</button>
+      <button class="btn btn-ghost" (click)="showCreate.set(false)">Cancel</button>
+    </div>
+    <p class="create__hint">Huddle is set as upstream proxy and its CA is installed automatically, so HTTPS + editor backends work.</p>
+    @if (createError(); as r) {
+      <div class="create__err">
+        @for (step of r.steps; track step.label) {
+          @if (step.code !== 0) { <div>✗ {{ step.label }}: <code>{{ step.stderr }}</code></div> }
+        }
+      </div>
+    }
+  </div>
+}
+
+@if (error()) { <p class="empty-note" style="color:var(--danger)">{{ error() }}</p> }
+
+<div class="card">
+  <table class="data-table">
+    <thead>
+      <tr><th>Sandbox</th><th>Status</th><th>Requested</th><th>Open in IDE</th><th class="col-actions">Actions</th></tr>
+    </thead>
+    <tbody>
+      @if (!loading() && sandboxes().length === 0) {
+        <tr><td colspan="5"><p class="empty-note">No sandboxes yet — click “Create sandbox”.</p></td></tr>
+      } @else {
+        @for (s of sandboxes(); track s.name) {
+          <tr>
+            <td>
+              <div class="container-cell">
+                <div class="cc-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+                </div>
+                <div>
+                  <div class="name">{{ s.name }}</div>
+                  <div class="sub"><code>microVM · SSH {{ s.name }}.sbx</code></div>
+                </div>
+              </div>
+            </td>
+            <td><span class="status" [ngClass]="running(s) ? 'status--running' : 'status--stopped'">{{ running(s) ? 'Running' : (s.status || 'Stopped') }}</span></td>
+            <td>
+              @if (requestedCount(s.name) > 0) {
+                <a class="badge-pill yellow" routerLink="/firewall" [queryParams]="{ container: s.name }" title="Blocked by sbx — approve on the Firewall page">{{ requestedCount(s.name) }}</a>
+              } @else { <span class="badge-pill muted">0</span> }
+            </td>
+            <td>
+              <div class="ide">
+                <a class="ide-link" [href]="vscodeLink(s.name)" title="Open in VS Code (Remote-SSH)">VS Code</a>
+                <a class="ide-link" [href]="jetbrainsLink(s.name)" title="Open in JetBrains Gateway">JetBrains</a>
+              </div>
+              @if (msgFor(s.name)) { <div class="rowmsg">{{ msgFor(s.name) }}</div> }
+            </td>
+            <td class="col-actions">
+              <button class="btn btn-ghost btn-sm" (click)="trustCa(s.name)" [disabled]="!!isBusy(s.name)" title="Install Huddle's CA (fixes editor backend TLS)">{{ isBusy(s.name) || 'Trust CA' }}</button>
+              <button class="btn btn-delete btn-sm" (click)="remove(s.name)" [disabled]="!!isBusy(s.name)">Delete</button>
+            </td>
+          </tr>
+        }
+      }
+    </tbody>
+  </table>
+</div>
+
+<!-- last sync report (collapsible, off by default) -->
+@if (report(); as rep) {
+  <div class="card">
+    <div class="card-header">
+      <h3>Firewall sync {{ rep.dryRun ? '(dry-run)' : '' }} — +{{ rep.created }} / −{{ rep.deleted }} @if (rep.failed) { <span style="color:var(--danger)">· {{ rep.failed }} failed</span> }</h3>
+      <button class="btn btn-ghost btn-sm" (click)="showReport.set(!showReport())">{{ showReport() ? 'Hide' : 'Details' }}</button>
+    </div>
+    @if (rep.error) { <p class="empty-note" style="color:var(--danger)">{{ rep.error }}</p> }
+    @if (showReport() && !rep.error) {
+      <div class="report">
+        @for (a of rep.actions; track a.target + (a.scope.name || '')) {
+          <div class="rrow" [class.fail]="!a.ok"><span class="op">{{ a.op === 'create' ? '+' : '−' }}</span> {{ a.action }} {{ a.target }} <span class="muted">@ {{ scopeLabel(a.scope) }}</span>@if (a.error) { <span style="color:var(--danger)"> — {{ a.error }}</span> }</div>
+        }
+        @if (rep.notProjected.length) {
+          <p class="muted note">{{ rep.notProjected.length }} path rule(s) not projected to sbx — enforced fleet-wide at Huddle's proxy (sbx policy is domain-level only).</p>
+        }
+      </div>
+    }
+  </div>
+}

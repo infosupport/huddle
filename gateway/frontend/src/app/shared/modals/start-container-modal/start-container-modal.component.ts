@@ -31,12 +31,28 @@ interface RememberedLayout {
     .mount-row .btn { flex: 0 0 auto; }
     .mount-hint { font-size: 12px; color: var(--text-muted); margin: -.25rem 0 .5rem; }
     .mount-add { display: flex; gap: .5rem; }
+    .env-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+    .env-kind__opt { display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer;
+      border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); color: var(--text); }
+    .env-kind__opt:hover { border-color: var(--border-strong); }
+    .env-kind__opt.on { border-color: var(--accent, #5865f2); box-shadow: 0 0 0 1px var(--accent, #5865f2) inset; }
+    .env-kind__opt b { font-size: 13.5px; }
+    .env-kind__opt span { font-size: 11px; color: var(--text-muted); }
   `]
 })
 export class StartContainerModalComponent {
   modalService = inject(ModalService);
   private api = inject(ApiService);
   private state = inject(StateService);
+
+  // Which kind of dev environment to create. Always defaults to 'sandbox' on open
+  // (the primary box type); the user can switch to 'container' per-open.
+  kind: 'sandbox' | 'container' = 'sandbox';
+
+  // sandbox fields
+  sbxName = '';
+  sbxAgent = 'claude';
+  sbxWorkspace = '';
 
   images: DockerImage[] = [];
   // Host folders indexed by `huddle indexfolder`; loaded once per open and passed
@@ -78,6 +94,10 @@ export class StartContainerModalComponent {
     this.error = '';
     this.status = '';
     this.loading = false;
+    this.sbxName = '';
+    this.sbxWorkspace = '';
+    this.sbxAgent = 'claude';
+    this.kind = 'sandbox'; // always default to Sandbox on open (the primary box type)
     this.restoreRemembered();
     this.loadImagesForIde();
     this.api.getIndexedFolders().subscribe({
@@ -86,6 +106,11 @@ export class StartContainerModalComponent {
       // inputs still take free text — so a failure here must not block the modal.
       error: () => { this.indexedFolders = []; },
     });
+  }
+
+  setKind(k: 'sandbox' | 'container'): void {
+    this.kind = k;
+    this.error = '';
   }
 
   // The IDE choice drives both the default base image and the snapshot filter.
@@ -232,6 +257,7 @@ export class StartContainerModalComponent {
   }
 
   confirm(): void {
+    if (this.kind === 'sandbox') { this.confirmSandbox(); return; }
     const err = this.validate();
     if (err) { this.error = err; return; }
     this.error = '';
@@ -250,6 +276,29 @@ export class StartContainerModalComponent {
     }).subscribe({
       next: () => { this.remember(); this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },
+    });
+  }
+
+  private confirmSandbox(): void {
+    this.error = '';
+    this.loading = true;
+    this.status = 'Creating sandbox…';
+    this.api.startSbx({
+      name: this.sbxName.trim() || undefined,
+      agent: this.sbxAgent.trim() || undefined,
+      workspace: this.sbxWorkspace.trim() || undefined,
+    }).subscribe({
+      next: (r) => {
+        this.loading = false;
+        if (r.ok) {
+          this.modalService.notifySandboxesChanged();
+          this.modalService.closeStart();
+        } else {
+          this.status = '';
+          this.error = r.steps.find((s) => s.code !== 0)?.stderr?.trim() || 'Sandbox creation failed';
+        }
+      },
+      error: (err) => { this.loading = false; this.status = ''; this.error = err?.error?.error || err?.message || 'Sandbox creation failed'; },
     });
   }
 

@@ -8,6 +8,8 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxLog, runSbxIngest } from './sbx';
+import { startBridge, stopBridge, bridgeStatus, runBridge } from './sbx-bridge';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -25,9 +27,9 @@ interface ParsedArgs {
   mounts: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'dry-run']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -149,6 +151,21 @@ Usage:
   huddle firewall group export <name>  Export a group as JSON (--out <file>)
   huddle firewall group import <file>  Import a group (--replace to mirror)
   huddle firewall group apply <name>   Apply a group (--container <id> or global)
+  huddle sbx status                  Show Docker Sandboxes (sbx) mode status:
+                                     host-agent pipe, upstream proxy, sbx version
+  huddle sbx list                    List sandboxes the host sbx daemon knows
+  huddle sbx start [name] [options]  Start a microVM sandbox with Huddle as its
+                                     upstream proxy (--agent <name> --workspace <path>)
+  huddle sbx rm <name> [--force]     Remove a sandbox
+  huddle sbx reconcile [--dry-run]   Sync Huddle rules → sbx policy (one-way;
+                                     Huddle is the single source of truth)
+  huddle sbx trust-ca <name>         Install Huddle's CA in a sandbox so HTTPS
+                                     works (needed for VS Code / JetBrains backends)
+  huddle sbx ssh-setup               Enable the SSH bridge (<name>.sbx) for
+                                     VS Code / JetBrains remote development
+  huddle sbx bridge [start|stop|status]  Run the host bridge that lets the
+                                     containerized gateway drive sbx (auto-started
+                                     by 'huddle init' when sbx is installed)
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
@@ -373,6 +390,44 @@ async function main(): Promise<void> {
       clear: flagBool(flags, 'clear'),
       list: flagBool(flags, 'list'),
     });
+    return;
+  }
+
+  if (cmd === 'sbx') {
+    const subCmd = sub ?? 'status';
+    if (subCmd === 'status') {
+      await runSbxStatus();
+    } else if (subCmd === 'list' || subCmd === 'ls') {
+      await runSbxList();
+    } else if (subCmd === 'start' || subCmd === 'create') {
+      await runSbxStart({
+        name: positional[2] ?? flagString(flags, 'name'),
+        agent: flagString(flags, 'agent'),
+        workspace: flagString(flags, 'workspace'),
+      });
+    } else if (subCmd === 'rm' || subCmd === 'remove' || subCmd === 'delete') {
+      await runSbxRemove({ name: positional[2] ?? flagString(flags, 'name'), force: flagBool(flags, 'force') });
+    } else if (subCmd === 'reconcile' || subCmd === 'sync') {
+      await runSbxReconcile({ dryRun: flagBool(flags, 'dry-run') });
+    } else if (subCmd === 'trust-ca' || subCmd === 'ca') {
+      await runSbxTrustCa({ name: positional[2] ?? flagString(flags, 'name') });
+    } else if (subCmd === 'log') {
+      await runSbxLog({ name: positional[2] ?? flagString(flags, 'name') });
+    } else if (subCmd === 'ingest') {
+      await runSbxIngest();
+    } else if (subCmd === 'bridge') {
+      const action = positional[2] ?? 'start';
+      if (action === 'run') { runBridge(); return; }        // foreground loop (does not return)
+      else if (action === 'stop') stopBridge();
+      else if (action === 'status') bridgeStatus();
+      else startBridge();                                    // 'start' (default)
+    } else if (subCmd === 'ssh-setup' || subCmd === 'ssh') {
+      await runSbxSshSetup();
+    } else {
+      console.error(`Unknown sbx subcommand: ${subCmd}`);
+      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|ssh-setup|bridge|log|ingest>');
+      process.exit(1);
+    }
     return;
   }
 

@@ -385,6 +385,53 @@ export function checkRule(
   return { status: 'requested', ruleId: created?.id ?? null };
 }
 
+/**
+ * Evaluate a SANDBOX-FLEET request. Huddle's proxy can't attribute a live request
+ * to a specific sandbox (all sbx egress arrives aggregated), so we match against
+ * the MERGE of: all GLOBAL rules + all rules of EVERY known sandbox. Because sbx
+ * has already enforced per-box (deny-by-default) before forwarding upstream, a
+ * request only reaches here if some box was allowed to make it — so at the fleet
+ * layer ALLOW wins if any sandbox (or global) allows the host. A GLOBAL deny is
+ * authoritative (operator blocked it for everyone). Host-level only (sbx policy
+ * has no paths); never creates a `requested` row (discovery is via the sbx log).
+ */
+export function checkFleetRule(
+  rawDomain: string,
+  sandboxNames: Set<string>,
+): { status: RuleStatus; ruleId: number | null } {
+  const domain = rawDomain.toLowerCase();
+  const { selectPerContainer, selectGlobal, selectWildcardPerContainer, selectWildcardGlobal, touchRule } = s();
+  const now = Math.floor(Date.now() / 1000);
+
+  type Tagged = { rule: Candidate; isGlobal: boolean };
+  const cands: Tagged[] = [];
+  const collect = (rows: RuleRow[], isGlobal: boolean, wildcard: boolean) => {
+    for (const r of rows) {
+      if (r.path_pattern) continue; // host-level only at the fleet layer
+      if (wildcard ? matchDomain(r.domain, domain) : true) {
+        cands.push({ rule: { ...r, domain_is_wildcard: wildcard }, isGlobal });
+      }
+    }
+  };
+  collect(selectGlobal.all(domain) as RuleRow[], true, false);
+  collect(selectWildcardGlobal.all() as RuleRow[], true, true);
+  for (const name of sandboxNames) {
+    collect(selectPerContainer.all(domain, name) as RuleRow[], false, false);
+    collect(selectWildcardPerContainer.all(name) as RuleRow[], false, true);
+  }
+
+  const live = (c: Tagged) => c.rule.status !== 'allow' || c.rule.expires_at === null || c.rule.expires_at >= now;
+  const globalDeny = cands.find((c) => c.isGlobal && c.rule.status === 'deny');
+  if (globalDeny) { touchRule.run(globalDeny.rule.id); return { status: 'deny', ruleId: globalDeny.rule.id }; }
+  const allow = cands.find((c) => c.rule.status === 'allow' && live(c));
+  if (allow) { touchRule.run(allow.rule.id); return { status: 'allow', ruleId: allow.rule.id }; }
+  const anyDeny = cands.find((c) => c.rule.status === 'deny');
+  if (anyDeny) { touchRule.run(anyDeny.rule.id); return { status: 'deny', ruleId: anyDeny.rule.id }; }
+  // No match / only a stale 'requested' — block, but DON'T auto-file (can't
+  // attribute to a box; discovery of blocked hosts is done via the sbx policy log).
+  return { status: 'requested', ruleId: null };
+}
+
 // Is this domain in path-allowlist mode? I.e. does a host-only marker rule
 // (path_mode=1) exist that applies to this container or globally. The proxy uses
 // this at CONNECT (path still encrypted) to allow the HTTPS tunnel anyway, so
