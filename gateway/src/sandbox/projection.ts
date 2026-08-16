@@ -48,6 +48,9 @@ export function projectRules(
   const desired = new Map<string, PolicyRule>();
   const notProjected: SkippedRule[] = [];
   const skipped: SkippedRule[] = [];
+  // Path-mode domains are allowed FLEET-WIDE in sbx (global) so every sandbox can
+  // reach them; sbx can't do paths, so Huddle enforces the paths at its proxy.
+  const pathDomains = new Set<string>();
 
   for (const r of rows) {
     if (r.status === 'requested') {
@@ -58,12 +61,15 @@ export function projectRules(
       skipped.push({ domain: r.domain, container_id: r.container_id, reason: 'expired' });
       continue;
     }
-    // Path-mode / path-pattern rules cannot be expressed by sbx policy (domain-only).
+    // Path-mode / path-pattern rules: sbx has no path support, so allow the bare
+    // DOMAIN globally (fleet-wide) and let Huddle's MITM proxy cover the paths.
     if (r.path_mode !== 0 || (r.path_pattern != null && r.path_pattern !== '')) {
+      const dom = r.domain.toLowerCase();
+      if (isValidPolicyTarget(dom) && dom !== 'huddle') pathDomains.add(dom);
       notProjected.push({
         domain: r.domain,
         container_id: r.container_id,
-        reason: 'path rule — not expressible in sbx policy; enforced fleet-wide at Huddle proxy',
+        reason: 'path rule — domain allowed fleet-wide in sbx (global); paths enforced at Huddle proxy',
       });
       continue;
     }
@@ -94,6 +100,13 @@ export function projectRules(
 
     const action = r.status; // 'allow' | 'deny'
     desired.set(ruleKey(action, r.domain, scope), { action, target: r.domain, scope });
+  }
+
+  // Path-mode domains → one global ALLOW each (deduped), so sbx forwards the
+  // domain from every sandbox and Huddle's proxy does the per-path enforcement.
+  for (const dom of pathDomains) {
+    const scope: Scope = { kind: 'global' };
+    desired.set(ruleKey('allow', dom, scope), { action: 'allow', target: dom, scope });
   }
 
   return { desired, notProjected, skipped };
