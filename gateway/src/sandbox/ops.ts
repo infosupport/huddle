@@ -313,23 +313,85 @@ export async function policySet(p: PolicySetParams): Promise<void> {
   if (r.code !== 0) throwSbxError(r, 'policy set failed');
 }
 
-export async function policyRemove(_p: PolicyRemoveParams): Promise<void> {
-  // TODO(T1.3): confirm the removal verb via `sbx policy --help` — likely
-  // `sbx policy remove network <target> [--sandbox <name>]` or a `--delete` flag.
-  // Kept explicit (not a silent no-op) so reconciliation can't assume success.
-  throw new Error('policy.remove not yet implemented — confirm sbx policy removal verb on the host');
+/** An actual sbx policy rule as returned by `sbx policy ls --json` — carries the
+ * rule id (needed to remove it) alongside the action/target/scope. */
+export interface ActualPolicyRule extends PolicyRule {
+  id: string;
 }
 
-export async function policyList(p: PolicyListParams): Promise<PolicyRule[]> {
-  if (p.scope.kind === 'sandbox' && !isValidSandboxName(p.scope.name)) {
-    throw new Error(`invalid sandbox name: ${p.scope.name}`);
+/** Strip a trailing `:port` so sbx's `host:443` matches Huddle's bare `host`. */
+function stripPort(t: string): string {
+  return t.replace(/:\d+$/, '');
+}
+
+/**
+ * Remove a network rule by its sbx RULE ID (from `sbx policy ls --json`):
+ *   sbx policy rm network --id <id> [--sandbox <name>]
+ * --sandbox scopes to that sandbox's local policy; omitted = global policy.
+ */
+export async function policyRemove(id: string, scope: Scope): Promise<void> {
+  if (!id) throw new Error('policyRemove requires a rule id');
+  const args = ['policy', 'rm', 'network', '--id', id];
+  if (scope.kind === 'sandbox') {
+    if (!isValidSandboxName(scope.name)) throw new Error(`invalid sandbox name: ${scope.name}`);
+    args.push('--sandbox', scope.name);
   }
-  const r = await runSbx(['policy', 'list', ...scopeArgs(p.scope)]);
-  if (r.code !== 0) throwSbxError(r, 'policy list failed');
-  const parsed = parsePolicyList(r.stdout);
+  const r = await runSbx(args);
+  if (r.code !== 0) throwSbxError(r, 'policy rm failed');
+}
+
+/**
+ * All ACTIVE, EDITABLE network rules across every scope, via `sbx policy ls --json`.
+ * Schema (confirmed 2026-08-16): entries carry id, decision (allow|deny),
+ * resource_type, resources[] (may include :port), scope ("global" | "sandbox:<n>")
+ * / sandbox_id, editable, status. We skip non-network, non-editable (org/system),
+ * and non-active rules — reconciliation must never touch those. One entry can list
+ * several resources → one ActualPolicyRule each. Never throws on odd JSON.
+ */
+export function parsePolicyLsJson(stdout: string): ActualPolicyRule[] | null {
+  const text = stdout.trim();
+  if (!text) return [];
+  let parsed: any;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  let items: any[];
+  if (Array.isArray(parsed)) items = parsed;
+  else if (parsed && typeof parsed === 'object') items = parsed.policies ?? parsed.rules ?? parsed.items ?? parsed.network ?? [];
+  else return null;
+  if (!Array.isArray(items)) return null;
+
+  const out: ActualPolicyRule[] = [];
+  for (const e of items) {
+    if (!e || typeof e !== 'object') continue;
+    if (e.resource_type && e.resource_type !== 'network') continue;   // network rules only
+    if (e.editable === false) continue;                               // never touch org/system rules
+    if (e.status && e.status !== 'active') continue;
+    const id = e.id ?? e.rule_id ?? e.ID;
+    if (typeof id !== 'string' || !id) continue;
+    const decision = e.decision ?? e.action;
+    const action: 'allow' | 'deny' | null = decision === 'deny' ? 'deny' : decision === 'allow' ? 'allow' : null;
+    if (!action) continue;
+    let scope: Scope = { kind: 'global' };
+    const sc = typeof e.scope === 'string' ? e.scope : typeof e.applies_to === 'string' ? e.applies_to : '';
+    const m = /^sandbox:(.+)$/.exec(sc);
+    if (m && isValidSandboxName(m[1])) scope = { kind: 'sandbox', name: m[1] };
+    else if (typeof e.sandbox_id === 'string' && isValidSandboxName(e.sandbox_id)) scope = { kind: 'sandbox', name: e.sandbox_id };
+    const raw = e.resources ?? e.resource ?? e.target;
+    const resources: unknown[] = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+    for (const res of resources) {
+      if (typeof res !== 'string' || !res.trim()) continue;
+      out.push({ id, action, target: stripPort(res.trim().toLowerCase()), scope });
+    }
+  }
+  return out;
+}
+
+/** All actual sbx policy rules (global + every sandbox) in one call. */
+export async function policyListAll(): Promise<ActualPolicyRule[]> {
+  const r = await runSbx(['policy', 'ls', '--json']);
+  if (r.code !== 0) throwSbxError(r, 'sbx policy ls failed');
+  const parsed = parsePolicyLsJson(r.stdout);
   if (parsed === null) {
-    // Unrecognised format — do NOT crash; return empty and leave a breadcrumb.
-    console.warn('[host-agent] policy.list: unrecognised `sbx policy list` output; returning []');
+    console.warn('[sbx] policy ls --json: unrecognised output; returning []');
     return [];
   }
   return parsed;
