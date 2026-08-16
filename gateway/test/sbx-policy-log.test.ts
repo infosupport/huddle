@@ -1,5 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { parsePolicyLogJson, parseSandboxListJson } from '../src/sandbox/ops';
+import { parsePolicyLogJson, parseSandboxListJson, parsePolicyLsJson } from '../src/sandbox/ops';
+
+// `sbx policy ls --json` — the ACTUAL policy, used by reconcile to spot drift and
+// remove rules by id. Confirmed schema (2026-08-16): id, decision, resource_type,
+// resources[] (may carry :port), scope "global"|"sandbox:<n>" / sandbox_id,
+// editable, status.
+describe('parsePolicyLsJson', () => {
+  const real = JSON.stringify({
+    policies: [
+      { id: '6092', name: '6092', scope: 'sandbox:huddle-sbx', applies_to: 'sandbox:huddle-sbx', resource_type: 'network', decision: 'allow', resources: ['jsonplaceholder.typicode.com:443'], origin: 'scoped', layer: 'local', status: 'active', editable: true, sandbox_id: 'huddle-sbx' },
+      { id: 'g1', scope: 'global', resource_type: 'network', decision: 'deny', resources: ['evil.test:80', 'bad.test'], status: 'active', editable: true },
+      { id: 'org1', scope: 'global', resource_type: 'network', decision: 'allow', resources: ['org.test'], status: 'active', editable: false }, // org rule → skip
+      { id: 'dns1', scope: 'global', resource_type: 'dns', decision: 'allow', resources: ['x.test'], status: 'active', editable: true }, // non-network → skip
+    ],
+  });
+
+  it('parses id/decision/scope and strips :port from resources', () => {
+    const out = parsePolicyLsJson(real)!;
+    expect(out).toContainEqual({ id: '6092', action: 'allow', target: 'jsonplaceholder.typicode.com', scope: { kind: 'sandbox', name: 'huddle-sbx' } });
+  });
+
+  it('expands multiple resources into one rule each (global scope)', () => {
+    const out = parsePolicyLsJson(real)!;
+    expect(out).toContainEqual({ id: 'g1', action: 'deny', target: 'evil.test', scope: { kind: 'global' } });
+    expect(out).toContainEqual({ id: 'g1', action: 'deny', target: 'bad.test', scope: { kind: 'global' } });
+  });
+
+  it('skips non-editable (org/system) and non-network rules', () => {
+    const out = parsePolicyLsJson(real)!;
+    expect(out.some((r) => r.id === 'org1')).toBe(false);
+    expect(out.some((r) => r.id === 'dns1')).toBe(false);
+  });
+
+  it('accepts a top-level array and returns [] / null appropriately', () => {
+    expect(parsePolicyLsJson(JSON.stringify([{ id: 'a', decision: 'allow', resources: ['a.test'], status: 'active' }]))![0].id).toBe('a');
+    expect(parsePolicyLsJson('')).toEqual([]);
+    expect(parsePolicyLsJson('not json')).toBeNull();
+  });
+});
 
 describe('parseSandboxListJson', () => {
   it('parses a top-level array of objects (name/status)', () => {

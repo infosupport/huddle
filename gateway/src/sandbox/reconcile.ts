@@ -15,6 +15,7 @@
 
 import { db } from '../db';
 import * as ops from './ops';
+import type { ActualPolicyRule } from './ops';
 import { type Scope, type PolicyRule } from './protocol';
 import { projectRules, scopeKey, ruleKey, type HuddleRuleRow, type SkippedRule } from './projection';
 import { setKnownSandboxes } from './registry';
@@ -108,28 +109,21 @@ export async function reconcile(opts: { dryRun?: boolean } = {}): Promise<Reconc
   report.notProjected = notProjected;
   report.skipped = skipped;
 
-  const scopes: Scope[] = [{ kind: 'global' }, ...[...sandboxNames].map((name) => ({ kind: 'sandbox', name } as Scope))];
   report.sandboxes = [...sandboxNames];
 
-  // Read the actual policy set across all relevant scopes.
-  const actual = new Map<string, PolicyRule>();
-  for (const scope of scopes) {
-    try {
-      for (const rule of await ops.policyList({ scope })) {
-        // policyList's global read may not carry scope; stamp the scope we queried.
-        const stamped: PolicyRule = { ...rule, scope: rule.scope ?? scope };
-        actual.set(ruleKey(stamped.action, stamped.target, stamped.scope), stamped);
-      }
-    } catch (err) {
-      report.actions.push({
-        op: 'delete',
-        action: 'deny',
-        target: `(policy list ${scopeKey(scope)})`,
-        scope,
-        ok: false,
-        error: (err as Error).message,
-      });
+  // Read the actual sbx policy in one call (`sbx policy ls --json`). Keyed by
+  // scope|action|target (port stripped so host:443 matches a bare host). Only
+  // scopes Huddle projects (global + known sandboxes) are considered — never
+  // touch rules for other sandboxes or non-editable org/system rules.
+  const actual = new Map<string, ActualPolicyRule>();
+  try {
+    for (const rule of await ops.policyListAll()) {
+      if (rule.scope.kind === 'sandbox' && !sandboxNames.has(rule.scope.name)) continue;
+      actual.set(ruleKey(rule.action, rule.target, rule.scope), rule);
     }
+  } catch (err) {
+    report.error = (err as Error).message; // can't diff safely → abort (don't blind-create)
+    return report;
   }
 
   // CREATE: desired \ actual
@@ -159,7 +153,7 @@ export async function reconcile(opts: { dryRun?: boolean } = {}): Promise<Reconc
       continue;
     }
     try {
-      await ops.policyRemove({ scope: rule.scope, target: rule.target });
+      await ops.policyRemove(rule.id, rule.scope);
       report.actions.push({ op: 'delete', action: rule.action, target: rule.target, scope: rule.scope, ok: true });
       report.deleted++;
     } catch (err) {
