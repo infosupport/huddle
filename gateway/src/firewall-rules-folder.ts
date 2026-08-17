@@ -43,8 +43,29 @@ function listEnvelopeFiles(mount: string, sorted: boolean): string[] | null {
   }
 }
 
+// A group envelope is a handful of kilobytes; the largest realistic export is
+// well under a megabyte. The cap exists so a single file cannot decide how much
+// memory the gateway allocates during startup.
+const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
+
 function readEnvelopeFile(mount: string, file: string): GroupEnvelope {
-  return validateGroupEnvelope(JSON.parse(fs.readFileSync(path.join(mount, file), 'utf8')));
+  // `file` always comes from readdirSync() on the mount, which yields bare
+  // basenames — this asserts that invariant rather than trusting it, so the
+  // join below can never escape the mounted folder.
+  if (file !== path.basename(file)) throw new Error('not a plain file name');
+  const full = path.join(mount, file);
+  // lstat, not stat: a symlink has to be rejected on its own terms, BEFORE it is
+  // opened. Following one lets a file in the team folder decide what the gateway
+  // reads — `evil.json -> /dev/zero` makes readFileSync consume memory until it
+  // dies, and since reloadFirewallRulesFolder() runs during API startup that
+  // hangs the gateway rather than one request. A symlink to somewhere outside the
+  // folder would also read a file the operator never put there.
+  const stat = fs.lstatSync(full);
+  if (!stat.isFile()) throw new Error('not a regular file (symlinks and directories are not read)');
+  if (stat.size > MAX_ENVELOPE_BYTES) {
+    throw new Error(`is ${stat.size} bytes, over the ${MAX_ENVELOPE_BYTES}-byte limit for a group file`);
+  }
+  return validateGroupEnvelope(JSON.parse(fs.readFileSync(full, 'utf8')));
 }
 
 // ── Reload: folder → portal ─────────────────────────────────────────────────────

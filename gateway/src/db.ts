@@ -612,9 +612,11 @@ export function getGroup(id: number): FirewallGroup | undefined {
 }
 
 export function getGroupByName(name: string): FirewallGroup | undefined {
-  return db.prepare('SELECT * FROM firewall_groups WHERE name = ? COLLATE NOCASE').get(name) as
-    | FirewallGroup
-    | undefined;
+  // Columns listed explicitly (as in getGroup above) so the row shape stays tied
+  // to FirewallGroup instead of to whatever the table happens to hold.
+  return db.prepare(
+    'SELECT id, name, description, shared, source, created_at, updated_at FROM firewall_groups WHERE name = ? COLLATE NOCASE'
+  ).get(name) as FirewallGroup | undefined;
 }
 
 export function createGroup(g: { name: string; description?: string; shared?: number; source?: string }): number {

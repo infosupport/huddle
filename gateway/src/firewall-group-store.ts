@@ -47,25 +47,49 @@ function findRuleStmt() {
 // (a status='deny', path_mode=1 marker), its allowed sub-path rules — those are
 // created ungrouped (group_id NULL) but conceptually belong to the group. Without
 // them a path-mode domain would export/apply as a bare "block at root" with no
-// allowed paths. Shared by export and apply so the two can never disagree on what
-// a group contains; `columns` differs only because apply re-targets container_id.
-function memberRulesSql(columns: string): string {
-  return `SELECT DISTINCT ${columns}
-         FROM rules r
-        WHERE r.group_id = ?
-           OR (
-             -- Only the ALLOWED SUB-PATH entries of a grouped path-mode domain
-             -- (an allow rule with a path_pattern). A requested placeholder or a
-             -- redundant path-deny for the same domain/container must NOT be
-             -- swept into the group's export/apply.
-             r.path_pattern IS NOT NULL AND r.status = 'allow' AND EXISTS (
-               SELECT 1 FROM rules m
-                WHERE m.group_id = ?
-                  AND m.path_mode = 1 AND m.path_pattern IS NULL
-                  AND m.domain = r.domain COLLATE NOCASE
-                  AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
-             )
-           )`;
+// allowed paths.
+//
+// One statement, shared by export and apply, so the two can never disagree on
+// what a group contains. It is a plain literal — building it from an interpolated
+// column list would put a constructed string into db.prepare() for no gain, and
+// apply's narrower de-duplication is done in memberRulesForScope() instead.
+const MEMBER_RULES_SQL = `SELECT DISTINCT r.domain, r.container_id, r.status, r.path_pattern, r.path_mode, r.expires_at
+     FROM rules r
+    WHERE r.group_id = ?
+       OR (
+         -- Only the ALLOWED SUB-PATH entries of a grouped path-mode domain
+         -- (an allow rule with a path_pattern). A requested placeholder or a
+         -- redundant path-deny for the same domain/container must NOT be
+         -- swept into the group's export/apply.
+         r.path_pattern IS NOT NULL AND r.status = 'allow' AND EXISTS (
+           SELECT 1 FROM rules m
+            WHERE m.group_id = ?
+              AND m.path_mode = 1 AND m.path_pattern IS NULL
+              AND m.domain = r.domain COLLATE NOCASE
+              AND COALESCE(m.container_id, '') = COALESCE(r.container_id, '')
+         )
+       )
+    ORDER BY r.domain COLLATE NOCASE, COALESCE(r.container_id, ''), COALESCE(r.path_pattern, '')`;
+
+function memberRules(groupId: number): ShareableGroupRule[] {
+  return db.prepare(MEMBER_RULES_SQL).all(groupId, groupId) as ShareableGroupRule[];
+}
+
+// Members as apply() needs them: it re-targets every rule at one scope, so the
+// original container_id is irrelevant and two members that differ ONLY by
+// container_id would otherwise be stamped into the same scope twice (the second
+// landing as an "update" of the first). Collapsing them here keeps apply's view
+// identical to the `SELECT DISTINCT` without container_id that it used to run.
+function memberRulesForScope(groupId: number): Omit<ShareableGroupRule, 'container_id'>[] {
+  const seen = new Set<string>();
+  const members: Omit<ShareableGroupRule, 'container_id'>[] = [];
+  for (const { container_id: _ignored, ...m } of memberRules(groupId)) {
+    const key = JSON.stringify([m.domain, m.status, m.path_pattern, m.path_mode, m.expires_at]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    members.push(m);
+  }
+  return members;
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────────
@@ -73,12 +97,7 @@ function memberRulesSql(columns: string): string {
 export function exportGroup(groupId: number): GroupEnvelope | null {
   const group = getGroup(groupId);
   if (!group) return null;
-  const rules = db
-    .prepare(
-      `${memberRulesSql('r.domain, r.container_id, r.status, r.path_pattern, r.path_mode, r.expires_at')}
-        ORDER BY r.domain COLLATE NOCASE, COALESCE(r.container_id, ''), COALESCE(r.path_pattern, '')`,
-    )
-    .all(groupId, groupId) as ShareableGroupRule[];
+  const rules = memberRules(groupId);
   return {
     version: GROUP_ENVELOPE_VERSION,
     kind: GROUP_ENVELOPE_KIND,
@@ -215,9 +234,7 @@ export function applyGroup(
 ): { applied: number; updated: number } {
   const group = getGroup(groupId);
   if (!group) throw new Error('group not found');
-  const members = db
-    .prepare(memberRulesSql('r.domain, r.status, r.path_pattern, r.path_mode, r.expires_at'))
-    .all(groupId, groupId) as Omit<ShareableGroupRule, 'container_id'>[];
+  const members = memberRulesForScope(groupId);
 
   const find = findRuleStmt();
   const insertRule = db.prepare(
