@@ -11,7 +11,7 @@ import { resolveContainerByIp } from './docker';
 import { SBX_PROXY_PORT } from './sbx';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
-import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
+import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from './token-exchange';
 import { logIdentityProbe } from './identity-probe';
 
 const PROXY_PORT = 80;
@@ -350,6 +350,10 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   // paths here) — so the path is passed through.
   const evalRule = (host: string, containerId: string | null, path: string | null) =>
     isSbxProxy ? checkFleetRule(host, knownSandboxNames(), path) : checkRule(host, containerId, path);
+  // OAuth token hiding is a DEVCONTAINER mechanism: it binds a placeholder to the
+  // container that obtained it, and the sbx port has no such identity. sbx runs
+  // its own proxy-managed credentials there anyway — see managesTokenExchange().
+  const manageTokens = managesTokenExchange(isSbxProxy);
 
   server.on('request', async (req, res) => {
     // Extension server-side fetch is identified via the X-Huddle-Ext header
@@ -778,8 +782,11 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       const upstreamHeaders = { ...innerReq.headers };
       delete upstreamHeaders['proxy-connection'];
 
-      // Token replacement: replace placeholder with the real token for api.anthropic.com
-      if (hostname === 'api.anthropic.com') {
+      // Token replacement: replace placeholder with the real token for
+      // api.anthropic.com. Skipped in sbx mode — sbx manages the credential
+      // itself (the sandbox holds `sk-ant-oat01-proxy-managed`), so a second
+      // rewriter would only fight it. See managesTokenExchange().
+      if (manageTokens && hostname === 'api.anthropic.com') {
         const authVal = upstreamHeaders['authorization'] as string | undefined;
         if (authVal?.startsWith('Bearer ') && isPlaceholderToken(authVal.slice(7))) {
           // Only redeem if this container also received the placeholder (#12).
@@ -795,6 +802,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       // Token exchange: detect OAuth token response from platform.claude.com
       const isTokenRequest =
+        manageTokens &&
         hostname === 'platform.claude.com' &&
         innerReq.method === 'POST' &&
         (innerReq.url?.split('?')[0] ?? '') === '/v1/oauth/token';
