@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { commonParentPath, defaultMultiMountWorkspace } from '../src/workspace-root';
+import { commonParentPath, containerPathError, defaultMultiMountWorkspace } from '../src/workspace-root';
 
 // ── IDE project root for a multi-mount devcontainer ──────────────────────────
 // When several folders are mounted and the caller supplies no explicit "open at"
@@ -42,5 +42,42 @@ describe('defaultMultiMountWorkspace', () => {
 
   it('falls back to /workspaces when there are no mounts to compare', () => {
     expect(defaultMultiMountWorkspace([])).toBe('/workspaces');
+  });
+});
+
+// ── containerPathError ───────────────────────────────────────────────────────
+// The workspace root is interpolated into the container setup script that runs as
+// root via `sh -c` (docker.ts), which then does mkdir -p / chown -R / chmod -R on
+// it. Before this guard the API only checked that the value started with '/', so a
+// start request could inject shell commands or aim `chown -R` at the whole
+// container filesystem.
+describe('containerPathError', () => {
+  it('accepts ordinary absolute container paths', () => {
+    expect(containerPathError('/workspaces/api')).toBeNull();
+    expect(containerPathError('/workspaces/My Project')).toBeNull();
+    expect(containerPathError('/srv/app-1.2_final+rc')).toBeNull();
+    expect(containerPathError('/workspaces/huddle (copy)')).toBeNull();
+  });
+
+  it('rejects the container root, which would chown -R the whole filesystem', () => {
+    expect(containerPathError('/')).toMatch(/container root/);
+    expect(containerPathError('///')).toMatch(/container root/);
+  });
+
+  it('rejects shell metacharacters that would break out of the script', () => {
+    expect(containerPathError('/workspaces/x"; touch /tmp/pwned; #')).toMatch(/quotes/);
+    expect(containerPathError('/workspaces/$(id)')).toMatch(/quotes/);
+    expect(containerPathError('/workspaces/`id`')).toMatch(/quotes/);
+    expect(containerPathError("/workspaces/x'y")).toMatch(/quotes/);
+    expect(containerPathError('/workspaces/x\\y')).toMatch(/quotes/);
+  });
+
+  it('rejects relative paths, traversal, control characters and absurd lengths', () => {
+    expect(containerPathError('workspaces/api')).toMatch(/absolute/);
+    expect(containerPathError('/workspaces/../etc')).toMatch(/\.\./);
+    expect(containerPathError('/workspaces/./api')).toMatch(/segments/);
+    expect(containerPathError('/workspaces/a\nb')).toMatch(/control characters/);
+    expect(containerPathError('/workspaces/a\x00b')).toMatch(/control characters/);
+    expect(containerPathError('/' + 'a'.repeat(600))).toMatch(/512/);
   });
 });

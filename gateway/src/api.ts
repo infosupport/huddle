@@ -15,7 +15,7 @@ import {
   syncGroupsToFolder,
 } from './firewall-groups';
 import { readHostConfig, setHostFolder, hostConfigAvailable } from './host-config';
-import { defaultMultiMountWorkspace } from './workspace-root';
+import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -937,7 +937,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
             const hostPath = (m.hostPath ?? '').replace(/\\/g, '/').replace(/\/$/, '');
             const containerPath = (m.containerPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
             if (!hostPath) throw new Error('Every folder needs a host path');
-            if (!containerPath.startsWith('/')) throw new Error(`Container path must be absolute: "${m.containerPath}"`);
+            const pathProblem = containerPathError(containerPath);
+            if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
             if (seen.has(containerPath)) throw new Error(`Duplicate container path: ${containerPath}`);
             seen.add(containerPath);
             return { hostPath, containerPath };
@@ -959,8 +960,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (normalizedMounts && !multiWorkspace) {
         multiWorkspace = defaultMultiMountWorkspace(normalizedMounts.map((m) => m.containerPath));
       }
-      if (normalizedMounts && !multiWorkspace.startsWith('/')) {
-        return reply.code(400).send({ error: `containerWorkspace must be absolute: "${containerWorkspaceOverride}"` });
+      // Single choke point for the value that reaches the container setup script:
+      // whether it came from the caller's explicit "open at" override, from the
+      // common parent of the mounts, or from the single-mount leaf, it is checked
+      // here before createAndStartContainer() interpolates it into a script that
+      // runs as root inside the new container.
+      const containerWorkspace = normalizedMounts ? multiWorkspace : `/workspaces/${leaf}`;
+      const workspaceProblem = containerPathError(containerWorkspace);
+      if (workspaceProblem) {
+        return reply.code(400).send({ error: `containerWorkspace ${workspaceProblem}: "${containerWorkspace}"` });
       }
       const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
       const params: StartParams = {
@@ -968,7 +976,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         workspaceDir: empty ? '' : fwd,
         mounts: normalizedMounts,
         containerName,
-        containerWorkspace: normalizedMounts ? multiWorkspace : `/workspaces/${leaf}`,
+        containerWorkspace,
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
