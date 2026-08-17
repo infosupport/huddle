@@ -159,6 +159,42 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     expect(dbMod.listGroups().map((g) => g.name)).toEqual(['OpenAI']);
   });
 
+  it('refuses to read a symlinked group file instead of following it', () => {
+    // `evil.json -> /dev/zero` would make readFileSync consume memory until the
+    // process dies, and the reload runs during API startup — so a single file in
+    // the team folder could hang the whole gateway. A symlink pointing outside the
+    // folder would likewise read something the operator never placed there.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
+    fs.writeFileSync(path.join(dir, 'openai.json'), JSON.stringify(envOpenAI()));
+    const outside = path.join(dir, '..', `huddle-outside-${process.pid}.json`);
+    fs.writeFileSync(outside, JSON.stringify(envOpenAI()));
+    fs.symlinkSync(outside, path.join(dir, 'linked.json'));
+
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    const res = groups.reloadFirewallRulesFolder();
+    expect(res.errors.map((e) => e.file)).toContain('linked.json');
+    expect(res.errors.find((e) => e.file === 'linked.json')!.message).toMatch(/regular file/);
+    // Fail-closed: one unreadable file aborts the reload and keeps the last-good
+    // policy, so the valid file in the same folder is not imported either.
+    expect(res.groups).toBe(0);
+    expect(dbMod.listGroups()).toHaveLength(0);
+    fs.rmSync(outside);
+  });
+
+  it('refuses a group file over the size limit', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
+    // Valid JSON, just absurdly large: the guard must trip on the stat, before the
+    // file is read into memory and parsed.
+    const huge = { ...envOpenAI(), description: 'x'.repeat(6 * 1024 * 1024) };
+    fs.writeFileSync(path.join(dir, 'huge.json'), JSON.stringify(huge));
+
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    const res = groups.reloadFirewallRulesFolder();
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0].message).toMatch(/over the .* limit/);
+    expect(dbMod.listGroups()).toHaveLength(0);
+  });
+
   it('does not touch manual rules when reloading the folder', () => {
     // A manual (source='manual') global rule must survive a folder reload.
     dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, source) VALUES ('manual.example', NULL, 'allow', 'manual')").run();

@@ -638,7 +638,7 @@ IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i $
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
 BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
 CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
-PROJ="${containerWorkspace}"
+PROJ=${shQuote(containerWorkspace)}
 mkdir -p /.jbdevcontainer/config/JetBrains
 if [ -n "$IDEA_DIR" ]; then
   printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
@@ -718,10 +718,11 @@ fi
 
 ${NOOT_LOCKED_SETUP}
 
-# Fix workspace permissions
-mkdir -p "${containerWorkspace}" 2>/dev/null || true
-chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
-chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+# Fix workspace permissions. Uses "$PROJ" (set above) rather than interpolating
+# the path again, so the value is shell-quoted in exactly one place.
+mkdir -p "$PROJ" 2>/dev/null || true
+chown -R vscode:vscode "$PROJ" 2>/dev/null || true
+chmod -R u+rwX "$PROJ" 2>/dev/null || true
 
 ${seedScript}
 
@@ -793,6 +794,7 @@ function buildVscodeConfigScript(containerWorkspace: string, containerName: stri
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
+PROJ=${shQuote(containerWorkspace)}
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
 
@@ -818,10 +820,11 @@ ${IDE_CRED_SCRUB}
 
 ${NOOT_LOCKED_SETUP}
 
-# Fix workspace permissions
-mkdir -p "${containerWorkspace}" 2>/dev/null || true
-chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
-chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+# Fix workspace permissions. Uses "$PROJ" (set at the top) rather than
+# interpolating the path again, so the value is shell-quoted in exactly one place.
+mkdir -p "$PROJ" 2>/dev/null || true
+chown -R vscode:vscode "$PROJ" 2>/dev/null || true
+chmod -R u+rwX "$PROJ" 2>/dev/null || true
 
 ${seedScript}
 
@@ -881,6 +884,22 @@ export async function detectWindowsMountStyle(): Promise<WindowsMountStyle> {
   } catch {
     return 'wsl2-native';
   }
+}
+
+/**
+ * Quote a value for safe substitution into the `sh -c` setup scripts below.
+ * Single quotes make the shell treat every character literally, so the only
+ * character needing care is `'` itself — closed, escaped, reopened. Callers pass
+ * the result WITHOUT adding quotes of their own (`VAR=${shQuote(v)}`, not
+ * `VAR="${shQuote(v)}"`).
+ *
+ * The API layer already refuses paths containing shell metacharacters
+ * (containerPathError in ./workspace-root); this is the second, independent
+ * layer, so a future caller that reaches these builders without going through
+ * that validation still cannot inject a command into a script that runs as root.
+ */
+export function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function toLinuxPath(p: string, style: WindowsMountStyle = 'wsl2-native'): string {
