@@ -543,16 +543,27 @@ const FOLDER_MAPPING_COLUMNS: ReadonlyArray<keyof Omit<FolderMapping, 'id'>> = [
   'name', 'host_path', 'volume_name', 'container_path', 'read_only', 'enabled', 'sort_order',
 ];
 
-// Validate the update keys against the column allowlist. Pure (no DB) so the
-// SQL-injection defense (finding #9) is testable in isolation. Returns the
-// allowed keys; throws on any unknown key (fail-closed).
-export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
-  const allowed = FOLDER_MAPPING_COLUMNS as ReadonlyArray<string>;
-  const unknown = Object.keys(m).filter(k => !allowed.includes(k));
+// Validate the update keys of any table against its column allowlist. Pure (no
+// DB) so the SQL-injection defense (finding #9) is testable in isolation.
+// Returns the allowed keys; throws on any unknown key (fail-closed). Every
+// dynamic `UPDATE` in this module funnels its caller-supplied keys through here,
+// so the allowlist is the single place that decides what may reach the SQL text.
+export function validateUpdateKeys<K extends string>(
+  m: object,
+  allowed: ReadonlyArray<K>,
+  what: string,
+): K[] {
+  const permitted = allowed as ReadonlyArray<string>;
+  const keys = Object.keys(m);
+  const unknown = keys.filter(k => !permitted.includes(k));
   if (unknown.length > 0) {
-    throw new Error(`unknown folder-mapping field(s): ${unknown.join(', ')}`);
+    throw new Error(`unknown ${what} field(s): ${unknown.join(', ')}`);
   }
-  return Object.keys(m).filter((k): k is keyof Omit<FolderMapping, 'id'> => allowed.includes(k));
+  return keys.filter((k): k is K => permitted.includes(k));
+}
+
+export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
+  return validateUpdateKeys(m, FOLDER_MAPPING_COLUMNS, 'folder-mapping');
 }
 
 export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
@@ -620,10 +631,7 @@ const FIREWALL_GROUP_COLUMNS: ReadonlyArray<'name' | 'description' | 'shared' | 
 ];
 
 export function validateGroupKeys(m: object): Array<'name' | 'description' | 'shared' | 'source'> {
-  const allowed = FIREWALL_GROUP_COLUMNS as ReadonlyArray<string>;
-  const unknown = Object.keys(m).filter((k) => !allowed.includes(k));
-  if (unknown.length > 0) throw new Error(`unknown group field(s): ${unknown.join(', ')}`);
-  return Object.keys(m).filter((k): k is 'name' | 'description' | 'shared' | 'source' => allowed.includes(k));
+  return validateUpdateKeys(m, FIREWALL_GROUP_COLUMNS, 'group');
 }
 
 export function updateGroup(
