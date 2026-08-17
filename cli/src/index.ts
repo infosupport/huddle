@@ -8,7 +8,7 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
-import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxLog, runSbxIngest } from './sbx';
+import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
 import { startBridge, stopBridge, bridgeStatus, runBridge } from './sbx-bridge';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
@@ -161,6 +161,12 @@ Usage:
                                      Huddle is the single source of truth)
   huddle sbx trust-ca <name>         Install Huddle's CA in a sandbox so HTTPS
                                      works (needed for VS Code / JetBrains backends)
+  huddle sbx trust-host              Trust Huddle's CA on the HOST, where the sbx
+                                     daemon runs — sbx terminates TLS itself for
+                                     some hosts (platform.claude.com) and then
+                                     validates Huddle against the host store; without
+                                     this those calls fail with "Empty reply from
+                                     server". Run by 'huddle init'; idempotent.
   huddle sbx ssh-setup               Enable the SSH bridge (<name>.sbx) for
                                      VS Code / JetBrains remote development
   huddle sbx bridge [start|stop|status]  Run the host bridge that lets the
@@ -411,6 +417,8 @@ async function main(): Promise<void> {
       await runSbxReconcile({ dryRun: flagBool(flags, 'dry-run') });
     } else if (subCmd === 'trust-ca' || subCmd === 'ca') {
       await runSbxTrustCa({ name: positional[2] ?? flagString(flags, 'name') });
+    } else if (subCmd === 'trust-host' || subCmd === 'host-ca') {
+      await runSbxTrustHost({ runtime: flagString(flags, 'runtime') });
     } else if (subCmd === 'log') {
       await runSbxLog({ name: positional[2] ?? flagString(flags, 'name') });
     } else if (subCmd === 'ingest') {
@@ -425,7 +433,7 @@ async function main(): Promise<void> {
       await runSbxSshSetup();
     } else {
       console.error(`Unknown sbx subcommand: ${subCmd}`);
-      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|ssh-setup|bridge|log|ingest>');
+      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|bridge|log|ingest>');
       process.exit(1);
     }
     return;

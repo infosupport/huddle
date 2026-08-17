@@ -115,6 +115,21 @@ export async function runSbxTrustCa(opts: { name?: string }): Promise<void> {
   else process.exitCode = 1;
 }
 
+/**
+ * Trust Huddle's CA on the HOST (where the sbx daemon runs), not inside a
+ * sandbox. Needed because sbx terminates TLS itself for some hosts (measured:
+ * platform.claude.com gets a `Docker Sandboxes Proxy CA` leaf) and then
+ * validates Huddle's certificate against the host trust store. Without it those
+ * requests die as "Empty reply from server" / ECONNRESET — see sbx-host-ca.ts.
+ */
+export async function runSbxTrustHost(opts: { runtime?: string } = {}): Promise<void> {
+  const { installHostCa, printHostCaResult } = await import('./sbx-host-ca');
+  console.log('Trusting Huddle’s CA on the host (for the sbx daemon)');
+  const r = installHostCa({ runtime: opts.runtime, restartDaemon: 'always' });
+  printHostCaResult(r);
+  if (!r.ok) process.exitCode = 1;
+}
+
 export async function runSbxSshSetup(): Promise<void> {
   const r = await post<{ exitCode: number; ok: boolean }>('/api/sbx/ssh-setup', {});
   if (r.ok) {
