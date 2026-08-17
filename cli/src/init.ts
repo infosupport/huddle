@@ -224,6 +224,13 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     const bin = resolveSbxBin();
     const sbxPresent = (() => { try { execFileSync(bin, ['version'], { stdio: 'ignore', timeout: 15000 }); return true; } catch { return false; } })();
     if (sbxPresent) {
+      // Huddle's CA has to be trusted on the HOST too, not just inside each
+      // sandbox: sbx terminates TLS itself for some hosts (measured on
+      // platform.claude.com) and then validates Huddle's leaf against the host
+      // trust store. Without this the sandbox gets "Empty reply from server"
+      // and `claude` fails with ECONNRESET. See cli/src/sbx-host-ca.ts.
+      const { installHostCa, printHostCaResult } = await import('./sbx-host-ca');
+      printHostCaResult(installHostCa({ runtime: rt }));
       startBridge({ quiet: false });
     } else {
       console.log(dim('  (sbx not found on PATH — sandbox bridge not started; install Docker Sandboxes to use sbx boxes)'));

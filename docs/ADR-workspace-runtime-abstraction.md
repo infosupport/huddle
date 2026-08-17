@@ -27,6 +27,8 @@ A live PoC forced an sbx microVM's egress through Huddle (via `sbx settings set 
 
 4. **Everything reaches Huddle as a CONNECT tunnel** (even plain `:80`), client `user-agent: sbx-proxy`. → Huddle can still **MITM-terminate** (TLS on/offload) for audit and path rules, provided its CA is trusted inside the sandbox.
 
+   **Correction (measured 2026-08-16): not everything is tunnelled — sbx MITMs some hosts itself.** In a live sandbox, `github.com` presents `CN=Huddle DMZ Proxy Root CA` (tunnelled, Huddle terminates) but `platform.claude.com` presents `CN=Docker Sandboxes Proxy CA` — sbx terminates that one. For those hosts the upstream leg to Huddle is dialled by the **sbx daemon**, a host process validating against the **host** trust store. So Huddle's CA must be trusted in **two** places: inside the sandbox (`sbx.ts:trustCa`) *and* on the host (`cli/src/sbx-host-ca.ts`, run by `huddle init` / `huddle sbx trust-host`). Symptom when the host half is missing: the client handshake succeeds, then the connection closes with no response — `curl: (52) Empty reply from server`, and Claude Code reports `ECONNRESET` on platform.claude.com.
+
 5. **sbx has its own per-sandbox network policy and audit.** `sbx policy allow/deny network <domain>` (wildcards `*.`/`**.`, CIDR, ports — **no path patterns**), plus *"sandbox-scoped rules"* and a per-sandbox traffic log. → **sbx is the right place to enforce per-sandbox rules**, because it is the party that knows the identity.
 
 **Conclusion:** don't fight the platform for per-sandbox identity at the proxy. Split responsibilities — Huddle owns truth/UI/audit/TLS and fleet-level enforcement; sbx owns per-sandbox enforcement, fed by a one-way sync from Huddle.

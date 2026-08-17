@@ -12,11 +12,26 @@
 #
 # Works straight from git bash on Windows (no WSL, no socat, no npiperelay).
 #
+# TLS: the host must trust Huddle's CA too
+#   There are TWO TLS terminators in sbx mode. For most hosts sbx tunnels CONNECT
+#   to Huddle, so the client inside the sandbox sees Huddle's leaf and the CA that
+#   `sbx start` installs IN the sandbox is enough:
+#       sandbox$ curl -vI https://github.com  → issuer: CN=Huddle DMZ Proxy Root CA
+#   But sbx terminates TLS ITSELF for (at least) the Claude/Anthropic hosts:
+#       sandbox$ curl -vI https://platform.claude.com → issuer: CN=Docker Sandboxes Proxy CA
+#   There the upstream leg to Huddle is dialed by the sbx daemon — a HOST process
+#   validating against the HOST trust store. If that store doesn't know Huddle's
+#   CA, sbx completes the client handshake and then drops the connection:
+#   "curl: (52) Empty reply from server", and `claude` reports ECONNRESET on
+#   platform.claude.com. So we also install the CA on the host (idempotent) and
+#   restart the sbx daemon. `huddle init` does this too — see cli/src/sbx-host-ca.ts.
+#
 # Usage:
 #   ./run-sandbox-mode.sh            # start watcher + build + run gateway + check
 #   ./run-sandbox-mode.sh --status   # check the pipe (the real 'sbx status')
 #   ./run-sandbox-mode.sh --stop     # stop the host watcher
 #   ./run-sandbox-mode.sh --watch-only   # only run the host watcher
+#   ./run-sandbox-mode.sh --trust-host   # only trust Huddle's CA on the host
 #   ./run-sandbox-mode.sh --no-build # skip rebuilds
 #
 # Env:
@@ -24,6 +39,7 @@
 #   HUDDLE_SBX_BIN=<sbx|sbx.exe>     real sbx binary on the host (auto-detected)
 #   HUDDLE_SBX_BRIDGE_WIN=<path>     shared folder (default: $HOME/.huddle-sbx)
 #   HUDDLE_DEV_IMAGE=<ref>           local gateway image tag (default: huddle:sbx-local)
+#   HUDDLE_SKIP_HOST_CA=1            skip the host-CA step (you trust it yourself)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -50,14 +66,15 @@ if [ -z "$SBX_BIN" ]; then
   else SBX_BIN=sbx; fi
 fi
 
-BUILD=1; DO_STOP=0; DO_STATUS=0; WATCH_ONLY=0
+BUILD=1; DO_STOP=0; DO_STATUS=0; WATCH_ONLY=0; TRUST_ONLY=0
 for a in "$@"; do
   case "$a" in
     --no-build)   BUILD=0 ;;
     --stop)       DO_STOP=1 ;;
     --status|--check) DO_STATUS=1 ;;
     --watch-only) WATCH_ONLY=1 ;;
-    -h|--help)    sed -n '2,33p' "$0"; exit 0 ;;
+    --trust-host) TRUST_ONLY=1 ;;
+    -h|--help)    sed -n '2,42p' "$0"; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
@@ -85,7 +102,23 @@ check_pipe() {
   HUDDLE_SKIP_CLI_SWITCH=1 $CLI sbx status 2>&1 | sed 's/^/    /' || true
 }
 
+# Trust Huddle's MITM CA on the HOST, where the sbx daemon runs. Idempotent:
+# already-trusted is a no-op, and only a fresh install restarts the daemon.
+# Without this, every host that sbx MITMs itself (platform.claude.com and the
+# rest of the Claude/Anthropic set) dies with "Empty reply from server" as soon
+# as sbx tries to validate Huddle's certificate. See the header.
+trust_host_ca() {
+  if [ "${HUDDLE_SKIP_HOST_CA:-}" = "1" ]; then
+    c_warn "  Skipping the host-CA step (HUDDLE_SKIP_HOST_CA=1)"
+    return 0
+  fi
+  ensure_cli
+  HUDDLE_RUNTIME="$RT" HUDDLE_SBX_BIN="$SBX_BIN" $CLI sbx trust-host || \
+    c_warn "  Host CA not installed — sbx-terminated hosts (platform.claude.com) will fail until it is."
+}
+
 if [ "$DO_STOP" = 1 ]; then ensure_cli; $CLI sbx bridge stop; exit 0; fi
+if [ "$TRUST_ONLY" = 1 ]; then step "Trusting Huddle's CA on the host"; trust_host_ca; exit 0; fi
 if [ "$DO_STATUS" = 1 ]; then check_pipe; exit 0; fi
 if [ "$WATCH_ONLY" = 1 ]; then ensure_cli; step "Running the sbx bridge (foreground)"; exec env HUDDLE_SBX_BRIDGE_WIN="$BRIDGE" HUDDLE_SBX_BIN="$SBX_BIN" $CLI sbx bridge run; fi
 
@@ -125,7 +158,13 @@ HUDDLE_IMAGE="$GATEWAY_IMAGE" HUDDLE_NO_PULL=1 HUDDLE_RUNTIME="$RT" HUDDLE_SKIP_
 HUDDLE_SBX_BRIDGE_WIN="$BRIDGE" \
   node cli/dist/index.js init
 
-# ── 3. self-check ────────────────────────────────────────────────────────────
+# ── 3. trust Huddle's CA on the host (sbx validates it there, not in the box) ─
+# `huddle init` above already runs this; repeating it is a cheap no-op and keeps
+# the step visible here for anyone reading the script instead of the CLI.
+step "Trusting Huddle's CA on the host (needed for the hosts sbx MITMs itself)"
+trust_host_ca
+
+# ── 4. self-check ────────────────────────────────────────────────────────────
 sleep 1
 check_pipe
 
@@ -136,8 +175,10 @@ cat <<EOF
   Portal:        http://localhost:3000
   host bridge:   run by the CLI — 'node cli/dist/index.js sbx bridge status'
   bridge folder: $BRIDGE   (mounted → /sbx-bridge in the container)
+  host CA:       $HOME/.huddle/huddle-ca.crt  (trusted for the sbx daemon)
 
   Check anytime:   ./run-sandbox-mode.sh --status
+  Re-trust the CA: ./run-sandbox-mode.sh --trust-host   (= huddle sbx trust-host)
   Drive it (local CLI, not the bare 'sbx'):
     node cli/dist/index.js sbx start my-box --workspace "\$PWD"
     node cli/dist/index.js sbx reconcile --dry-run
