@@ -15,6 +15,7 @@ import {
   syncGroupsToFolder,
 } from './firewall-groups';
 import { readHostConfig, setHostFolder, hostConfigAvailable } from './host-config';
+import { defaultMultiMountWorkspace } from './workspace-root';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -87,22 +88,6 @@ interface ShareableRule {
   path_pattern: string | null;
   path_mode: number;
   expires_at: number | null;
-}
-
-// Deepest directory that every given absolute path sits under (their longest
-// shared prefix at a path-segment boundary). Used to pick a sensible IDE project
-// root when several folders are mounted and no explicit "open at" is supplied.
-function commonParentPath(paths: string[]): string {
-  if (paths.length === 0) return '';
-  const split = paths.map((p) => p.split('/').filter(Boolean));
-  const first = split[0];
-  const shared: string[] = [];
-  for (let i = 0; i < first.length; i++) {
-    const seg = first[i];
-    if (split.every((parts) => parts[i] === seg)) shared.push(seg);
-    else break;
-  }
-  return '/' + shared.join('/');
 }
 
 export async function createApiServer(): Promise<FastifyInstance> {
@@ -972,7 +957,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // when no override is supplied (e.g. an older CLI).
       let multiWorkspace = (containerWorkspaceOverride ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
       if (normalizedMounts && !multiWorkspace) {
-        multiWorkspace = commonParentPath(normalizedMounts.map((m) => m.containerPath)) || '/workspaces';
+        multiWorkspace = defaultMultiMountWorkspace(normalizedMounts.map((m) => m.containerPath));
       }
       if (normalizedMounts && !multiWorkspace.startsWith('/')) {
         return reply.code(400).send({ error: `containerWorkspace must be absolute: "${containerWorkspaceOverride}"` });
