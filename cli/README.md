@@ -25,17 +25,21 @@ huddle                 # start an IntelliJ devcontainer for the current director
 huddle ./project       # start for a specific directory
 huddle --ide rider
 huddle --ide vscode --name devcontainer-demo
-huddle --ide vscode --mount backend=../docker-corpa --mount frontend=../frontend-consolidated-real-estate-info --name corpa-dev
+huddle --ide vscode --mount ../docker-corpa=/workspaces/backend --mount ../frontend-real-estate-info=/workspaces/frontend --name corpa-dev
 huddle fw list
 huddle firewall list -i
 ```
 
-`--mount <name>=<path>` mounts an additional folder, worktree-isolated like the main workspace, under `/workspaces/<name>` in the container. Repeatable — pass one per folder. Cannot be combined with `--workspace`/`--empty`; when at least one `--mount` is given, the container's shared workspace root becomes `/workspaces` instead of `/workspaces/<leaf>`.
+`--mount <host>=<container>` mounts an additional folder, worktree-isolated like the main workspace, at the container path you choose. The left side is a host path (relative paths are resolved against the current directory); the right side must be an **absolute** container path. Repeatable — pass one per folder — and cannot be combined with `--workspace`/`--empty`. Two mounts may not target the same container path.
 
-`--context <name>` marks one of the `--mount` folders as shared context (e.g. an AI-context/skills repo): Huddle writes a stub `/workspaces/CLAUDE.md` pointing at it, so an agent working in any of the other mounted repos picks it up as an ancestor file. `<name>` must match a declared `--mount` name; the stub is only written if `/workspaces/CLAUDE.md` doesn't already exist.
+`--workspace-root <path>` sets the absolute container path the IDE opens as its project root. It requires at least one `--mount`. Without it the root defaults to the deepest directory the mount targets share, so the example above opens `/workspaces` and shows `backend/` and `frontend/` inside it. Mount targets that share nothing fall back to `/workspaces`.
 
 ```bash
-huddle --ide vscode --mount ai=../ai-context-repo --mount backend=../backend-repo --mount frontend=../frontend-repo --context ai --name corpa-dev
+huddle --ide vscode \
+  --mount ../ai-context-repo=/workspaces/ai \
+  --mount ../backend-repo=/workspaces/backend \
+  --mount ../frontend-repo=/workspaces/frontend \
+  --workspace-root /workspaces --name corpa-dev
 ```
 
 Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
@@ -68,7 +72,8 @@ Main flags:
 ```text
 --ide <intellij|rider|vscode>
 --workspace <path>
---mount <name>=<path>   (repeatable)
+--mount <host>=<container>   (repeatable, container path must be absolute)
+--workspace-root <path>      (container path the IDE opens; requires --mount)
 --name <name>
 --image <image>
 --empty

@@ -181,6 +181,26 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     fs.rmSync(outside);
   });
 
+  it('keeps a group whose name would slug into a traversal on one plain file', () => {
+    // A group name is attacker-influenceable through the import API and decides the
+    // file name on sync. groupFileSlug() strips it to [a-z0-9-] and envelopePath()
+    // asserts the result is a bare basename, so no name can aim a write outside the
+    // mounted folder.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    groups.importGroupEnvelope(
+      groups.validateGroupEnvelope({ ...envOpenAI(), group: { name: '../../etc/evil' } }),
+    );
+
+    const res = groups.syncGroupsToFolder();
+    expect(res.errors).toHaveLength(0);
+    expect(res.written).toBe(1);
+    // Written inside the mount, under a slugged name — nothing escaped upwards.
+    expect(res.files[0].file).toBe('etc-evil.json');
+    expect(fs.readdirSync(dir)).toEqual(['etc-evil.json']);
+    expect(fs.existsSync(path.join(dir, '..', '..', 'etc', 'evil.json'))).toBe(false);
+  });
+
   it('refuses a group file over the size limit', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
     // Valid JSON, just absurdly large: the guard must trip on the stat, before the

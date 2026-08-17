@@ -48,12 +48,22 @@ function listEnvelopeFiles(mount: string, sorted: boolean): string[] | null {
 // memory the gateway allocates during startup.
 const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
 
+// The ONLY way this module turns a file name into a path. Every name reaching it
+// is a bare basename by construction — either straight from readdirSync() on the
+// mount, or minted by groupFileSlug(), which strips a group name down to
+// [a-z0-9-]. That is exactly the kind of invariant that quietly stops holding
+// when someone adds a caller, and a group name is attacker-influenceable through
+// the import API, so it is asserted here instead of assumed. Nothing outside this
+// function joins onto the mount.
+function envelopePath(mount: string, file: string): string {
+  if (!file || file !== path.basename(file) || file === '.' || file === '..') {
+    throw new Error(`not a plain file name: "${file}"`);
+  }
+  return path.join(mount, file);
+}
+
 function readEnvelopeFile(mount: string, file: string): GroupEnvelope {
-  // `file` always comes from readdirSync() on the mount, which yields bare
-  // basenames — this asserts that invariant rather than trusting it, so the
-  // join below can never escape the mounted folder.
-  if (file !== path.basename(file)) throw new Error('not a plain file name');
-  const full = path.join(mount, file);
+  const full = envelopePath(mount, file);
   // lstat, not stat: a symlink has to be rejected on its own terms, BEFORE it is
   // opened. Following one lets a file in the team folder decide what the gateway
   // reads — `evil.json -> /dev/zero` makes readFileSync consume memory until it
@@ -236,7 +246,7 @@ function pickGroupFile(
 // to fix it rather than aborting the whole sync.
 function writeGroupFile(mount: string, file: string, groupName: string, groupId: number, env: GroupEnvelope, summary: FolderSyncSummary): void {
   try {
-    fs.writeFileSync(path.join(mount, file), serializeGroupEnvelope(env));
+    fs.writeFileSync(envelopePath(mount, file), serializeGroupEnvelope(env));
     summary.writable = true;
     summary.written++;
     summary.files.push({ file, group: groupName });
@@ -259,7 +269,7 @@ function pruneOrphanEnvelopes(
   for (const [lname, f] of fileByGroupName) {
     if (currentNames.has(lname) || usedFiles.has(f)) continue;
     try {
-      fs.unlinkSync(path.join(mount, f));
+      fs.unlinkSync(envelopePath(mount, f));
       summary.pruned++;
     } catch (err) {
       summary.errors.push({ file: f, message: (err as Error).message });
