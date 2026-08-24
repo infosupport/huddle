@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -14,7 +14,20 @@ import {
   reloadFirewallRulesFolder,
   syncGroupsToFolder,
 } from './firewall-groups';
-import { readHostConfig, setHostFolder, hostConfigAvailable } from './host-config';
+import {
+  readHostConfig,
+  setHostFolder,
+  hostConfigAvailable,
+  getResourceDefaults,
+  setResourceDefaults,
+  listFolderMappings,
+  getFolderMapping,
+  createFolderMapping,
+  updateFolderMapping,
+  deleteFolderMapping,
+  toWireMapping,
+  fromWirePatch,
+} from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
@@ -1327,13 +1340,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // ── Settings ──────────────────────────────────────────────────────────────
   app.get('/api/settings', async () => {
-    // Resource limits stay in the DB; the team folders live in the CLI config
-    // (~/.huddle/config.json), mounted read-write into the gateway (#69), so
-    // the config file is the single source of truth for those paths.
+    // Every setting on this page lives in the CLI config (~/.huddle/config.json),
+    // mounted read-write into the gateway (#69/#98) — not in the SQLite DB. That
+    // makes the config file the single source of truth the team can review and
+    // hand-edit.
     const host = readHostConfig();
+    const resources = getResourceDefaults();
     return {
-      defaultMemory: getSetting('defaultMemory') ?? '',
-      defaultCpus: getSetting('defaultCpus') ?? '',
+      defaultMemory: resources.defaultMemory,
+      defaultCpus: resources.defaultCpus,
       extensionsFolder: host.extensionsFolder ?? '',
       firewallRulesFolder: host.firewallRulesFolder ?? '',
       // Whether the CLI config is actually mounted; the portal warns if not.
@@ -1345,12 +1360,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/settings',
     async (req) => {
       const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
-      if (defaultMemory !== undefined) setSetting('defaultMemory', defaultMemory);
-      if (defaultCpus !== undefined) setSetting('defaultCpus', defaultCpus);
-      // Folder paths are written into the mounted CLI config. They only take
-      // effect after the CLI re-mounts them, so signal that a restart is needed.
       let restartRequired = false;
       let persisted = true;
+      // Resource limits go into the same config file, but need no remount: the
+      // gateway reads them when it creates the next devcontainer (#98).
+      if (defaultMemory !== undefined || defaultCpus !== undefined) {
+        persisted = setResourceDefaults({ defaultMemory, defaultCpus }) && persisted;
+      }
+      // Folder paths are written into the mounted CLI config. They only take
+      // effect after the CLI re-mounts them, so signal that a restart is needed.
       if (extensionsFolder !== undefined) { persisted = setHostFolder('extensionsFolder', extensionsFolder) && persisted; restartRequired = true; }
       if (firewallRulesFolder !== undefined) { persisted = setHostFolder('firewallRulesFolder', firewallRulesFolder) && persisted; restartRequired = true; }
       notifyStateChanged();
@@ -1359,30 +1377,45 @@ export async function createApiServer(): Promise<FastifyInstance> {
   );
 
   // ── Folder Mappings CRUD ──────────────────────────────────────────────────
-  app.get('/api/folder-mappings', async () => listFolderMappings());
+  // Backed by the mounted CLI config (~/.huddle/config.json), not the DB (#98).
+  // The wire shape is unchanged (snake_case, 0/1 flags) so the portal is
+  // unaffected by where the mappings are stored.
+  app.get('/api/folder-mappings', async () => listFolderMappings().map(toWireMapping));
 
   app.post<{ Body: { name: string; host_path?: string; volume_name?: string; container_path: string; read_only?: number; enabled?: number; sort_order?: number } }>(
     '/api/folder-mappings',
-    async (req) => {
+    async (req, reply) => {
       const { name, host_path = '', volume_name = '', container_path, read_only = 0, enabled = 1, sort_order = 0 } = req.body;
       if (!name || !container_path) throw new Error('name and container_path are required');
-      const id = createFolderMapping({ name, host_path, volume_name, container_path, read_only, enabled, sort_order });
+      if (!hostConfigAvailable()) return reply.code(503).send({ error: 'config_not_mounted' });
+      const id = createFolderMapping({
+        name,
+        hostPath: host_path,
+        volumeName: volume_name,
+        containerPath: container_path,
+        readOnly: read_only === 1,
+        enabled: enabled === 1,
+        sortOrder: sort_order,
+      });
+      if (id === null) return reply.code(500).send({ error: 'config_write_failed' });
       notifyStateChanged();
       return { id };
     }
   );
 
-  app.put<{ Params: { id: string }; Body: Partial<Omit<FolderMapping, 'id'>> }>(
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
     '/api/folder-mappings/:id',
     async (req, reply) => {
       const id = Number(req.params.id);
       if (!getFolderMapping(id)) return reply.code(404).send({ error: 'not_found' });
+      let patch;
       try {
-        updateFolderMapping(id, req.body);
+        patch = fromWirePatch(req.body);
       } catch (err: any) {
-        // Unknown column key (finding #9 fail-closed) → 400 instead of 500.
+        // Unknown field (fail-closed, finding #9) → 400 instead of 500.
         return reply.code(400).send({ error: 'invalid_field', message: err.message });
       }
+      if (!updateFolderMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
       notifyStateChanged();
       return { ok: true };
     }
@@ -1390,8 +1423,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.delete<{ Params: { id: string } }>(
     '/api/folder-mappings/:id',
-    async (req) => {
-      deleteFolderMapping(Number(req.params.id));
+    async (req, reply) => {
+      if (!deleteFolderMapping(Number(req.params.id))) {
+        return reply.code(500).send({ error: 'config_write_failed' });
+      }
       notifyStateChanged();
       return { ok: true };
     }
