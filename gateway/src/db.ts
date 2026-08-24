@@ -87,6 +87,25 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    -- Indexed host folders: the portal runs in a container and cannot browse the
+    -- host filesystem, so 'huddle indexfolder' walks the host once and stores the
+    -- folders it finds here. The portal then offers them as choices wherever a
+    -- host path is typed. Machine-local scan output — deliberately DB and not
+    -- config.json (unlike the team-managed settings in #69/#98): another machine's
+    -- folder list is noise, not shared configuration.
+    -- Paths are stored normalized (forward slashes, upper-case drive letter;
+    -- see host-path.ts) and compared case-insensitively so the backslashed,
+    -- lower-cased spelling of a Windows folder is the same entry — Windows
+    -- treats them as one folder.
+    CREATE TABLE IF NOT EXISTS indexed_folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      path TEXT NOT NULL,
+      label TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'cli',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_indexed_folders_path
+      ON indexed_folders (path COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -539,6 +558,69 @@ export function validateUpdateKeys<K extends string>(
     throw new Error(`unknown ${what} field(s): ${unknown.join(', ')}`);
   }
   return keys.filter((k): k is K => permitted.includes(k));
+}
+
+// ── Indexed host folders ──────────────────────────────────────────────────────
+
+// Populated by `huddle indexfolder` on the host and editable in Settings. Paths
+// must already be normalized by the caller (normalizeHostPath in host-path.ts);
+// this layer only stores and dedupes them.
+export interface IndexedFolder {
+  id: number;
+  path: string;
+  label: string;
+  source: string;
+  created_at: number;
+}
+
+// Upper bound on the index. `huddle indexfolder` at the wrong spot (a home
+// directory, a drive root) can discover tens of thousands of folders; that would
+// bloat the DB and turn the portal's picker into something unusable. The CLI
+// stops well before this, and the API reports what it refused rather than
+// silently truncating.
+export const MAX_INDEXED_FOLDERS = 2000;
+
+export function listIndexedFolders(): IndexedFolder[] {
+  return db.prepare('SELECT * FROM indexed_folders ORDER BY path COLLATE NOCASE ASC').all() as IndexedFolder[];
+}
+
+export function countIndexedFolders(): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM indexed_folders').get() as { n: number }).n;
+}
+
+export function getIndexedFolderByPath(path: string): IndexedFolder | undefined {
+  return db.prepare('SELECT * FROM indexed_folders WHERE path = ? COLLATE NOCASE').get(path) as IndexedFolder | undefined;
+}
+
+// Insert, or refresh the label/source of an existing entry. Returns 'added' or
+// 'updated' so a bulk index can report both without a second query.
+export function upsertIndexedFolder(f: { path: string; label: string; source: string }): 'added' | 'updated' {
+  const existing = getIndexedFolderByPath(f.path);
+  if (existing) {
+    db.prepare('UPDATE indexed_folders SET label = ?, source = ? WHERE id = ?').run(f.label, f.source, existing.id);
+    return 'updated';
+  }
+  db.prepare('INSERT INTO indexed_folders (path, label, source) VALUES (?, ?, ?)').run(f.path, f.label, f.source);
+  return 'added';
+}
+
+export function deleteIndexedFolder(id: number): void {
+  db.prepare('DELETE FROM indexed_folders WHERE id = ?').run(id);
+}
+
+// Clear the whole index, or only the subtree under `root` so re-indexing one
+// project does not throw away the folders indexed from elsewhere. The LIKE
+// pattern is escaped: a path may legitimately contain '%' or '_'.
+export function clearIndexedFolders(root?: string): number {
+  if (!root) return db.prepare('DELETE FROM indexed_folders').run().changes;
+  // The subtree prefix has to be built, not glued on: a root already ends in a
+  // slash ('T:/', '/'), and 'T:/' + '/%' matched nothing, so clearing a whole
+  // drive from the portal silently removed zero rows.
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+  const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return db.prepare(
+    "DELETE FROM indexed_folders WHERE path = ? COLLATE NOCASE OR path LIKE ? || '%' ESCAPE '\\' COLLATE NOCASE"
+  ).run(root, escaped).changes;
 }
 
 // ── Firewall Groups (#69) ─────────────────────────────────────────────────────
