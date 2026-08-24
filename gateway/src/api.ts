@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -29,6 +29,7 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
+import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -947,9 +948,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
         try {
           const seen = new Set<string>();
           normalizedMounts = mounts.map((m) => {
-            const hostPath = (m.hostPath ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+            // Host paths go through the one normalizer (host-path.ts): the value
+            // may be typed in the modal, picked from the folder index or sent by
+            // the CLI, and on Windows all three spell the same folder
+            // differently (`T:\p`, `t:/p/`, `T:/p`).
+            const hostPath = normalizeHostPath(m.hostPath ?? '');
             const containerPath = (m.containerPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-            if (!hostPath) throw new Error('Every folder needs a host path');
+            const hostProblem = hostPathError(hostPath);
+            if (hostProblem) throw new Error(`Host path ${hostProblem}: "${m.hostPath ?? ''}"`);
             const pathProblem = containerPathError(containerPath);
             if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
             if (seen.has(containerPath)) throw new Error(`Duplicate container path: ${containerPath}`);
@@ -960,7 +966,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
           return reply.code(400).send({ error: err.message });
         }
       }
-      const fwd = (workspaceDir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+      const fwd = normalizeHostPath(workspaceDir ?? '');
+      if (!empty && !normalizedMounts) {
+        const problem = hostPathError(fwd);
+        if (problem) return reply.code(400).send({ error: `workspaceDir ${problem}: "${workspaceDir ?? ''}"` });
+      }
       const leaf = empty
         ? containerName.replace(/^devcontainer-/, '') || containerName
         : normalizedMounts
@@ -1358,7 +1368,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
     '/api/settings',
-    async (req) => {
+    async (req, reply) => {
       const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
       let restartRequired = false;
       let persisted = true;
@@ -1369,8 +1379,17 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       // Folder paths are written into the mounted CLI config. They only take
       // effect after the CLI re-mounts them, so signal that a restart is needed.
-      if (extensionsFolder !== undefined) { persisted = setHostFolder('extensionsFolder', extensionsFolder) && persisted; restartRequired = true; }
-      if (firewallRulesFolder !== undefined) { persisted = setHostFolder('firewallRulesFolder', firewallRulesFolder) && persisted; restartRequired = true; }
+      // `huddle init` passes them to the engine as a `-v` argument WITHOUT a
+      // shell, so they get the same normalizer as every other host path: one
+      // notation in the config file, and no `~` that nothing would expand.
+      for (const [key, raw] of [['extensionsFolder', extensionsFolder], ['firewallRulesFolder', firewallRulesFolder]] as const) {
+        if (raw === undefined) continue;
+        const folder = normalizeHostPath(raw);
+        const problem = folder ? hostPathError(folder) : null;   // empty clears the setting
+        if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
+        persisted = setHostFolder(key, folder) && persisted;
+        restartRequired = true;
+      }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };
     }
@@ -1388,9 +1407,17 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const { name, host_path = '', volume_name = '', container_path, read_only = 0, enabled = 1, sort_order = 0 } = req.body;
       if (!name || !container_path) throw new Error('name and container_path are required');
       if (!hostConfigAvailable()) return reply.code(503).send({ error: 'config_not_mounted' });
+      // A mapping's host path is mounted into every devcontainer, so it goes
+      // through the same normalizer as a workspace path: stored one way, and on
+      // Windows translated to the engine's prefix at container-create time.
+      const hostPath = normalizeHostPath(host_path);
+      if (hostPath) {
+        const problem = hostPathError(hostPath);
+        if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
+      }
       const id = createFolderMapping({
         name,
-        hostPath: host_path,
+        hostPath,
         volumeName: volume_name,
         containerPath: container_path,
         readOnly: read_only === 1,
@@ -1415,6 +1442,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         // Unknown field (fail-closed, finding #9) → 400 instead of 500.
         return reply.code(400).send({ error: 'invalid_field', message: err.message });
       }
+      if (patch.hostPath !== undefined) {
+        patch.hostPath = normalizeHostPath(patch.hostPath);
+        const problem = patch.hostPath ? hostPathError(patch.hostPath) : null;
+        if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
+      }
       if (!updateFolderMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
       notifyStateChanged();
       return { ok: true };
@@ -1429,6 +1461,80 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       notifyStateChanged();
       return { ok: true };
+    }
+  );
+
+  // ── Indexed host folders ──────────────────────────────────────────────────
+  // Huddle's portal runs in a container: it cannot open a file dialog on the
+  // host, so a host path has always had to be typed from memory. `huddle
+  // indexfolder` walks the host once and posts what it found here; the portal
+  // then offers those folders wherever a host path is needed. Operators can also
+  // add or remove single entries from Settings.
+  app.get('/api/indexed-folders', async () => ({
+    folders: listIndexedFolders(),
+    max: MAX_INDEXED_FOLDERS,
+  }));
+
+  app.post<{ Body: { path?: string; paths?: string[]; root?: string; source?: string; replace?: boolean } }>(
+    '/api/indexed-folders',
+    async (req, reply) => {
+      const { path: single, paths, root, source, replace } = req.body ?? {};
+      const raw = [...(Array.isArray(paths) ? paths : []), ...(single ? [single] : [])];
+      if (raw.length === 0) return reply.code(400).send({ error: 'no_paths' });
+      // 'cli' when a scan posted the batch, 'manual' when an operator typed one
+      // entry in Settings — the portal shows which is which, and re-running the
+      // scan must not silently relabel a hand-added folder as machine-found.
+      const src = source === 'manual' ? 'manual' : 'cli';
+
+      // Replace is scoped to the subtree that was just re-scanned, so indexing
+      // one project again never discards folders indexed from anywhere else.
+      const normalizedRoot = root ? normalizeHostPath(root) : '';
+      let removed = 0;
+      if (replace) removed = clearIndexedFolders(normalizedRoot || undefined);
+
+      let added = 0;
+      let updated = 0;
+      let skipped = 0;
+      const invalid: { path: string; error: string }[] = [];
+      // Dedupe inside the batch too: the caller may well send two spellings of
+      // the same folder, and 'skipped' should not depend on insertion order.
+      const seen = new Set<string>();
+      let total = countIndexedFolders();
+      for (const candidate of raw) {
+        if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
+        const normalized = normalizeHostPath(candidate);
+        const err = hostPathError(normalized);
+        if (err) { invalid.push({ path: candidate, error: err }); continue; }
+        const key = normalized.toLowerCase();
+        if (seen.has(key)) { skipped++; continue; }
+        seen.add(key);
+        if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
+        const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: src });
+        if (result === 'added') { added++; total++; } else { updated++; }
+      }
+      notifyStateChanged();
+      return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/indexed-folders/:id',
+    async (req) => {
+      deleteIndexedFolder(Number(req.params.id));
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  // Clearing the whole index (or one subtree) is a separate, explicit call so a
+  // malformed single-entry delete can never wipe the list.
+  app.delete<{ Querystring: { root?: string } }>(
+    '/api/indexed-folders',
+    async (req) => {
+      const root = req.query?.root ? normalizeHostPath(req.query.root) : undefined;
+      const removed = clearIndexedFolders(root);
+      notifyStateChanged();
+      return { removed };
     }
   );
 
