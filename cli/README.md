@@ -44,6 +44,44 @@ huddle --ide vscode \
 
 Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
 
+## Making host folders selectable in the portal
+
+Huddle's portal runs inside a container, so it cannot open a folder dialog on your
+host: every host path had to be typed from memory. `huddle indexfolder` scans your
+host once and stores what it finds, and every host-path field in the portal grows a
+**Browse** button that opens those folders as a tree — starting a devcontainer, the
+folder mappings, and the team-managed folders. Starting a devcontainer, Ctrl-click picks
+several folders at once and each becomes its own worktree. Typing a path by hand keeps working:
+the index is a snapshot, so a folder created after the last scan must not be
+unreachable.
+
+```bash
+cd T:/projects
+huddle indexfolder                  # this folder + 2 levels below it
+huddle indexfolder T:/projects --depth 3
+huddle indexfolder --all            # also index node_modules, dist, target, ...
+huddle indexfolder --replace        # re-scan: drop the earlier entries under this folder first
+huddle indexfolder --list           # show what is indexed
+huddle indexfolder --clear          # empty the index (with a folder: only that subtree)
+```
+
+Hidden (dot) folders and the usual build folders (`node_modules`, `dist`, `target`,
+`obj`, …) are skipped, which is what keeps a scan of a projects folder in the
+hundreds instead of the tens of thousands; `--all` turns that off. The scan stops
+at 1500 folders and the index holds at most 2000 — index a more specific folder if
+you hit that.
+
+The index is a **snapshot**, not a live view: the gateway cannot read your host, so
+re-run the command after adding projects. Every input keeps accepting a typed path,
+so a folder you created a minute ago works without re-indexing first. Windows paths
+may be typed either way (`T:\projects\app` or `T:/projects/app`) — they are stored
+in one canonical form, and the two spellings are the same entry.
+
+Individual folders can also be added or removed under **Settings > Indexed
+folders** in the portal. The index lives in Huddle's database, not in
+`~/.huddle/config.json`: it describes this machine, so unlike the team-managed
+settings it is not something to share in version control.
+
 ## Experiments
 
 An experiment is a complete Huddle version (CLI + all Docker images) tied to a single GitHub issue. Push a branch `experiment/<issue-number>-<description>` and the pipeline publishes everything under the tag `experiment-<issue-number>`, fully separated from the normal releases.

@@ -914,7 +914,12 @@ export function toLinuxPath(p: string, style: WindowsMountStyle = 'wsl2-native')
 
 interface FolderMount { Type: 'bind' | 'volume'; Source: string; Target: string; ReadOnly?: boolean; }
 
-function buildFolderMounts(containerName: string): FolderMount[] {
+// The mount style is passed in rather than detected here: a host path in a
+// folder mapping needs exactly the same Windows translation as the workspace
+// mount (`T:/tools` -> `/mnt/t/tools`), and the engine is the same one for both.
+// Without it a Windows folder mapping was handed to the engine verbatim, which
+// silently created a bind at a nonexistent path instead of the mapped folder.
+function buildFolderMounts(containerName: string, mountStyle: WindowsMountStyle): FolderMount[] {
   const mappings = listFolderMappings();
   const result: FolderMount[] = [];
   for (const m of mappings) {
@@ -922,7 +927,7 @@ function buildFolderMounts(containerName: string): FolderMount[] {
     const target = m.containerPath;
     const readOnly = m.readOnly;
     if (m.hostPath && m.hostPath.trim()) {
-      result.push({ Type: 'bind', Source: m.hostPath.trim(), Target: target, ReadOnly: readOnly });
+      result.push({ Type: 'bind', Source: toLinuxPath(m.hostPath.trim(), mountStyle), Target: target, ReadOnly: readOnly });
     } else if (m.volumeName && m.volumeName.trim()) {
       const volName = m.volumeName.trim().replace('{containerName}', containerName);
       result.push({ Type: 'volume', Source: volName, Target: target, ReadOnly: readOnly });
@@ -1060,12 +1065,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // single mount that is the classic behaviour; with multiple mounts each host
   // path is bound at the container path the user chose (m.containerPath) and the
   // IDE opens `containerWorkspace` (the explicit "open at" path) as project root.
+  // Resolved once per start: the bind Source prefix depends on the engine, not on
+  // the individual mount (issue #93). Needed for the folder mappings below too,
+  // which exist even for an empty container — hence outside the `!empty` block.
+  const mountStyle = await detectWindowsMountStyle();
   const workspaceMounts: FolderMount[] = [];
   let sourcesPathLabel = '';
   if (!empty) {
-    // Resolved once per start: the bind Source prefix depends on the engine, not
-    // on the individual mount (issue #93).
-    const mountStyle = await detectWindowsMountStyle();
     if (isMultiMount) {
       for (const m of mountParams!) {
         const effectiveSource = await ensureWorktree(toLinuxPath(m.hostPath, mountStyle), containerName);
@@ -1079,7 +1085,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     }
   }
 
-  const folderMounts = buildFolderMounts(containerName);
+  const folderMounts = buildFolderMounts(containerName, mountStyle);
 
   // The RemoteDev distro volume is JB-only; VS Code does not need it.
   const mounts = [
