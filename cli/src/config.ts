@@ -20,6 +20,24 @@ export interface HuddleConfig {
   // ~/.huddle/config.json; changes apply on the next `huddle restart`.
   firewallRulesFolder?: string;
   extensionsFolder?: string;
+  // Team-managed devcontainer defaults (#98). The gateway reads these straight
+  // from this file when it creates a container, so an edit applies to the next
+  // container without a restart. The CLI only needs to preserve them on write.
+  defaultMemory?: string;
+  defaultCpus?: string;
+  folderMappings?: FolderMapping[];
+}
+
+/** A folder or volume that Huddle mounts into every new devcontainer (#98). */
+export interface FolderMapping {
+  id: number;
+  name: string;
+  hostPath: string;
+  volumeName: string;
+  containerPath: string;
+  readOnly: boolean;
+  enabled: boolean;
+  sortOrder: number;
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.huddle');
