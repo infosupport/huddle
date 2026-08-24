@@ -4,7 +4,10 @@ import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
+import { IndexedFolder } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
+import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
+import { FolderPickerModalComponent } from '../folder-picker-modal/folder-picker-modal.component';
 
 // Remembers the last-used multi-folder layout so the modal pre-fills it next time.
 const REMEMBER_KEY = 'huddle.start-modal.v1';
@@ -19,15 +22,16 @@ interface RememberedLayout {
 @Component({
   selector: 'app-start-container-modal',
   standalone: true,
-  imports: [FormsModule, FmtBytesPipe],
+  imports: [FormsModule, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent],
   templateUrl: './start-container-modal.component.html',
   styles: [`
     .mount-row { display: flex; gap: .5rem; align-items: center; }
-    .mount-row input:first-child { flex: 1; }
+    .mount-row .mount-host { flex: 1; min-width: 0; }
     .mount-row .mount-arrow { flex: 0 0 auto; color: var(--text-muted); }
-    .mount-row input:nth-of-type(2) { flex: 1; }
+    .mount-row input { flex: 1; min-width: 0; }
     .mount-row .btn { flex: 0 0 auto; }
     .mount-hint { font-size: 12px; color: var(--text-muted); margin: -.25rem 0 .5rem; }
+    .mount-add { display: flex; gap: .5rem; }
   `]
 })
 export class StartContainerModalComponent {
@@ -36,12 +40,16 @@ export class StartContainerModalComponent {
   private state = inject(StateService);
 
   images: DockerImage[] = [];
+  // Host folders indexed by `huddle indexfolder`; loaded once per open and passed
+  // to every folder input, so N mount rows do not each fetch the same list.
+  indexedFolders: IndexedFolder[] = [];
   baseImage = '';
   selectedImage = '';
   ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
   mode: 'single' | 'multi' = 'single';
   workspace = '';
   mounts: { hostPath: string; containerPath: string }[] = [];
+  folderPickerOpen = false;
   // The container path the IDE opens as its project root ("open at"). Editable;
   // auto-suggested from the common parent of the mount targets until touched.
   containerWorkspace = '';
@@ -79,6 +87,12 @@ export class StartContainerModalComponent {
     this.loading = false;
     this.restoreRemembered();
     this.loadImagesForIde();
+    this.api.getIndexedFolders().subscribe({
+      next: r => { this.indexedFolders = r.folders; },
+      // No index is a normal state (nobody ran `huddle indexfolder` yet), and the
+      // inputs still take free text — so a failure here must not block the modal.
+      error: () => { this.indexedFolders = []; },
+    });
   }
 
   // The IDE choice drives both the default base image and the snapshot filter.
@@ -113,13 +127,67 @@ export class StartContainerModalComponent {
     this.mounts.push({ hostPath: '', containerPath: '' });
   }
 
+  // Picking the folders of a multi-folder container one dialog at a time is a
+  // lot of clicking for what is one decision. Browse once, Ctrl-click the
+  // folders, and every one of them lands as its own row. Purely additive: rows
+  // already filled in (including hand-typed paths that are not indexed) stay,
+  // and a folder that is already mounted is not added twice.
+  onFoldersPicked(paths: string[]): void {
+    this.folderPickerOpen = false;
+    const known = new Set(
+      this.mounts.map((m) => m.hostPath.trim().toLowerCase()).filter(Boolean)
+    );
+    for (const path of paths) {
+      if (known.has(path.toLowerCase())) continue;
+      known.add(path.toLowerCase());
+      let row = this.mounts.find((m) => !m.hostPath.trim());
+      if (!row) {
+        row = { hostPath: '', containerPath: '' };
+        this.mounts.push(row);
+      }
+      this.onHostPathInput(row, path);
+    }
+  }
+
   removeMount(i: number): void {
     this.mounts.splice(i, 1);
     this.onMountInput();
   }
 
-  onWorkspaceInput(): void {
+  onWorkspaceInput(value: string): void {
+    this.workspace = value;
     this.updateAutoName();
+  }
+
+  // Picking several folders while the dialog is in single-folder mode is not a
+  // mistake — it is the answer to a question we asked badly. Switch to
+  // multi-folder mode and lay the folders out, instead of making the user back
+  // out, tick the checkbox and pick them all over again.
+  onWorkspacePicked(paths: string[]): void {
+    if (paths.length < 2) return; // one folder: the text box already has it
+    this.mode = 'multi';
+    this.workspace = '';
+    this.mounts = [];
+    this.workspaceRootTouched = false;
+    this.onFoldersPicked(paths);
+  }
+
+  /** Same from a mount row: the first folder fills the row, the rest add rows. */
+  onMountPicked(paths: string[]): void {
+    if (paths.length > 1) this.onFoldersPicked(paths.slice(1));
+  }
+
+  // Picking (or typing) a host folder fills in an empty container path with
+  // /workspaces/<leaf>: that is what the single-folder mode does anyway, and it
+  // is the answer in nearly every case. Only ever fills a BLANK field, so an
+  // explicit choice is never overwritten.
+  onHostPathInput(mount: { hostPath: string; containerPath: string }, value: string): void {
+    mount.hostPath = value;
+    if (!mount.containerPath.trim()) {
+      const leaf = value.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? '';
+      if (leaf && !leaf.endsWith(':')) mount.containerPath = `/workspaces/${leaf}`;
+    }
+    this.onMountInput();
   }
 
   onMountInput(): void {
