@@ -45,5 +45,7 @@ export const ICONS: Record<string, string> = {
   'bug':          `<path d="m8 2 1.88 1.88M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6z"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>`,
   'activity':     `<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>`,
   'search':       `<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>`,
+  'list-tree':    `<path d="M4 5h4"/><path d="M4 5v14"/><path d="M8 12H4"/><path d="M8 19H4"/><path d="M11 5h9"/><path d="M11 12h9"/><path d="M11 19h9"/>`,
+  'grid':         `<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>`,
   'filter':       `<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>`,
 };

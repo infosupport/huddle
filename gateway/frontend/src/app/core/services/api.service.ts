@@ -28,6 +28,27 @@ export interface ApprovedHostPort {
   created_at: number;
 }
 
+// A host folder indexed by `huddle indexfolder` on the host. The portal cannot
+// browse the host filesystem, so this index is the only list of real host folders
+// it can offer the operator.
+export interface IndexedFolder {
+  id: number;
+  path: string;
+  label: string;
+  source: string;
+  created_at: number;
+}
+
+export interface IndexResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  removed: number;
+  invalid: { path: string; error: string }[];
+  total: number;
+  max: number;
+}
+
 export interface FolderMapping {
   id: number;
   name: string;
@@ -46,7 +67,10 @@ export class ApiService {
   private handle<T>(obs: Observable<T>): Observable<T> {
     return obs.pipe(
       catchError((err) => {
-        const msg = err?.error?.error ?? err?.message ?? 'Unknown error';
+        // Prefer the API's human-readable `message` over its machine `error`
+        // code: a rejected path should read "host_path must be an absolute
+        // path", not "invalid_host_path".
+        const msg = err?.error?.message ?? err?.error?.error ?? err?.message ?? 'Unknown error';
         return throwError(() => new Error(msg));
       })
     );
@@ -309,6 +333,28 @@ export class ApiService {
 
   deleteFolderMapping(id: number): Observable<{ ok: boolean }> {
     return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
+  }
+
+  // ── Indexed host folders ────────────────────────────────────────────────────
+  getIndexedFolders(): Observable<{ folders: IndexedFolder[]; max: number }> {
+    return this.handle(this.http.get<{ folders: IndexedFolder[]; max: number }>('/api/indexed-folders'));
+  }
+
+  addIndexedFolder(path: string): Observable<IndexResult> {
+    return this.handle(this.http.post<IndexResult>('/api/indexed-folders', { path, source: 'manual' }));
+  }
+
+  deleteIndexedFolder(id: number): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/indexed-folders/${id}`));
+  }
+
+  // Without a root this empties the whole index; with one it removes that folder
+  // and everything below it, which is what pruning a branch in the tree means.
+  clearIndexedFolders(root?: string): Observable<{ removed: number }> {
+    const url = root
+      ? `/api/indexed-folders?root=${encodeURIComponent(root)}`
+      : '/api/indexed-folders';
+    return this.handle(this.http.delete<{ removed: number }>(url));
   }
 
   // ── Approved Host Ports ──────────────────────────────────────────────────────

@@ -230,6 +230,13 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
 
+> **Selecting host folders in the web UI.** Huddle runs in a container, so the portal cannot
+> open a folder dialog on your host — a host path had to be typed from memory. Run
+> `huddle indexfolder` in your projects folder once and the **Browse** button next to every
+> host-path field opens a folder tree of what was found. Ctrl-click several folders when
+> starting a devcontainer and each one is mounted as its own worktree. See
+> [Indexing host folders](#indexing-host-folders).
+
 ### Via the CLI
 
 From a project directory you start a devcontainer with a single command:
@@ -266,6 +273,34 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 3. Choose **Dev Containers: Attach to Running Container**
 4. Select the container name the CLI printed
+
+---
+
+## Indexing host folders
+
+The portal runs inside a container and has no view of your host filesystem, so it cannot
+offer a folder picker. `huddle indexfolder` closes that gap: it walks your host where you
+run it and hands the folders it finds to Huddle, which offers them wherever a host path is
+needed — starting a devcontainer, the folder mappings, and the team-managed folders.
+
+```bash
+cd T:/projects
+huddle indexfolder                  # this folder + 2 levels below it
+huddle indexfolder --depth 3        # deeper
+huddle indexfolder --list           # what is indexed right now
+huddle indexfolder --clear          # empty the index
+```
+
+Hidden folders and build folders (`node_modules`, `dist`, `target`, …) are skipped; `--all`
+includes them. Individual folders can be added or removed under **Settings → Indexed
+folders**, and every input still accepts a typed path, so a folder created after the last
+scan works without re-indexing.
+
+Windows paths may be written either way (`T:\projects\app` or `T:/projects/app`): Huddle
+stores one canonical form and translates it to the mount prefix your engine uses
+(`/mnt/t/...` for a native dockerd in WSL2, `/run/desktop/mnt/host/t/...` for Docker
+Desktop). The index is per machine and lives in Huddle's database — unlike the team-managed
+settings in `~/.huddle/config.json`, it is not meant to be shared.
 
 ---
 
@@ -498,6 +533,10 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
 | GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
+| GET | `/api/indexed-folders` | Indexed host folders the portal can offer as choices |
+| POST | `/api/indexed-folders` | Add folders (body: `{ path }` or `{ paths, root, replace }`) |
+| DELETE | `/api/indexed-folders/:id` | Remove one indexed folder |
+| DELETE | `/api/indexed-folders` | Empty the index (`?root=` limits it to one subtree) |
 
 All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
 
