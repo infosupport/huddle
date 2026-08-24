@@ -87,16 +87,6 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
-    CREATE TABLE IF NOT EXISTS folder_mappings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      host_path TEXT NOT NULL DEFAULT '',
-      volume_name TEXT NOT NULL DEFAULT '',
-      container_path TEXT NOT NULL,
-      read_only INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -505,9 +495,13 @@ export function deleteMcpValues(id: string): void {
   db.prepare(`DELETE FROM ext_kv WHERE ext_id = ?`).run('mcp-' + id);
 }
 
-// ── Folder Mappings ───────────────────────────────────────────────────────────
+// ── Legacy folder mappings (pre-#98) ─────────────────────────────────────────
 
-export interface FolderMapping {
+// Folder mappings now live in the CLI config file (~/.huddle/config.json) so the
+// team can review and hand-edit them — see host-config.ts. The table is no longer
+// created for fresh installs; this reader exists only so an install that predates
+// #98 can migrate its rows once (settings-migration.ts).
+export interface LegacyFolderMappingRow {
   id: number;
   name: string;
   host_path: string;
@@ -518,30 +512,15 @@ export interface FolderMapping {
   sort_order: number;
 }
 
-export function listFolderMappings(): FolderMapping[] {
-  return db.prepare('SELECT * FROM folder_mappings ORDER BY sort_order ASC, id ASC').all() as FolderMapping[];
+export function readLegacyFolderMappings(): LegacyFolderMappingRow[] {
+  const table = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'folder_mappings'"
+  ).get();
+  if (!table) return [];
+  return db.prepare(
+    'SELECT * FROM folder_mappings ORDER BY sort_order ASC, id ASC'
+  ).all() as LegacyFolderMappingRow[];
 }
-
-export function getFolderMapping(id: number): FolderMapping | undefined {
-  return db.prepare('SELECT * FROM folder_mappings WHERE id = ?').get(id) as FolderMapping | undefined;
-}
-
-export function createFolderMapping(m: Omit<FolderMapping, 'id'>): number {
-  const result = db.prepare(
-    `INSERT INTO folder_mappings (name, host_path, volume_name, container_path, read_only, enabled, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(m.name, m.host_path, m.volume_name, m.container_path, m.read_only, m.enabled, m.sort_order);
-  return Number(result.lastInsertRowid);
-}
-
-// The columns that may be changed via update. The TS `Partial<>` is only a
-// compile-time guarantee — at runtime `m` comes straight from the request body.
-// Without this allowlist the JSON keys were interpolated unfiltered as SQL
-// identifiers, which made SQL injection via a crafted key possible (finding #9,
-// e.g. `container_path = (SELECT ...), name`).
-const FOLDER_MAPPING_COLUMNS: ReadonlyArray<keyof Omit<FolderMapping, 'id'>> = [
-  'name', 'host_path', 'volume_name', 'container_path', 'read_only', 'enabled', 'sort_order',
-];
 
 // Validate the update keys of any table against its column allowlist. Pure (no
 // DB) so the SQL-injection defense (finding #9) is testable in isolation.
@@ -560,24 +539,6 @@ export function validateUpdateKeys<K extends string>(
     throw new Error(`unknown ${what} field(s): ${unknown.join(', ')}`);
   }
   return keys.filter((k): k is K => permitted.includes(k));
-}
-
-export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
-  return validateUpdateKeys(m, FOLDER_MAPPING_COLUMNS, 'folder-mapping');
-}
-
-export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
-  // Only accept known columns; this way keys are never placed into the SQL text
-  // from caller input.
-  const keys = validateFolderMappingKeys(m);
-  if (keys.length === 0) return;
-  const fields = keys.map(k => `${k} = ?`).join(', ');
-  const values = [...keys.map(k => (m as Record<string, unknown>)[k]), id];
-  db.prepare(`UPDATE folder_mappings SET ${fields} WHERE id = ?`).run(...values);
-}
-
-export function deleteFolderMapping(id: number): void {
-  db.prepare('DELETE FROM folder_mappings WHERE id = ?').run(id);
 }
 
 // ── Firewall Groups (#69) ─────────────────────────────────────────────────────

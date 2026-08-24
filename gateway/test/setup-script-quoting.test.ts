@@ -12,7 +12,6 @@ import { describe, it, expect, vi } from 'vitest';
 // same as windows-mount-path.test.ts.
 vi.mock('../src/db', () => ({
   getSetting: () => null,
-  listFolderMappings: () => [],
   isHostPortApproved: () => false,
   getGrant: () => null,
   getActionPolicy: () => null,

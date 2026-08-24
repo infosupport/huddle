@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { getSetting, listFolderMappings } from './db';
+import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
@@ -919,12 +919,12 @@ function buildFolderMounts(containerName: string): FolderMount[] {
   const result: FolderMount[] = [];
   for (const m of mappings) {
     if (!m.enabled) continue;
-    const target = m.container_path;
-    const readOnly = m.read_only === 1;
-    if (m.host_path && m.host_path.trim()) {
-      result.push({ Type: 'bind', Source: m.host_path.trim(), Target: target, ReadOnly: readOnly });
-    } else if (m.volume_name && m.volume_name.trim()) {
-      const volName = m.volume_name.trim().replace('{containerName}', containerName);
+    const target = m.containerPath;
+    const readOnly = m.readOnly;
+    if (m.hostPath && m.hostPath.trim()) {
+      result.push({ Type: 'bind', Source: m.hostPath.trim(), Target: target, ReadOnly: readOnly });
+    } else if (m.volumeName && m.volumeName.trim()) {
+      const volName = m.volumeName.trim().replace('{containerName}', containerName);
       result.push({ Type: 'volume', Source: volName, Target: target, ReadOnly: readOnly });
     }
   }
@@ -1102,6 +1102,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     },
   ];
 
+  // Read once per create: the resource defaults live in the mounted CLI config
+  // (~/.huddle/config.json, #98), so an operator edit applies to the next
+  // container without restarting Huddle.
+  const resourceDefaults = getResourceDefaults();
+
   const createBody = {
     Image: imageName,
     Entrypoint: ['/bin/sh'],
@@ -1125,8 +1130,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
       ...(RUNTIME_SECURITY_OPT.length ? { SecurityOpt: RUNTIME_SECURITY_OPT } : {}),
-      Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || '8g'),
-      CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || '2'),
+      Memory: parseMemoryBytes(params.memory || resourceDefaults.defaultMemory || '8g'),
+      CpuQuota: parseCpuQuota(params.cpus || resourceDefaults.defaultCpus || '2'),
       CpuPeriod: 100000,
     },
   };

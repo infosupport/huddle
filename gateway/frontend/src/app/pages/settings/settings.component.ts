@@ -13,10 +13,18 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
     </div>
     @if (error()) { <p class="error-note">{{ error() }}</p> }
 
+    @if (configMounted() === false) {
+      <p class="error-note">
+        The CLI config (<code>~/.huddle/config.json</code>) is not mounted into Huddle, so
+        nothing on this page can be saved. Run <code>huddle restart</code> on the host first.
+      </p>
+    }
+
     <div class="card">
       <h2>Resource limits</h2>
       <p class="hint">
         Default CPU and memory limits for new devcontainers. Leave empty for no limit.
+        Stored in <code>~/.huddle/config.json</code>; applies to the next devcontainer you start.
       </p>
       <form (ngSubmit)="saveResources()">
         <div class="field-row">
@@ -35,7 +43,7 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
           <button type="submit" class="btn btn--accent" [disabled]="savingResources()">
             {{ savingResources() ? 'Saving…' : 'Save' }}
           </button>
-          @if (savedResources()) { <span class="saved-note">Saved</span> }
+          @if (resourceNote()) { <span class="saved-note">{{ resourceNote() }}</span> }
         </div>
       </form>
     </div>
@@ -45,6 +53,7 @@ import { IconComponent } from '../../shared/components/icon/icon.component';
       <p class="hint">
         Folders or volumes that are automatically mounted in every new devcontainer.
         Use a host path for bind mounts, or a volume name for Docker volumes.
+        Stored in <code>~/.huddle/config.json</code> so the team can review them in version control.
       </p>
 
       <table class="mappings-table">
@@ -195,7 +204,8 @@ export class SettingsComponent implements OnInit {
   mappings = signal<FolderMapping[]>([]);
   error = signal<string | null>(null);
   savingResources = signal(false);
-  savedResources = signal(false);
+  resourceNote = signal<string | null>(null);
+  configMounted = signal<boolean | null>(null);
   addingMapping = signal(false);
   savingFolders = signal(false);
   folderNote = signal<string | null>(null);
@@ -205,7 +215,7 @@ export class SettingsComponent implements OnInit {
 
   ngOnInit(): void {
     this.api.getSettings().subscribe({
-      next: (s) => { this.resources = { ...s }; },
+      next: (s) => { this.resources = { ...s }; this.configMounted.set(s.hostConfigMounted ?? null); },
       error: (e) => this.error.set(e.message),
     });
     this.loadMappings();
@@ -218,12 +228,25 @@ export class SettingsComponent implements OnInit {
     });
   }
 
+  // The limits are written into the mounted ~/.huddle/config.json (#98), so a
+  // failed write means the config is not mounted — say so instead of "Saved".
   saveResources(): void {
     this.savingResources.set(true);
-    this.savedResources.set(false);
+    this.resourceNote.set(null);
     this.error.set(null);
-    this.api.saveSettings(this.resources).subscribe({
-      next: () => { this.savingResources.set(false); this.savedResources.set(true); },
+    this.api.saveSettings({
+      defaultMemory: this.resources.defaultMemory,
+      defaultCpus: this.resources.defaultCpus,
+    }).subscribe({
+      next: (res) => {
+        this.savingResources.set(false);
+        if (res.persisted === false) {
+          this.configMounted.set(false);
+          this.error.set('Could not save — the CLI config is not mounted into Huddle. Run `huddle restart` on the host first.');
+        } else {
+          this.resourceNote.set('Saved');
+        }
+      },
       error: (e) => { this.savingResources.set(false); this.error.set(e.message); },
     });
   }
