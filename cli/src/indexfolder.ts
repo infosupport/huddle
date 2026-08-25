@@ -74,6 +74,25 @@ function parseDepth(raw: string | undefined): number {
   return n;
 }
 
+// The folder to walk comes from argv, or from wherever the operator's shell is.
+// Resolving it here — once, before anything touches the filesystem — is what lets
+// the rest of the command treat "the root" as one absolute, `..`-free path: the
+// walk below, the containment check, and the paths posted to the gateway all
+// derive from this value.
+function resolveScanRoot(raw: string | undefined): string {
+  const input = raw ?? process.cwd();
+  // A null byte makes every fs call throw ERR_INVALID_ARG_VALUE with a stack
+  // trace; say what is wrong instead.
+  if (input.includes('\0')) throw new Error('Invalid folder: the path contains a null byte.');
+  return path.resolve(input);
+}
+
+// Whether `candidate` is the root or sits underneath it.
+function contains(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 // Breadth-first so a depth cut-off keeps the folders nearest the root — those are
 // the ones an operator actually mounts. Symlinks are not followed: `isDirectory()`
 // is false for a symlink entry, which also rules out a link loop.
@@ -94,6 +113,11 @@ function scan(root: string, depth: number, all: boolean): { folders: string[]; t
         if (e.name.startsWith('.')) continue;
         if (!all && NOISE.has(e.name)) continue;
         const full = path.join(dir, e.name);
+        // Nothing outside the folder the operator named ever enters the index or
+        // gets opened by the next round of readdirSync. Entries come from
+        // readdirSync and symlinks are already skipped, so this should never
+        // fire — it is here so a scan can never walk out of its root by accident.
+        if (!contains(root, full)) continue;
         folders.push(full);
         next.push(full);
         if (folders.length >= MAX_FOLDERS) return { folders, truncated: true };
@@ -123,7 +147,7 @@ export async function runIndexFolder(opts: IndexFolderOptions): Promise<void> {
   if (opts.clear) {
     // Scoped when a folder is given, so clearing one project's entries does not
     // throw away everything else that was indexed.
-    const root = opts.path ? toPosix(path.resolve(opts.path)) : undefined;
+    const root = opts.path ? toPosix(resolveScanRoot(opts.path)) : undefined;
     const query = root ? `?root=${encodeURIComponent(root)}` : '';
     const res = await del<{ removed: number }>(`/api/indexed-folders${query}`);
     console.log(green(`[OK] Removed ${res.removed} folder(s) from the index${root ? ` under ${cyan(root)}` : ''}.`));
@@ -131,7 +155,7 @@ export async function runIndexFolder(opts: IndexFolderOptions): Promise<void> {
   }
 
   const depth = parseDepth(opts.depth);
-  const root = path.resolve(opts.path ?? process.cwd());
+  const root = resolveScanRoot(opts.path);
   let stat: fs.Stats;
   try {
     stat = fs.statSync(root);
