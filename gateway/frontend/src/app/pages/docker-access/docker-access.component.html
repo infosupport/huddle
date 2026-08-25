@@ -7,7 +7,7 @@
   @if (containers().length > 0) {
     <select id="da-container-select" [ngModel]="selectedContainer()" (ngModelChange)="selectContainer($event)">
       @for (c of containers(); track c.name) {
-        <option [value]="c.name">{{ c.presentableName || c.name }}</option>
+        <option [value]="c.name">{{ c.name }}</option>
       }
     </select>
     <span class="da-selector__hint">Permissions and timer apply per devcontainer.</span>
@@ -32,7 +32,7 @@
     @if (containers().length > 0) {
       <select [(ngModel)]="portsContainer" (ngModelChange)="onPortsContainerChange()">
         @for (c of containers(); track c.name) {
-          <option [value]="c.name">{{ c.presentableName || c.name }}</option>
+          <option [value]="c.name">{{ c.name }}</option>
         }
       </select>
     } @else {

@@ -13,8 +13,30 @@ Huddle is a security gateway that shields devcontainers from the external networ
 Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a shielded environment. Execution is isolated; the portal stays in control of what goes in and out.
 
 <p align="center">
-  <img src="docs/images/huddle-portal.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-portal-dark.png">
+    <img src="docs/images/huddle-portal-light.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
+  </picture>
 </p>
+
+## 🚀 Quick start
+
+> **Requirements:** Docker or Podman and Node.js 18+. Huddle's packages are public — no GitHub token or registry login needed.
+
+```bash
+# 1 — install the CLI
+npm install -g @infosupport/huddle-cli
+
+# 2 — start Huddle (pulls the image, auto-detects Docker/Podman)
+huddle init            # portal → http://localhost:3000
+
+# 3 — launch a devcontainer from your project directory
+huddle                 # IntelliJ (default) · --ide vscode · --ide rider
+```
+
+Open **http://localhost:3000** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
+
+---
 
 ## Why Huddle?
 
@@ -24,7 +46,10 @@ Huddle addresses two major risks of modern, AI-assisted development:
 - **Developing safely *against* AI-amplified attacks** — supply-chain attacks are getting smarter, faster, and multi-stage. Huddle intercepts outbound traffic and blocks anything that isn't explicitly allowed.
 
 <p align="center">
-  <img src="docs/images/huddle-risks.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-risks-dark.png">
+    <img src="docs/images/huddle-risks-light.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+  </picture>
 </p>
 
 ## Architecture
@@ -49,7 +74,10 @@ Two servers run in the same process:
 | API + UI | 3000 | REST API, Angular frontend, WebSocket push |
 
 <p align="center">
-  <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-gateway-dark.png">
+    <img src="docs/images/huddle-gateway-light.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
+  </picture>
 </p>
 
 ### Three security principles
@@ -202,6 +230,13 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
 
+> **Selecting host folders in the web UI.** Huddle runs in a container, so the portal cannot
+> open a folder dialog on your host — a host path had to be typed from memory. Run
+> `huddle indexfolder` in your projects folder once and the **Browse** button next to every
+> host-path field opens a folder tree of what was found. Ctrl-click several folders when
+> starting a devcontainer and each one is mounted as its own worktree. See
+> [Indexing host folders](#indexing-host-folders).
+
 ### Via the CLI
 
 From a project directory you start a devcontainer with a single command:
@@ -238,6 +273,34 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 3. Choose **Dev Containers: Attach to Running Container**
 4. Select the container name the CLI printed
+
+---
+
+## Indexing host folders
+
+The portal runs inside a container and has no view of your host filesystem, so it cannot
+offer a folder picker. `huddle indexfolder` closes that gap: it walks your host where you
+run it and hands the folders it finds to Huddle, which offers them wherever a host path is
+needed — starting a devcontainer, the folder mappings, and the team-managed folders.
+
+```bash
+cd T:/projects
+huddle indexfolder                  # this folder + 2 levels below it
+huddle indexfolder --depth 3        # deeper
+huddle indexfolder --list           # what is indexed right now
+huddle indexfolder --clear          # empty the index
+```
+
+Hidden folders and build folders (`node_modules`, `dist`, `target`, …) are skipped; `--all`
+includes them. Individual folders can be added or removed under **Settings → Indexed
+folders**, and every input still accepts a typed path, so a folder created after the last
+scan works without re-indexing.
+
+Windows paths may be written either way (`T:\projects\app` or `T:/projects/app`): Huddle
+stores one canonical form and translates it to the mount prefix your engine uses
+(`/mnt/t/...` for a native dockerd in WSL2, `/run/desktop/mnt/host/t/...` for Docker
+Desktop). The index is per machine and lives in Huddle's database — unlike the team-managed
+settings in `~/.huddle/config.json`, it is not meant to be shared.
 
 ---
 
@@ -304,6 +367,59 @@ huddle firewall add example.com --path "/admin/*" --deny --container devcontaine
 
 Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
 `/foo/..%2fsecret`) can never slip through a wildcard allow.
+
+### Export & import rules
+
+Rulesets can be shared between machines and teammates as a JSON document. The
+document is a versioned envelope containing only the shareable rule fields
+(`domain`, `container_id`, `status`, `path_pattern`, `path_mode`, `expires_at`) —
+volatile fields such as the row id, last-seen time and request count are never
+exported.
+
+```json
+{
+  "version": 1,
+  "exported_at": 1717430400,
+  "rules": [
+    { "domain": "github.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}
+```
+
+**Scope.** Both export and import accept an optional `container` scope. Use
+`__global__` for the global (container-less) rules, or a container name for that
+container's rules. Omitting it means "all rules" on export; on import it remaps
+every incoming rule into that scope.
+
+**Merge vs. replace.** Import runs in one of two modes:
+
+- `merge` (default) — upserts each rule. An incoming rule that matches an
+  existing one on `(domain, container, path)` updates its status/expiry/path-mode;
+  otherwise it is inserted.
+- `replace` — first deletes the existing rules in the scope(s) being imported,
+  then inserts. Only the imported scopes are wiped, never the whole table.
+
+Import validates every rule fail-closed: unknown fields, an empty domain or an
+invalid status reject the whole request with `400`. The response summarises the
+result as `{ imported, updated, skipped }` (`skipped` counts within-file
+duplicates).
+
+**CLI:**
+
+```bash
+huddle firewall export                       # print all rules as JSON to stdout
+huddle firewall export --container __global__ --out rules.json
+huddle firewall import rules.json            # merge (upsert)
+huddle firewall import rules.json --replace  # replace the imported scope(s)
+huddle firewall import rules.json --container devcontainer-app   # remap scope
+```
+
+**UI:** the Firewall page has **Export** and **Import** buttons. Export
+downloads a `.json` file; Import reads a selected `.json` file and merges it.
+
+**API:** `GET /api/rules/export[?container=<id|__global__>]` and
+`POST /api/rules/import[?container=<id|__global__>]` with body
+`{ "mode": "merge" | "replace", "rules": [ ... ] }`.
 
 ---
 
@@ -417,6 +533,10 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
 | GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
+| GET | `/api/indexed-folders` | Indexed host folders the portal can offer as choices |
+| POST | `/api/indexed-folders` | Add folders (body: `{ path }` or `{ paths, root, replace }`) |
+| DELETE | `/api/indexed-folders/:id` | Remove one indexed folder |
+| DELETE | `/api/indexed-folders` | Empty the index (`?root=` limits it to one subtree) |
 
 All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
 
