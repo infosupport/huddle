@@ -216,11 +216,14 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerWorkspace?: string; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
+  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
     return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
       imageName: params.image,
+      // No containerWorkspace: the gateway derives the IDE project root from the
+      // mounts (deepest common parent, else /workspaces). The CLI can still send
+      // one via `--workspace-root`.
       ...(params.mounts?.length
-        ? { mounts: params.mounts, ...(params.containerWorkspace ? { containerWorkspace: params.containerWorkspace } : {}) }
+        ? { mounts: params.mounts }
         : { workspaceDir: params.workspace }),
       containerName: params.containerName,
       ideName: params.ide,

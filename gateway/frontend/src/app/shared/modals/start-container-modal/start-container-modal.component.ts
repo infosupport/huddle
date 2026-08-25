@@ -16,7 +16,6 @@ interface RememberedLayout {
   mode: 'single' | 'multi';
   workspace: string;
   mounts: { hostPath: string; containerPath: string }[];
-  containerWorkspace: string;
 }
 
 @Component({
@@ -50,10 +49,6 @@ export class StartContainerModalComponent {
   workspace = '';
   mounts: { hostPath: string; containerPath: string }[] = [];
   folderPickerOpen = false;
-  // The container path the IDE opens as its project root ("open at"). Editable;
-  // auto-suggested from the common parent of the mount targets until touched.
-  containerWorkspace = '';
-  workspaceRootTouched = false;
   containerName = '';
   nameTouched = false;
   empty = false;
@@ -77,8 +72,6 @@ export class StartContainerModalComponent {
     this.mode = 'single';
     this.workspace = '';
     this.mounts = [];
-    this.containerWorkspace = '';
-    this.workspaceRootTouched = false;
     this.containerName = '';
     this.nameTouched = false;
     this.empty = false;
@@ -117,8 +110,6 @@ export class StartContainerModalComponent {
       if (this.mounts.length === 0) this.addMount();
     } else {
       this.mounts = [];
-      this.containerWorkspace = '';
-      this.workspaceRootTouched = false;
     }
     this.updateAutoName();
   }
@@ -168,7 +159,6 @@ export class StartContainerModalComponent {
     this.mode = 'multi';
     this.workspace = '';
     this.mounts = [];
-    this.workspaceRootTouched = false;
     this.onFoldersPicked(paths);
   }
 
@@ -191,32 +181,7 @@ export class StartContainerModalComponent {
   }
 
   onMountInput(): void {
-    this.suggestWorkspaceRoot();
     this.updateAutoName();
-  }
-
-  onWorkspaceRootInput(): void {
-    this.workspaceRootTouched = true;
-  }
-
-  // Until the user edits the "open at" field, keep it in sync with the deepest
-  // common parent of the container paths typed so far.
-  private suggestWorkspaceRoot(): void {
-    if (this.workspaceRootTouched) return;
-    const targets = this.mounts.map(m => m.containerPath.trim()).filter(p => p.startsWith('/'));
-    this.containerWorkspace = targets.length ? this.commonParent(targets) : '';
-  }
-
-  private commonParent(paths: string[]): string {
-    const split = paths.map(p => p.split('/').filter(Boolean));
-    const first = split[0];
-    const shared: string[] = [];
-    for (let i = 0; i < first.length; i++) {
-      const seg = first[i];
-      if (split.every(parts => parts[i] === seg)) shared.push(seg);
-      else break;
-    }
-    return '/' + shared.join('/');
   }
 
   private updateAutoName(): void {
@@ -238,8 +203,6 @@ export class StartContainerModalComponent {
     if (this.empty) {
       this.workspace = '';
       this.mounts = [];
-      this.containerWorkspace = '';
-      this.workspaceRootTouched = false;
       this.mode = 'single';
       if (!this.nameTouched && !this.containerName) {
         this.containerName = 'devcontainer-empty';
@@ -262,7 +225,6 @@ export class StartContainerModalComponent {
         if (seen.has(containerPath)) return `Duplicate container path: ${containerPath}`;
         seen.add(containerPath);
       }
-      if (!this.containerWorkspace.trim().startsWith('/')) return 'Open the IDE at an absolute path (e.g. /workspace)';
       return null;
     }
     if (!this.workspace) return 'All fields are required';
@@ -283,7 +245,6 @@ export class StartContainerModalComponent {
       mounts: isMulti
         ? this.mounts.map(m => ({ hostPath: m.hostPath.trim(), containerPath: m.containerPath.trim() }))
         : undefined,
-      containerWorkspace: isMulti ? this.containerWorkspace.trim() : undefined,
       containerName: this.containerName,
       empty: this.empty,
     }).subscribe({
@@ -298,7 +259,6 @@ export class StartContainerModalComponent {
       mode: this.mode,
       workspace: this.workspace,
       mounts: this.mounts.map(m => ({ hostPath: m.hostPath.trim(), containerPath: m.containerPath.trim() })),
-      containerWorkspace: this.containerWorkspace.trim(),
     };
     try { localStorage.setItem(REMEMBER_KEY, JSON.stringify(layout)); } catch { /* storage unavailable */ }
   }
@@ -313,8 +273,6 @@ export class StartContainerModalComponent {
     if (layout.mode === 'multi' && layout.mounts?.length) {
       this.mode = 'multi';
       this.mounts = layout.mounts.map(m => ({ hostPath: m.hostPath ?? '', containerPath: m.containerPath ?? '' }));
-      this.containerWorkspace = layout.containerWorkspace ?? '';
-      this.workspaceRootTouched = !!this.containerWorkspace;
     } else if (layout.workspace) {
       this.workspace = layout.workspace;
     }
