@@ -119,10 +119,11 @@ describe('diepe bomen', () => {
 
   it('filtert een diepe boom zonder de stack op te blazen', () => {
     // Zonder open takken raakt het filter toch de volle diepte: een tak die een
-    // hit bevat opent zichzelf. Ondieper gehouden omdat dit filter per knoop de
-    // subboom naloopt en dus kwadratisch is in tijd.
-    const tree = deepTree(5_000);
-    const rows = folderRows(tree, new Set<string>(), 'n4999');
-    expect(rows.length).toBe(5_001);
+    // hit bevat opent zichzelf. Op dezelfde diepte als hierboven, want de
+    // subboom-treffers worden in één pass bepaald; een versie die per knoop de
+    // subboom naloopt is kwadratisch en haalt dit niet binnen de timeout.
+    const tree = deepTree(DEEP);
+    const rows = folderRows(tree, new Set<string>(), `n${DEEP - 1}`);
+    expect(rows.length).toBe(DEEP + 1);
   });
 });
