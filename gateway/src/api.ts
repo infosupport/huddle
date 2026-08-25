@@ -1488,9 +1488,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
       // Replace is scoped to the subtree that was just re-scanned, so indexing
       // one project again never discards folders indexed from anywhere else.
+      // Without a usable root there is no subtree to scope to, and falling back
+      // to "clear everything" would turn a re-index of one project into total
+      // index loss. Refuse instead — wiping the index is the DELETE endpoint's
+      // job, and that one is explicit about it.
       const normalizedRoot = root ? normalizeHostPath(root) : '';
+      if (replace && !normalizedRoot) {
+        return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
+      }
       let removed = 0;
-      if (replace) removed = clearIndexedFolders(normalizedRoot || undefined);
+      if (replace) removed = clearIndexedFolders(normalizedRoot);
 
       let added = 0;
       let updated = 0;
