@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 import os from 'os';
 import path from 'path';
 
@@ -71,25 +72,71 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function acquireLock(): number | null {
+// The lock file carries the identity of its holder, not just its existence. Age
+// alone is not enough to decide it may be removed: a writer that pauses past
+// LOCK_STALE_MS gets its lock broken and taken over, and would then delete the
+// *new* holder's lock on the way out — letting a third writer in alongside the
+// second, which is exactly the clobber the lock exists to prevent. A pid would
+// not do as identity: the gateway runs in a container and this CLI on the host,
+// sharing the file over a bind mount, so their pid spaces are unrelated.
+function lockToken(): string {
+  return `${process.pid}:${randomUUID()}`;
+}
+
+function readLockToken(): string | null {
+  try {
+    return fs.readFileSync(LOCK_PATH, 'utf8');
+  } catch {
+    return null; // gone between the stat and the read
+  }
+}
+
+// Remove a lock left behind by a writer that was killed mid-update, but only that
+// exact lock: the token and mtime are re-read right before the unlink, so a lock
+// another contender has meanwhile broken and taken over is left in place.
+function breakStaleLock(): void {
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(LOCK_PATH).mtimeMs;
+  } catch {
+    return; // already gone
+  }
+  if (Date.now() - mtimeMs <= LOCK_STALE_MS) return;
+  const token = readLockToken();
+  if (token === null) return;
+  try {
+    if (readLockToken() !== token) return;
+    if (fs.statSync(LOCK_PATH).mtimeMs !== mtimeMs) return;
+    fs.unlinkSync(LOCK_PATH);
+  } catch { /* another process got there first — just retry */ }
+}
+
+// Returns the token identifying this holder, to be handed back to releaseLock.
+function acquireLock(): string | null {
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
+    const token = lockToken();
     try {
-      return fs.openSync(LOCK_PATH, 'wx');
+      const fd = fs.openSync(LOCK_PATH, 'wx');
+      try {
+        fs.writeSync(fd, token);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return token;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
-      try {
-        // Break a lock left behind by a writer that was killed mid-update.
-        if (Date.now() - fs.statSync(LOCK_PATH).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(LOCK_PATH);
-      } catch { /* another process got there first — just retry */ }
+      breakStaleLock();
       if (Date.now() >= deadline) return null;
       sleepSync(25);
     }
   }
 }
 
-function releaseLock(fd: number): void {
-  try { fs.closeSync(fd); } catch { /* already closed */ }
+function releaseLock(token: string): void {
+  // Never unlink a lock this writer no longer owns: if it was broken as stale and
+  // taken over, the file belongs to the writer that is running right now.
+  if (readLockToken() !== token) return;
   try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
 }
 
@@ -115,8 +162,8 @@ let tmpSeq = 0;
  */
 export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  const lock = acquireLock();
-  if (lock === null) {
+  const token = acquireLock();
+  if (token === null) {
     throw new Error(
       `Could not lock ${CONFIG_PATH} within ${LOCK_WAIT_MS}ms — another Huddle process ` +
         `is writing it. Nothing was changed; retry the command. If no other process is ` +
@@ -136,7 +183,7 @@ export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
     try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
     throw err;
   } finally {
-    releaseLock(lock);
+    releaseLock(token);
   }
 }
 
