@@ -31,13 +31,6 @@ export class ContainersComponent {
   isRogue(c: Container) { return this.isRunning(c) && c.inNetwork === false; }
   statusClass(c: Container) { return this.isRogue(c) ? 'rogue' : this.isRunning(c) ? 'running' : 'stopped'; }
   statusLabel(c: Container) { return this.isRogue(c) ? 'Rogue' : this.isRunning(c) ? 'Running' : 'Stopped'; }
-  scoreOf(name: string, rules: Rule[]) {
-    const r = rules.filter(x => x.container_id === name);
-    const a = r.filter(x => x.status === 'allow').length;
-    const d = r.filter(x => x.status === 'deny').length;
-    return a + d === 0 ? null : Math.round((a / (a + d)) * 100);
-  }
-  scoreClass(s: number | null) { return s === null ? 'muted' : s > 70 ? 'green' : s > 40 ? 'yellow' : 'red'; }
   sourcesLeaf(c: Container) {
     if (c.mounts?.length) return c.mounts.map(m => m.containerPath.split('/').filter(Boolean).pop() || m.containerPath).join(', ');
     const p = c.workspacePath || c.labels?.['com.intellij.devcontainer.sources.path'] || c.Labels?.['com.intellij.devcontainer.sources.path'] || '';

@@ -15,7 +15,6 @@ export interface Container {
   inNetwork?: boolean;
   huddleInNetwork?: boolean;
   ipAddress?: string;
-  securityScore?: number;
   labels?: Record<string, string>;
   Labels?: Record<string, string>;
   airlocked?: boolean;
