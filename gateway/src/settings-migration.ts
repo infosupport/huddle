@@ -14,8 +14,14 @@
 import { getSetting, readLegacyFolderMappings } from './db';
 import { readHostConfig, updateHostConfig, hostConfigAvailable, HostFolderMapping, HostConfig } from './host-config';
 
+// `skipped` says the migration will be retried on the next start; `reason` says
+// why, because the two causes need a different message to the operator: the
+// config file is not mounted yet, or it is mounted but could not be written.
+export type SkipReason = 'not-mounted' | 'write-failed';
+
 export interface MigrationResult {
   skipped: boolean;
+  reason?: SkipReason;
   mappings: number;
   resources: string[];
 }
@@ -24,6 +30,7 @@ export function migrateSettingsToHostConfig(): MigrationResult {
   const result: MigrationResult = { skipped: false, mappings: 0, resources: [] };
   if (!hostConfigAvailable()) {
     result.skipped = true;
+    result.reason = 'not-mounted';
     return result;
   }
 
@@ -63,6 +70,7 @@ export function migrateSettingsToHostConfig(): MigrationResult {
   if (!updateHostConfig(patch)) {
     // Write failed — report as skipped so the next start retries.
     result.skipped = true;
+    result.reason = 'write-failed';
     result.mappings = 0;
     result.resources = [];
     return result;
@@ -75,7 +83,11 @@ export function runSettingsMigration(): void {
   try {
     const r = migrateSettingsToHostConfig();
     if (r.skipped) {
-      console.log('[settings] config.json not writable yet — migration deferred to the next start');
+      console.log(
+        r.reason === 'write-failed'
+          ? '[settings] writing config.json failed — migration deferred to the next start'
+          : '[settings] config.json not mounted yet — migration deferred to the next start',
+      );
       return;
     }
     const parts: string[] = [];
