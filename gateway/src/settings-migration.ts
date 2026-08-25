@@ -12,7 +12,7 @@
 // If the config file is not mounted the migration is skipped and retried on the
 // next start; the portal already tells the operator to run `huddle restart`.
 import { getSetting, readLegacyFolderMappings } from './db';
-import { readHostConfig, updateHostConfig, hostConfigAvailable, HostFolderMapping, HostConfig } from './host-config';
+import { mutateHostConfig, hostConfigAvailable, HostFolderMapping, HostConfig } from './host-config';
 
 // `skipped` says the migration will be retried on the next start; `reason` says
 // why, because the two causes need a different message to the operator: the
@@ -34,46 +34,56 @@ export function migrateSettingsToHostConfig(): MigrationResult {
     return result;
   }
 
-  const cfg = readHostConfig();
-  const patch: Partial<HostConfig> = {};
+  // Decide what to migrate inside the lock: every branch below keys off what the
+  // config file already holds, so a portal write landing between the read and the
+  // write would otherwise be migrated straight back over.
+  let nothingToDo = false;
+  const written = mutateHostConfig(cfg => {
+    result.mappings = 0;
+    result.resources = [];
+    const patch: Partial<HostConfig> = {};
 
-  // Resource limits: only adopt a legacy value when the config file has nothing
-  // to say about that key, so a config-file edit always wins.
-  for (const key of ['defaultMemory', 'defaultCpus'] as const) {
-    if (cfg[key] !== undefined) continue;
-    const legacy = getSetting(key);
-    if (legacy && legacy.trim()) {
-      patch[key] = legacy.trim();
-      result.resources.push(key);
+    // Resource limits: only adopt a legacy value when the config file has nothing
+    // to say about that key, so a config-file edit always wins.
+    for (const key of ['defaultMemory', 'defaultCpus'] as const) {
+      if (cfg[key] !== undefined) continue;
+      const legacy = getSetting(key);
+      if (legacy && legacy.trim()) {
+        patch[key] = legacy.trim();
+        result.resources.push(key);
+      }
     }
-  }
 
-  if (!Array.isArray(cfg.folderMappings)) {
-    const legacy = readLegacyFolderMappings();
-    if (legacy.length > 0) {
-      patch.folderMappings = legacy.map((row, i): HostFolderMapping => ({
-        id: typeof row.id === 'number' ? row.id : i + 1,
-        name: row.name ?? '',
-        hostPath: row.host_path ?? '',
-        volumeName: row.volume_name ?? '',
-        containerPath: row.container_path ?? '',
-        readOnly: row.read_only === 1,
-        enabled: row.enabled === 1,
-        sortOrder: row.sort_order ?? 0,
-      }));
-      result.mappings = patch.folderMappings.length;
+    if (!Array.isArray(cfg.folderMappings)) {
+      const legacy = readLegacyFolderMappings();
+      if (legacy.length > 0) {
+        patch.folderMappings = legacy.map((row, i): HostFolderMapping => ({
+          id: typeof row.id === 'number' ? row.id : i + 1,
+          name: row.name ?? '',
+          hostPath: row.host_path ?? '',
+          volumeName: row.volume_name ?? '',
+          containerPath: row.container_path ?? '',
+          readOnly: row.read_only === 1,
+          enabled: row.enabled === 1,
+          sortOrder: row.sort_order ?? 0,
+        }));
+        result.mappings = patch.folderMappings.length;
+      }
     }
-  }
 
-  if (Object.keys(patch).length === 0) return result;
+    if (Object.keys(patch).length === 0) {
+      nothingToDo = true;
+      return null; // nothing legacy left to adopt — not a failure
+    }
+    return patch;
+  });
 
-  if (!updateHostConfig(patch)) {
+  if (!written && !nothingToDo) {
     // Write failed — report as skipped so the next start retries.
     result.skipped = true;
     result.reason = 'write-failed';
     result.mappings = 0;
     result.resources = [];
-    return result;
   }
   return result;
 }

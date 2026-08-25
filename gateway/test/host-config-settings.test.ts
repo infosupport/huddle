@@ -170,6 +170,60 @@ describe('gelijktijdige schrijvers', () => {
     expect(fs.existsSync(LOCK)).toBe(false);
   });
 
+  it('geeft de mutator het bestand zoals het bij het pakken van het slot is', () => {
+    writeConfig({ operatorToken: 'oud' });
+    // Wat de aanroeper eerder las is niet wat er nu staat: een andere schrijver
+    // is ertussen gekomen. De mutator hoort de nieuwe inhoud te zien, want daar
+    // baseert de folder-mapping-CRUD hieronder zijn hele lijst op.
+    const snapshot = hc.readHostConfig();
+    writeConfig({ operatorToken: 'nieuw', firewallRulesFolder: 'T:/rules' });
+
+    let seen: unknown;
+    expect(hc.mutateHostConfig((cur) => { seen = { ...cur }; return {}; })).toBe(true);
+    expect(snapshot).toEqual({ operatorToken: 'oud' });
+    expect(seen).toEqual({ operatorToken: 'nieuw', firewallRulesFolder: 'T:/rules' });
+  });
+
+  it('slaat de schrijfactie over als de mutator null teruggeeft', () => {
+    writeConfig({ operatorToken: 'x' });
+    expect(hc.mutateHostConfig(() => null)).toBe(false);
+    expect(readConfig()).toEqual({ operatorToken: 'x' });
+    expect(fs.readdirSync(HOME)).toEqual(['config.json']);
+  });
+
+  it('laat de folder-mapping-CRUD op het slot wachten i.p.v. eroverheen te schrijven', () => {
+    writeConfig({ folderMappings: [{ id: 1, name: 'a', hostPath: 'T:/a', volumeName: '', containerPath: '', readOnly: false, enabled: true, sortOrder: 0 }] });
+    fs.writeFileSync(LOCK, ''); // verse lock: een actieve schrijver
+    try {
+      expect(hc.createFolderMapping({ name: 'b', hostPath: 'T:/b', volumeName: '', containerPath: '', readOnly: false, enabled: true, sortOrder: 0 })).toBe(null);
+      expect(hc.updateFolderMapping(1, { name: 'anders' })).toBe(false);
+      expect(hc.deleteFolderMapping(1)).toBe(false);
+      // Geen van de drie heeft het bestand aangeraakt.
+      expect(readConfig().folderMappings).toHaveLength(1);
+      expect(readConfig().folderMappings[0].name).toBe('a');
+    } finally {
+      fs.rmSync(LOCK, { force: true });
+    }
+  }, 10_000); // drie schrijvers die elk LOCK_WAIT_MS uitzitten
+
+  it('leidt een nieuwe mapping af uit het bestand, niet uit een oudere lijst', () => {
+    writeConfig({ folderMappings: [] });
+    const stale = hc.listFolderMappings(); // wat de portal in handen had
+    // Een andere schrijver zet er ondertussen een mapping bij, met een hogere id
+    // en een sleutel die niets met mappings te maken heeft.
+    writeConfig({
+      operatorToken: 'van-de-cli',
+      folderMappings: [{ id: 9, name: 'ander', hostPath: 'T:/ander', volumeName: '', containerPath: '', readOnly: false, enabled: true, sortOrder: 0 }],
+    });
+
+    const id = hc.createFolderMapping({ name: 'nieuw', hostPath: 'T:/nieuw', volumeName: '', containerPath: '', readOnly: false, enabled: true, sortOrder: 0 });
+    expect(stale).toEqual([]);
+    expect(id).toBe(10); // niet 1: de id komt uit het bestand
+    const after = readConfig();
+    expect(after.folderMappings.map((m: any) => m.id)).toEqual([9, 10]);
+    expect(after.operatorToken).toBe('van-de-cli'); // niet weggeschreven
+  });
+
   it('leest binnen het slot, dus een wijziging van de CLI blijft staan', () => {
     writeConfig({ operatorToken: 'from-cli' });
     // Wat de portal in handen had toen de operator op opslaan drukte, is niet
