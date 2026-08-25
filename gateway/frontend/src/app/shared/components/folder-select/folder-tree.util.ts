@@ -145,17 +145,20 @@ function matches(node: FolderNode, query: string): boolean {
   return node.name.toLowerCase().includes(query) || node.path.toLowerCase().includes(query);
 }
 
-// Iterative like flattenNodes, but with its own stack: this runs once per node
-// per keystroke, so it stops at the first hit instead of materialising the whole
-// subtree first.
-function subtreeMatches(node: FolderNode, query: string): boolean {
-  const stack: FolderNode[] = [node];
-  while (stack.length) {
-    const n = stack.pop() as FolderNode;
-    if (matches(n, query)) return true;
-    for (const c of n.children) stack.push(c);
+// Marks every node whose subtree contains a hit, in one bottom-up pass: each node
+// is tested exactly once and then only has to look at its own children, which are
+// already decided. Asking the question per node instead — walk this node's
+// subtree, then walk each child's subtree again — re-reads the same nodes once
+// per ancestor, so a deep tree from `huddle index-folder` makes every keystroke
+// quadratic.
+function subtreeHits(tree: readonly FolderNode[], query: string): Set<FolderNode> {
+  const all = flattenNodes(tree); // pre-order, so a node always precedes its children
+  const hits = new Set<FolderNode>();
+  for (let i = all.length - 1; i >= 0; i--) {
+    const node = all[i];
+    if (matches(node, query) || node.children.some((c) => hits.has(c))) hits.add(node);
   }
-  return false;
+  return hits;
 }
 
 /**
@@ -172,6 +175,7 @@ export function folderRows(
 ): FolderRow[] {
   const q = query.trim().toLowerCase();
   const rows: FolderRow[] = [];
+  const hits = q ? subtreeHits(tree, q) : null;
 
   // Iterative for the same reason as flattenNodes: with a filter active every
   // branch holding a hit opens itself, so the walk follows the full depth of the
@@ -184,8 +188,8 @@ export function folderRows(
   push(tree, 0);
   while (stack.length) {
     const { node, depth } = stack.pop() as { node: FolderNode; depth: number };
-    if (q && !subtreeMatches(node, q)) continue;
-    const openByFilter = q !== '' && node.children.some((c) => subtreeMatches(c, q));
+    if (hits && !hits.has(node)) continue;
+    const openByFilter = hits !== null && node.children.some((c) => hits.has(c));
     const open = openByFilter || expanded.has(node.path.toLowerCase());
     rows.push({ node, depth, open });
     if (open) push(node.children, depth + 1);
