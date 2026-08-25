@@ -385,66 +385,90 @@ function rejectUnsupportedYaml(lines: Line[]): void {
   }
 }
 
+// The reader's position in the token stream. Passing it explicitly is what lets
+// the parse steps below live as separate, individually testable functions rather
+// than as closures sharing one `pos` inside parseYaml.
+interface Cursor {
+  lines: Line[];
+  pos: number;
+}
+
+function atIndent(c: Cursor, indent: number): boolean {
+  return c.pos < c.lines.length && c.lines[c.pos].indent === indent;
+}
+
+// Cap the mutual recursion (parseNode ↔ parseMapping/parseSequence) so a deeply
+// nested (malformed or hostile) compose file cannot exhaust the stack (CWE-674).
+function parseNode(c: Cursor, indent: number, depth: number): unknown {
+  if (depth > MAX_YAML_DEPTH) {
+    throw new Error(`YAML nesting exceeds ${MAX_YAML_DEPTH} levels; refusing to parse this compose file.`);
+  }
+  if (c.pos >= c.lines.length || c.lines[c.pos].indent < indent) return null;
+  return isSeqItem(c.lines[c.pos].text) ? parseSequence(c, indent, depth) : parseMapping(c, indent, depth);
+}
+
+function parseMapping(c: Cursor, indent: number, depth: number): Record<string, unknown> {
+  const map: Record<string, unknown> = {};
+  while (atIndent(c, indent) && !isSeqItem(c.lines[c.pos].text)) {
+    const { text } = c.lines[c.pos];
+    const colon = findKeyColon(text);
+    // Not a mapping line where we expected one — stop and let the caller cope.
+    if (colon < 0) break;
+    const key = unquote(text.slice(0, colon).trim());
+    const rest = text.slice(colon + 1).trim();
+    c.pos++;
+    map[key] = parseMappingValue(c, rest, indent, depth);
+  }
+  return map;
+}
+
+/** The value belonging to `key:` — inline, the indented block below it, or none. */
+function parseMappingValue(c: Cursor, rest: string, indent: number, depth: number): unknown {
+  if (rest !== '') return parseScalar(rest);
+  if (c.pos < c.lines.length && c.lines[c.pos].indent > indent) {
+    return parseNode(c, c.lines[c.pos].indent, depth + 1);
+  }
+  return null;
+}
+
+function parseSequence(c: Cursor, indent: number, depth: number): unknown[] {
+  const arr: unknown[] = [];
+  while (atIndent(c, indent) && isSeqItem(c.lines[c.pos].text)) {
+    arr.push(parseSequenceItem(c, indent, depth));
+  }
+  return arr;
+}
+
+function parseSequenceItem(c: Cursor, indent: number, depth: number): unknown {
+  const line = c.lines[c.pos];
+  const afterDash = line.text.replace(/^-\s*/, '');
+
+  // A bare `-`: the item is the indented block on the following lines.
+  if (afterDash === '') {
+    c.pos++;
+    return c.pos < c.lines.length && c.lines[c.pos].indent > indent
+      ? parseNode(c, c.lines[c.pos].indent, depth + 1)
+      : null;
+  }
+
+  // Inline map item: "- key: value". Re-interpret the remainder as a mapping
+  // that starts at a virtual indent past the dash. parseMapping consumes this
+  // same line, so the cursor deliberately does not advance here.
+  if (findKeyColon(afterDash) >= 0) {
+    const virtualIndent = indent + (line.text.length - afterDash.length);
+    c.lines[c.pos] = { indent: virtualIndent, text: afterDash };
+    return parseMapping(c, virtualIndent, depth + 1);
+  }
+
+  c.pos++;
+  return parseScalar(afterDash);
+}
+
 export function parseYaml(input: string): ComposeDoc {
   const lines = tokenize(input);
   rejectUnsupportedYaml(lines);
-  let pos = 0;
-
-  // Cap the mutual recursion (parseNode ↔ parseMapping/parseSequence) so a deeply
-  // nested (malformed or hostile) compose file cannot exhaust the stack (CWE-674).
-  function parseNode(indent: number, depth: number): unknown {
-    if (depth > MAX_YAML_DEPTH) {
-      throw new Error(`YAML nesting exceeds ${MAX_YAML_DEPTH} levels; refusing to parse this compose file.`);
-    }
-    if (pos >= lines.length || lines[pos].indent < indent) return null;
-    return isSeqItem(lines[pos].text) ? parseSequence(indent, depth) : parseMapping(indent, depth);
-  }
-
-  function parseMapping(indent: number, depth: number): Record<string, unknown> {
-    const map: Record<string, unknown> = {};
-    while (pos < lines.length && lines[pos].indent === indent && !isSeqItem(lines[pos].text)) {
-      const { text } = lines[pos];
-      const colon = findKeyColon(text);
-      if (colon < 0) {
-        // Not a mapping line where we expected one — stop and let the caller cope.
-        break;
-      }
-      const key = unquote(text.slice(0, colon).trim());
-      const rest = text.slice(colon + 1).trim();
-      pos++;
-      if (rest !== '') {
-        map[key] = parseScalar(rest);
-      } else if (pos < lines.length && lines[pos].indent > indent) {
-        map[key] = parseNode(lines[pos].indent, depth + 1);
-      } else {
-        map[key] = null;
-      }
-    }
-    return map;
-  }
-
-  function parseSequence(indent: number, depth: number): unknown[] {
-    const arr: unknown[] = [];
-    while (pos < lines.length && lines[pos].indent === indent && isSeqItem(lines[pos].text)) {
-      const afterDash = lines[pos].text.replace(/^-\s*/, '');
-      if (afterDash === '') {
-        pos++;
-        arr.push(pos < lines.length && lines[pos].indent > indent ? parseNode(lines[pos].indent, depth + 1) : null);
-      } else if (findKeyColon(afterDash) >= 0) {
-        // Inline map item: "- key: value". Re-interpret the remainder as a
-        // mapping that starts at a virtual indent past the dash.
-        const virtualIndent = indent + (lines[pos].text.length - afterDash.length);
-        lines[pos] = { indent: virtualIndent, text: afterDash };
-        arr.push(parseMapping(virtualIndent, depth + 1));
-      } else {
-        arr.push(parseScalar(afterDash));
-        pos++;
-      }
-    }
-    return arr;
-  }
-
-  const root = parseNode(lines.length ? lines[0].indent : 0, 0);
+  const cursor: Cursor = { lines, pos: 0 };
+  const root = parseNode(cursor, lines.length ? lines[0].indent : 0, 0);
   return (root && typeof root === 'object' ? root : {}) as ComposeDoc;
 }
 
