@@ -1,5 +1,5 @@
 import { green, dim, yellow } from './utils';
-import { activeExperiment, configPath, readConfig, writeConfig } from './config';
+import { activeExperiment, configPath, readConfig, updateConfig } from './config';
 import { CLI_PACKAGE, cliVersion, switchGlobalCli } from './self-update';
 import { resolveImages } from './images';
 import { runInit, InitOptions } from './init';
@@ -52,7 +52,7 @@ export function ensureCliForChannel(relaunchArgs: string[], opts: { force?: bool
  */
 export async function runExperimentUse(issue: number, initOpts: InitOptions = {}): Promise<void> {
   const previous = readConfig();
-  writeConfig({ ...previous, channel: 'experiment', experiment: issue });
+  updateConfig({ channel: 'experiment', experiment: issue });
   console.log(green(`Experiment ${issue} activated`) + dim(` (${configPath()})`));
 
   const relaunchArgs = ['init', ...(initOpts.runtime ? ['--runtime', initOpts.runtime] : [])];
@@ -62,8 +62,10 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
     ensureCliForChannel(relaunchArgs, { force: true });
   } catch (err) {
     // Activation failed → roll back the config so a subsequent `huddle init`
-    // doesn't stay stuck on an experiment that cannot be installed.
-    writeConfig(previous);
+    // doesn't stay stuck on an experiment that cannot be installed. Only the two
+    // keys this function set are restored; anything the gateway wrote to the
+    // shared file meanwhile (folder mappings, resource defaults) stays put.
+    updateConfig({ channel: previous.channel, experiment: previous.experiment });
     throw err;
   }
   await runInit(initOpts, resolveImages());
@@ -71,15 +73,12 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
 
 /** Puts Huddle back on the stable release. */
 export async function runExperimentReset(): Promise<void> {
-  const config = readConfig();
   if (activeExperiment() === undefined && cliExperiment() === undefined) {
     console.log('No experiment active; Huddle is already running on stable.');
     return;
   }
 
-  delete config.experiment;
-  config.channel = 'stable';
-  writeConfig(config);
+  updateConfig({ channel: 'stable', experiment: undefined });
   console.log(green('Experiment config removed') + dim(` (${configPath()})`));
 
   // If an experimental CLI is still running, this installs the stable version

@@ -135,6 +135,54 @@ describe('folder mappings in config.json', () => {
   });
 });
 
+// De gateway (portal-edits) en de CLI op de host schrijven hetzelfde bestand met
+// een read-modify-write. Zonder slot draait de laatste schrijver de wijziging van
+// de ander terug — de operator verliest een mapping zonder foutmelding.
+describe('gelijktijdige schrijvers', () => {
+  const LOCK = `${CONFIG}.lock`;
+
+  it('laat geen .tmp of .lock achter na een geslaagde schrijfactie', () => {
+    writeConfig({});
+    expect(hc.setResourceDefaults({ defaultMemory: '4g' })).toBe(true);
+    expect(fs.readdirSync(HOME)).toEqual(['config.json']);
+  });
+
+  it('weigert te schrijven zolang een andere schrijver het slot vasthoudt', () => {
+    writeConfig({ defaultMemory: '4g' });
+    fs.writeFileSync(LOCK, ''); // verse lock: een actieve schrijver
+    try {
+      expect(hc.setResourceDefaults({ defaultMemory: '16g' })).toBe(false);
+      // Belangrijk: het bestand is ongemoeid gebleven, niet half geschreven.
+      expect(readConfig().defaultMemory).toBe('4g');
+    } finally {
+      fs.rmSync(LOCK, { force: true });
+    }
+  });
+
+  it('breekt een slot van een schrijver die halverwege is omgevallen', () => {
+    writeConfig({ defaultMemory: '4g' });
+    fs.writeFileSync(LOCK, '');
+    const longAgo = new Date(Date.now() - 60_000);
+    fs.utimesSync(LOCK, longAgo, longAgo);
+
+    expect(hc.setResourceDefaults({ defaultMemory: '16g' })).toBe(true);
+    expect(readConfig().defaultMemory).toBe('16g');
+    expect(fs.existsSync(LOCK)).toBe(false);
+  });
+
+  it('leest binnen het slot, dus een wijziging van de CLI blijft staan', () => {
+    writeConfig({ operatorToken: 'from-cli' });
+    // Wat de portal in handen had toen de operator op opslaan drukte, is niet
+    // wat er nu in het bestand staat: de CLI heeft er ondertussen een sleutel bij
+    // gezet. De merge moet die overleven.
+    writeConfig({ operatorToken: 'from-cli', firewallRulesFolder: 'T:/rules' });
+    expect(hc.setResourceDefaults({ defaultCpus: '2' })).toBe(true);
+    expect(readConfig()).toEqual({
+      operatorToken: 'from-cli', firewallRulesFolder: 'T:/rules', defaultCpus: '2',
+    });
+  });
+});
+
 describe('wire-conversie', () => {
   it('houdt de HTTP-vorm gelijk aan wat de portal al sprak', () => {
     expect(hc.toWireMapping({
