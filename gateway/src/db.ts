@@ -536,8 +536,11 @@ export function readLegacyFolderMappings(): LegacyFolderMappingRow[] {
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'folder_mappings'"
   ).get();
   if (!table) return [];
+  // Columns listed explicitly: the row shape below is what the migration maps,
+  // and a `SELECT *` would silently hand it whatever a future column adds.
   return db.prepare(
-    'SELECT * FROM folder_mappings ORDER BY sort_order ASC, id ASC'
+    `SELECT id, name, host_path, volume_name, container_path, read_only, enabled, sort_order
+       FROM folder_mappings ORDER BY sort_order ASC, id ASC`
   ).all() as LegacyFolderMappingRow[];
 }
 
