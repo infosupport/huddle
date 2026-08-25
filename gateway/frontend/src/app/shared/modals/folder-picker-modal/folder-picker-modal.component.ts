@@ -20,8 +20,8 @@ import {
   standalone: true,
   imports: [IconComponent],
   template: `
-    <div class="modal fp-modal" (click)="onBackdrop($event)">
-      <div class="modal-box fp-box" (click)="$event.stopPropagation()">
+    <div class="modal fp-modal" (mousedown)="onBackdrop($event)">
+      <div class="modal-box fp-box" (mousedown)="$event.stopPropagation()">
         <div class="fp-head">
           <h3>{{ title }}</h3>
           <p>{{ subtitle }}</p>
@@ -328,6 +328,9 @@ export class FolderPickerModalComponent implements OnChanges {
     else this.picked.emit(this.selected[0]);
   }
 
+  // Bound to mousedown, not click: a click fires on the common ancestor of press
+  // and release, so dragging a selection from inside the box and letting go over
+  // the backdrop used to count as "clicked outside" and threw the dialog away.
   onBackdrop(event: MouseEvent): void {
     if ((event.target as HTMLElement).classList.contains('modal')) this.cancel.emit();
   }
