@@ -64,7 +64,7 @@ export function readConfig(): HuddleConfig {
 // change. Same protocol on both sides: exclusive create of a sibling lock file,
 // which works across the bind mount that joins the two.
 const LOCK_PATH = `${CONFIG_PATH}.lock`;
-const LOCK_WAIT_MS = 2000;
+const LOCK_WAIT_MS = 5000; // the gateway holds it for microseconds; this is pure headroom
 const LOCK_STALE_MS = 10_000; // older than this means the holder died mid-write
 
 function sleepSync(ms: number): void {
@@ -102,6 +102,13 @@ let tmpSeq = 0;
  * write-the-whole-document variant: every such write was a read-modify-write of
  * a snapshot that could already be stale.
  *
+ * Throws when the lock cannot be taken. Writing anyway would reintroduce exactly
+ * the clobber the lock exists to prevent — the gateway would have the config open
+ * for a read-modify-write of its own, and one of the two edits would vanish. A
+ * failed command the operator can retry is the better outcome; the callers below
+ * (`huddle init`, `huddle firewall …`, `huddle experiment …`) all abort cleanly
+ * because nothing has been written yet at that point.
+ *
  * The temp file name is unique per write — a shared `.tmp` lets two writers
  * truncate each other's half-written file and rename the wreckage over the real
  * config.
@@ -110,12 +117,11 @@ export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   const lock = acquireLock();
   if (lock === null) {
-    // Best-effort rather than fatal: unlike the gateway (whose caller reports
-    // persisted=false in the portal), this write sits in the middle of a command
-    // the operator is watching, and aborting `huddle init` over a lock file
-    // helps nobody. The re-read below still shrinks the clobber window from the
-    // whole command to the few microseconds around the rename.
-    console.warn(`[!] Could not lock ${CONFIG_PATH}; writing anyway.`);
+    throw new Error(
+      `Could not lock ${CONFIG_PATH} within ${LOCK_WAIT_MS}ms — another Huddle process ` +
+        `is writing it. Nothing was changed; retry the command. If no other process is ` +
+        `running, remove the stale lock: rm ${LOCK_PATH}`,
+    );
   }
   const tmp = `${CONFIG_PATH}.${process.pid}.${tmpSeq++}.tmp`;
   try {
@@ -130,7 +136,7 @@ export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
     try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
     throw err;
   } finally {
-    if (lock !== null) releaseLock(lock);
+    releaseLock(lock);
   }
 }
 

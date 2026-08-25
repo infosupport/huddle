@@ -65,7 +65,12 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
     // doesn't stay stuck on an experiment that cannot be installed. Only the two
     // keys this function set are restored; anything the gateway wrote to the
     // shared file meanwhile (folder mappings, resource defaults) stays put.
-    updateConfig({ channel: previous.channel, experiment: previous.experiment });
+    try {
+      updateConfig({ channel: previous.channel, experiment: previous.experiment });
+    } catch (rollbackErr) {
+      // The rollback is a courtesy; never let it mask why activation failed.
+      console.error(dim(`Could not roll back ${configPath()}: ${(rollbackErr as Error).message}`));
+    }
     throw err;
   }
   await runInit(initOpts, resolveImages());
