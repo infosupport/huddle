@@ -741,8 +741,10 @@ touch /tmp/sudo-audit.log
   done ) &
 
 # Start IDE backend in background; skip if the IDE is not yet in dist/
+# Its output goes to /tmp, never into "$PROJ": a log file dropped in the project
+# root shows up in the user's git status (and in commits) on every start.
 if [ -n "$IDEA_DIR" ]; then
-nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
+nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > /tmp/huddle-ide-backend.log 2>&1 &
 fi
 
 `;
