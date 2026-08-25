@@ -34,7 +34,7 @@ const ROW = {
 };
 
 beforeEach(() => {
-  fs.rmSync(CONFIG, { force: true });
+  fs.rmSync(CONFIG, { recursive: true, force: true });
   legacyRows = [];
   legacySettings = {};
 });
@@ -46,7 +46,23 @@ afterAll(() => {
 describe('migrateSettingsToHostConfig', () => {
   it('slaat over zolang de config niet gemount is (volgende start opnieuw)', () => {
     legacyRows = [ROW];
-    expect(migrateSettingsToHostConfig()).toEqual({ skipped: true, mappings: 0, resources: [] });
+    expect(migrateSettingsToHostConfig())
+      .toEqual({ skipped: true, reason: 'not-mounted', mappings: 0, resources: [] });
+  });
+
+  // Beide skip-redenen krijgen hun eigen startup-melding: "niet gemount" is
+  // normaal (de operator moet `huddle restart` doen), een mislukte schrijfactie
+  // op een gemounte config is dat niet.
+  it('meldt een mislukte schrijfactie als eigen reden, niet als "niet gemount"', () => {
+    legacyRows = [ROW];
+    // config.json vervangen door een niet-lege map: hostConfigAvailable() ziet
+    // het pad nog wel bestaan, maar de rename erover faalt. Onafhankelijk van
+    // de uid waaronder de test loopt — ook root kan dit niet.
+    fs.rmSync(CONFIG, { force: true });
+    fs.mkdirSync(CONFIG);
+    fs.writeFileSync(path.join(CONFIG, 'blocker'), '');
+    expect(migrateSettingsToHostConfig())
+      .toEqual({ skipped: true, reason: 'write-failed', mappings: 0, resources: [] });
   });
 
   it('neemt legacy-rijen en -limieten over en behoudt de id', () => {
