@@ -170,6 +170,28 @@ describe('gelijktijdige schrijvers', () => {
     expect(fs.existsSync(LOCK)).toBe(false);
   });
 
+  it('zet zijn eigen identiteit in het slot i.p.v. een leeg bestand', () => {
+    writeConfig({});
+    let held = '';
+    expect(hc.mutateHostConfig(() => { held = fs.readFileSync(LOCK, 'utf8'); return {}; })).toBe(true);
+    expect(held).toMatch(new RegExp(`^${process.pid}:[0-9a-f-]{36}$`));
+  });
+
+  it('laat een slot staan dat een andere schrijver inmiddels heeft overgenomen', () => {
+    writeConfig({ operatorToken: 'x' });
+    // Deze schrijver doet er binnen het slot te lang over; een contender breekt
+    // het als verlopen en zet zijn eigen slot neer. Bij het loslaten mag dat
+    // slot dus niet weg — het is nu van iemand anders, en het weghalen zou een
+    // derde schrijver naast de tweede binnenlaten.
+    expect(hc.mutateHostConfig(() => {
+      fs.writeFileSync(LOCK, 'van-een-andere-schrijver');
+      return { defaultCpus: '2' };
+    })).toBe(true);
+    expect(fs.existsSync(LOCK)).toBe(true);
+    expect(fs.readFileSync(LOCK, 'utf8')).toBe('van-een-andere-schrijver');
+    fs.rmSync(LOCK, { force: true });
+  });
+
   it('geeft de mutator het bestand zoals het bij het pakken van het slot is', () => {
     writeConfig({ operatorToken: 'oud' });
     // Wat de aanroeper eerder las is niet wat er nu staat: een andere schrijver

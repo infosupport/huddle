@@ -13,6 +13,7 @@
 //    remount: the gateway reads them out of this file whenever it creates a
 //    devcontainer, so an edit applies to the next container immediately.
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 
 const HOME_DIR = process.env.HUDDLE_HOME_DIR || '/huddle-home';
@@ -94,26 +95,73 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function acquireLock(): number | null {
+// The lock file carries the identity of whoever holds it, not just its existence.
+// Age alone is not enough to decide it may be removed: a writer that pauses past
+// LOCK_STALE_MS gets its lock broken and taken over, and would then delete the
+// *new* holder's lock on the way out — letting a third writer in alongside the
+// second, which is the clobber this whole file is trying to prevent. So both
+// breaking and releasing check the token first. A pid would not do: the gateway
+// runs in a container and the CLI on the host, sharing this file over a bind
+// mount, so their pid spaces are unrelated.
+function lockToken(): string {
+  return `${process.pid}:${randomUUID()}`;
+}
+
+function readLockToken(): string | null {
+  try {
+    return fs.readFileSync(LOCK_FILE, 'utf8');
+  } catch {
+    return null; // gone between the stat and the read
+  }
+}
+
+// Remove a lock left behind by a writer that was killed mid-update — otherwise one
+// crash makes the config permanently unwritable — but only that exact lock. The
+// token and mtime are re-read right before the unlink: if either moved, another
+// contender already broke it and this is their live lock, so leave it alone.
+function breakStaleLock(): void {
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(LOCK_FILE).mtimeMs;
+  } catch {
+    return; // already gone
+  }
+  if (Date.now() - mtimeMs <= LOCK_STALE_MS) return;
+  const token = readLockToken();
+  if (token === null) return;
+  try {
+    if (readLockToken() !== token) return;
+    if (fs.statSync(LOCK_FILE).mtimeMs !== mtimeMs) return;
+    fs.unlinkSync(LOCK_FILE);
+  } catch { /* another process got there first — just retry */ }
+}
+
+// Returns the token identifying this holder, to be handed back to releaseLock.
+function acquireLock(): string | null {
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
+    const token = lockToken();
     try {
-      return fs.openSync(LOCK_FILE, 'wx');
+      const fd = fs.openSync(LOCK_FILE, 'wx');
+      try {
+        fs.writeSync(fd, token);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return token;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null; // dir gone/read-only
-      try {
-        // Break a lock left behind by a writer that was killed mid-update,
-        // otherwise one crash makes the config permanently unwritable.
-        if (Date.now() - fs.statSync(LOCK_FILE).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(LOCK_FILE);
-      } catch { /* another process got there first — just retry */ }
+      breakStaleLock();
       if (Date.now() >= deadline) return null;
       sleepSync(25);
     }
   }
 }
 
-function releaseLock(fd: number): void {
-  try { fs.closeSync(fd); } catch { /* already closed */ }
+function releaseLock(token: string): void {
+  // Never unlink a lock this writer no longer owns: if it was broken as stale and
+  // taken over, the file now belongs to the writer that is running right now.
+  if (readLockToken() !== token) return;
   try { fs.unlinkSync(LOCK_FILE); } catch { /* already gone */ }
 }
 
@@ -134,8 +182,8 @@ export function mutateHostConfig(
   if (!hostConfigAvailable()) {
     return false; // config not mounted; run `huddle restart` from the host
   }
-  const lock = acquireLock();
-  if (lock === null) return false; // another writer holds it; caller sees persisted=false
+  const token = acquireLock();
+  if (token === null) return false; // another writer holds it; caller sees persisted=false
   const tmp = `${CONFIG_FILE}.${process.pid}.${tmpSeq++}.tmp`;
   try {
     // Read INSIDE the lock: a snapshot taken before it could already be stale.
@@ -155,7 +203,7 @@ export function mutateHostConfig(
     try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
     return false; // write failed; caller sees persisted=false
   } finally {
-    releaseLock(lock);
+    releaseLock(token);
   }
 }
 
