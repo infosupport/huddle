@@ -3,7 +3,7 @@ import { IconComponent } from '../../components/icon/icon.component';
 import { IndexedFolder } from '../../../core/services/api.service';
 import {
   FolderNode, FolderRow, ancestorPaths, breadcrumbs, buildFolderTree, canonicalPath, findNode,
-  folderRows, prettyPath,
+  flattenNodes, folderRows, prettyPath,
 } from '../../components/folder-select/folder-tree.util';
 
 // The folder dialog Huddle cannot ask the operating system for.
@@ -347,13 +347,9 @@ export class FolderPickerModalComponent implements OnChanges {
 
     const children = at ? at.children : this.tree;
     this.tiles = this.query
-      ? this.descendants(children).filter((n) => n.name.toLowerCase().includes(this.query.trim().toLowerCase()))
+      ? flattenNodes(children).filter((n) => n.name.toLowerCase().includes(this.query.trim().toLowerCase()))
       : children;
 
     this.crumbs = breadcrumbs(this.cwd);
-  }
-
-  private descendants(nodes: readonly FolderNode[]): FolderNode[] {
-    return nodes.flatMap((n) => [n, ...this.descendants(n.children)]);
   }
 }

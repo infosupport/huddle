@@ -5,7 +5,7 @@ import { ApiService, HuddleSettings, FolderMapping, IndexedFolder } from '../../
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { FolderSelectComponent } from '../../shared/components/folder-select/folder-select.component';
 import {
-  FolderNode, breadcrumbs, buildFolderTree, findNode, folderRows, prettyPath,
+  FolderNode, breadcrumbs, buildFolderTree, findNode, flattenNodes, folderRows, prettyPath,
 } from '../../shared/components/folder-select/folder-tree.util';
 
 @Component({
@@ -519,7 +519,7 @@ export class SettingsComponent implements OnInit {
     // Walk the whole tree, not the visible rows: collapsing a branch or typing
     // in the search box after selecting must not quietly spare those folders.
     const selection = this.indexSelection();
-    const selected = this.allNodes(this.indexTree())
+    const selected = flattenNodes(this.indexTree())
       .map((n) => n.path)
       .filter((p) => selection.has(p.toLowerCase()));
     // Removing a folder takes its subtree with it, so a child of another
@@ -541,10 +541,6 @@ export class SettingsComponent implements OnInit {
       },
       error: (e) => { this.removingIndexed.set(false); this.error.set(e.message); },
     });
-  }
-
-  private allNodes(nodes: readonly FolderNode[]): FolderNode[] {
-    return nodes.flatMap((n) => [n, ...this.allNodes(n.children)]);
   }
 
   /** 'T:/projects' -> 't:/projects/', and 'T:/' -> 't:/' — roots already end in one. */

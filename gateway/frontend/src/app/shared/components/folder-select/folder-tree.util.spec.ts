@@ -1,4 +1,6 @@
-import { ancestorPaths, buildFolderTree, folderRows, splitRoot } from './folder-tree.util';
+import {
+  FolderNode, ancestorPaths, buildFolderTree, findNode, flattenNodes, folderRows, splitRoot,
+} from './folder-tree.util';
 
 // The picker rebuilds the folder hierarchy from flat paths, so this util decides
 // what the tree in the portal looks like — including for Windows paths, which is
@@ -79,5 +81,48 @@ describe('ancestorPaths', () => {
 
   it('heeft voor een root niets open te klappen', () => {
     expect(ancestorPaths('T:/')).toEqual(['T:/']);
+  });
+});
+
+// De diepte van deze boom is de segmentdiepte van een geïndexeerd hostpad, en
+// niets aan de schrijfkant begrenst die. Een recursieve wandeling liet daarmee
+// een pad bepalen hoe diep onze call stack gaat (CWE-674). Deze boom wordt
+// rechtstreeks opgebouwd i.p.v. via buildFolderTree: die bewaart per knoop het
+// volledige pad, en dat is op deze diepte kwadratisch in geheugen.
+describe('diepe bomen', () => {
+  const DEEP = 50_000;
+
+  function deepTree(depth: number): FolderNode[] {
+    const root: FolderNode = { path: 'T:/', name: 'T:', indexed: false, children: [] };
+    let node = root;
+    for (let i = 0; i < depth; i++) {
+      const child: FolderNode = { path: `n${i}`, name: `n${i}`, indexed: i === depth - 1, children: [] };
+      node.children.push(child);
+      node = child;
+    }
+    return [root];
+  }
+
+  it('maakt 50.000 niveaus plat en vindt de diepste knoop', () => {
+    const tree = deepTree(DEEP);
+    expect(flattenNodes(tree).length).toBe(DEEP + 1); // + de root
+    expect(findNode(tree, `n${DEEP - 1}`)?.indexed).toBe(true);
+  });
+
+  it('maakt rijen van 50.000 open niveaus', () => {
+    const tree = deepTree(DEEP);
+    const expanded = new Set(flattenNodes(tree).map((n) => n.path.toLowerCase()));
+    const rows = folderRows(tree, expanded);
+    expect(rows.length).toBe(DEEP + 1);
+    expect(rows[rows.length - 1].depth).toBe(DEEP);
+  });
+
+  it('filtert een diepe boom zonder de stack op te blazen', () => {
+    // Zonder open takken raakt het filter toch de volle diepte: een tak die een
+    // hit bevat opent zichzelf. Ondieper gehouden omdat dit filter per knoop de
+    // subboom naloopt en dus kwadratisch is in tijd.
+    const tree = deepTree(5_000);
+    const rows = folderRows(tree, new Set<string>(), 'n4999');
+    expect(rows.length).toBe(5_001);
   });
 });

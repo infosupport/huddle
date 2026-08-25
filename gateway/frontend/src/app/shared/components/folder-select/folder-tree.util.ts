@@ -44,6 +44,23 @@ function join(parent: string, segment: string): string {
   return parent.endsWith('/') ? `${parent}${segment}` : `${parent}/${segment}`;
 }
 
+/**
+ * Every node in the tree, parents before children (pre-order). Iterative on
+ * purpose: the depth of this tree is the segment depth of an indexed host path,
+ * which nothing on the write side bounds, so a recursive walk would put a
+ * hostile or merely absurd path in charge of our call stack (CWE-674).
+ */
+export function flattenNodes(nodes: readonly FolderNode[]): FolderNode[] {
+  const out: FolderNode[] = [];
+  const stack: FolderNode[] = [...nodes].reverse();
+  while (stack.length) {
+    const node = stack.pop() as FolderNode;
+    out.push(node);
+    for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+  }
+  return out;
+}
+
 /** All ancestors of a path, root first — used to expand the tree to a value. */
 export function ancestorPaths(path: string): string[] {
   const { root, rest } = splitRoot(path);
@@ -97,24 +114,18 @@ export function buildFolderTree(paths: readonly string[]): FolderNode[] {
     node.indexed = true;
   }
 
-  const sort = (nodes: FolderNode[]): FolderNode[] => {
-    nodes.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-    for (const n of nodes) sort(n.children);
-    return nodes;
-  };
-  return sort([...roots.values()]);
+  const byName = (a: FolderNode, b: FolderNode): number =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  const tree = [...roots.values()];
+  for (const node of flattenNodes(tree)) node.children.sort(byName);
+  return tree.sort(byName);
 }
 
 /** The node for an exact path, or null when the index no longer holds it. */
 export function findNode(tree: readonly FolderNode[], path: string): FolderNode | null {
   if (!path) return null;
   const wanted = path.toLowerCase();
-  for (const node of tree) {
-    if (node.path.toLowerCase() === wanted) return node;
-    const hit = findNode(node.children, path);
-    if (hit) return hit;
-  }
-  return null;
+  return flattenNodes(tree).find((n) => n.path.toLowerCase() === wanted) ?? null;
 }
 
 /** Breadcrumb trail for a path: root first, the folder itself last. */
@@ -134,8 +145,17 @@ function matches(node: FolderNode, query: string): boolean {
   return node.name.toLowerCase().includes(query) || node.path.toLowerCase().includes(query);
 }
 
+// Iterative like flattenNodes, but with its own stack: this runs once per node
+// per keystroke, so it stops at the first hit instead of materialising the whole
+// subtree first.
 function subtreeMatches(node: FolderNode, query: string): boolean {
-  return matches(node, query) || node.children.some((c) => subtreeMatches(c, query));
+  const stack: FolderNode[] = [node];
+  while (stack.length) {
+    const n = stack.pop() as FolderNode;
+    if (matches(n, query)) return true;
+    for (const c of n.children) stack.push(c);
+  }
+  return false;
 }
 
 /**
@@ -153,17 +173,22 @@ export function folderRows(
   const q = query.trim().toLowerCase();
   const rows: FolderRow[] = [];
 
-  const walk = (nodes: readonly FolderNode[], depth: number): void => {
-    for (const node of nodes) {
-      const hit = q ? subtreeMatches(node, q) : true;
-      if (!hit) continue;
-      const openByFilter = q !== '' && node.children.some((c) => subtreeMatches(c, q));
-      const open = openByFilter || expanded.has(node.path.toLowerCase());
-      rows.push({ node, depth, open });
-      if (open) walk(node.children, depth + 1);
-    }
+  // Iterative for the same reason as flattenNodes: with a filter active every
+  // branch holding a hit opens itself, so the walk follows the full depth of the
+  // indexed paths. Children are pushed in reverse so they pop in tree order.
+  const stack: { node: FolderNode; depth: number }[] = [];
+  const push = (nodes: readonly FolderNode[], depth: number): void => {
+    for (let i = nodes.length - 1; i >= 0; i--) stack.push({ node: nodes[i], depth });
   };
 
-  walk(tree, 0);
+  push(tree, 0);
+  while (stack.length) {
+    const { node, depth } = stack.pop() as { node: FolderNode; depth: number };
+    if (q && !subtreeMatches(node, q)) continue;
+    const openByFilter = q !== '' && node.children.some((c) => subtreeMatches(c, q));
+    const open = openByFilter || expanded.has(node.path.toLowerCase());
+    rows.push({ node, depth, open });
+    if (open) push(node.children, depth + 1);
+  }
   return rows;
 }
