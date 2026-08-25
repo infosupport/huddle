@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvArgs } from './images';
-import { readConfig, writeConfig, CONFIG_DIR } from './config';
+import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
@@ -146,7 +146,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     (cfg.operatorToken && cfg.operatorToken.trim()) ||
     crypto.randomBytes(32).toString('base64url');
   if (cfg.operatorToken !== operatorToken) {
-    writeConfig({ ...cfg, operatorToken });
+    updateConfig({ operatorToken });
   }
   // The container is created on the engine's default network first (with -p),
   // then joins devcontainer-net (--internal) afterwards: Docker skips the host

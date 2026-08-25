@@ -55,9 +55,83 @@ export function readConfig(): HuddleConfig {
   }
 }
 
-export function writeConfig(config: HuddleConfig): void {
+// ── Cross-process locking ─────────────────────────────────────────────────────
+//
+// The gateway edits this same file from inside its container (the portal writes
+// the folder mappings and resource defaults there, see gateway/src/host-config.ts)
+// while the CLI edits it from the host. Both do a read-modify-write of the whole
+// document, so without a lock whoever writes last silently reverts the other's
+// change. Same protocol on both sides: exclusive create of a sibling lock file,
+// which works across the bind mount that joins the two.
+const LOCK_PATH = `${CONFIG_PATH}.lock`;
+const LOCK_WAIT_MS = 2000;
+const LOCK_STALE_MS = 10_000; // older than this means the holder died mid-write
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireLock(): number | null {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      return fs.openSync(LOCK_PATH, 'wx');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
+      try {
+        // Break a lock left behind by a writer that was killed mid-update.
+        if (Date.now() - fs.statSync(LOCK_PATH).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(LOCK_PATH);
+      } catch { /* another process got there first — just retry */ }
+      if (Date.now() >= deadline) return null;
+      sleepSync(25);
+    }
+  }
+}
+
+function releaseLock(fd: number): void {
+  try { fs.closeSync(fd); } catch { /* already closed */ }
+  try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
+}
+
+let tmpSeq = 0;
+
+/**
+ * The only writer. Merges a patch into the config file, re-reading it inside the
+ * lock so a concurrent gateway write is preserved instead of reverted; a key set
+ * to `undefined` is removed from the file. There is deliberately no
+ * write-the-whole-document variant: every such write was a read-modify-write of
+ * a snapshot that could already be stale.
+ *
+ * The temp file name is unique per write — a shared `.tmp` lets two writers
+ * truncate each other's half-written file and rename the wreckage over the real
+ * config.
+ */
+export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
+  const lock = acquireLock();
+  if (lock === null) {
+    // Best-effort rather than fatal: unlike the gateway (whose caller reports
+    // persisted=false in the portal), this write sits in the middle of a command
+    // the operator is watching, and aborting `huddle init` over a lock file
+    // helps nobody. The re-read below still shrinks the clobber window from the
+    // whole command to the few microseconds around the rename.
+    console.warn(`[!] Could not lock ${CONFIG_PATH}; writing anyway.`);
+  }
+  const tmp = `${CONFIG_PATH}.${process.pid}.${tmpSeq++}.tmp`;
+  try {
+    const next = { ...readConfig(), ...patch } as Record<string, unknown>;
+    for (const [k, v] of Object.entries(next)) {
+      if (v === undefined) delete next[k];
+    }
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+    fs.renameSync(tmp, CONFIG_PATH);
+    return next as HuddleConfig;
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+    throw err;
+  } finally {
+    if (lock !== null) releaseLock(lock);
+  }
 }
 
 /** Operator-token voor API-auth: env wint, anders uit de config. */

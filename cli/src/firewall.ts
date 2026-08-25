@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { get, post, del } from './api';
-import { readConfig, writeConfig } from './config';
+import { readConfig, updateConfig } from './config';
 import { bold, dim, green, red, cyan, promptKey, formatTime, printTable } from './utils';
 
 interface Rule {
@@ -355,7 +355,7 @@ export async function runFirewallFolder(opts: FirewallFolderOptions): Promise<vo
     if (!path) throw new Error('Usage: huddle firewall folder set <path>');
     // Config-only: the gateway reads the folder at the fixed mount point the CLI
     // binds it to; there is no DB setting. Persist here and mount on restart.
-    writeConfig({ ...readConfig(), firewallRulesFolder: path });
+    updateConfig({ firewallRulesFolder: path });
     console.log(green(`[OK] Firewall rules folder set to ${cyan(path)}`));
     console.log(dim('  Run `huddle restart` to mount it into the gateway; it is then read on start & reload.'));
     return;

@@ -71,6 +71,56 @@ export function readHostConfig(): HostConfig {
   }
 }
 
+// ── Cross-process locking ─────────────────────────────────────────────────────
+//
+// Two processes edit this one file: the gateway (every portal edit below) and
+// the CLI on the host (`huddle init`, `firewall folder set`, `experiment use`),
+// and both do a read-modify-write of the whole document. Without a lock the
+// slower writer's snapshot is already stale when it lands, so it silently
+// reverts the other one's change — an operator loses a folder mapping or a
+// resource default with no error anywhere and a stale mount on the next start.
+//
+// The lock is an exclusive create (`wx`) of a sibling file, which is what makes
+// it work across the bind mount that joins the container to the host. The CLI
+// takes the same lock in cli/src/config.ts; keep the two in step.
+const LOCK_FILE = `${CONFIG_FILE}.lock`;
+const LOCK_WAIT_MS = 2000; // bounded: an API request must not hang on a lock
+const LOCK_STALE_MS = 10_000; // older than this means the holder died mid-write
+
+// Synchronous sleep. updateHostConfig is sync all the way up to its callers, and
+// making it async would ripple through the API layer for a wait that is only
+// ever a few milliseconds.
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireLock(): number | null {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      return fs.openSync(LOCK_FILE, 'wx');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null; // dir gone/read-only
+      try {
+        // Break a lock left behind by a writer that was killed mid-update,
+        // otherwise one crash makes the config permanently unwritable.
+        if (Date.now() - fs.statSync(LOCK_FILE).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(LOCK_FILE);
+      } catch { /* another process got there first — just retry */ }
+      if (Date.now() >= deadline) return null;
+      sleepSync(25);
+    }
+  }
+}
+
+function releaseLock(fd: number): void {
+  try { fs.closeSync(fd); } catch { /* already closed */ }
+  try { fs.unlinkSync(LOCK_FILE); } catch { /* already gone */ }
+}
+
+// Unique per write: two writers sharing one `.tmp` name would truncate each
+// other's half-written file and rename the wreckage over the real config.
+let tmpSeq = 0;
+
 // Merge-write a patch, preserving everything else in the file (operatorToken,
 // channel, …). A key set to `undefined` is dropped from the file rather than
 // written as null. Returns false (not mounted, or write failed) so the caller can
@@ -80,19 +130,25 @@ export function updateHostConfig(patch: Partial<HostConfig>): boolean {
   if (!hostConfigAvailable()) {
     return false; // config not mounted; run `huddle restart` from the host
   }
+  const lock = acquireLock();
+  if (lock === null) return false; // another writer holds it; caller sees persisted=false
+  const tmp = `${CONFIG_FILE}.${process.pid}.${tmpSeq++}.tmp`;
   try {
+    // Read INSIDE the lock: a snapshot taken before it could already be stale.
     const next = { ...readHostConfig(), ...patch };
     for (const [k, v] of Object.entries(next)) {
       if (v === undefined) delete next[k];
     }
     // Write-then-rename so a crash mid-write cannot leave a truncated config
     // behind — the CLI reads this same file to start Huddle.
-    const tmp = `${CONFIG_FILE}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
     fs.renameSync(tmp, CONFIG_FILE);
     return true;
   } catch {
+    try { fs.unlinkSync(tmp); } catch { /* never created, or already renamed */ }
     return false; // write failed; caller sees persisted=false
+  } finally {
+    releaseLock(lock);
   }
 }
 
