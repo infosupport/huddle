@@ -5,15 +5,27 @@ import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
 import { URL } from 'url';
-import { checkRule, checkFleetRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
-import { knownSandboxNames } from './sandbox/registry';
-import { resolveContainerByIp } from './docker';
+import { canonicalizeHost, normalizePathname } from './rules';
 import { SBX_PROXY_PORT } from './sbx';
-import { logAudit, updateAuditResponse } from './db';
+import { controlPlane } from './control/plane';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from './token-exchange';
 import { logIdentityProbe } from './identity-probe';
 import { runtimeEnv } from './runtime-env';
+
+// Everything the proxy needs from the control plane. Destructured from the
+// `controlPlane` facade rather than imported from `rules`/`db`/`docker`
+// directly: these are the wrapper functions, which resolve the active binding
+// on every call, so a swapped binding takes effect without rebinding here.
+const {
+  checkRule,
+  checkFleetRule,
+  isPathMode,
+  knownSandboxNames,
+  resolveContainerByIp,
+  logAudit,
+  updateAuditResponse,
+} = controlPlane;
 
 const PROXY_PORT = runtimeEnv.proxyPort;
 
