@@ -42,7 +42,8 @@ huddle --ide vscode \
   --workspace-root /workspaces --name corpa-dev
 ```
 
-Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
+Default API URL: `http://localhost:24842` — Huddle Node, on the host. Override it with
+`--url` or `HUDDLE_URL`.
 
 ## Making host folders selectable in the portal
 

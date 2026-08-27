@@ -28,13 +28,13 @@ Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a s
 npm install -g @infosupport/huddle-cli
 
 # 2 — start Huddle (pulls the image, auto-detects Docker/Podman)
-huddle init            # portal → http://localhost:3000
+huddle init            # portal → http://localhost:24842
 
 # 3 — launch a devcontainer from your project directory
 huddle                 # IntelliJ (default) · --ide vscode · --ide rider
 ```
 
-Open **http://localhost:3000** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
+Open **http://localhost:24842** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
 
 ---
 
@@ -54,24 +54,38 @@ Huddle addresses two major risks of modern, AI-assisted development:
 
 ## Architecture
 
+Huddle runs as two processes: **Huddle Node** on your machine, and
+**huddle-gateway** in a container. The split is a control plane / data plane
+split — the half a devcontainer can reach is the half that can do the least.
+
 ```
 Devcontainer
-  └─ HTTP/HTTPS traffic → Huddle proxy (port 80)
-       └─ rules engine → allow / deny / request
+  └─ HTTP/HTTPS traffic → huddle-gateway proxy (port 80, in Docker)
+       └─ locally held policy → allow / deny / request
   └─ Docker socket → /tmp/dc-sockets/<name>/docker.sock (per-container proxy)
        └─ label isolation + time-limited grant check
 
+huddle-gateway ──▶ Huddle Node control channel (port 24843, host)
+       policy + container feeds in, decisions and audit rows out
+
 Browser
-  └─ Angular SPA (port 3000) + WebSocket live push
+  └─ Angular SPA (port 24842, host) + WebSocket live push
        └─ Fastify REST API (/api/...)
 ```
 
-Two servers run in the same process:
+| Process | Port | Purpose |
+|---------|------|---------|
+| huddle-gateway (Docker) | 80 | Forward/intercept all outbound container traffic |
+| huddle-gateway (Docker) | 32768 | Egress for Docker Sandboxes (sbx), on host loopback |
+| Huddle Node (host) | 24842 | REST API, Angular frontend, WebSocket push — loopback only |
+| Huddle Node (host) | 24843 | Control channel the gateway follows — its own token |
 
-| Server | Port | Purpose |
-|--------|------|---------|
-| HTTP proxy | 80 | Forward/intercept all outbound container traffic |
-| API + UI | 3000 | REST API, Angular frontend, WebSocket push |
+The gateway has no database, no Docker socket, no API and no portal. It holds
+the firewall policy in memory, decides locally (so Node is never in the hot path
+of a request), and reports what it decided afterwards. If Node is down the
+gateway keeps enforcing the last policy it received; before the first policy
+arrives it denies everything. See
+[docs/ADR-huddle-node-split.md](docs/ADR-huddle-node-split.md).
 
 <p align="center">
   <picture>
@@ -141,7 +155,7 @@ This closes security-review finding **#10** (plaintext admin credentials retriev
 - Filterable by container, domain, and action prefix
 
 ### Live UI
-- Angular 21 SPA on port 3000
+- Angular 21 SPA on port 24842
 - WebSocket connection pushes a `reload` event on every state change
 - Unified icon system (`app-icon`) backed by a central SVG registry
 - Pie-action menus in the firewall and container views (approve / snooze / reject)
@@ -181,7 +195,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pulls the latest Huddle image and starts the container. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
+`huddle init` starts Huddle Node on your machine, then pulls the latest Huddle image and starts the gateway container pointed at it. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:24842`.
 
 After that, you start devcontainers directly from a project directory:
 
@@ -228,7 +242,7 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 ## Starting containers
 
-You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
+You can start devcontainers via the CLI or via the web UI at `http://localhost:24842`.
 
 > **Selecting host folders in the web UI.** Huddle runs in a container, so the portal cannot
 > open a folder dialog on your host — a host path had to be typed from memory. Run
@@ -550,7 +564,7 @@ All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to conn
 │   ├── src/
 │   │   ├── index.ts             # Init DB, start proxy + API, restore socket proxies
 │   │   ├── proxy.ts             # HTTP/HTTPS proxy (port 80), rule enforcement, audit
-│   │   ├── api.ts               # Fastify REST API + WebSocket push (port 3000)
+│   │   ├── api.ts               # Fastify REST API + WebSocket push (Huddle Node, port 24842)
 │   │   ├── docker.ts            # Docker API helpers, container lifecycle
 │   │   ├── socket-proxy.ts      # Per-container Docker socket proxy with label policy
 │   │   ├── rules.ts             # Rule lookup with per-container + global fallback
@@ -590,7 +604,7 @@ npm run build          # builds the gateway (API + frontend)
 npm run cli:build      # builds the CLI
 npm run cli:typecheck  # type-checks the CLI
 
-npm start              # runs the gateway locally (UI at http://localhost:3000)
+npm start              # runs Huddle Node locally (UI at http://localhost:24842)
 ```
 
 Running tests:
@@ -640,8 +654,9 @@ There are two ways an `experiment-<nr>` build gets published:
 | `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)). |
 | `huddle init` finds no runtime | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`. |
 | Rancher Desktop not detected | Use **dockerd (moby)** mode (not `containerd`), activate the context with `docker context use rancher-desktop`, verify `docker info` works, then re-run `huddle init --runtime docker`. |
-| Web UI not reachable at `http://localhost:3000` | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host. |
+| Web UI not reachable at `http://localhost:24842` | The portal is Huddle Node, a host process — not the container. Check `~/.huddle/node.log` and re-run `huddle init`. It binds `127.0.0.1` by design: reach it locally, not from another host. |
 | Devcontainer can't reach a domain | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`. |
+| **Every** domain is blocked, including allowed ones | The gateway cannot reach Huddle Node, so it has no policy — and no policy means deny, never allow. `docker logs huddle` says so. `huddle init` prints the address it chose; if it warned that it could not work out how the container reaches your host, name it yourself: `HUDDLE_CONTROL_HOST=<address> huddle init`. |
 | JetBrains Gateway doesn't see the container right away | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready. |
 | `docker` inside the devcontainer gives *permission denied* | Docker access runs through a time-bound grant. Grant access via **Docker Access** in the UI (or `PUT /api/authz/grants/:container`). |
 | Port 80 already in use | Another proxy/web server is using port 80. Stop that service or adjust the port mapping when starting the Huddle container. |
