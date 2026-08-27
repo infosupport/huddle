@@ -8,6 +8,7 @@
 // Everything here is best-effort: if sbx is not reachable, calls throw
 // and are swallowed quietly so normal operation is never blocked.
 
+import type { Statement } from 'better-sqlite3';
 import { db } from '../db';
 import { notifyStateChanged } from '../events';
 import { reconcile } from './reconcile';
@@ -54,9 +55,21 @@ async function runReconcile(): Promise<void> {
   }
 }
 
-const insertRequested = db.prepare<[string, string | null]>(
-  `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES (?, ?, 'requested')`
-);
+// Prepared on first use, not at import. better-sqlite3 validates SQL against the
+// live schema in .prepare(), and importing this module is what boot-node.ts does
+// BEFORE it calls initDb() — imports are hoisted, so a top-level prepare here
+// throws `no such table: rules` on a database that has never been initialised.
+// Invisible while the database lived in a long-lived container volume; the first
+// boot of Huddle Node on a fresh host hits it every time.
+let _insertRequested: Statement<[string, string | null]> | null = null;
+function insertRequested(): Statement<[string, string | null]> {
+  if (!_insertRequested) {
+    _insertRequested = db.prepare<[string, string | null]>(
+      `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES (?, ?, 'requested')`
+    );
+  }
+  return _insertRequested;
+}
 
 /**
  * Pull blocked destinations from each sandbox's policy log and file them as
@@ -98,7 +111,7 @@ export async function ingestPending(): Promise<number> {
     // side is handled by the fleet-merge in checkFleetRule.)
     if (!d.sandbox || !isValidSandboxName(d.sandbox)) continue;
     if (alreadyDecided(d.domain, d.sandbox)) continue; // already allowed/denied → not pending
-    const info = insertRequested.run(d.domain, d.sandbox);
+    const info = insertRequested().run(d.domain, d.sandbox);
     added += info.changes;
   }
   if (added > 0) {
