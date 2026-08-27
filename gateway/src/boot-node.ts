@@ -15,7 +15,8 @@ import { initDb } from './db';
 import { runSettingsMigration } from './settings-migration';
 import { createApiServer } from './api';
 import { createControlServer } from './control/server';
-import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
+import { listDevcontainers, inspectContainer, execInContainer } from './docker';
+import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
 import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
@@ -39,29 +40,37 @@ async function initContainerProxies(): Promise<void> {
   }
 }
 
-async function initContainerNetworks(): Promise<void> {
+// How long to wait for the gateway container before wiring devcontainers to it.
+//
+// `huddle init` starts Node and only THEN creates the gateway, so at this point
+// in Node's boot the container it has to attach usually does not exist yet.
+// Wiring anyway attaches nothing and refreshes iptables against an address that
+// is not there — silently, because the refresh script exits 0 when `huddle` does
+// not resolve. So wait for it. When Huddle Node is run on its own (`huddle
+// node`) no gateway is coming, and after this it gives up and says so.
+const GATEWAY_WAIT_MS = 90_000;
+const GATEWAY_POLL_MS = 1_000;
+
+async function gatewayContainerExists(): Promise<boolean> {
   try {
-    const containers = await listDevcontainers();
-    for (const c of containers) {
-      const netName = `dc-net-${c.name}`;
-      if (await networkExists(netName)) {
-        try { await connectNetwork(netName, 'huddle'); } catch { /* already connected is fine */ }
-      }
-    }
-  } catch (err: any) {
-    console.error('[network] init failed:', err.message);
+    await inspectContainer('huddle');
+    return true;
+  } catch {
+    return false;
   }
 }
 
-async function initContainerIptables(): Promise<void> {
-  try {
-    const containers = await listDevcontainers();
-    for (const c of containers) {
-      await refreshContainerIptables(c.id, c.name);
+async function wireGatewayWhenItAppears(): Promise<void> {
+  const deadline = Date.now() + GATEWAY_WAIT_MS;
+  while (!(await gatewayContainerExists())) {
+    if (Date.now() >= deadline) {
+      console.warn('[wiring] no gateway container after 90s — devcontainers are not wired to one');
+      return;
     }
-  } catch (err: any) {
-    console.error('[iptables] init failed:', err.message);
+    await new Promise((r) => setTimeout(r, GATEWAY_POLL_MS));
   }
+  const rep = await rewireGatewayIntoDevcontainers();
+  console.log(`[wiring] ${rep.attached.length} network(s), ${rep.refreshed.length} devcontainer(s) refreshed`);
 }
 
 // Ephemeral sudo grants must be locked INTERNALLY in the container as soon as they
@@ -125,6 +134,5 @@ export function bootNode(): void {
   // call (Node's) but the resolv.conf it breaks belongs to the GATEWAY container
   // (see dns-egress.ts), which notices on its own — scheduleSettlingSanitize()
   // in boot-gateway.ts.
-  void initContainerNetworks();
-  void initContainerIptables();
+  void wireGatewayWhenItAppears();
 }

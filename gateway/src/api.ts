@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import { runtimeEnv } from './runtime-env';
+import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
 import fastifyStatic from '@fastify/static';
 import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
 import {
@@ -847,6 +848,20 @@ export async function createApiServer(): Promise<FastifyInstance> {
     } catch (err: any) {
       return reply.code(404).send({ error: err.message });
     }
+  });
+
+  // Wire the gateway container into every devcontainer that already exists.
+  //
+  // `huddle init` calls this straight after creating the container. Node does the
+  // same at boot, but only helps on a FIRST install: on every later init Node is
+  // already running and reused, while the gateway container is removed and
+  // recreated with a new IP — leaving every devcontainer attached to nothing and
+  // DNAT'ing to an address that is gone. Operator-only, on /api/*, because this
+  // is Huddle acting on its own containers; the gateway never asks for it.
+  app.post('/api/docker/rewire-gateway', async () => {
+    const report = await rewireGatewayIntoDevcontainers();
+    notifyStateChanged();
+    return report;
   });
 
   // Reconnect huddle to a devcontainer's dc-net-<name> network.
