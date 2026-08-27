@@ -287,3 +287,42 @@ Answered by inspection, to be confirmed in step 3/6:
    gets false negatives on the largest file. Use `rg` or `grep --text`.
 5. **`API_PORT` is hardcoded** to 3000 while `feat/port-24842` already moved the
    whole tree to 24842 — those must be reconciled when that branch merges.
+
+### Found while implementing steps 1–3
+
+6. **Huddle Node has no delivery mechanism.** `huddle node` can *run* a build but
+   nothing *ships* one. The published CLI is `files: ["dist"]` with zero runtime
+   dependencies; Huddle Node needs fastify, dockerode and `better-sqlite3` — a
+   native module requiring per-platform prebuilds (win32/darwin/linux × x64/arm64).
+   Three options, none free:
+   - bundle the gateway build + `node_modules` into the CLI package (fattest, but
+     one install for the operator);
+   - publish a second package `@infosupport/huddle-node` the CLI depends on
+     optionally;
+   - `docker cp` the build out of the gateway image on `huddle init` (keeps npm
+     thin, but Huddle Node then still needs Docker to bootstrap — which is
+     acceptable, since it needs Docker to work at all).
+   **This blocks step 6**, not step 3. It must be decided before `huddle init`
+   can start Huddle Node on an operator's machine.
+7. **The resolv.conf seam.** `initContainerNetworks()` is a Docker call (Node),
+   but the `/etc/resolv.conf` it corrupts belongs to the *gateway* container
+   (`dns-egress.ts`). In one process those chain directly. Split, Node performs
+   the connect and the gateway has to notice by itself — currently via the
+   settling re-runs `scheduleSettlingSanitize()` already schedules. That works,
+   but it is timing-based, not event-driven; `/control/events` (step 4) is the
+   place to make it explicit.
+8. **`initDb()` and `initCa()` run in both roles.** Neither is cleanly one-sided
+   yet: the proxy still reads rules and writes audit rows from SQLite, and the CA
+   is signed by the gateway but distributed by Node. A split deployment must
+   therefore share `DB_PATH` and `CA_DIR` today. Step 4 removes the DB half; the
+   CA half stays and needs the read-only mount from blocker 3.
+9. **The CLI has no test harness.** `cli/package.json` has no `test` script and no
+   test runner, so the arg-parsing and entry-resolution logic added in step 3 is
+   verified only by running the built CLI. Adding vitest needs a `registry.npmjs.org`
+   install, which the Huddle firewall blocks in this devcontainer.
+10. **`index.ts` and `proxy.ts` are the only CRLF files in the repo** (also on
+    `main`). With `core.autocrlf=input` — the setting in this devcontainer — any
+    edit normalizes them and turns a two-line change into a ~2000-line diff that
+    conflicts with every concurrent branch. Steps 1–2 preserved CRLF via
+    `git -c core.autocrlf=false add`. Normalizing both files to LF is worth doing,
+    but as its own commit, on a quiet branch point.
