@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { db, listGroups, logAudit } from './db';
 import { notifyStateChanged } from './events';
+import { runtimeEnv } from './runtime-env';
 import {
   serializeGroupEnvelope,
   validateGroupEnvelope,
@@ -28,7 +29,7 @@ import {
 // the configured host path lives only in the CLI config and is shown in the
 // portal for reference. Read per-call so it is overridable in tests.
 export function firewallRulesMount(): string {
-  return process.env.HUDDLE_FIREWALL_RULES_MOUNT || '/firewall-rules';
+  return process.env.HUDDLE_FIREWALL_RULES_MOUNT?.trim() || runtimeEnv.firewallRulesMount;
 }
 
 // The *.json entries in the folder, or null when the folder is not mounted at all

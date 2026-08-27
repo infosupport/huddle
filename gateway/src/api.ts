@@ -4,6 +4,7 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
+import { runtimeEnv } from './runtime-env';
 import fastifyStatic from '@fastify/static';
 import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
 import {
@@ -76,7 +77,7 @@ import {
   EXT_DIR,
 } from './extensions/registry';
 
-const API_PORT = 3000;
+const API_PORT = runtimeEnv.apiPort;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
 
 type RuleStatus = 'requested' | 'allow' | 'deny';

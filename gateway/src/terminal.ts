@@ -2,6 +2,7 @@ import http from 'http';
 import { WebSocket } from 'ws';
 import { listDevcontainers } from './docker';
 import { logAudit } from './db';
+import { runtimeEnv } from './runtime-env';
 
 // In-container exec sessie voor de embedded terminal in het portaal.
 // Flow:
@@ -32,7 +33,7 @@ export function dockerExec(containerName: string): Promise<string> {
     });
     const req = http.request(
       {
-        socketPath: '/var/run/docker.sock',
+        socketPath: runtimeEnv.dockerSocketPath,
         method: 'POST',
         path: `/containers/${encodeURIComponent(containerName)}/exec`,
         headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
@@ -61,7 +62,7 @@ export function dockerExecStart(execId: string): Promise<NodeJS.ReadWriteStream>
     const body = JSON.stringify({ Detach: false, Tty: true });
     const req = http.request(
       {
-        socketPath: '/var/run/docker.sock',
+        socketPath: runtimeEnv.dockerSocketPath,
         method: 'POST',
         path: `/exec/${encodeURIComponent(execId)}/start`,
         headers: {
@@ -94,7 +95,7 @@ export function dockerExecResize(execId: string, cols: number, rows: number): Pr
   return new Promise((resolve) => {
     const req = http.request(
       {
-        socketPath: '/var/run/docker.sock',
+        socketPath: runtimeEnv.dockerSocketPath,
         method: 'POST',
         path: `/exec/${encodeURIComponent(execId)}/resize?h=${rows}&w=${cols}`,
       },
