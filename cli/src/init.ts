@@ -24,6 +24,7 @@ import {
   NODE_LOG_FILE,
   nodeCaDir,
   nodeDataDir,
+  nodeProbeUrls,
   nodeUrl,
   readGatewayToken,
   readOperatorToken,
@@ -32,6 +33,39 @@ import {
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
+
+/**
+ * Ask Huddle Node to wire the freshly created gateway into every devcontainer.
+ *
+ * The container above is brand new, so each existing devcontainer is attached to
+ * a `huddle` that no longer exists and DNATs port 80 to an IP that is gone —
+ * which is silent, not loud: the devcontainer just stops reaching anything.
+ *
+ * Node does this itself at boot, but that only covers a first install. Re-running
+ * init reuses the Node that is already up while replacing the container, so the
+ * request has to come from here. Node's job and not the CLI's, because rebuilding
+ * those rules means exec'ing into every devcontainer.
+ *
+ * Best-effort: a gateway that is up but not yet wired is worth reporting, not
+ * worth failing init over — the portal offers a per-container reconnect too.
+ */
+async function rewireGateway(port: string, token: string | null): Promise<void> {
+  const url = `${nodeProbeUrls(port)[0]}/api/docker/rewire-gateway`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rep = (await res.json()) as { attached?: string[]; refreshed?: string[] };
+    const attached = rep.attached?.length ?? 0;
+    console.log(dim(`  wired into ${attached} devcontainer network(s), ${rep.refreshed?.length ?? 0} refreshed`));
+  } catch (err) {
+    console.log(yellow(`[!] Could not wire the gateway into the devcontainer networks: ${(err as Error).message}`));
+    console.log(dim('    Existing devcontainers may not reach Huddle until you reconnect them in the portal.'));
+  }
+}
+
 /**
  * Huddle Node's control channel on the host. Its own port, never the portal's:
  * the portal carries the operator token and stays on loopback, while this one
@@ -259,6 +293,8 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // resolv.conf on Podman with that network's internal aardvark-DNS; the
   // gateway cleans that up itself (see dns-egress.ts / boot-gateway.ts).
   runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
+
+  await rewireGateway(HOST_PORT, token);
 
   if (!control.reachable) {
     console.log();
