@@ -143,7 +143,20 @@ export function readOperatorToken(dataDir: string = nodeDataDir()): string | nul
 export function readGatewayToken(dataDir: string): string {
   const fromEnv = process.env.HUDDLE_GATEWAY_TOKEN?.trim();
   if (fromEnv) return fromEnv;
-  return fs.readFileSync(path.join(dataDir, 'gateway-token'), 'utf8').trim();
+  const file = path.join(dataDir, 'gateway-token');
+  try {
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    // Node is up (we waited for it) but did not write its half of the pair, so
+    // it is older than the boot that mints it — say that, instead of leaking a
+    // bare ENOENT from the middle of gateway creation.
+    throw new Error(
+      `Huddle Node has not written ${file}.\n` +
+      `  It mints that token at boot, so this build of Node predates the fix.\n` +
+      `  Stop it and re-run: the pid is in ${NODE_PID_FILE}.`,
+    );
+  }
 }
 
 export async function runNode(opts: NodeOptions = {}): Promise<void> {

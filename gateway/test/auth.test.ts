@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   getOperatorToken,
   getGatewayToken,
@@ -128,6 +131,29 @@ describe('gateway-token', () => {
     delete process.env.HUDDLE_OPERATOR_TOKEN;
     __resetGatewayTokenCache();
     __resetOperatorTokenCache();
+  });
+
+  // `huddle init` LEEST dit bestand om het aan de container mee te geven, dus het
+  // moet er al zijn voordat de gateway zijn eerste /control-request doet — die
+  // kan hij zonder token immers niet doen. Boot mint het daarom expliciet
+  // (boot-node.ts); ontbreekt het, dan sneuvelt init met een kale ENOENT halverwege
+  // het aanmaken van de gateway en staat Huddle er half op.
+  it('schrijft het token weg als het bestand nog niet bestaat', () => {
+    delete process.env.HUDDLE_GATEWAY_TOKEN;
+    __resetGatewayTokenCache();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-gwtoken-'));
+    const file = path.join(dir, 'gateway-token');
+    process.env.HUDDLE_GATEWAY_TOKEN_FILE = file;
+    try {
+      expect(fs.existsSync(file)).toBe(false);
+      const minted = getGatewayToken();
+      expect(minted).toBeTruthy();
+      expect(fs.readFileSync(file, 'utf8').trim()).toBe(minted);
+    } finally {
+      delete process.env.HUDDLE_GATEWAY_TOKEN_FILE;
+      __resetGatewayTokenCache();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('gebruikt HUDDLE_GATEWAY_TOKEN uit de env', () => {
