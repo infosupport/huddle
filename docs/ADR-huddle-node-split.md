@@ -188,7 +188,8 @@ Only once both exist does moving files become a mechanical, reversible step.
 | 4b | **Split evaluation from its effects** — `decide()` is pure over a policy snapshot and returns an effect list; `checkRule` becomes read → decide → apply | new `rule-match.ts` (pure vocabulary + matching, extracted), new `control/decide.ts`; `rules.ts` | none | new `decide.test.ts` (21 tests, no DB); `rules.test.ts` unchanged | behaviour-preserving refactor |
 | 4c | **Control channel, read half** — `/control/health`, `/control/policy`, `/control/containers` on Node, behind a token of the gateway's own | `auth.ts` (second token), `api.ts` (guard), new `control/{http,feed,routes}.ts` | none — nothing consumes it yet | `control-http.test.ts` (pure, 15); `control-routes.test.ts` (12, DB-gated) | additive; no existing route changes |
 | 4d | **Control channel, write half** — the effect list and audit entries the gateway produces flow back to Node | `control/routes.ts`, proxy-side queue | audit sink | contract tests both sides | additive |
-| 4e | **Remote binding + bypass guard** — the facade reads the polled feeds instead of SQLite/Docker; the proxy refuses to forward devcontainer traffic to the control endpoint | `control/plane.ts`, `proxy.ts` | rule evaluation input | contract tests both sides | feature-flagged; `all` keeps the in-process binding |
+| 4e | **Remote binding** — the facade reads the polled feeds instead of SQLite/Docker | `control/plane.ts` | rule evaluation input | contract tests both sides | feature-flagged; `all` keeps the in-process binding |
+| 4e′ | **Self-traffic guard** — one tested predicate instead of the `'huddle'` literal at three proxy sites; loopback refused regardless of policy | new `proxy-self.ts`, `proxy.ts` | none — the sudo-audit exception is preserved | `proxy-self.test.ts` (14, pure) | self-addressed hosts stop appearing as `requested` rules (blocker 14) |
 | 5 | **SBX direct exec** — drop the mailbox; `sandbox/ops.ts` execs `sbx` on the host | `sandbox/ops.ts`, delete `bridge/`, `cli/src/sbx-bridge.ts`, the `/sbx-bridge` mount | container→host hop removed | existing `sbx-*.test.ts` keep passing | only lands after step 3 works |
 | 6 | **`huddle init` starts both** — gateway container + Huddle Node, health-checked | `cli/src/init.ts` | container startup responsibilities → CLI | init integration test | keep `--gateway-only` escape hatch |
 | 7 | **Slim the gateway** — drop the Docker socket mount, `docker.ts`/`api.ts`/extensions from the image | `gateway/Dockerfile`, split sources | — | e2e firewall suite | last step, most reversible in isolation |
@@ -383,3 +384,37 @@ Answered by inspection, to be confirmed in step 3/6:
     devcontainers share a network segment with. Whatever 4c picks must come with
     the proxy-side guard that devcontainer traffic can never be forwarded to the
     control endpoint, regardless of what the operator has allowlisted.
+
+14. **Devcontainers are allowed to reach Huddle's own API — through the proxy.**
+    The proxy refuses self-addressed traffic at all three entry points (plain
+    HTTP, WebSocket upgrade, CONNECT), but the plain-HTTP site carries one
+    deliberate exception: `POST :3000/api/audit/sudo`, the ingest devcontainers
+    use to report sudo invocations. It is public by design (`devcontainerPublicApi`
+    in `api.ts`) and it must keep working.
+
+    That is a data-plane→control-plane dependency the split has to carry across:
+    after the move, the endpoint no longer lives in the gateway's own process. The
+    gateway will have to forward that one request to Node on the host, over
+    whatever transport blocker 13 settles on — which makes it the same listener
+    the control channel uses, reached by devcontainer traffic on purpose. So the
+    guard cannot be "never forward to Node"; it has to be "forward exactly this
+    one method+path, and nothing else."
+
+    The check is now a tested predicate pair in `proxy-self.ts` rather than the
+    string `'huddle'` repeated at three call sites, because that literal stops
+    being Node's name the moment Node moves. `isSelfHost` also covers loopback,
+    which the old comparison did not: a devcontainer asking the proxy for
+    `localhost` had it resolved in the GATEWAY's namespace, and pointing it at the
+    proxy's own listener loops it back into itself. Default-deny refused that in
+    practice — no rule matches, so it was filed as `requested` and blocked — but
+    it was one operator mistake away from being allowed. It is now refused
+    regardless of policy.
+
+    *Deliberate behaviour change:* self-addressed hosts no longer appear in the
+    portal as pending `requested` rules, because they never reach rule
+    evaluation. There is no rule an operator should ever write for them.
+
+    Still open, and dependent on 13: the host-mode names for the same guard
+    (`host.docker.internal`, the bridge address, Node's host port). They cannot be
+    pinned down before the transport is chosen, so they are named here rather than
+    guessed at in code.
