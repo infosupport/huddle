@@ -116,6 +116,26 @@ describe('resolveRuntimeEnv — roles', () => {
   it('refuses an unknown role rather than silently running as all', () => {
     expect(() => resolveRuntimeEnv({ HUDDLE_ROLE: 'proxy' })).toThrow(/HUDDLE_ROLE/);
   });
+
+  // index.ts gates every subsystem on these two, so getting them wrong either
+  // starts the proxies on the host or leaves the firewall with no listener.
+  it('runs both planes under the default role', () => {
+    const env = resolveRuntimeEnv({});
+    expect(env.runsGateway).toBe(true);
+    expect(env.runsNode).toBe(true);
+  });
+
+  it('runs only the data plane as gateway', () => {
+    const env = resolveRuntimeEnv({ HUDDLE_ROLE: 'gateway' });
+    expect(env.runsGateway).toBe(true);
+    expect(env.runsNode).toBe(false);
+  });
+
+  it('runs only the control plane as node', () => {
+    const env = resolveRuntimeEnv({ HUDDLE_ROLE: 'node' });
+    expect(env.runsGateway).toBe(false);
+    expect(env.runsNode).toBe(true);
+  });
 });
 
 describe('resolveRuntimeEnv — port validation', () => {
