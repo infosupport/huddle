@@ -12,6 +12,7 @@ import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from './token-exchange';
 import { logIdentityProbe } from './identity-probe';
 import { runtimeEnv } from './runtime-env';
+import { isPublicSelfEndpoint, isSelfHost } from './proxy-self';
 
 // Everything the proxy needs from the control plane. Destructured from the
 // `controlPlane` facade rather than imported from `rules`/`db`/`docker`
@@ -414,21 +415,20 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const forwardPath = `${target.pathname}${target.search}`;
 
     let ruleId: number | null;
-    if (host === 'huddle') {
+    if (isSelfHost(host)) {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
-      const allowed =
-        (target.port === '3000' && req.method === 'POST' && normPath === '/api/audit/sudo');
+      const allowed = isPublicSelfEndpoint(target.port, req.method, normPath, runtimeEnv.apiPort);
       if (!allowed) {
         logAudit({
           containerId,
-          domain: 'huddle',
+          domain: host,
           action: 'deny',
           ruleId: null,
           method: req.method ?? null,
           path: forwardPath,
           resStatus: 403,
         });
-        send403(res, 'huddle', 'deny', containerId);
+        send403(res, host, 'deny', containerId);
         return;
       }
       ruleId = null;
@@ -576,12 +576,12 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     }
 
     // No legitimate WebSocket endpoint on huddle itself → always fail-closed.
-    if (host === 'huddle') {
+    if (isSelfHost(host)) {
       logAudit({
-        containerId, domain: 'huddle', action: 'deny', ruleId: null,
+        containerId, domain: host, action: 'deny', ruleId: null,
         method: req.method ?? null, path: forwardPath, resStatus: 403,
       });
-      rejectSocket(clientSocket, 403, 'deny', 'huddle', containerId);
+      rejectSocket(clientSocket, 403, 'deny', host, containerId);
       return;
     }
 
@@ -630,18 +630,18 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
-    if (hostname === 'huddle') {
+    if (isSelfHost(hostname)) {
       // No HTTPS endpoint on huddle's own API — always reject CONNECT to self.
       logAudit({
         containerId,
-        domain: 'huddle',
+        domain: hostname,
         port,
         action: 'deny',
         ruleId: null,
         method: 'CONNECT',
         resStatus: 403,
       });
-      rejectSocket(clientSocket, 403, 'deny', 'huddle', containerId);
+      rejectSocket(clientSocket, 403, 'deny', hostname, containerId);
       return;
     }
     const { status, ruleId } = evalRule(hostname, containerId, null);
