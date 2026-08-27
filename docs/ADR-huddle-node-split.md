@@ -184,7 +184,9 @@ Only once both exist does moving files become a mechanical, reversible step.
 | 1 | **`runtime-env.ts`** — single source for role + paths + ports; defaults byte-identical to today | new `gateway/src/runtime-env.ts`; `index.ts`, `api.ts`, `db.ts`, `auth.ts`, `docker.ts`, `terminal.ts`, `socket-proxy.ts`, `tls-ca.ts`, `extensions/loader.ts`, `sbx.ts` | none | unit tests on the resolver (container defaults, host defaults, env overrides, role parsing) | pure refactor; revert the commit |
 | 2 | **Role-gated startup** — `index.ts` starts proxies only in `gateway`/`all`, API/Docker/sbx only in `node`/`all` | `index.ts` | none (`all` is the default) | boot smoke test per role | default unchanged |
 | 3 | **`huddle node` command** — run Huddle Node in the foreground on the host, port 24842 | `cli/src/node.ts`, `cli/src/index.ts` | nothing yet; additive | CLI arg tests | additive |
-| 4 | **Gateway control channel** — small authenticated REST surface on the gateway (`/control/policy`, `/control/containers`, `/control/events`) replacing shared-SQLite access from the proxy | `gateway/src/control/*`, `proxy.ts`, `rules.ts` | rule evaluation input | contract tests both sides | feature-flagged; `all` keeps reading SQLite directly |
+| 4a | **Control-plane seam** — the proxy talks to one `controlPlane` facade instead of importing `rules`/`db`/`docker`/`registry` directly | new `gateway/src/control/plane.ts`; `proxy.ts` (imports only) | none | facade delegation + swap-after-destructure | pure indirection; revert the commit |
+| 4b | **Split evaluation from its effects** — `decide()` becomes pure over a policy snapshot; the writes `checkRule` performs today become an effect list | `rules.ts`, `control/plane.ts` | none | existing `rules.test.ts` must pass unchanged | behaviour-preserving refactor |
+| 4c | **Gateway control channel** — authenticated REST surface (`/control/policy`, `/control/containers`, `/control/events`) + a remote binding for the facade | `gateway/src/control/*`, `cli`/Node push side | rule evaluation input, audit sink | contract tests both sides | feature-flagged; `all` keeps the in-process binding |
 | 5 | **SBX direct exec** — drop the mailbox; `sandbox/ops.ts` execs `sbx` on the host | `sandbox/ops.ts`, delete `bridge/`, `cli/src/sbx-bridge.ts`, the `/sbx-bridge` mount | container→host hop removed | existing `sbx-*.test.ts` keep passing | only lands after step 3 works |
 | 6 | **`huddle init` starts both** — gateway container + Huddle Node, health-checked | `cli/src/init.ts` | container startup responsibilities → CLI | init integration test | keep `--gateway-only` escape hatch |
 | 7 | **Slim the gateway** — drop the Docker socket mount, `docker.ts`/`api.ts`/extensions from the image | `gateway/Dockerfile`, split sources | — | e2e firewall suite | last step, most reversible in isolation |
@@ -327,7 +329,24 @@ Answered by inspection, to be confirmed in step 3/6:
    test runner, so the arg-parsing and entry-resolution logic added in step 3 is
    verified only by running the built CLI. Adding vitest needs a `registry.npmjs.org`
    install, which the Huddle firewall blocks in this devcontainer.
-10. **`index.ts` and `proxy.ts` are the only CRLF files in the repo** (also on
+11. **`checkRule` is not a read — it writes, and it mints ids.** This is the
+    blocker that reshaped step 4 into 4a/4b/4c. On a miss it `INSERT`s a
+    `requested` rule so the operator sees the blocked host in the portal; it also
+    refreshes last-seen metadata (`touchRule`, `setLastPath`), expires timed-out
+    allows (`resetExpired`), fires `notifyStateChanged()`, and then **re-reads
+    the row to return the database-assigned `ruleId`** that the audit entry
+    references. A gateway holding only a pushed policy snapshot cannot produce
+    that id — it is Node's to assign.
+
+    So "push policy, evaluate locally" is not sufficient on its own. The shape
+    that works: evaluation splits into a pure decision (applied immediately, so
+    egress never waits on Node) plus an effect stream (`requested` rows, touches,
+    expiries) that reaches Node asynchronously and is correlated there. The
+    rejected alternative is a synchronous `POST /control/decide` per request,
+    which puts Node in the hot path of every proxied request and stops all egress
+    when it is down.
+
+12. **`index.ts` and `proxy.ts` are the only CRLF files in the repo** (also on
     `main`). With `core.autocrlf=input` — the setting in this devcontainer — any
     edit normalizes them and turns a two-line change into a ~2000-line diff that
     conflicts with every concurrent branch. Steps 1–2 preserved CRLF via
