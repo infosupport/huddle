@@ -16,6 +16,9 @@ import { runtimeEnv } from '../runtime-env';
 import {
   isValidSandboxName,
   isValidPolicyTarget,
+  isValidWorkspacePath,
+  normalizeWorkspacePath,
+  workspaceArg,
   type Scope,
   type CreateParams,
   type RemoveParams,
@@ -274,14 +277,36 @@ export async function setProxy(p: SetProxyParams): Promise<void> {
   if (r.code !== 0) throwSbxError(r, `failed to set ${key}`);
 }
 
-export async function create(p: CreateParams, onChunk: StreamChunk): Promise<number> {
+/**
+ * argv for `sbx create --name <name> <agent> PATH [PATH...]`. Extra workspaces are
+ * appended in order, each with sbx's `:ro` suffix when read-only. Duplicates are
+ * dropped (the primary path wins, then first occurrence) because sbx rejects the
+ * same folder twice. Pure, so the argv order is unit-testable without a real sbx.
+ */
+export function buildCreateArgs(p: CreateParams): string[] {
   if (!isValidSandboxName(p.name)) throw new Error(`invalid sandbox name: ${p.name}`);
-  if (typeof p.path !== 'string' || p.path.length === 0) throw new Error('create requires a workspace path');
+  if (!isValidWorkspacePath(p.path)) throw new Error(`invalid workspace path: ${p.path}`);
   const agent = p.agent || DEFAULT_AGENT;
   if (!AGENT_RE.test(agent)) throw new Error(`invalid agent: ${agent}`);
+
+  const primary = normalizeWorkspacePath(p.path);
+  const seen = new Set([primary]);
+  const extras: string[] = [];
+  for (const extra of p.extraPaths ?? []) {
+    if (!isValidWorkspacePath(extra?.path)) throw new Error(`invalid workspace path: ${extra?.path}`);
+    const norm = normalizeWorkspacePath(extra.path);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    extras.push(workspaceArg({ path: norm, readOnly: extra.readOnly }));
+  }
+  return ['create', '--name', p.name, agent, primary, ...extras];
+}
+
+export async function create(p: CreateParams, onChunk: StreamChunk): Promise<number> {
+  const args = buildCreateArgs(p);
   // proxy.sandbox (NOT proxy) so daemon auth/registry stays direct — see docs.
   if (p.proxySandbox) await setProxy({ which: 'sandbox', url: p.proxySandbox });
-  const { code, stderr } = await streamSbx(['create', '--name', p.name, agent, p.path], onChunk);
+  const { code, stderr } = await streamSbx(args, onChunk);
   if (code !== 0) {
     const login = detectDockerLoginError(stderr);
     if (login) throw new Error(login);

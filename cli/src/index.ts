@@ -25,6 +25,8 @@ export interface ParsedArgs {
   positional: string[];
   flags: Record<string, string | boolean>;
   mounts: string[];
+  /** Repeatable `--folder <host path>[:ro]` — extra folders for `huddle sbx start`. */
+  folders: string[];
 }
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent', 'entry', 'port', 'data-dir']);
@@ -35,6 +37,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
   const mounts: string[] = [];
+  const folders: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -49,20 +52,22 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
       if (!name) throw new Error(`Invalid option: ${arg}`);
 
-      // Repeatable, unlike every other value flag (one `--mount host=container` per folder).
-      if (name === 'mount') {
+      // Repeatable, unlike every other value flag (one `--mount host=container` or
+      // one `--folder <host path>` per folder).
+      if (name === 'mount' || name === 'folder') {
+        const expects = name === 'mount' ? 'host=container' : 'a host path';
         let value: string;
         if (eq >= 0) {
           value = raw.slice(eq + 1);
         } else {
           const next = argv[i + 1];
           if (next === undefined || next.startsWith('-')) {
-            throw new Error('Option --mount expects a value (host=container)');
+            throw new Error(`Option --${name} expects a value (${expects})`);
           }
           value = next;
           i++;
         }
-        mounts.push(value);
+        (name === 'mount' ? mounts : folders).push(value);
         continue;
       }
 
@@ -101,7 +106,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     positional.push(arg);
   }
 
-  return { positional, flags, mounts };
+  return { positional, flags, mounts, folders };
 }
 
 function parseMountFlag(raw: string): { hostPath: string; containerPath: string } {
@@ -156,6 +161,9 @@ Usage:
   huddle sbx list                    List sandboxes the host sbx daemon knows
   huddle sbx start [name] [options]  Start a microVM sandbox with Huddle as its
                                      upstream proxy (--agent <name> --workspace <path>)
+                                     --folder <host path>[:ro] adds another folder
+                                     (repeatable); Huddle's folder mappings are
+                                     mounted automatically
   huddle sbx rm <name> [--force]     Remove a sandbox
   huddle sbx reconcile [--dry-run]   Sync Huddle rules → sbx policy (one-way;
                                      Huddle is the single source of truth)
@@ -431,6 +439,7 @@ async function main(): Promise<void> {
         name: positional[2] ?? flagString(flags, 'name'),
         agent: flagString(flags, 'agent'),
         workspace: flagString(flags, 'workspace'),
+        folders: parsed.folders,
       });
     } else if (subCmd === 'rm' || subCmd === 'remove' || subCmd === 'delete') {
       await runSbxRemove({ name: positional[2] ?? flagString(flags, 'name'), force: flagBool(flags, 'force') });
