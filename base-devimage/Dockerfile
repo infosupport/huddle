@@ -24,8 +24,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Global CLIs
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @github/copilot opencode-ai 
+# Global CLIs (npm). claude-code niet meer via npm: zie native installer onderaan.
+RUN npm install -g @openai/codex @github/copilot opencode-ai
 
 # markitdown: converteert PDF/Office/HTML/afbeeldingen → Markdown.
 # Wordt gebruikt door de markitdown-skill (.ai/claude/skills/markitdown.md).
@@ -53,3 +53,10 @@ RUN groupadd -f docker && usermod -aG docker vscode
 # Draai als non-root. Root-only setup (iptables NAT) doet de spawn-flow via een
 # aparte `docker exec -u root` (zie huddle.ps1), dus pid 1 hoeft geen root te zijn.
 USER vscode
+
+# Claude Code via de officiële native installer i.p.v. npm: kleinere image
+# (geen gebundelde node_modules) en de binary update zichzelf. Installeert als
+# de vscode-user naar /home/vscode/.local/bin/claude.
+# Pinnen kan met `| bash -s <versie>` (bijv. `stable` of een versienummer).
+ENV PATH="/home/vscode/.local/bin:${PATH}"
+RUN curl -fsSL https://claude.ai/install.sh | bash

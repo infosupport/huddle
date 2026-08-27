@@ -15,7 +15,12 @@ interface SbxStatus {
   proxyPort: number;
 }
 interface SbxStep { label: string; command: string; code: number; stdout: string; stderr: string }
-interface SbxStartResult { name: string; ok: boolean; upstreamUrl: string; proxyPort: number; steps: SbxStep[] }
+interface SbxStartResult {
+  name: string; ok: boolean; upstreamUrl: string; proxyPort: number; steps: SbxStep[];
+  workspaces?: { path: string; readOnly: boolean }[];
+  settingsFolders?: { name: string; hostPath: string; targetPath: string; readOnly: boolean }[];
+  settingsSkipped?: { name: string; reason: string }[];
+}
 interface SandboxInfo { name: string; status?: string; raw?: string }
 interface ReconcileAction { op: 'create' | 'delete'; action: 'allow' | 'deny'; target: string; scope: { kind: string; name?: string }; ok: boolean; error?: string }
 interface SkippedRule { domain: string; container_id: string | null; reason: string }
@@ -52,20 +57,41 @@ export async function runSbxList(): Promise<void> {
   for (const s of sandboxes) console.log(`${s.name.padEnd(nameW)}  ${s.status ?? ''}`);
 }
 
-export async function runSbxStart(opts: { name?: string; agent?: string; workspace?: string }): Promise<void> {
-  const body: Record<string, string> = {};
+export async function runSbxStart(opts: { name?: string; agent?: string; workspace?: string; folders?: string[] }): Promise<void> {
+  const body: Record<string, unknown> = {};
   if (opts.name) body.name = opts.name;
   if (opts.agent) body.agent = opts.agent;
-  if (opts.workspace) body.workspace = opts.workspace;
+  // A sandbox can hold several folders: --workspace is the one the agent starts in,
+  // every --folder is mounted alongside it. `<path>:ro` mounts that folder
+  // read-only (sbx's own suffix). Huddle's settings folders are added server-side.
+  const folders = (opts.folders ?? []).map((f) => f.trim()).filter(Boolean);
+  if (folders.length) {
+    const first = opts.workspace ? [{ path: opts.workspace, readOnly: false }] : [];
+    body.workspaces = [...first, ...folders.map(parseFolderArg)];
+  } else if (opts.workspace) {
+    body.workspace = opts.workspace;
+  }
   const r = await post<SbxStartResult>('/api/sbx/start', body);
   console.log(`${r.ok ? '✓ sandbox created' : '✗ stopped at a wall'}: ${r.name}`);
   console.log(dim(`  upstream ${r.upstreamUrl}`));
+  for (const w of r.workspaces ?? []) console.log(dim(`  folder ${w.path}${w.readOnly ? ' (read-only)' : ''}`));
   for (const step of r.steps) {
     console.log(`  ${step.code === 0 ? '✓' : '✗'} ${step.label}  ${dim(`(exit ${step.code})`)}`);
     console.log(dim(`    ${step.command}`));
+    if (step.stdout?.trim() && step.label.startsWith('link settings folders')) {
+      console.log(dim(`    ${step.stdout.trim().split('\n').join('\n    ')}`));
+    }
     if (step.stderr.trim()) console.log(dim(`    ${step.stderr.trim().split('\n').join('\n    ')}`));
   }
+  for (const s of r.settingsSkipped ?? []) console.log(dim(`  ! settings folder '${s.name}' not mounted: ${s.reason}`));
   if (!r.ok) process.exitCode = 1;
+}
+
+/** `<host path>` or `<host path>:ro` — sbx's own read-only workspace suffix. */
+function parseFolderArg(raw: string): { path: string; readOnly: boolean } {
+  const m = /^(.*?):(ro|rw)$/i.exec(raw);
+  if (!m) return { path: raw, readOnly: false };
+  return { path: m[1], readOnly: m[2].toLowerCase() === 'ro' };
 }
 
 export async function runSbxRemove(opts: { name?: string; force?: boolean }): Promise<void> {

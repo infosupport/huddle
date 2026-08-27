@@ -53,7 +53,8 @@ import {
   type IdeName,
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
-import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor } from './sbx';
+import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan } from './sbx';
+import { isValidWorkspacePath } from './sandbox/protocol';
 import { scheduleReconcile, ingestPending } from './sandbox/auto-sync';
 import {
   getOperatorToken,
@@ -78,6 +79,8 @@ import {
 } from './extensions/registry';
 
 const API_PORT = runtimeEnv.apiPort;
+/** Upper bound on folders per sandbox — each one is an `sbx create` positional. */
+const MAX_SBX_WORKSPACES = 32;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
 
 type RuleStatus = 'requested' | 'allow' | 'deny';
@@ -1048,7 +1051,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { ...avail, upstreamUrl: sbxUpstreamUrl(), proxyPort: SBX_PROXY_PORT };
   });
 
-  app.post<{ Body: { name?: string; agent?: string; workspace?: string } }>(
+  // A sandbox may get MULTIPLE folders: `workspaces[]` (first = the folder the
+  // agent starts in, the rest extra, optionally read-only). `workspace` stays
+  // accepted as the single-folder form older clients send.
+  app.post<{ Body: { name?: string; agent?: string; workspace?: string; workspaces?: { path?: string; readOnly?: boolean }[] } }>(
     '/api/sbx/start',
     async (req, reply) => {
       const name = (req.body?.name ?? '').trim() || `huddle-sbx-${Date.now().toString(36)}`;
@@ -1058,8 +1064,27 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       const agent = typeof req.body?.agent === 'string' ? req.body.agent.trim() : undefined;
       const workspace = typeof req.body?.workspace === 'string' ? req.body.workspace.trim() : undefined;
+      const rawWorkspaces = req.body?.workspaces;
+      let workspaces: { path: string; readOnly: boolean }[] | undefined;
+      if (rawWorkspaces !== undefined) {
+        if (!Array.isArray(rawWorkspaces)) return reply.code(400).send({ error: 'workspaces must be an array' });
+        if (rawWorkspaces.length > MAX_SBX_WORKSPACES) {
+          return reply.code(400).send({ error: `at most ${MAX_SBX_WORKSPACES} folders per sandbox` });
+        }
+        workspaces = [];
+        for (const w of rawWorkspaces) {
+          const p = typeof w?.path === 'string' ? w.path.trim() : '';
+          if (!p) continue;
+          if (!isValidWorkspacePath(p)) return reply.code(400).send({ error: `invalid folder path: ${p}` });
+          workspaces.push({ path: p, readOnly: w?.readOnly === true });
+        }
+        if (workspaces.length === 0) workspaces = undefined;
+      }
+      if (workspace !== undefined && workspace !== '' && !isValidWorkspacePath(workspace)) {
+        return reply.code(400).send({ error: `invalid folder path: ${workspace}` });
+      }
       try {
-        const result = await startSandbox({ name, agent: agent || undefined, workspace: workspace || undefined });
+        const result = await startSandbox({ name, agent: agent || undefined, workspace: workspace || undefined, workspaces });
         logAudit({ containerId: null, domain: '-', action: `admin:sbx-start${result.ok ? '' : '-failed'}` });
         return { name, ...result };
       } catch (err: any) {
@@ -1067,6 +1092,21 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
     }
   );
+
+  // Which settings folders (folder mappings) a new sandbox gets, and which
+  // mappings cannot travel (Docker volumes, ~-paths). The modal shows this so the
+  // difference with a devcontainer is visible BEFORE creating a sandbox.
+  app.get('/api/sbx/settings-folders', async (_req, reply) => {
+    try {
+      const plan = settingsFolderPlan();
+      return {
+        folders: plan.folders.map((f) => ({ name: f.name, hostPath: f.hostPath, targetPath: f.targetPath, readOnly: f.readOnly })),
+        skipped: plan.skipped,
+      };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
+  });
 
   // List the sandboxes the host sbx daemon currently knows about.
   app.get('/api/sbx/sandboxes', async (_req, reply) => {

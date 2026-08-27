@@ -52,3 +52,9 @@ cli/cli/
 
 # Ad-hoc portal screenshots saved straight from the browser
 localhost_3000_*.png
+
+# lokale Aikido API-credentials (niet committen)
+.aikido.env
+
+# native dev run: local DB, CA and operator token (dev-native.ps1)
+.huddle-native/
