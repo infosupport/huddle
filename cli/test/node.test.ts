@@ -8,6 +8,8 @@ import {
   explicitNodeEntry,
   nodeEntryCandidates,
   nodeEnv,
+  nodeProbeUrls,
+  nodeUrl,
   resolveNodeEntry,
 } from '../src/node';
 import { parseArgs } from '../src/index';
@@ -136,6 +138,48 @@ describe('nodeEnv', () => {
 
   it('defaults to Huddle Node\'s own port, not the gateway\'s', () => {
     expect(DEFAULT_NODE_PORT).toBe(24842);
+  });
+});
+
+describe('nodeProbeUrls', () => {
+  // The split's most confusing failure mode: the portal opens in the browser but
+  // `huddle init` reports Node "did not come up" and exits before it creates the
+  // gateway container. Node binds 127.0.0.1; `localhost` is ::1 first on Windows.
+  it('probes loopback literals, not the name localhost', () => {
+    delete process.env.HUDDLE_API_HOST;
+    expect(nodeProbeUrls(24842)).toEqual(['http://127.0.0.1:24842', 'http://[::1]:24842']);
+    expect(nodeProbeUrls(24842).some((u) => u.includes('localhost'))).toBe(false);
+  });
+
+  it('still shows humans a localhost URL', () => {
+    expect(nodeUrl(24842)).toBe('http://localhost:24842');
+  });
+
+  it('defaults to the node port', () => {
+    delete process.env.HUDDLE_API_HOST;
+    expect(nodeProbeUrls()[0]).toBe(`http://127.0.0.1:${DEFAULT_NODE_PORT}`);
+  });
+
+  it('follows HUDDLE_API_HOST when Node is bound off loopback', () => {
+    process.env.HUDDLE_API_HOST = '192.168.1.5';
+    expect(nodeProbeUrls(24842)).toEqual(['http://192.168.1.5:24842']);
+    delete process.env.HUDDLE_API_HOST;
+  });
+
+  it('brackets a bare IPv6 bind address', () => {
+    process.env.HUDDLE_API_HOST = 'fe80::1';
+    expect(nodeProbeUrls(24842)).toEqual(['http://[fe80::1]:24842']);
+    process.env.HUDDLE_API_HOST = '[fe80::1]';
+    expect(nodeProbeUrls(24842)).toEqual(['http://[fe80::1]:24842']);
+    delete process.env.HUDDLE_API_HOST;
+  });
+
+  it('treats a wildcard bind as "loopback will do"', () => {
+    for (const wildcard of ['0.0.0.0', '::']) {
+      process.env.HUDDLE_API_HOST = wildcard;
+      expect(nodeProbeUrls(24842)).toEqual(['http://127.0.0.1:24842', 'http://[::1]:24842']);
+    }
+    delete process.env.HUDDLE_API_HOST;
   });
 });
 

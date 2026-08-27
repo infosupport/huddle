@@ -224,9 +224,33 @@ export async function runNode(opts: NodeOptions = {}): Promise<void> {
 export const NODE_PID_FILE = path.join(CONFIG_DIR, 'node.pid');
 export const NODE_LOG_FILE = path.join(CONFIG_DIR, 'node.log');
 
-/** The URL the CLI and the browser talk to Huddle Node on. */
+/** The URL a HUMAN talks to Huddle Node on: printed, opened in a browser. */
 export function nodeUrl(port: number | string = DEFAULT_NODE_PORT): string {
   return `http://localhost:${port}`;
+}
+
+/**
+ * The addresses the CLI itself talks to Huddle Node on — loopback literals, in
+ * order, not the name `localhost`.
+ *
+ * Node binds ONE address (runtime-env.ts's apiBindHost: 127.0.0.1 in host mode),
+ * while `localhost` is two — and on Windows it resolves to ::1 first, where
+ * nothing listens. A browser papers over that with Happy Eyeballs, and so does a
+ * recent enough Node; an older one just fails. That combination is nasty,
+ * because it makes Huddle look half-installed rather than broken: the portal
+ * opens fine, but `huddle init` sits out its 30s probe against a perfectly
+ * healthy process and exits BEFORE it ever creates the gateway container.
+ *
+ * So probe the literals and accept whichever answers. HUDDLE_API_HOST wins when
+ * set, since then Node is not on loopback at all.
+ */
+export function nodeProbeUrls(port: number | string = DEFAULT_NODE_PORT): string[] {
+  const bound = process.env.HUDDLE_API_HOST?.trim();
+  if (bound && bound !== '0.0.0.0' && bound !== '::') {
+    const host = bound.includes(':') && !bound.startsWith('[') ? `[${bound}]` : bound;
+    return [`http://${host}:${port}`];
+  }
+  return [`http://127.0.0.1:${port}`, `http://[::1]:${port}`];
 }
 
 export function readNodePid(): number | null {
@@ -259,9 +283,14 @@ export async function pingNode(port: number | string, timeoutMs = 1500): Promise
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await fetch(`${nodeUrl(port)}/api/auth/status`, { signal: ac.signal });
-    return res.ok;
-  } catch {
+    for (const base of nodeProbeUrls(port)) {
+      try {
+        const res = await fetch(`${base}/api/auth/status`, { signal: ac.signal });
+        if (res.ok) return true;
+      } catch {
+        // Wrong family, or not up yet. Try the next address, then the next tick.
+      }
+    }
     return false;
   } finally {
     clearTimeout(timer);
@@ -331,8 +360,15 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   if (child.pid) fs.writeFileSync(NODE_PID_FILE, String(child.pid));
 
   if (!(await waitForNode(port))) {
+    // Alive-but-unreachable and dead are different bugs with the same symptom,
+    // and the difference is the first thing you want to know: init stops here,
+    // so the gateway container is never created and Huddle looks half-installed.
+    const stillRunning = child.pid ? isNodePidAlive() : false;
     throw new Error(
-      `Huddle Node did not come up on ${nodeUrl(port)} within 30s.\n` +
+      `Huddle Node did not come up on ${nodeProbeUrls(port).join(' or ')} within 30s.\n` +
+      (stillRunning
+        ? `  The process (pid ${child.pid}) is still running, so it started but is not answering there.\n`
+        : `  The process is gone, so it failed during startup.\n`) +
       `  Check ${NODE_LOG_FILE} — it holds everything the process printed.`,
     );
   }

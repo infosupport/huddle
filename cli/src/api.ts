@@ -1,10 +1,13 @@
 import { operatorToken } from './config';
-import { DEFAULT_NODE_PORT, nodeUrl } from './node';
+import { DEFAULT_NODE_PORT, nodeProbeUrls } from './node';
 
 // Huddle Node, on the host, on loopback. Not 3000 and not a container address:
 // after the Node/Gateway split the API this talks to is the host process, and
 // the gateway container has no API at all (docs/ADR-huddle-node-split.md).
-let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? nodeUrl(DEFAULT_NODE_PORT));
+//
+// The loopback LITERAL, not `localhost` — same reason as nodeProbeUrls(), which
+// is where that reason is written down.
+let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? nodeProbeUrls(DEFAULT_NODE_PORT)[0]);
 
 export class ApiError extends Error {
   constructor(
