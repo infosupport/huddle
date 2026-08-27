@@ -185,7 +185,7 @@ Only once both exist does moving files become a mechanical, reversible step.
 | 2 | **Role-gated startup** — `index.ts` starts proxies only in `gateway`/`all`, API/Docker/sbx only in `node`/`all` | `index.ts` | none (`all` is the default) | boot smoke test per role | default unchanged |
 | 3 | **`huddle node` command** — run Huddle Node in the foreground on the host, port 24842 | `cli/src/node.ts`, `cli/src/index.ts` | nothing yet; additive | CLI arg tests | additive |
 | 4a | **Control-plane seam** — the proxy talks to one `controlPlane` facade instead of importing `rules`/`db`/`docker`/`registry` directly | new `gateway/src/control/plane.ts`; `proxy.ts` (imports only) | none | facade delegation + swap-after-destructure | pure indirection; revert the commit |
-| 4b | **Split evaluation from its effects** — `decide()` becomes pure over a policy snapshot; the writes `checkRule` performs today become an effect list | `rules.ts`, `control/plane.ts` | none | existing `rules.test.ts` must pass unchanged | behaviour-preserving refactor |
+| 4b | **Split evaluation from its effects** — `decide()` is pure over a policy snapshot and returns an effect list; `checkRule` becomes read → decide → apply | new `rule-match.ts` (pure vocabulary + matching, extracted), new `control/decide.ts`; `rules.ts` | none | new `decide.test.ts` (21 tests, no DB); `rules.test.ts` unchanged | behaviour-preserving refactor |
 | 4c | **Gateway control channel** — authenticated REST surface (`/control/policy`, `/control/containers`, `/control/events`) + a remote binding for the facade | `gateway/src/control/*`, `cli`/Node push side | rule evaluation input, audit sink | contract tests both sides | feature-flagged; `all` keeps the in-process binding |
 | 5 | **SBX direct exec** — drop the mailbox; `sandbox/ops.ts` execs `sbx` on the host | `sandbox/ops.ts`, delete `bridge/`, `cli/src/sbx-bridge.ts`, the `/sbx-bridge` mount | container→host hop removed | existing `sbx-*.test.ts` keep passing | only lands after step 3 works |
 | 6 | **`huddle init` starts both** — gateway container + Huddle Node, health-checked | `cli/src/init.ts` | container startup responsibilities → CLI | init integration test | keep `--gateway-only` escape hatch |
@@ -345,6 +345,13 @@ Answered by inspection, to be confirmed in step 3/6:
     rejected alternative is a synchronous `POST /control/decide` per request,
     which puts Node in the hot path of every proxied request and stops all egress
     when it is down.
+
+    *Step 4b implements that shape.* `decide()` returns the answer plus a
+    `PolicyEffect[]`, and `create-requested` is an explicit effect rather than a
+    hidden write. It is still applied synchronously against the local database,
+    so nothing has changed yet — but the id now arrives from *applying* the
+    effect instead of from inside the evaluation, which is what lets step 4c move
+    the applier without touching the decision.
 
 12. **`index.ts` and `proxy.ts` are the only CRLF files in the repo** (also on
     `main`). With `core.autocrlf=input` — the setting in this devcontainer — any
