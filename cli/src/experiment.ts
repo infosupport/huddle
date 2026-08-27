@@ -29,7 +29,7 @@ export function parseIssueNumber(raw: string | undefined): number {
  * function does not return (process.exit with the exit code of the new process).
  */
 export function ensureCliForChannel(relaunchArgs: string[], opts: { force?: boolean } = {}): void {
-  // Escape hatch for locally-built CLIs (e.g. run-sandbox-mode.sh, dev-install.sh):
+  // Escape hatch for locally-built CLIs (e.g. dev-install.sh):
   // when we deliberately run THIS build we must not hop to the published channel
   // CLI — that would discard local, unpublished changes. The active experiment
   // config is left untouched; only the auto-switch is suppressed for this run.

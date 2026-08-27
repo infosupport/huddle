@@ -27,7 +27,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { CONFIG_DIR } from './config';
-import { resolveSbxBin } from './sbx-bridge';
+import { resolveSbxBin } from './sbx-host';
 import { dim, green, yellow } from './utils';
 
 const CONTAINER = 'huddle';
@@ -37,7 +37,7 @@ const CA_IN_CONTAINER = '/data/ca.crt';
 export const HOST_CA_PATH = path.join(CONFIG_DIR, 'huddle-ca.crt');
 const LINUX_CA_PATH = '/usr/local/share/ca-certificates/huddle-ca.crt';
 
-/** No console window per child process on Windows (same reason as sbx-bridge). */
+/** No console window per child process on Windows (same reason as sbx-host.ts). */
 const NO_WINDOW = { windowsHide: true } as const;
 
 export type TrustStore = 'windows-user' | 'windows-machine' | 'macos-login' | 'linux-system';

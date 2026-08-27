@@ -1,13 +1,18 @@
 // ── sbx passthrough (execFile) ────────────────────────────────────────────────
-// Runs `$HUDDLE_SBX_BIN` (default `sbx`) with an argv array — NEVER a shell. In
-// the container, `sbx` is the baked file-mailbox client (bridge/sbx.sh at
-// /usr/local/bin/sbx): it forwards the argv to the Windows watcher via the shared
-// folder and returns sbx's real stdout/stderr/exit. So this module is unchanged
-// whether sbx runs locally (native Linux) or across the mailbox (Windows) — it
-// just execs a binary. Every name/target is validated BEFORE it reaches the
-// process. See bridge/sbx.sh + bridge/sbx-watcher.sh and docs/sbx-cli-surface.md.
+// Runs `$HUDDLE_SBX_BIN` (default `sbx`) with an argv array — NEVER a shell.
+// Every name/target is validated BEFORE it reaches the process. See
+// docs/sbx-cli-surface.md.
+//
+// sbx is a HOST binary: it drives the user's own Docker installation and Huddle
+// points it at the sbx egress proxy. It is therefore reachable only from Huddle
+// Node, which runs on the host. A containerized Huddle used to reach it through
+// a file mailbox — the container's `sbx` was a shim that forwarded argv to a
+// watcher on Windows through a bind-mounted folder. That bridge is gone (step 5
+// of docs/ADR-huddle-node-split.md); this module now always execs the real
+// binary, and refuses up front where that binary cannot exist.
 
 import { execFile, spawn } from 'node:child_process';
+import { runtimeEnv } from '../runtime-env';
 import {
   isValidSandboxName,
   isValidPolicyTarget,
@@ -23,7 +28,27 @@ import {
   type PolicyRule,
 } from './protocol';
 
-const SBX_BIN = process.env.HUDDLE_SBX_BIN ?? 'sbx';
+export const SBX_BIN = process.env.HUDDLE_SBX_BIN ?? 'sbx';
+
+/**
+ * Why sbx cannot be used, or null when it can. Pure, so the two branches are
+ * testable without reaching for the process environment.
+ *
+ * Only host mode can run sbx. Answering that up front rather than letting
+ * execFile fail turns a confusing `'sbx' not found on PATH` — which reads like a
+ * missing install — into the actual reason, with the actual fix. An explicit
+ * HUDDLE_SBX_BIN is taken at face value: someone who sets it has told us where
+ * the binary is, and that is not ours to second-guess.
+ */
+export function unavailableReason(hostMode: boolean, binOverride: string | undefined): string | null {
+  if (hostMode || binOverride) return null;
+  return 'sbx runs on your machine, not in the gateway container — sandboxes are managed by Huddle Node on the host (huddle node)';
+}
+
+/** unavailableReason for THIS process. */
+export function sbxUnavailableReason(): string | null {
+  return unavailableReason(runtimeEnv.hostMode, process.env.HUDDLE_SBX_BIN);
+}
 const DEFAULT_AGENT = process.env.HUDDLE_SBX_AGENT ?? 'claude';
 const STEP_TIMEOUT_MS = Number(process.env.HUDDLE_SBX_TIMEOUT_MS ?? '300000');
 
@@ -38,6 +63,8 @@ export interface RunResult {
 
 /** Non-streaming run of `sbx <args>`. Resolves even on non-zero exit. */
 export function runSbx(args: string[]): Promise<RunResult> {
+  const blocked = sbxUnavailableReason();
+  if (blocked) return Promise.resolve({ code: -1, stdout: '', stderr: blocked });
   return new Promise((resolve) => {
     execFile(
       SBX_BIN,
@@ -80,6 +107,11 @@ export function streamSbx(
   args: string[],
   onChunk: StreamChunk
 ): Promise<{ code: number; stderr: string }> {
+  const blocked = sbxUnavailableReason();
+  if (blocked) {
+    onChunk('stderr', blocked);
+    return Promise.resolve({ code: -1, stderr: blocked });
+  }
   return new Promise((resolve) => {
     let stderrBuf = '';
     let child;

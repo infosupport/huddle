@@ -5,7 +5,7 @@
 //    destinations and file them as `requested` rows so they surface in the portal
 //    for approval (the discovery loop; ADR §4.2). Approving writes a rule →
 //    reconcile → sbx allows it.
-// Everything here is best-effort: if the sbx bridge/watcher is down, calls throw
+// Everything here is best-effort: if sbx is not reachable, calls throw
 // and are swallowed quietly so normal operation is never blocked.
 
 import { db } from '../db';
