@@ -64,7 +64,8 @@ export interface SbxStatus {
   available: boolean;
   version: string;
   error?: string;
-  socket: string | null;
+  /** The sbx binary Huddle would run, or null when this process cannot run it. */
+  bin: string | null;
   upstreamUrl: string;
   proxyPort: number;
 }

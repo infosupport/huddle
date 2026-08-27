@@ -56,7 +56,7 @@ if (runsGateway) {
 
 if (runsNode) {
   // Background sbx sync: auto-reconcile Huddle→sbx + ingest blocked requests as
-  // pending (sbx→Huddle). Best-effort; no-op when the sbx bridge isn't running.
+  // pending (sbx→Huddle). Best-effort; no-op when sbx isn't reachable.
   startAutoSync();
   createApiServer().catch(err => {
     console.error('[api] failed to start', err);

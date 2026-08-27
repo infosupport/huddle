@@ -1,13 +1,13 @@
-// ── Docker Sandboxes (sbx) — gateway facade ───────────────────────────────────
-// The gateway can't run sbx itself (sbx lives on the host / on Windows). It execs
-// `sbx`, which in the container is the baked FILE-MAILBOX client (bridge/sbx.sh):
-// it forwards argv to the Windows watcher through a shared folder and returns the
-// real output. Dead simple: no sockets, no daemon, no networking. See:
-//   - bridge/sbx.sh          (container-side mailbox client, baked as /usr/local/bin/sbx)
-//   - bridge/sbx-watcher.sh  (Windows-side; runs the real sbx.exe)
-//   - gateway/src/sandbox/ops.ts   (the execFile passthrough this calls)
+// ── Docker Sandboxes (sbx) — Huddle Node facade ───────────────────────────────
+// sbx is a HOST binary. Huddle Node runs on the host and execs it directly; see
+// gateway/src/sandbox/ops.ts for the passthrough and for what happens when this
+// process is NOT on the host.
 //
-// The export surface is unchanged so api.ts / index.ts did not have to change.
+// This used to go through a file mailbox: the gateway container had a shim named
+// `sbx` on its PATH that wrote argv into a bind-mounted folder for a watcher on
+// Windows to pick up. The domain logic here never knew about it — it just exec'd
+// a binary — which is exactly why removing the bridge (step 5 of
+// docs/ADR-huddle-node-split.md) touched the comments and not the flow.
 
 import * as ops from './sandbox/ops';
 import { reconcile, type ReconcileReport } from './sandbox/reconcile';
@@ -24,9 +24,6 @@ export const SBX_PROXY_PORT = runtimeEnv.sbxProxyPort;
 const SBX_PROXY_HOST = process.env.HUDDLE_SBX_PROXY_HOST ?? 'localhost';
 const SBX_AGENT = process.env.HUDDLE_SBX_AGENT ?? 'claude';
 const DEFAULT_WORKSPACE = process.env.HUDDLE_SBX_WORKSPACE ?? '.';
-/** The shared folder that carries the mailbox (for status display). */
-const SBX_BRIDGE = process.env.HUDDLE_SBX_BRIDGE ?? '/sbx-bridge';
-
 /** The URL Huddle hands to sbx as its upstream proxy (reached on the host). */
 export function sbxUpstreamUrl(): string {
   return `http://${SBX_PROXY_HOST}:${SBX_PROXY_PORT}`;
@@ -53,17 +50,20 @@ function cap(s: string): string {
 }
 
 /**
- * `sbx version` through the mailbox — tells the portal exactly which wall we're at:
- *   - mailbox/watcher down → available:false, error explains the bridge
- *   - watcher up, sbx present → available:true, version populated
- * `socket` reports the shared bridge folder (the mailbox path).
+ * `sbx version` — tells the portal exactly which wall we're at:
+ *   - not on the host   → available:false, error says so (sbxUnavailableReason)
+ *   - sbx not installed → available:false, error is sbx's own
+ *   - usable            → available:true, version populated
+ * `bin` is the binary that would be run, or null when this process cannot run it.
  */
-export async function sbxAvailable(): Promise<{ available: boolean; version: string; error?: string; socket: string | null }> {
+export async function sbxAvailable(): Promise<{ available: boolean; version: string; error?: string; bin: string | null }> {
+  const blocked = ops.sbxUnavailableReason();
+  if (blocked) return { available: false, version: '', error: blocked, bin: null };
   try {
     const version = await ops.version();
-    return { available: true, version: version.trim() || 'unknown', socket: SBX_BRIDGE };
+    return { available: true, version: version.trim() || 'unknown', bin: ops.SBX_BIN };
   } catch (err) {
-    return { available: false, version: '', error: (err as Error).message, socket: SBX_BRIDGE };
+    return { available: false, version: '', error: (err as Error).message, bin: ops.SBX_BIN };
   }
 }
 
