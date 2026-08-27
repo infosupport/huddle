@@ -1721,7 +1721,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // so that the operator immediately knows what to log in with.
   getOperatorToken();
 
-  const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
+  const address = await app.listen({ port: API_PORT, host: runtimeEnv.apiBindHost });
   console.log(`[api] listening on ${address}`);
 
   return app;

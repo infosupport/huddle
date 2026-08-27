@@ -67,6 +67,11 @@ export interface RuntimeEnv {
   hostMode: boolean;
   /** Portal + REST/WS API. */
   apiPort: number;
+  /**
+   * Interface the portal/API listens on. Loopback in host mode — see
+   * resolveRuntimeEnv for why that is not the same choice as in a container.
+   */
+  apiBindHost: string;
   /** The filtering proxy devcontainers are DNAT'ed to. Gateway-side only. */
   proxyPort: number;
   /** Dedicated egress proxy for sbx sandboxes. Gateway-side only. */
@@ -110,6 +115,27 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
   // gateway container that still publishes 3000.
   const apiPort = parsePort(env.HUDDLE_API_PORT, hostMode ? 24842 : 3000, 'HUDDLE_API_PORT');
 
+  // 0.0.0.0 means something different on each side of the split, which is why
+  // this is a binding and not a literal.
+  //
+  // In the container it is the only option: Docker reaches the API through the
+  // container's own veth address, and what the OUTSIDE world can see is decided
+  // by `-p 3000:3000` on the host — not here.
+  //
+  // On the host there is no such publish step, so 0.0.0.0 would put Huddle Node
+  // on every interface the machine has, including the LAN and any VPN. Huddle
+  // Node is not a portal with a read-only view: it execs into containers, runs
+  // terminals and rewrites firewall policy. The operator token is the only thing
+  // between that and the network, and one shared secret should not be the sole
+  // barrier for an interface nobody meant to open. So host mode binds loopback.
+  //
+  // Consequence, and it is a real one: a gateway CONTAINER cannot reach a
+  // loopback-bound Node on Linux, where `host.docker.internal` resolves to the
+  // bridge address rather than the host's loopback. The control channel (step 4c)
+  // therefore has to say explicitly how the two halves meet; the override exists
+  // for that, not as an invitation to widen the default.
+  const apiBindHost = env.HUDDLE_API_HOST?.trim() || (hostMode ? '127.0.0.1' : '0.0.0.0');
+
   // Windows has no Unix socket for the engine; Node accepts the named pipe as a
   // socketPath verbatim. Irrelevant in container mode, where the CLI bind-mounts
   // whichever socket the runtime uses onto /var/run/docker.sock.
@@ -122,6 +148,7 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
     runsNode: role === 'all' || role === 'node',
     hostMode,
     apiPort,
+    apiBindHost,
     proxyPort: parsePort(env.HUDDLE_PROXY_PORT, 80, 'HUDDLE_PROXY_PORT'),
     sbxProxyPort: parsePort(env.HUDDLE_SBX_PROXY_PORT, 32768, 'HUDDLE_SBX_PROXY_PORT'),
     dockerSocketPath: env.HUDDLE_DOCKER_SOCKET?.trim() || defaultDockerSocket,

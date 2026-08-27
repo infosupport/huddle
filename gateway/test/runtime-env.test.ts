@@ -35,6 +35,10 @@ describe('resolveRuntimeEnv — container mode (today)', () => {
     expect(env.proxyPort).toBe(80);
     expect(env.sbxProxyPort).toBe(32768);
   });
+
+  it('binds every interface, because in a container -p decides the exposure', () => {
+    expect(env.apiBindHost).toBe('0.0.0.0');
+  });
 });
 
 describe('resolveRuntimeEnv — host mode', () => {
@@ -55,6 +59,13 @@ describe('resolveRuntimeEnv — host mode', () => {
 
   it('keeps the socket dir on the ENGINE host, which is Linux on every platform', () => {
     expect(env.socketDir).toBe('/tmp/dc-sockets');
+  });
+
+  it('binds loopback, so moving to the host does not publish the API to the LAN', () => {
+    // There is no `-p` step on the host to decide exposure, and Huddle Node can
+    // exec into containers and rewrite firewall policy. 0.0.0.0 here would put
+    // that on every interface the machine has.
+    expect(env.apiBindHost).toBe('127.0.0.1');
   });
 });
 
@@ -101,6 +112,14 @@ describe('resolveRuntimeEnv — explicit env always wins', () => {
     const env = resolveRuntimeEnv({ DB_PATH: '  ', HUDDLE_API_PORT: '' });
     expect(env.dbPath).toBe('/data/huddle.db');
     expect(env.apiPort).toBe(3000);
+  });
+
+  it('lets the bind host be widened deliberately, in either mode', () => {
+    // The escape hatch for the step-4c reachability problem: a gateway container
+    // on Linux cannot reach a loopback-bound Node. Opting in is a decision the
+    // operator makes explicitly — it is never the default.
+    expect(resolveRuntimeEnv({ HUDDLE_HOST_MODE: '1', HUDDLE_API_HOST: '172.17.0.1' }).apiBindHost).toBe('172.17.0.1');
+    expect(resolveRuntimeEnv({ HUDDLE_API_HOST: '  ' }).apiBindHost).toBe('0.0.0.0');
   });
 });
 

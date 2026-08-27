@@ -359,3 +359,25 @@ Answered by inspection, to be confirmed in step 3/6:
     conflicts with every concurrent branch. Steps 1–2 preserved CRLF via
     `git -c core.autocrlf=false add`. Normalizing both files to LF is worth doing,
     but as its own commit, on a quiet branch point.
+
+13. **The two halves cannot reach each other without widening a bind address.**
+    `api.ts` listened on `0.0.0.0`. In the container that is the only sensible
+    choice — Docker reaches the API on the container's veth address and `-p
+    3000:3000` decides what the outside world sees. On the host there is no
+    publish step, so the same literal would put Huddle Node — which execs into
+    containers, runs terminals and rewrites firewall policy — on every interface
+    the machine has, with the operator token as the only barrier. Host mode
+    therefore binds `127.0.0.1` (`apiBindHost`, overridable via `HUDDLE_API_HOST`).
+
+    That is the safe default, and it collides with step 4c. A gateway CONTAINER
+    reaching Huddle Node on the host works differently per platform: on Docker
+    Desktop `host.docker.internal` reaches services bound to the host's loopback,
+    but on Linux it resolves to the bridge address (`172.17.0.1`), where a
+    loopback-bound Node is invisible. So on Linux the control channel needs
+    either an explicit bind on the bridge address or a different transport.
+
+    Recorded rather than guessed at, because the choice is a security decision,
+    not a configuration detail: every option here is a new listener that
+    devcontainers share a network segment with. Whatever 4c picks must come with
+    the proxy-side guard that devcontainer traffic can never be forwarded to the
+    control endpoint, regardless of what the operator has allowlisted.
