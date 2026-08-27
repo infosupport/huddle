@@ -1,26 +1,25 @@
-// What Huddle Node publishes to the gateway.
+// The shapes that cross the control channel.
 //
 // The gateway needs three things from the control plane to filter traffic:
 // the firewall policy, the set of sandboxes a fleet decision merges across, and
-// the IP→container mapping that attributes a connection to a devcontainer.
-// Today it gets all three by reading SQLite and the Docker socket itself. After
-// the split it has neither, so Node serves them here.
+// the IP→container mapping that attributes a connection to a devcontainer. It
+// has none of them locally after the split — no database, no Docker socket — so
+// Huddle Node serves them here and the gateway reports back what it decided.
 //
 // These are FEEDS, not queries. The gateway holds the whole thing in memory and
-// decides locally (see ./decide) — asking Node per request would put Node in the
-// hot path and stop all egress the moment it is down. Both feeds are therefore
-// versioned so the gateway can poll cheaply and only pay for a real change.
+// decides locally (see ./select and ./decide) — asking Node per request would
+// put Node in the hot path and stop all egress the moment it is down. Both
+// feeds are therefore versioned so the gateway can poll cheaply and only pay for
+// a real change; versioning is a content hash (see ./http).
 //
-// Versioning is a content hash (see ./http). A rule set is small — hundreds of
-// rows — so hashing the whole thing per poll is not worth optimizing.
+// This module is types only, and deliberately: the gateway imports it, and it
+// must not drag in the database that ./feed-build reads. Everything here is
+// serialized as JSON, so keep it to plain data.
 
-import { db } from '../db';
-import { containerIpMap } from '../docker';
-import { knownSandboxNames } from '../sandbox/registry';
 import type { RuleRow } from '../rule-match';
-import { feedVersion } from './http';
-
-/** The firewall policy, in the form `decide()` needs it. */
+import type { PolicyEffect } from './decide';
+import type { AuditEntry, AuditResponse } from '../db-types';
+/** The firewall policy, whole. `./select` turns it into per-request snapshots. */
 export interface PolicyFeed {
   version: string;
   rules: RuleRow[];
@@ -36,28 +35,64 @@ export interface ContainerFeed {
   byIp: Record<string, string>;
 }
 
-export function buildPolicyFeed(): PolicyFeed {
-  // ORDER BY id so the hash is a function of the content and not of whatever
-  // order SQLite happened to return rows in.
-  const rules = db
-    .prepare(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode
-       FROM rules ORDER BY id`
-    )
-    .all() as RuleRow[];
-  const airlocked = (db
-    .prepare(`SELECT name FROM containers WHERE airlocked = 1 ORDER BY name`)
-    .all() as { name: string }[]).map((r) => r.name);
-  const sandboxes = [...knownSandboxNames()].sort();
+// ── The write half ───────────────────────────────────────────────────────────
+//
+// A decision is made in the gateway but written down by Node: the rules table
+// and the audit log are Node's. The gateway therefore batches what it decided
+// and posts it here — asynchronously, because the request it describes has
+// already been answered.
 
-  const feed: PolicyFeed = { version: '', rules, airlocked, sandboxes };
-  feed.version = feedVersion(JSON.stringify({ rules, airlocked, sandboxes }));
-  return feed;
+/**
+ * A request the gateway logged. `ref` is the gateway's own handle for the row —
+ * it cannot know the id Node's database will assign, so it mints a local one and
+ * refers to it again when the response comes in. Node keeps the mapping.
+ */
+export interface ReportAudit {
+  ref: number;
+  entry: AuditEntry;
+  /**
+   * Index into `effects` of the `create-requested` this entry refers to. The
+   * rule did not exist when the request was blocked, so its id is Node's to
+   * assign and to fill in here — that id is what makes the blocked host
+   * clickable in the portal.
+   */
+  ruleFromEffect?: number;
 }
 
-export async function buildContainerFeed(): Promise<ContainerFeed> {
-  const map = await containerIpMap();
-  const byIp: Record<string, string> = {};
-  for (const ip of [...map.keys()].sort()) byIp[ip] = map.get(ip)!;
-  return { version: feedVersion(JSON.stringify(byIp)), byIp };
+/** The response fields of a request logged earlier, by the same `ref`. */
+export interface ReportAuditUpdate {
+  ref: number;
+  response: AuditResponse;
+}
+
+/**
+ * A sudo command a devcontainer ran, on its way to the audit log.
+ *
+ * The devcontainer POSTs the raw sudo line to Huddle through the proxy; the
+ * gateway answers that itself and forwards the line here rather than letting it
+ * through to an API that no longer sits behind it (proxy-self.ts).
+ *
+ * `containerId` comes from the gateway's own IP→container lookup, never from the
+ * body — a devcontainer cannot file sudo activity under another container's
+ * name, which is the property the old ingest had for the same reason.
+ */
+export interface SudoAudit {
+  containerId: string;
+  entry: string;
+}
+
+export interface ReportBody {
+  /**
+   * Identifies the gateway process. Refs are per-process counters, so a restart
+   * reuses low numbers; without this Node could match a fresh ref to a stale
+   * mapping and attach a response to somebody else's audit row.
+   */
+  session: string;
+  /** Applied in order. `create-requested` mints rows the audits refer to. */
+  effects: PolicyEffect[];
+  audits: ReportAudit[];
+  auditUpdates: ReportAuditUpdate[];
+  sudoAudits: SudoAudit[];
+  /** What the gateway dropped when the queue overflowed, so Node can say so. */
+  dropped?: number;
 }

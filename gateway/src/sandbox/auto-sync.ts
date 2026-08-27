@@ -14,7 +14,7 @@ import { reconcile } from './reconcile';
 import * as ops from './ops';
 import { isValidSandboxName } from './protocol';
 import { setKnownSandboxes } from './registry';
-import { matchDomain } from '../rules';
+import { matchDomain } from '../rule-match';
 
 const DEBOUNCE_MS = Number(process.env.HUDDLE_SBX_RECONCILE_DEBOUNCE_MS ?? '1500');
 const POLL_MS = Number(process.env.HUDDLE_SBX_INGEST_INTERVAL_MS ?? '20000');

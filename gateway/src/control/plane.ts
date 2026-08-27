@@ -1,36 +1,40 @@
 // The gateway's view of the control plane.
 //
 // Everything the filtering proxy needs from outside itself passes through here:
-// firewall policy, the IP→container mapping, and the audit sink. Today every
-// one of them is satisfied in-process by SQLite and the Docker socket, and this
-// module is a thin pass-through — binding it changes no behaviour.
+// firewall policy, the IP→container mapping, and the audit sink. The proxy has
+// exactly ONE seam to the control plane instead of four direct imports
+// (`rules`, `db`, `docker`, `sandbox/registry`), and that seam is now genuinely
+// remote: Huddle Node runs on the host and owns the database, the Docker socket
+// and the sandbox registry, while the gateway keeps only the proxies
+// (docs/ADR-huddle-node-split.md).
 //
-// It exists so that the proxy has exactly ONE seam to the control plane instead
-// of four direct imports (`rules`, `db`, `docker`, `sandbox/registry`). When
-// Huddle Node moves to the host (docs/ADR-huddle-node-split.md) the gateway
-// keeps only the proxy, and this is the interface a remote binding has to
-// satisfy — the surface to replace is visible in one file rather than spread
-// over 40 call sites.
+// There is one binding, ./client, and no in-process fallback. A second
+// implementation reading SQLite directly would be a second definition of the
+// firewall — and the one that drifts is the one nobody runs in production.
 //
-// WHAT A REMOTE BINDING STILL HAS TO SOLVE
-//   `checkRule` is not a read. On a miss it INSERTS a `requested` rule so the
-//   operator sees the blocked host in the portal, refreshes last-seen metadata,
-//   expires timed-out allows, fires a UI event, and then re-reads the row to
-//   return the database-assigned `ruleId`. A gateway holding only a pushed
-//   policy snapshot cannot mint that id — it is Node's to assign. Splitting the
-//   evaluation into a pure decision plus a stream of effects (the decision
-//   applies locally, the effects reach Node asynchronously and the audit row is
-//   correlated there) is the next step, deliberately not taken in this commit.
+// HOW THE WRITES GET DONE
+//   `checkRule` is not a read. On a miss the answer implies a `requested` rule
+//   so the operator sees the blocked host in the portal, refreshed last-seen
+//   metadata, expired allows reset, and an audit row. The gateway cannot perform
+//   any of that: it has no database. So the decision is split in two —
+//   ./decide returns the answer plus an explicit list of effects, the answer is
+//   applied here and now, and the effects are batched to Node (./client), which
+//   writes them down (./apply). The one thing that cannot be deferred is the id
+//   of a rule that does not exist yet, which is why an audit entry may carry a
+//   `ruleRef` pointing at the effect that mints it.
 
-import { checkRule, checkFleetRule, isPathMode } from '../rules';
-import { knownSandboxNames } from '../sandbox/registry';
-import { resolveContainerByIp } from '../docker';
-import { logAudit, updateAuditResponse, type AuditEntry, type AuditResponse } from '../db';
-import type { RuleStatus } from '../rules';
+import type { AuditEntry, AuditResponse } from '../db-types';
+import type { RuleStatus } from '../rule-match';
 
 export interface RuleDecision {
   status: RuleStatus;
   ruleId: number | null;
+  /**
+   * Set when this decision filed a NEW rule, whose id only exists once Node has
+   * applied the effect. Pass it to `logAudit` as `entry.ruleRef` to have the
+   * audit row point at that rule anyway.
+   */
+  ruleRef?: number | null;
 }
 
 export interface ControlPlane {
@@ -44,33 +48,45 @@ export interface ControlPlane {
   knownSandboxNames(): Set<string>;
   /** Map a connection's source address to the container that owns it. */
   resolveContainerByIp(ip: string): Promise<string | null>;
-  /** Record a request. The returned id correlates the later response update. */
+  /** Record a request. The returned ref correlates the later response update. */
   logAudit(entry: AuditEntry): number | null;
   /** Fill in the response fields on a previously logged in-flight request. */
-  updateAuditResponse(id: number, response: AuditResponse): void;
+  updateAuditResponse(ref: number, response: AuditResponse): void;
+  /**
+   * Hand a raw sudo log line to Node, which parses and files it.
+   *
+   * Devcontainers post these to Huddle themselves (docker.ts installs the
+   * forwarder), and the endpoint they post to is answered by the proxy — so this
+   * relay is what keeps that contract working now that the gateway has no API
+   * and no database. `containerId` is the gateway's own IP→container lookup,
+   * never anything the caller sent.
+   */
+  reportSudoAudit(containerId: string, entry: string): void;
 }
 
-// The combined-process binding: straight through to the modules the proxy used
-// to import directly. This is the behaviour of every Huddle release so far.
-export const inProcessControlPlane: ControlPlane = {
-  checkRule: (domain, containerId, path) => checkRule(domain, containerId, path),
-  checkFleetRule: (domain, sandboxNames, path) => checkFleetRule(domain, sandboxNames, path),
-  isPathMode: (domain, containerId) => isPathMode(domain, containerId),
-  knownSandboxNames: () => knownSandboxNames(),
-  resolveContainerByIp: (ip) => resolveContainerByIp(ip),
-  logAudit: (entry) => logAudit(entry),
-  updateAuditResponse: (id, response) => updateAuditResponse(id, response),
+// What the proxy sees before anything is bound. Not a stub for tests: it is the
+// answer during the seconds between the process starting and the control client
+// connecting, and the only safe answer then is no.
+const unboundControlPlane: ControlPlane = {
+  checkRule: () => ({ status: 'deny', ruleId: null }),
+  checkFleetRule: () => ({ status: 'deny', ruleId: null }),
+  isPathMode: () => false,
+  knownSandboxNames: () => new Set(),
+  resolveContainerByIp: async () => null,
+  logAudit: () => null,
+  updateAuditResponse: () => {},
+  reportSudoAudit: () => {},
 };
 
-let active: ControlPlane = inProcessControlPlane;
+let active: ControlPlane = unboundControlPlane;
 
-/** Swap the binding. Used by tests today; by the host binding later. */
+/** Bind the plane. Done once at boot by ./client; and by tests. */
 export function setControlPlane(plane: ControlPlane): void {
   active = plane;
 }
 
 export function resetControlPlane(): void {
-  active = inProcessControlPlane;
+  active = unboundControlPlane;
 }
 
 // Read through `active` on every call rather than destructuring it once, so a
@@ -82,5 +98,6 @@ export const controlPlane: ControlPlane = {
   knownSandboxNames: () => active.knownSandboxNames(),
   resolveContainerByIp: (ip) => active.resolveContainerByIp(ip),
   logAudit: (entry) => active.logAudit(entry),
-  updateAuditResponse: (id, response) => active.updateAuditResponse(id, response),
+  updateAuditResponse: (ref, response) => active.updateAuditResponse(ref, response),
+  reportSudoAudit: (containerId, entry) => active.reportSudoAudit(containerId, entry),
 };

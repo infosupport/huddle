@@ -5,21 +5,26 @@
 //                     running directly on the user's HOST.
 //   huddle-gateway  — the network enforcement point, staying in Docker.
 //
-// Until that split lands, one process still plays both roles. Every value that
-// differs between "inside the gateway container" and "on the host" used to be a
-// literal scattered across db.ts, auth.ts, api.ts, docker.ts, terminal.ts,
-// socket-proxy.ts, tls-ca.ts and extensions/loader.ts — some env-overridable,
-// some not (API_PORT, SOCKET_DIR and nine copies of /var/run/docker.sock). That
-// made "run the gateway on the host" a matter of guessing which env vars exist.
+// There are exactly TWO configurations, and no third: Huddle Node runs on the
+// host, huddle-gateway runs in the container. Every value that differs between
+// them used to be a literal scattered across db.ts, auth.ts, api.ts, docker.ts,
+// terminal.ts, socket-proxy.ts, tls-ca.ts and extensions/loader.ts — some
+// env-overridable, some not (API_PORT, SOCKET_DIR and nine copies of
+// /var/run/docker.sock). That made "run this half over there" a matter of
+// guessing which env vars exist.
 //
 // This module is the single answer to that question. It resolves the ROLE the
 // process plays and every path/port binding once, at import time, from:
 //
-//   1. an explicit env var        — always wins, in either mode;
-//   2. the mode default           — container (today) or host (HUDDLE_HOST_MODE=1).
+//   1. an explicit env var  — always wins;
+//   2. the role default     — host layout for `node`, container layout for `gateway`.
 //
-// Container defaults are byte-identical to the literals they replace, so an
-// unmodified `huddle init` against an unmodified image behaves exactly as before.
+// The role IS the deployment: there is no separate "host mode" switch, because
+// the two never crossed in practice — a Node in a container has no Docker to
+// orchestrate and no sbx to exec, and a gateway on the host is not an
+// enforcement point. `hostMode` is therefore derived, kept only because a dozen
+// call sites read better asking "am I on the host" than "is my role node".
+//
 // It imports nothing from the rest of the gateway (db.ts pulls it in first), so
 // it can never participate in an import cycle.
 
@@ -29,20 +34,21 @@ import path from 'path';
 /**
  * Which half of the split this process is running.
  *
- *  - `all`     — one process does everything (today's behaviour, the default).
- *  - `node`    — Huddle Node: portal/API, Docker orchestration, sbx. No proxies.
- *  - `gateway` — the enforcement point: filtering proxies only.
+ *  - `node`    — Huddle Node on the host: portal/API, Docker orchestration,
+ *                config, extensions, sbx. Owns the database. No proxies.
+ *  - `gateway` — the enforcement point in the container: the filtering proxies
+ *                and nothing else. No database, no Docker socket, no API.
  *
- * Nothing branches on this yet; startup gating is the next step. It lives here
- * so there is exactly one parser for it.
+ * Defaults to `node` because that is what a bare `node dist/index.js` on a
+ * developer's machine should be; the image sets HUDDLE_ROLE=gateway explicitly.
  */
-export type HuddleRole = 'all' | 'node' | 'gateway';
+export type HuddleRole = 'node' | 'gateway';
 
-const VALID_ROLES: readonly HuddleRole[] = ['all', 'node', 'gateway'];
+const VALID_ROLES: readonly HuddleRole[] = ['node', 'gateway'];
 
 function parseRole(raw: string | undefined): HuddleRole {
   const value = (raw ?? '').trim().toLowerCase();
-  if (!value) return 'all';
+  if (!value) return 'node';
   if ((VALID_ROLES as readonly string[]).includes(value)) return value as HuddleRole;
   throw new Error(`HUDDLE_ROLE must be one of ${VALID_ROLES.join(' | ')} — got "${raw}"`);
 }
@@ -63,7 +69,7 @@ export interface RuntimeEnv {
   runsGateway: boolean;
   /** Runs the control plane: API, UI, Docker orchestration, sbx, config. */
   runsNode: boolean;
-  /** True when Huddle runs directly on the user's machine instead of in the gateway container. */
+  /** True when this process runs directly on the user's machine. Derived from the role. */
   hostMode: boolean;
   /** Portal + REST/WS API. */
   apiPort: number;
@@ -72,6 +78,12 @@ export interface RuntimeEnv {
    * resolveRuntimeEnv for why that is not the same choice as in a container.
    */
   apiBindHost: string;
+  /** Port the control channel listens on (Node) — never the portal's. */
+  controlPort: number;
+  /** Interface the control channel listens on. See resolveRuntimeEnv. */
+  controlBindHost: string;
+  /** Base URL the gateway reaches Node's control channel on. Gateway-side only. */
+  nodeControlUrl: string;
   /** The filtering proxy devcontainers are DNAT'ed to. Gateway-side only. */
   proxyPort: number;
   /** Dedicated egress proxy for sbx sandboxes. Gateway-side only. */
@@ -103,7 +115,8 @@ export interface RuntimeEnv {
  */
 export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): RuntimeEnv {
   const role = parseRole(env.HUDDLE_ROLE);
-  const hostMode = env.HUDDLE_HOST_MODE === '1';
+  // Derived, not configured: `node` is the host half by definition.
+  const hostMode = role === 'node';
 
   // In host mode Huddle owns ~/.huddle outright: it is both the state directory
   // and the config directory the CLI already writes (cli/src/config.ts).
@@ -129,11 +142,13 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
   // between that and the network, and one shared secret should not be the sole
   // barrier for an interface nobody meant to open. So host mode binds loopback.
   //
-  // Consequence, and it is a real one: a gateway CONTAINER cannot reach a
-  // loopback-bound Node on Linux, where `host.docker.internal` resolves to the
-  // bridge address rather than the host's loopback. The control channel (step 4c)
-  // therefore has to say explicitly how the two halves meet; the override exists
-  // for that, not as an invitation to widen the default.
+  // The gateway container cannot reach a loopback-bound Node on Linux, where
+  // host.docker.internal resolves to the bridge address rather than the host's
+  // loopback. That is precisely why the control channel is a SEPARATE listener
+  // (controlPort/controlBindHost below) instead of another route on this one:
+  // widening the portal to reach the gateway would put the operator token's
+  // surface on the bridge, where every container on the default network could
+  // knock on it. The portal stays loopback; only the control channel moves.
   const apiBindHost = env.HUDDLE_API_HOST?.trim() || (hostMode ? '127.0.0.1' : '0.0.0.0');
 
   // Windows has no Unix socket for the engine; Node accepts the named pipe as a
@@ -144,18 +159,36 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
 
   return {
     role,
-    runsGateway: role === 'all' || role === 'gateway',
-    runsNode: role === 'all' || role === 'node',
+    runsGateway: role === 'gateway',
+    runsNode: role === 'node',
     hostMode,
     apiPort,
     apiBindHost,
+    controlPort: parsePort(env.HUDDLE_CONTROL_PORT, 24843, 'HUDDLE_CONTROL_PORT'),
+    // Loopback by default. `huddle init` overrides this with the Docker bridge
+    // address on Linux, where that is the only address the gateway container can
+    // reach the host on. Devcontainers cannot: their network is --internal and
+    // therefore has no route off itself.
+    controlBindHost: env.HUDDLE_CONTROL_HOST?.trim() || '127.0.0.1',
+    // Where the GATEWAY finds Node. host.docker.internal is provided by Docker
+    // Desktop and injected by `huddle init` (--add-host=…:host-gateway) on Linux.
+    nodeControlUrl: env.HUDDLE_NODE_CONTROL_URL?.trim() || 'http://host.docker.internal:24843',
     proxyPort: parsePort(env.HUDDLE_PROXY_PORT, 80, 'HUDDLE_PROXY_PORT'),
     sbxProxyPort: parsePort(env.HUDDLE_SBX_PROXY_PORT, 32768, 'HUDDLE_SBX_PROXY_PORT'),
     dockerSocketPath: env.HUDDLE_DOCKER_SOCKET?.trim() || defaultDockerSocket,
     socketDir: env.HUDDLE_SOCKET_DIR?.trim() || '/tmp/dc-sockets',
     dataDir,
     dbPath: env.DB_PATH?.trim() || path.join(dataDir, 'huddle.db'),
-    caDir: env.CA_DIR?.trim() || dataDir,
+    // Node generates the CA and owns it; the gateway only SIGNS leaf certs with
+    // it and gets the directory bind-mounted read-only at /ca. One CA, one
+    // writer — two halves each minting their own root would validate nothing.
+    //
+    // Its own subdirectory, not dataDir: the gateway needs ca.key as well as
+    // ca.crt to sign with, so this directory is what gets mounted. dataDir also
+    // holds the SQLite database and the operator token, and handing those to the
+    // half a devcontainer can reach — read-only or not — would give back exactly
+    // what the split took away.
+    caDir: env.CA_DIR?.trim() || (hostMode ? path.join(dataDir, 'ca') : '/ca'),
     extDir: env.EXT_DIR?.trim() || path.join(dataDir, 'extensions'),
     homeDir,
     firewallRulesMount: env.HUDDLE_FIREWALL_RULES_MOUNT?.trim() || '/firewall-rules',

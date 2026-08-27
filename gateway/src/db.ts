@@ -1,3 +1,4 @@
+import type { AuditEntry, AuditResponse } from './db-types';
 import Database from 'better-sqlite3';
 import { runtimeEnv } from './runtime-env';
 
@@ -357,20 +358,11 @@ function insertAudit() {
   return _insertAudit;
 }
 
-export interface AuditEntry {
-  containerId: string | null;
-  domain: string;
-  port?: number | null;
-  action: string;
-  ruleId?: number | null;
-  method?: string | null;
-  path?: string | null;
-  reqHeaders?: string | null;
-  reqBody?: string | null;
-  resStatus?: number | null;
-  resHeaders?: string | null;
-  resBody?: string | null;
-}
+
+// The audit row shapes live in ./db-types so the gateway can name them without
+// importing a native database binding. Re-exported here: every caller so far
+// imports them from './db', and that is still where they are written.
+export type { AuditEntry, AuditResponse } from './db-types';
 
 // Insert a single audit row. Returns the new row id (or null on error) so an
 // in-flight request can be logged immediately and later completed with the
@@ -397,12 +389,6 @@ export function logAudit(entry: AuditEntry): number | null {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _updateAudit: any = null;
-export interface AuditResponse {
-  reqBody?: string | null;
-  resStatus?: number | null;
-  resHeaders?: string | null;
-  resBody?: string | null;
-}
 
 // Fill in the response fields (and the now fully buffered req_body) on a
 // previously inserted in-flight audit row.
