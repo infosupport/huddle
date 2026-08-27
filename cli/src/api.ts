@@ -1,6 +1,10 @@
 import { operatorToken } from './config';
+import { DEFAULT_NODE_PORT, nodeUrl } from './node';
 
-let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? 'http://localhost:3000');
+// Huddle Node, on the host, on loopback. Not 3000 and not a container address:
+// after the Node/Gateway split the API this talks to is the host process, and
+// the gateway container has no API at all (docs/ADR-huddle-node-split.md).
+let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? nodeUrl(DEFAULT_NODE_PORT));
 
 export class ApiError extends Error {
   constructor(

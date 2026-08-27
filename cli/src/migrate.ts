@@ -4,6 +4,7 @@ import path from 'path';
 import { bold, green, cyan, dim, yellow, red } from './utils';
 import { resolveRuntime } from './runtime';
 import { INTERNAL_NET, HOST_SOCKET_DIR } from './init';
+import { nodeCaDir } from './node';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Conventions
@@ -35,6 +36,8 @@ export const OVERRIDE_FILENAME = 'docker-compose.huddle.yml';
 export interface OverrideOptions {
   /** Where the CA ends up in the container (NODE_EXTRA_CA_CERTS). */
   caPath?: string;
+  /** The CA file on the host to mount from (defaults to Huddle Node's ca/ca.crt). */
+  hostCaPath?: string;
   /** Also inject the filtered Docker socket mount + DOCKER_HOST (opt-in). */
   dockerSocket?: boolean;
   /** Network key/name that points at Huddle's internal net (defaults to HUDDLE_NET_KEY). */
@@ -198,6 +201,7 @@ interface InjectContext {
   markedNetwork: string;
   huddleNetKey: string;
   caPath: string;
+  hostCaPath: string;
   socketDir: string;
   dockerSocket: boolean;
 }
@@ -225,11 +229,19 @@ function buildInjectedService(
     }
   }
 
+  // The MITM CA is mounted, not fetched. Huddle Node holds the CA on the host and
+  // the gateway only gets it read-only, so there is no endpoint in the gateway to
+  // download it from — and adding one would be a devcontainer→Huddle path we
+  // deliberately do not have. A read-only bind is also what Huddle's own
+  // containers get, just seeded differently.
+  const volumes = [`${ctx.hostCaPath}:${ctx.caPath}:ro`];
+
   const injected: ComposeService = {
     // Keep the service on its own network AND add the Huddle egress network.
     // Map form is robust regardless of Compose's list merge semantics.
     networks: { [ctx.markedNetwork]: null, [ctx.huddleNetKey]: null },
     environment: huddleProxyEnv(ctx.caPath, ctx.dockerSocket),
+    volumes,
   };
 
   if (ctx.dockerSocket) {
@@ -240,7 +252,7 @@ function buildInjectedService(
           'at a stable path. Set a fixed container_name or drop --docker-socket for this service.',
       );
     } else {
-      injected.volumes = [`${ctx.socketDir}/${cn}:/var/run/huddle`];
+      volumes.push(`${ctx.socketDir}/${cn}:/var/run/huddle`);
     }
   }
 
@@ -249,6 +261,7 @@ function buildInjectedService(
 
 export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): AnalysisResult {
   const caPath = opts.caPath ?? DEFAULT_CA_PATH;
+  const hostCaPath = opts.hostCaPath ?? path.join(nodeCaDir(), 'ca.crt');
   const internalNet = opts.internalNet ?? INTERNAL_NET;
   const socketDir = opts.socketDir ?? HOST_SOCKET_DIR;
   const warnings: string[] = [];
@@ -275,7 +288,14 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
     warnings.push(`No service is attached to the marked network "${markedNetwork}"; the override wires nothing.`);
   }
 
-  const ctx: InjectContext = { markedNetwork, huddleNetKey, caPath, socketDir, dockerSocket: !!opts.dockerSocket };
+  const ctx: InjectContext = {
+    markedNetwork,
+    huddleNetKey,
+    caPath,
+    hostCaPath,
+    socketDir,
+    dockerSocket: !!opts.dockerSocket,
+  };
   const overrideServices: Record<string, ComposeService> = {};
   for (const name of services) {
     const svc = (compose.services?.[name] ?? {}) as ComposeService;
@@ -692,7 +712,8 @@ export async function runMigrate(opts: MigrateOptions): Promise<void> {
     throw new Error(`Could not parse ${composeFile}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const result = buildOverride(compose, { caPath, dockerSocket: opts.dockerSocket });
+  const hostCaPath = path.join(nodeCaDir(), 'ca.crt');
+  const result = buildOverride(compose, { caPath, hostCaPath, dockerSocket: opts.dockerSocket });
 
   console.log(`Marked network:  ${bold(result.markedNetwork)}`);
   console.log(`Wired services:  ${result.services.length ? result.services.map(bold).join(', ') : dim('(none)')}`);
@@ -731,10 +752,21 @@ export async function runMigrate(opts: MigrateOptions): Promise<void> {
     console.log();
   }
 
-  printNextSteps(composeFile, outPath, caPath, !!opts.dockerSocket);
+  if (!fs.existsSync(hostCaPath)) {
+    console.log(yellow(`[!] ${hostCaPath} does not exist yet — the override mounts it. Run \`huddle init\` first.`));
+    console.log();
+  }
+
+  printNextSteps(composeFile, outPath, caPath, hostCaPath, !!opts.dockerSocket);
 }
 
-function printNextSteps(composeFile: string, outPath: string, caPath: string, dockerSocket: boolean): void {
+function printNextSteps(
+  composeFile: string,
+  outPath: string,
+  caPath: string,
+  hostCaPath: string,
+  dockerSocket: boolean,
+): void {
   const composeBase = path.basename(composeFile);
   const overrideBase = path.basename(outPath);
 
@@ -743,12 +775,8 @@ function printNextSteps(composeFile: string, outPath: string, caPath: string, do
   console.log('  1. Make sure Huddle is running:');
   console.log(cyan('       huddle init'));
   console.log();
-  console.log('  2. Fetch the Huddle CA inside the container. Add to your devcontainer.json:');
-  console.log(
-    cyan(
-      `       "postCreateCommand": "curl -fsS http://huddle:3000/api/tls/ca.crt -o ${caPath} || echo 'CA not fetched (HTTPS tunnelled, no MITM)'"`,
-    ),
-  );
+  console.log('  2. The Huddle CA is mounted read-only by the override — nothing to fetch:');
+  console.log(cyan(`       ${hostCaPath}  ->  ${caPath}`));
   console.log(dim(`     (Adjust ${caPath} to your remoteUser's home if it differs; pass --ca-path to change it.)`));
   console.log();
   console.log('  3. Reference the override so the IDE merges it. In devcontainer.json:');

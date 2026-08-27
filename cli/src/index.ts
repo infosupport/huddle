@@ -6,7 +6,7 @@ import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
-import { runNode } from './node';
+import { runNode, nodeUrl } from './node';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
@@ -245,7 +245,7 @@ Firewall export/import options:
                                      scope first (default: merge/upsert)
 
 Global options:
-  --url <url>                        Huddle URL (default: http://localhost:3000)
+  --url <url>                        Huddle URL (default: http://localhost:24842)
                                      Or via the HUDDLE_URL env var
   --help, -h                         Show help
   --version, -v                      Show version (as published to
@@ -276,7 +276,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL ?? 'http://localhost:3000';
+  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL ?? nodeUrl();
   setBaseUrl(url);
 
   const startsWithExistingPath = cmd !== undefined && !COMMANDS.has(cmd) && fs.existsSync(path.resolve(cmd));
@@ -299,9 +299,9 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'node') {
-    // Runs Huddle Node in the foreground on this host (control plane only; the
-    // firewall stays in huddle-gateway). Additive for now — `huddle init` still
-    // starts the combined container. See docs/ADR-huddle-node-split.md.
+    // Runs Huddle Node in the FOREGROUND on this host — the shape you want
+    // while working on Huddle itself. `huddle init` starts the same process
+    // detached, alongside the gateway container.
     await runNode({
       entry: flagString(flags, 'entry'),
       port: flagString(flags, 'port'),

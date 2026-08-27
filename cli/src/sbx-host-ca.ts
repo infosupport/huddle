@@ -28,11 +28,9 @@ import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import { CONFIG_DIR } from './config';
 import { resolveSbxBin } from './sbx-host';
+import { nodeCaDir } from './node';
 import { dim, green, yellow } from './utils';
 
-const CONTAINER = 'huddle';
-/** Where the gateway keeps its MITM CA (CA_DIR in gateway/src/tls-ca.ts). */
-const CA_IN_CONTAINER = '/data/ca.crt';
 /** Stable host path, so re-running init points at the same file. */
 export const HOST_CA_PATH = path.join(CONFIG_DIR, 'huddle-ca.crt');
 const LINUX_CA_PATH = '/usr/local/share/ca-certificates/huddle-ca.crt';
@@ -73,18 +71,23 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * Read the CA out of the running gateway. `initCa()` writes it on boot, so
- * straight after `docker run` the file can be a beat late — retry briefly.
+ * Read the CA off this machine. It used to take a `docker exec` into the gateway
+ * container, because that is where the CA lived; Huddle Node owns it now and
+ * writes it to ~/.huddle/ca (gateway/src/runtime-env.ts), so this is a file read.
+ *
+ * Still retried: initCa() runs during Node's boot, and `huddle init` calls this
+ * moments after the process reported healthy.
  */
-function readCaFromGateway(rt: string, tries = 12): string | null {
+function readHostCa(tries = 12): string | null {
+  const caPath = path.join(nodeCaDir(), 'ca.crt');
   for (let i = 0; i < tries; i++) {
-    const r = run(rt, ['exec', CONTAINER, 'cat', CA_IN_CONTAINER], 15_000);
-    if (r.code === 0 && r.out.includes('-----BEGIN CERTIFICATE-----')) return r.out;
-    // Retry ONLY the race we know is transient: the gateway is up but initCa()
-    // has not written the file yet. Anything else (no container, engine
-    // unreachable, socket denied) will not fix itself — fail fast instead.
-    const stillBooting = r.out === '' || /no such file|is restarting/i.test(r.out);
-    if (!stillBooting || i === tries - 1) return null;
+    try {
+      const pem = fs.readFileSync(caPath, 'utf8');
+      if (pem.includes('-----BEGIN CERTIFICATE-----')) return pem;
+    } catch {
+      // Not written yet — that is the race this loop exists for.
+    }
+    if (i === tries - 1) return null;
     sleepSync(500);
   }
   return null;
@@ -180,18 +183,18 @@ function installLinux(certPath: string, pem: string, fp: string): TrustHostResul
 }
 
 /**
- * Export Huddle's CA from the gateway and trust it on the HOST, then restart the
- * sbx daemon so it reloads its root set. Never throws — sandbox mode is optional
+ * Trust Huddle's CA on the HOST, then restart the sbx daemon so it reloads its
+ * root set. Never throws — sandbox mode is optional
  * and this must never fail `huddle init`.
  */
-export function installHostCa(opts: { runtime?: string; restartDaemon?: 'auto' | 'always' | 'never' } = {}): TrustHostResult {
-  const rt = opts.runtime ?? process.env.HUDDLE_RUNTIME?.trim() ?? 'docker';
-  const pem = readCaFromGateway(rt);
+export function installHostCa(opts: { restartDaemon?: 'auto' | 'always' | 'never' } = {}): TrustHostResult {
+  const pem = readHostCa();
   if (!pem) {
+    const caPath = path.join(nodeCaDir(), 'ca.crt');
     return {
       ok: false, alreadyTrusted: false, daemonRestarted: false,
-      error: `could not read ${CA_IN_CONTAINER} from the '${CONTAINER}' container`,
-      manualHint: `${rt} cp ${CONTAINER}:${CA_IN_CONTAINER} "${HOST_CA_PATH}"`,
+      error: `could not read ${caPath} — is Huddle Node running?`,
+      manualHint: `huddle init   (Huddle Node writes the CA on boot)`,
     };
   }
 

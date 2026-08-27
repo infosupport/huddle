@@ -125,7 +125,7 @@ export async function runSbxTrustCa(opts: { name?: string }): Promise<void> {
 export async function runSbxTrustHost(opts: { runtime?: string } = {}): Promise<void> {
   const { installHostCa, printHostCaResult } = await import('./sbx-host-ca');
   console.log('Trusting Huddle’s CA on the host (for the sbx daemon)');
-  const r = installHostCa({ runtime: opts.runtime, restartDaemon: 'always' });
+  const r = installHostCa({ restartDaemon: 'always' });
   printHostCaResult(r);
   if (!r.ok) process.exitCode = 1;
 }
