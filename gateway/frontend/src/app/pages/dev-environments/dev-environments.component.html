@@ -20,7 +20,7 @@
     </thead>
     <tbody>
       @if (rows().length === 0 && loadingSandboxes()) {
-        <tr><td colspan="5"><p class="empty-note"><span class="spinner"></span> Loading sandboxes… (querying the host over the sbx bridge)</p></td></tr>
+        <tr><td colspan="5"><p class="empty-note"><span class="spinner"></span> Loading sandboxes… (querying sbx on the host)</p></td></tr>
       } @else if (rows().length === 0) {
         <tr><td colspan="5"><p class="empty-note">No environments yet — start a devcontainer or create a sandbox.</p></td></tr>
       } @else {

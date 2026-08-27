@@ -157,7 +157,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
   // Auto-sync (sbx mode): after any successful firewall-rule / group mutation, or
   // a sandbox lifecycle change, (re)project Huddle's rules into sbx policy.
-  // Debounced + best-effort — a no-op when the sbx bridge isn't running.
+  // Debounced + best-effort — a no-op when sbx isn't reachable.
   app.addHook('onResponse', async (req, reply) => {
     const m = req.method;
     if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return;

@@ -28,13 +28,12 @@ import { ApiService, SbxStartResult, SbxStatus } from '../../core/services/api.s
 
       @if (status(); as s) {
         <p class="sbx__status">
-          <span class="dot" [class.dot--ok]="s.available && !!s.socket" [class.dot--warn]="!s.available || !s.socket"></span>
+          <span class="dot" [class.dot--ok]="s.available" [class.dot--warn]="!s.available"></span>
           @if (s.available) {
-            sbx client ready ({{ s.version }}) · upstream <code>{{ s.upstreamUrl }}</code>
-            @if (s.socket) { · socket <code>{{ s.socket }}</code> }
-            @else { · <b>daemon socket not mounted</b> — start via <code>huddle init</code> with ~/.sbx present }
+            sbx ready ({{ s.version }}) · upstream <code>{{ s.upstreamUrl }}</code>
+            @if (s.bin) { · <code>{{ s.bin }}</code> }
           } @else {
-            sbx client not bundled/reachable — <code>{{ s.error || 'unknown' }}</code>
+            sbx not usable — <code>{{ s.error || 'unknown' }}</code>
           }
         </p>
       }

@@ -190,7 +190,7 @@ Only once both exist does moving files become a mechanical, reversible step.
 | 4d | **Control channel, write half** — the effect list and audit entries the gateway produces flow back to Node | `control/routes.ts`, proxy-side queue | audit sink | contract tests both sides | additive |
 | 4e | **Remote binding** — the facade reads the polled feeds instead of SQLite/Docker | `control/plane.ts` | rule evaluation input | contract tests both sides | feature-flagged; `all` keeps the in-process binding |
 | 4e′ | **Self-traffic guard** — one tested predicate instead of the `'huddle'` literal at three proxy sites; loopback refused regardless of policy | new `proxy-self.ts`, `proxy.ts` | none — the sudo-audit exception is preserved | `proxy-self.test.ts` (14, pure) | self-addressed hosts stop appearing as `requested` rules (blocker 14) |
-| 5 | **SBX direct exec** — drop the mailbox; `sandbox/ops.ts` execs `sbx` on the host | `sandbox/ops.ts`, delete `bridge/`, `cli/src/sbx-bridge.ts`, the `/sbx-bridge` mount | container→host hop removed | existing `sbx-*.test.ts` keep passing | only lands after step 3 works |
+| 5 | **SBX direct exec** (done) — mailbox dropped; `sandbox/ops.ts` execs `sbx` on the host | deleted `bridge/`, `cli/src/sbx-bridge.ts`, `gateway/sbx.sh`, `run-sandbox-mode.sh`, the `/sbx-bridge` mount; new `cli/src/sbx-host.ts` | container→host hop removed | `sbx-host-only.test.ts` (4); existing sbx tests unchanged | sbx now needs `huddle node` — see the gap below |
 | 6 | **`huddle init` starts both** — gateway container + Huddle Node, health-checked | `cli/src/init.ts` | container startup responsibilities → CLI | init integration test | keep `--gateway-only` escape hatch |
 | 7 | **Slim the gateway** — drop the Docker socket mount, `docker.ts`/`api.ts`/extensions from the image | `gateway/Dockerfile`, split sources | — | e2e firewall suite | last step, most reversible in isolation |
 
@@ -234,6 +234,33 @@ sandbox/ops.ts       the 300 s bridge timeout + MSYS path xlate
 
 After step 5, `ops.ts` runs `execFile('sbx', argv)` for real. The parsers, the
 validation and the reconcile loop are untouched — that is the reusable part.
+
+### What step 5 actually landed
+
+The prediction held: the domain layer never knew about the bridge. `ops.ts` was
+already `execFile($HUDDLE_SBX_BIN, argv)` with a validated argv array and no
+shell, so on the host it needs no retargeting at all — the mailbox lived
+entirely in *what `sbx` on the container's PATH resolved to*. Removing it was a
+deletion plus comment corrections, not a rewrite. The MSYS path translation
+(`/t/x` → `T:\x`) went with it: it existed because argv crossed from a Linux
+container to a Windows host mid-call, which no longer happens.
+
+Two things were extracted rather than deleted, because they are real host
+problems and outlive the bridge: resolving *which* binary (`sbx` vs `sbx.exe`
+vs `HUDDLE_SBX_BIN`) and `windowsHide`, which stops Windows opening a console
+window per spawn. They are now `cli/src/sbx-host.ts`, which `sbx-host-ca.ts`
+already depended on.
+
+**The gap this opens, stated plainly.** sbx is now usable only where sbx can
+actually run: `huddle node` on the host (`HUDDLE_HOST_MODE=1`), or any process
+with an explicit `HUDDLE_SBX_BIN`. A gateway container in the default `all`
+role can no longer drive sandboxes, and until `huddle init` starts Huddle Node
+itself (step 6) that is the configuration most users are in. This is a
+deliberate regression in reach, not an accident: keeping the mailbox alive
+until step 6 would have been keeping it for backwards compatibility, which the
+task rules out. `ops.unavailableReason()` makes the failure legible — the old
+path would have reported `'sbx' not found on PATH`, which reads as a missing
+install and sends people off to reinstall Docker Sandboxes.
 
 ---
 

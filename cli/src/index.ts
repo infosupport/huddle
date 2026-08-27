@@ -10,7 +10,6 @@ import { runNode } from './node';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
-import { startBridge, stopBridge, bridgeStatus, runBridge } from './sbx-bridge';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -170,9 +169,6 @@ Usage:
                                      server". Run by 'huddle init'; idempotent.
   huddle sbx ssh-setup               Enable the SSH bridge (<name>.sbx) for
                                      VS Code / JetBrains remote development
-  huddle sbx bridge [start|stop|status]  Run the host bridge that lets the
-                                     containerized gateway drive sbx (auto-started
-                                     by 'huddle init' when sbx is installed)
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
@@ -448,17 +444,11 @@ async function main(): Promise<void> {
       await runSbxLog({ name: positional[2] ?? flagString(flags, 'name') });
     } else if (subCmd === 'ingest') {
       await runSbxIngest();
-    } else if (subCmd === 'bridge') {
-      const action = positional[2] ?? 'start';
-      if (action === 'run') { runBridge(); return; }        // foreground loop (does not return)
-      else if (action === 'stop') stopBridge();
-      else if (action === 'status') bridgeStatus();
-      else startBridge();                                    // 'start' (default)
     } else if (subCmd === 'ssh-setup' || subCmd === 'ssh') {
       await runSbxSshSetup();
     } else {
       console.error(`Unknown sbx subcommand: ${subCmd}`);
-      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|bridge|log|ingest>');
+      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|log|ingest>');
       process.exit(1);
     }
     return;
