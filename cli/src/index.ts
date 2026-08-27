@@ -22,7 +22,7 @@ import {
   runExperimentUse,
 } from './experiment';
 
-interface ParsedArgs {
+export interface ParsedArgs {
   positional: string[];
   flags: Record<string, string | boolean>;
   mounts: string[];
@@ -32,7 +32,7 @@ const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'contai
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'dry-run']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'node', 'help', 'version']);
 
-function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
   const mounts: string[] = [];
@@ -493,7 +493,9 @@ function flagBool(flags: Record<string, string | boolean>, ...names: string[]): 
   return names.some((name) => flags[name] === true);
 }
 
-main().catch((err: Error) => {
+// Guarded so the arg parser above can be imported by tests without the CLI
+// running itself as a side effect of the import.
+if (require.main === module) main().catch((err: Error) => {
   console.error(`Error: ${err.message ?? err}`);
   if (err instanceof ApiError && err.message.includes('Cannot reach Huddle API')) {
     console.error('\nHuddle does not appear to be running. Start it with:\n  huddle init');
