@@ -294,16 +294,23 @@ Answered by inspection, to be confirmed in step 3/6:
    nothing *ships* one. The published CLI is `files: ["dist"]` with zero runtime
    dependencies; Huddle Node needs fastify, dockerode and `better-sqlite3` — a
    native module requiring per-platform prebuilds (win32/darwin/linux × x64/arm64).
-   Three options, none free:
-   - bundle the gateway build + `node_modules` into the CLI package (fattest, but
-     one install for the operator);
-   - publish a second package `@infosupport/huddle-node` the CLI depends on
-     optionally;
-   - `docker cp` the build out of the gateway image on `huddle init` (keeps npm
-     thin, but Huddle Node then still needs Docker to bootstrap — which is
-     acceptable, since it needs Docker to work at all).
-   **This blocks step 6**, not step 3. It must be decided before `huddle init`
-   can start Huddle Node on an operator's machine.
+   **Decided: bundle the gateway build into the CLI package.** One package, one
+   version, no version skew between the CLI and the Huddle Node it starts, and
+   npm resolves the right `better-sqlite3` prebuild for the host platform at
+   install time. The CLI package gets substantially larger, which is the price.
+
+   The two rejected alternatives, and why:
+   - *A second `@infosupport/huddle-node` package* — thinner CLI, but two
+     packages that can drift out of sync. Real operational cost for no gain
+     while everyone who runs Huddle needs both halves anyway.
+   - *`docker cp` the build out of the gateway image* — **not viable.** The
+     image is Linux/amd64; copying its `node_modules` onto a Windows or macOS
+     host yields a `better-sqlite3` binary that cannot load. This is not
+     hypothetical: the gateway `node_modules` in the dev container already fails
+     with `invalid ELF header` for exactly this reason, which is why 10 test
+     files skip. Only npm (or a per-host rebuild) gets the native module right.
+
+   **This blocks step 6**, not step 3 or 4.
 7. **The resolv.conf seam.** `initContainerNetworks()` is a Docker call (Node),
    but the `/etc/resolv.conf` it corrupts belongs to the *gateway* container
    (`dns-egress.ts`). In one process those chain directly. Split, Node performs
