@@ -59,6 +59,10 @@ function parsePort(raw: string | undefined, fallback: number, name: string): num
 
 export interface RuntimeEnv {
   role: HuddleRole;
+  /** Runs the network data plane: the :80 and sbx egress proxies. */
+  runsGateway: boolean;
+  /** Runs the control plane: API, UI, Docker orchestration, sbx, config. */
+  runsNode: boolean;
   /** True when Huddle runs directly on the user's machine instead of in the gateway container. */
   hostMode: boolean;
   /** Portal + REST/WS API. */
@@ -93,6 +97,7 @@ export interface RuntimeEnv {
  * singleton) so tests can assert both modes without mutating `process.env`.
  */
 export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): RuntimeEnv {
+  const role = parseRole(env.HUDDLE_ROLE);
   const hostMode = env.HUDDLE_HOST_MODE === '1';
 
   // In host mode Huddle owns ~/.huddle outright: it is both the state directory
@@ -112,7 +117,9 @@ export function resolveRuntimeEnv(env: NodeJS.ProcessEnv = process.env): Runtime
     hostMode && process.platform === 'win32' ? '\\\\.\\pipe\\docker_engine' : '/var/run/docker.sock';
 
   return {
-    role: parseRole(env.HUDDLE_ROLE),
+    role,
+    runsGateway: role === 'all' || role === 'gateway',
+    runsNode: role === 'all' || role === 'node',
     hostMode,
     apiPort,
     proxyPort: parsePort(env.HUDDLE_PROXY_PORT, 80, 'HUDDLE_PROXY_PORT'),
