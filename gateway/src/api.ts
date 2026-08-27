@@ -59,11 +59,14 @@ import { scheduleReconcile, ingestPending } from './sandbox/auto-sync';
 import {
   getOperatorToken,
   isAuthenticated,
+  isGatewayAuthenticated,
   timingSafeEqualStr,
   isAllowedOrigin,
   sessionCookie,
   clearSessionCookie,
 } from './auth';
+import { registerControlRoutes } from './control/routes';
+import { isControlPath } from './control/http';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
@@ -134,6 +137,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.addHook('onRequest', async (req, reply) => {
     const url = req.url ?? '';
     const pathOnly = url.split('?')[0];
+    // The control channel belongs to the gateway, not to the operator: its own
+    // token, and the operator's does not open it (auth.ts explains why they are
+    // kept apart). Checked before the /api/ gate below so that adding a route
+    // under /control/ can never inherit the "not /api/, so free" default.
+    if (isControlPath(pathOnly)) {
+      if (!isGatewayAuthenticated(req.headers)) {
+        reply.code(401).send({ error: 'unauthorized', reason: 'gateway authentication required' });
+      }
+      return;
+    }
     if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
     if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
     if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
@@ -251,6 +264,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
       socket.destroy();
     }
   });
+
+  registerControlRoutes(app);
 
   app.register(fastifyStatic, {
     root: UI_DIR,

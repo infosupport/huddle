@@ -74,6 +74,13 @@ async function fetchContainerMap(): Promise<Map<string, string>> {
   return map;
 }
 
+// The same mapping resolveContainerByIp caches, served whole. Huddle Node hands
+// this to the gateway over the control channel, because after the split the
+// gateway has no Docker socket to build it from itself.
+export async function containerIpMap(): Promise<Map<string, string>> {
+  return fetchContainerMap();
+}
+
 export async function resolveContainerByIp(rawIp: string): Promise<string | null> {
   const ip = rawIp.replace(/^::ffff:/, '');
   const now = Date.now();
