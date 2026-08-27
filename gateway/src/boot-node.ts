@@ -10,6 +10,7 @@
 // container feeds, and the endpoint the gateway reports its decisions to. That
 // listener is deliberately NOT the portal's — see control/server.ts.
 
+import { getGatewayToken } from './auth';
 import { initDb } from './db';
 import { runSettingsMigration } from './settings-migration';
 import { createApiServer } from './api';
@@ -86,6 +87,20 @@ export function bootNode(): void {
   // CA, one writer — two processes each minting their own root would validate
   // nothing.
   initCa({ generate: true });
+
+  // Mint the gateway token NOW, before either listener starts.
+  //
+  // It is created on first use, and the gateway's own first use is a /control
+  // request — which it cannot make without already having the token. `huddle
+  // init` breaks that circle by reading it out of the data dir and passing it
+  // into the container, so on a fresh install the file has to exist by the time
+  // Node answers at all, or init dies with a bare
+  // `ENOENT: ... open '~/.huddle/gateway-token'` and never creates the gateway.
+  //
+  // Here rather than in control/server.ts because the two listeners start
+  // concurrently: init waits for the API, so minting it on the control side
+  // would leave a window where the API answers and the file is not there yet.
+  getGatewayToken();
 
   createControlServer().catch(err => {
     console.error('[control] failed to start', err);
