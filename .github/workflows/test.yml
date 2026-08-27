@@ -27,6 +27,32 @@ jobs:
         run: npm test
         working-directory: gateway
 
+  cli:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: cli
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: cli
+
+      - name: Run unit tests
+        run: npm test
+        working-directory: cli
+
   e2e:
     runs-on: ubuntu-latest
     permissions:
