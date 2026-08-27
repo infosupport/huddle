@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'http';
 import net from 'net';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -27,6 +27,11 @@ try {
 }
 
 let db: typeof import('../src/db').db;
+// The proxy holds no policy of its own and denies until a plane is bound; see
+// test/helpers/local-plane.ts. Rules written straight into the database become
+// visible to it at refresh(), and what it decided reaches the audit log at
+// flush() — the same two moments a real gateway has.
+let control: import('./helpers/local-plane').LocalPlane;
 
 let upstream: WebSocketServer;
 let upstreamPort = 0;
@@ -114,10 +119,12 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     db = dbMod.db;
     dbMod.initDb();
 
-    // No Docker in the unit environment: client IP does not resolve to a
-    // container — rules at the global level suffice.
-    const dockerMod = await import('../src/docker');
-    vi.spyOn(dockerMod, 'resolveContainerByIp').mockResolvedValue(null);
+    // No Docker in the unit environment: the client IP resolves to no container
+    // (the plane is given an empty map) — rules at the global level suffice.
+    const { createLocalPlane } = await import('./helpers/local-plane');
+    const { setControlPlane } = await import('../src/control/plane');
+    control = await createLocalPlane();
+    setControlPlane(control.plane);
 
     // Upstream: real ws echo server.
     upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -143,6 +150,8 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
   });
 
   afterAll(async () => {
+    const { resetControlPlane } = await import('../src/control/plane');
+    resetControlPlane();
     // Force-close any remaining sockets (e.g. the proxy→stall-upstream
     // connection) so server.close() does not hang on teardown.
     (proxy as any)?.closeAllConnections?.();
@@ -153,19 +162,22 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     delete process.env.WS_UPGRADE_TIMEOUT_MS;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     db.exec('DELETE FROM rules');
+    await control.refresh();
   });
 
   it('proxies an allowed WebSocket upgrade end-to-end (echo)', async () => {
     // Host-only allow for the upstream host → every path allowed.
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    await control.refresh();
     const echoed = await wsEchoViaProxy('/echo', 'hello huddle');
     expect(echoed).toBe('hello huddle');
   });
 
   it('strips + redacts Proxy-Authorization and records the handshake result in the audit log', async () => {
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    await control.refresh();
     lastUpstreamHeaders = {};
     const echoed = await new Promise<string>((resolve, reject) => {
       // Low-entropy, obviously-fake marker (NOT a real credential): we only assert
@@ -183,6 +195,9 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     // The reusable proxy credential must NOT reach upstream…
     expect(lastUpstreamHeaders['proxy-authorization']).toBeUndefined();
     // …and the audit row must be completed (101) with the credential redacted.
+    // The gateway batches its writes, so nothing is in the database until the
+    // report is posted.
+    await control.flush();
     const row = db.prepare(
       `SELECT res_status, req_headers FROM audit_log WHERE action = 'allow' AND domain = '127.0.0.1' ORDER BY id DESC LIMIT 1`
     ).get() as { res_status: number | null; req_headers: string | null };
@@ -203,6 +218,7 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     // it as an upgrade, it would skip handleTokenExchangeResponse and leak the real
     // bearer token. The handshake gate must refuse it (400) before dialing upstream.
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    await control.refresh();
     const status = await new Promise<string>((resolve, reject) => {
       const c = net.connect(proxyPort, '127.0.0.1');
       let buf = '';
@@ -231,6 +247,7 @@ describe.skipIf(!sqliteAvailable)('proxy forwards WebSocket upgrades', () => {
     // timeouts do not apply on a hijacked upgrade socket). Expect: the
     // proxy dials upstream (allow) and then closes the client socket itself.
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    await control.refresh();
     const before = stallAccepted;
     // Measure how long the client socket stays open. Without a handshake timeout
     // the proxy never closes it (Node's server timeouts do not apply on a

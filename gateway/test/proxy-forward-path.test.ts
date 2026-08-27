@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 
@@ -25,6 +25,11 @@ try {
 }
 
 let db: typeof import('../src/db').db;
+// The proxy denies everything until a control plane is bound — it holds no
+// policy of its own. createLocalPlane binds the real gateway client with the
+// network stage removed, so a rule inserted below is only visible to the proxy
+// after refresh(), exactly as it would be after a poll.
+let control: import('./helpers/local-plane').LocalPlane;
 
 let upstream: http.Server;
 let upstreamPort = 0;
@@ -64,8 +69,10 @@ describe.skipIf(!sqliteAvailable)('proxy forwards the original encoded request-p
 
     // Geen Docker in de unit-omgeving: de client-IP hoeft niet naar een
     // container te resolven — een globale allow-regel volstaat.
-    const dockerMod = await import('../src/docker');
-    vi.spyOn(dockerMod, 'resolveContainerByIp').mockResolvedValue(null);
+    const { createLocalPlane } = await import('./helpers/local-plane');
+    const { setControlPlane } = await import('../src/control/plane');
+    control = await createLocalPlane();
+    setControlPlane(control.plane);
 
     upstream = http.createServer((req, res) => {
       lastUpstreamUrl = req.url ?? null;
@@ -84,16 +91,19 @@ describe.skipIf(!sqliteAvailable)('proxy forwards the original encoded request-p
   });
 
   afterAll(async () => {
+    const { resetControlPlane } = await import('../src/control/plane');
+    resetControlPlane();
     await new Promise<void>((r) => (proxy ? proxy.close(() => r()) : r()));
     await new Promise<void>((r) => (upstream ? upstream.close(() => r()) : r()));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     db.exec('DELETE FROM rules');
     lastUpstreamUrl = null;
     // Host-only allow voor de upstream-host: matcht elk pad, zodat de test het
     // pad-forwardgedrag isoleert (niet de rule-matching).
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    await control.refresh();
   });
 
   it('%20 blijft encoded richting upstream (geen rauwe spatie, geen crash)', async () => {

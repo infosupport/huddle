@@ -11,8 +11,10 @@
 //
 // With one exception, which is the reason this is a classifier and not a
 // blocklist: devcontainers legitimately POST their sudo-audit records to Huddle
-// through the proxy. That endpoint is public by design (see devcontainerPublicApi
-// in api.ts) and it has to keep working.
+// through the proxy, and that has to keep working. It no longer reaches an API —
+// nothing listens on that port in the gateway — the proxy answers it itself and
+// relays the line to Huddle Node (proxy.ts:handleSudoAudit). What this function
+// decides is therefore not "may it be forwarded" but "is this THE endpoint".
 //
 // Imports nothing, so it is testable without a database or a native binding —
 // and the caller passes the API port in rather than this module resolving it,
