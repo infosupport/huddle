@@ -104,8 +104,9 @@ describe('resolveNodeEntry', () => {
 describe('nodeEnv', () => {
   it('drops the proxies and moves off the container layout', () => {
     const env = nodeEnv({}, {});
+    // The role IS the deployment — there is no separate host-mode switch, and
+    // `node` already means "host layout, no proxies" (gateway/src/runtime-env.ts).
     expect(env.HUDDLE_ROLE).toBe('node');
-    expect(env.HUDDLE_HOST_MODE).toBe('1');
   });
 
   it('leaves port and data dir to runtime-env defaults when not given', () => {
@@ -129,9 +130,8 @@ describe('nodeEnv', () => {
   // A stale HUDDLE_ROLE=gateway in the operator's shell must not turn `huddle
   // node` into a process that opens the firewall proxies on the host.
   it('overrides a conflicting role already in the environment', () => {
-    const env = nodeEnv({}, { HUDDLE_ROLE: 'gateway', HUDDLE_HOST_MODE: '0' });
+    const env = nodeEnv({}, { HUDDLE_ROLE: 'gateway' });
     expect(env.HUDDLE_ROLE).toBe('node');
-    expect(env.HUDDLE_HOST_MODE).toBe('1');
   });
 
   it('defaults to Huddle Node\'s own port, not the gateway\'s', () => {
