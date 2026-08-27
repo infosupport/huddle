@@ -46,7 +46,6 @@ import {
   forceDeleteContainer,
   startExistingContainer,
   cleanupContainerNetwork,
-  resolveContainerByIp,
   isIdeName,
   execContainerOutput,
   execInContainer,
@@ -59,13 +58,11 @@ import { scheduleReconcile, ingestPending } from './sandbox/auto-sync';
 import {
   getOperatorToken,
   isAuthenticated,
-  isGatewayAuthenticated,
   timingSafeEqualStr,
   isAllowedOrigin,
   sessionCookie,
   clearSessionCookie,
 } from './auth';
-import { registerControlRoutes } from './control/routes';
 import { isControlPath } from './control/http';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
@@ -121,13 +118,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // can therefore only be separated by the token; the former subnet gate has
   // thus been replaced by auth on every /api/* route.
   //
-  // Endpoints that devcontainers must be able to reach without a token (sudo-audit
-  // ingest and the proxy CA). Keep this deliberately minimal: everything here is
-  // callable by anyone on the network.
-  const devcontainerPublicApi: Array<{ method: string; path: string }> = [
-    { method: 'POST', path: '/api/audit/sudo' },
-    { method: 'GET',  path: '/api/tls/ca.crt' },
-  ];
+  // There is no devcontainer-public carve-out any more, and that is the point of
+  // the split: this API runs on the host, on loopback, and no devcontainer can
+  // reach it at all. The one endpoint they did use — sudo-audit ingest — is
+  // answered by the gateway's proxy and relayed over the control channel
+  // (proxy.ts:handleSudoAudit, control/apply.ts). Every /api/* route below is
+  // therefore operator-only, with no exception to keep minimal.
   // Endpoints that the operator browser/CLI must be able to reach without a
   // logged-in session in order to be able to log in at all (and to see that
   // login is needed). The static SPA assets fall under this too (everything
@@ -137,19 +133,17 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.addHook('onRequest', async (req, reply) => {
     const url = req.url ?? '';
     const pathOnly = url.split('?')[0];
-    // The control channel belongs to the gateway, not to the operator: its own
-    // token, and the operator's does not open it (auth.ts explains why they are
-    // kept apart). Checked before the /api/ gate below so that adding a route
-    // under /control/ can never inherit the "not /api/, so free" default.
+    // The control channel is NOT served here. It has its own listener on its own
+    // port (control/server.ts) precisely so it can be bound where the gateway
+    // container can reach it without dragging the operator token's surface
+    // along. Answering /control/* here as well would be a second door into the
+    // same room, one that widens the moment someone sets HUDDLE_API_HOST.
     if (isControlPath(pathOnly)) {
-      if (!isGatewayAuthenticated(req.headers)) {
-        reply.code(401).send({ error: 'unauthorized', reason: 'gateway authentication required' });
-      }
+      reply.code(404).send({ error: 'not found' });
       return;
     }
     if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
     if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
-    if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
     if (!isAuthenticated(req.headers)) {
       reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
     }
@@ -264,8 +258,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
       socket.destroy();
     }
   });
-
-  registerControlRoutes(app);
 
   app.register(fastifyStatic, {
     root: UI_DIR,
@@ -1367,33 +1359,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
     }
-  });
-
-  // ── Sudo audit ingest ─────────────────────────────────────────────────────
-  // Container identity is derived from the source IP — the body's `container`
-  // field is ignored. A devcontainer cannot impersonate another container by
-  // sending a forged name.
-  app.post<{ Body: { entry: string } }>('/api/audit/sudo', async (req, reply) => {
-    const { entry } = req.body;
-    if (!entry) return { ok: false };
-    const container = await resolveContainerByIp(req.socket.remoteAddress ?? '');
-    if (!container) {
-      reply.code(403);
-      return { ok: false, error: 'unknown source container' };
-    }
-    // Parse sudo log: "... user : TTY=... ; PWD=... ; USER=root ; COMMAND=/usr/bin/foo bar"
-    const cmdMatch = entry.match(/COMMAND=(.+)$/);
-    const cmd = cmdMatch ? cmdMatch[1].trim() : entry;
-    const cmdBase = cmd.split('/').pop()?.split(' ')[0] ?? 'unknown';
-    logAudit({
-      containerId: container,
-      domain: 'sudo',
-      action: `sudo:${cmdBase}`,
-      method: null,
-      path: cmd.length > 200 ? cmd.slice(0, 200) : cmd,
-    });
-    notifyStateChanged();
-    return { ok: true };
   });
 
   // ── Extensions ────────────────────────────────────────────────────────────

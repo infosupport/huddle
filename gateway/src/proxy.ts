@@ -5,8 +5,8 @@ import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
 import { URL } from 'url';
-import { canonicalizeHost, normalizePathname } from './rules';
-import { SBX_PROXY_PORT } from './sbx';
+import { canonicalizeHost, normalizePathname } from './rule-match';
+import { SBX_PROXY_PORT } from './sbx-upstream';
 import { controlPlane } from './control/plane';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from './token-exchange';
@@ -26,6 +26,7 @@ const {
   resolveContainerByIp,
   logAudit,
   updateAuditResponse,
+  reportSudoAudit,
 } = controlPlane;
 
 const PROXY_PORT = runtimeEnv.proxyPort;
@@ -101,6 +102,55 @@ function send403(res: http.ServerResponse, domain: string, status: string, conta
     'content-length': Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+// ── The one endpoint the proxy answers itself ────────────────────────────────
+//
+// Devcontainers post their sudo log lines to Huddle (the forwarder docker.ts
+// installs). That request goes through this proxy, addressed to Huddle's own API
+// port — and after the Node/Gateway split there is no API behind that port to
+// forward it to: the database, and therefore the audit log, is on the host.
+//
+// So it terminates here and the line is relayed over the control channel the
+// gateway already holds open. The devcontainer's contract is byte-identical, and
+// deliberately so: this must not become a new devcontainer→host network path.
+//
+// The container is whatever resolveContainerByIp made of the source address. The
+// `container` field the forwarder puts in its body has never been trusted, and
+// is still ignored — a devcontainer cannot file sudo under someone else's name.
+
+/** Bigger than any sudo line; small enough that a hostile one cannot cost much. */
+const SUDO_ENTRY_CAP = 8 * 1024;
+
+function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+  res.end(body);
+}
+
+function handleSudoAudit(req: http.IncomingMessage, res: http.ServerResponse, containerId: string | null): void {
+  if (!containerId) {
+    sendJson(res, 403, { ok: false, error: 'unknown source container' });
+    return;
+  }
+  let size = 0;
+  const chunks: Buffer[] = [];
+  req.on('data', (c: Buffer) => {
+    size += c.length;
+    if (size <= SUDO_ENTRY_CAP) chunks.push(c);
+  });
+  req.on('end', () => {
+    if (size > SUDO_ENTRY_CAP) { sendJson(res, 413, { ok: false, error: 'entry too large' }); return; }
+    let entry = '';
+    try {
+      const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { entry?: unknown };
+      if (typeof parsed?.entry === 'string') entry = parsed.entry;
+    } catch { /* a malformed body is not worth an error page to a background tail */ }
+    // Same answer an empty entry always got: accepted, nothing filed.
+    if (entry) reportSudoAudit(containerId, entry);
+    sendJson(res, 200, { ok: !!entry });
+  });
+  req.on('error', () => { if (!res.writableEnded) res.destroy(); });
 }
 
 function send502(res: http.ServerResponse, message: string): void {
@@ -431,7 +481,11 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         send403(res, host, 'deny', containerId);
         return;
       }
-      ruleId = null;
+      // Answered here, not forwarded: nothing listens on Huddle's API port in
+      // this container. No network audit row either — the sudo row it produces
+      // IS the audit, and logging both would double every line.
+      handleSudoAudit(req, res, containerId);
+      return;
     } else {
       const result = evalRule(host, containerId, normPath);
       if (result.status !== 'allow') {
@@ -767,6 +821,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           port,
           action: pathResult.status,
           ruleId: pathResult.ruleId,
+          // A subpath filed just now has no id yet; ruleRef lets Node fill it in.
+          ruleRef: pathResult.ruleRef,
           method: innerReq.method ?? null,
           path: innerReq.url ?? null,
           reqHeaders: headersToJson(innerReq.headers),
@@ -941,6 +997,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           port,
           action: pathResult.status,
           ruleId: pathResult.ruleId,
+          // A subpath filed just now has no id yet; ruleRef lets Node fill it in.
+          ruleRef: pathResult.ruleRef,
           method: innerReq.method ?? null,
           path: innerReq.url ?? null,
           reqHeaders: headersToJson(innerReq.headers),

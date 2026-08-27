@@ -13,22 +13,14 @@ import * as ops from './sandbox/ops';
 import { reconcile, type ReconcileReport } from './sandbox/reconcile';
 import type { SandboxInfo } from './sandbox/protocol';
 import { getCaCertPem } from './tls-ca';
-import { runtimeEnv } from './runtime-env';
 
 export { reconcile };
 export type { ReconcileReport };
 
-// Dedicated port Huddle opens for sbx egress (kept separate from the devcontainer
-// proxy on :80). The host sbx daemon is pointed here as its upstream proxy.
-export const SBX_PROXY_PORT = runtimeEnv.sbxProxyPort;
-const SBX_PROXY_HOST = process.env.HUDDLE_SBX_PROXY_HOST ?? 'localhost';
+import { SBX_PROXY_PORT, sbxUpstreamUrl } from './sbx-upstream';
+export { SBX_PROXY_PORT, sbxUpstreamUrl };
 const SBX_AGENT = process.env.HUDDLE_SBX_AGENT ?? 'claude';
 const DEFAULT_WORKSPACE = process.env.HUDDLE_SBX_WORKSPACE ?? '.';
-/** The URL Huddle hands to sbx as its upstream proxy (reached on the host). */
-export function sbxUpstreamUrl(): string {
-  return `http://${SBX_PROXY_HOST}:${SBX_PROXY_PORT}`;
-}
-
 export interface SbxStep {
   label: string;
   command: string;

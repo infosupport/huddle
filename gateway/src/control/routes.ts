@@ -1,6 +1,6 @@
 // The control channel: the gateway's side door into Huddle Node.
 //
-// Three endpoints, and deliberately only three. This is not a second management
+// Four endpoints, and deliberately only four. This is not a second management
 // API and must not grow into one — the whole point of the split
 // (docs/ADR-huddle-node-split.md) is that the network-exposed half of Huddle can
 // do less, not that it gets a private way to do the same things. Anything an
@@ -16,7 +16,9 @@
 // from its last known policy instead of failing open or blocking all egress.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { buildContainerFeed, buildPolicyFeed } from './feed';
+import { applyReport } from './apply';
+import { buildContainerFeed, buildPolicyFeed } from './feed-build';
+import type { ReportBody } from './feed';
 import { presentedVersion } from './http';
 
 // Serve a versioned feed with ETag semantics. In one place so both feeds answer
@@ -49,4 +51,10 @@ export function registerControlRoutes(app: FastifyInstance): void {
   // from the policy feed because it changes on a completely different clock:
   // containers come and go far more often than rules do.
   app.get('/control/containers', async (req, reply) => serveFeed(req, reply, buildContainerFeed));
+
+  // The write half: what the gateway decided, batched. The requests these
+  // describe have already been answered — this is the operator's record of them
+  // (the audit log) and the blocked hosts they filed for review. Applied in
+  // order and never re-decided; see ./apply.
+  app.post<{ Body: ReportBody }>('/control/report', async (req) => applyReport(req.body));
 }
