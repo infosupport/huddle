@@ -83,6 +83,31 @@ folders** in the portal. The index lives in Huddle's database, not in
 `~/.huddle/config.json`: it describes this machine, so unlike the team-managed
 settings it is not something to share in version control.
 
+## Starting sandboxes (Docker Sandboxes / sbx)
+
+```bash
+huddle sbx start                                    # sandbox for the current directory
+huddle sbx start my-box --workspace T:\projects\app  # a specific folder
+huddle sbx start my-box \
+  --workspace T:\projects\app \
+  --folder T:\projects\shared-lib \
+  --folder T:\docs:ro                               # extra folders, one read-only
+```
+
+`--workspace <path>` is the folder the agent starts in. `--folder <host path>` adds
+another folder and is **repeatable**; append `:ro` to mount that folder read-only.
+Unlike `--mount` for devcontainers there is no container path to choose: sbx mounts
+every folder inside the sandbox at the same path it has on the host (a Windows path
+`T:\projects\app` becomes `/t/projects/app`).
+
+The **folder mappings** from Settings (the settings folders devcontainers get, e.g.
+`~/.claude`) are added to every sandbox automatically: each one rides along as an
+extra folder and is then linked at the path the agent reads it from. An existing
+folder in the sandbox is never overwritten — only its missing entries are linked in,
+so the agent credentials sbx manages itself stay untouched. Mappings that cannot
+travel (a Docker volume, or a `~`/relative host path) are reported per sandbox
+instead of silently dropped.
+
 ## Experiments
 
 An experiment is a complete Huddle version (CLI + all Docker images) tied to a single GitHub issue. Push a branch `experiment/<issue-number>-<description>` and the pipeline publishes everything under the tag `experiment-<issue-number>`, fully separated from the normal releases.
@@ -113,6 +138,7 @@ Main flags:
 --workspace <path>
 --mount <host>=<container>   (repeatable, container path must be absolute)
 --workspace-root <path>      (container path the IDE opens; requires --mount)
+--folder <host path>[:ro]    (repeatable; extra sandbox folder for `huddle sbx start`)
 --name <name>
 --image <image>
 --empty

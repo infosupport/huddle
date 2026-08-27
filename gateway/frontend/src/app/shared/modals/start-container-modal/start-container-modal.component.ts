@@ -4,7 +4,7 @@ import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
-import { IndexedFolder } from '../../../core/services/api.service';
+import { IndexedFolder, SbxSettingsFolders } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
 import { FolderPickerModalComponent } from '../folder-picker-modal/folder-picker-modal.component';
@@ -16,6 +16,8 @@ interface RememberedLayout {
   mode: 'single' | 'multi';
   workspace: string;
   mounts: { hostPath: string; containerPath: string }[];
+  /** Last-used sandbox folder list (host paths; sbx mounts them at the same path). */
+  sbxFolders?: { path: string; readOnly: boolean }[];
 }
 
 @Component({
@@ -31,6 +33,11 @@ interface RememberedLayout {
     .mount-row .btn { flex: 0 0 auto; }
     .mount-hint { font-size: 12px; color: var(--text-muted); margin: -.25rem 0 .5rem; }
     .mount-add { display: flex; gap: .5rem; }
+    .mount-row .ro-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: .3rem; font-size: 11.5px; color: var(--text-muted); }
+    .settings-list { margin: -.25rem 0 .5rem 1rem; padding: 0; font-size: 11.5px; color: var(--text-muted); }
+    .settings-list li { margin: 1px 0; }
+    .settings-list code { font-size: 11px; }
+    .settings-list--skip li { color: var(--warn, #d08a2a); }
     .env-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
     .env-kind__opt { display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer;
       border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); color: var(--text); }
@@ -49,10 +56,13 @@ export class StartContainerModalComponent {
   // (the primary box type); the user can switch to 'container' per-open.
   kind: 'sandbox' | 'container' = 'sandbox';
 
-  // sandbox fields
+  // sandbox fields. A sandbox can hold several folders: the FIRST is the one the
+  // agent starts in, the rest ride along. Unlike a devcontainer mount there is no
+  // container path to pick — sbx mounts every folder at its own host path.
   sbxName = '';
   sbxAgent = 'claude';
-  sbxWorkspace = '';
+  sbxFolders: { path: string; readOnly: boolean }[] = [{ path: '', readOnly: false }];
+  sbxSettings: SbxSettingsFolders | null = null;
 
   images: DockerImage[] = [];
   // Host folders indexed by `huddle indexfolder`; loaded once per open and passed
@@ -65,6 +75,7 @@ export class StartContainerModalComponent {
   workspace = '';
   mounts: { hostPath: string; containerPath: string }[] = [];
   folderPickerOpen = false;
+  sbxFolderPickerOpen = false;
   containerName = '';
   nameTouched = false;
   empty = false;
@@ -95,8 +106,9 @@ export class StartContainerModalComponent {
     this.status = '';
     this.loading = false;
     this.sbxName = '';
-    this.sbxWorkspace = '';
+    this.sbxFolders = [{ path: '', readOnly: false }];
     this.sbxAgent = 'claude';
+    this.sbxSettings = null;
     this.kind = 'sandbox'; // always default to Sandbox on open (the primary box type)
     this.restoreRemembered();
     this.loadImagesForIde();
@@ -106,6 +118,76 @@ export class StartContainerModalComponent {
       // inputs still take free text — so a failure here must not block the modal.
       error: () => { this.indexedFolders = []; },
     });
+    // Show which settings folders (folder mappings) the sandbox will get, and
+    // which mappings cannot travel — that difference is otherwise invisible.
+    this.api.sbxSettingsFolders().subscribe({
+      next: (s) => { this.sbxSettings = s; },
+      error: () => { this.sbxSettings = null; },
+    });
+  }
+
+  addSbxFolder(): void {
+    this.sbxFolders.push({ path: '', readOnly: false });
+  }
+
+  removeSbxFolder(i: number): void {
+    this.sbxFolders.splice(i, 1);
+    if (this.sbxFolders.length === 0) this.addSbxFolder();
+  }
+
+  // Same deal as the devcontainer mounts: browse once, Ctrl-click several
+  // folders, and each one lands as its own row rather than making the user open
+  // the dialog once per folder. Additive — filled rows (including hand-typed
+  // paths that are not indexed) stay, and a folder already listed is not added
+  // twice.
+  onSbxFoldersPicked(paths: string[]): void {
+    const known = new Set(
+      this.sbxFolders.map((f) => f.path.trim().toLowerCase()).filter(Boolean)
+    );
+    for (const path of paths) {
+      if (known.has(path.toLowerCase())) continue;
+      known.add(path.toLowerCase());
+      const row = this.sbxFolders.find((f) => !f.path.trim());
+      if (row) row.path = path;
+      else this.sbxFolders.push({ path, readOnly: false });
+    }
+    this.updateAutoName();
+  }
+
+  /** One row's path, typed or picked. The extra folders arrive separately. */
+  onSbxFolderInput(folder: { path: string; readOnly: boolean }, value: string): void {
+    folder.path = value;
+    this.updateAutoName();
+  }
+
+  /** From a row: the first folder filled the row, the rest become new rows. */
+  onSbxFolderPicked(paths: string[]): void {
+    if (paths.length > 1) this.onSbxFoldersPicked(paths.slice(1));
+  }
+
+  /** From the bulk Browse button: nothing was filled in yet, so take them all. */
+  onSbxFoldersPickedBulk(paths: string[]): void {
+    this.sbxFolderPickerOpen = false;
+    this.onSbxFoldersPicked(paths);
+  }
+
+  /** Non-empty folders, trimmed — the payload for /api/sbx/start. */
+  private sbxWorkspaces(): { path: string; readOnly: boolean }[] {
+    return this.sbxFolders
+      .map((f) => ({ path: f.path.trim(), readOnly: f.readOnly === true }))
+      .filter((f) => f.path !== '');
+  }
+
+  private validateSandbox(): string | null {
+    const folders = this.sbxWorkspaces();
+    if (folders.length === 0) return 'Add at least one folder';
+    const seen = new Set<string>();
+    for (const f of folders) {
+      const key = f.path.replace(/[\\/]+$/, '').toLowerCase();
+      if (seen.has(key)) return `Duplicate folder: ${f.path}`;
+      seen.add(key);
+    }
+    return null;
   }
 
   setKind(k: 'sandbox' | 'container'): void {
@@ -280,17 +362,20 @@ export class StartContainerModalComponent {
   }
 
   private confirmSandbox(): void {
+    const err = this.validateSandbox();
+    if (err) { this.error = err; return; }
     this.error = '';
     this.loading = true;
     this.status = 'Creating sandbox…';
     this.api.startSbx({
       name: this.sbxName.trim() || undefined,
       agent: this.sbxAgent.trim() || undefined,
-      workspace: this.sbxWorkspace.trim() || undefined,
+      workspaces: this.sbxWorkspaces(),
     }).subscribe({
       next: (r) => {
         this.loading = false;
         if (r.ok) {
+          this.remember();
           this.modalService.notifySandboxesChanged();
           this.modalService.closeStart();
         } else {
@@ -303,11 +388,12 @@ export class StartContainerModalComponent {
   }
 
   private remember(): void {
-    if (this.empty) return;
+    if (this.kind === 'container' && this.empty) return;
     const layout: RememberedLayout = {
       mode: this.mode,
       workspace: this.workspace,
       mounts: this.mounts.map(m => ({ hostPath: m.hostPath.trim(), containerPath: m.containerPath.trim() })),
+      sbxFolders: this.sbxWorkspaces(),
     };
     try { localStorage.setItem(REMEMBER_KEY, JSON.stringify(layout)); } catch { /* storage unavailable */ }
   }
@@ -324,6 +410,9 @@ export class StartContainerModalComponent {
       this.mounts = layout.mounts.map(m => ({ hostPath: m.hostPath ?? '', containerPath: m.containerPath ?? '' }));
     } else if (layout.workspace) {
       this.workspace = layout.workspace;
+    }
+    if (layout.sbxFolders?.length) {
+      this.sbxFolders = layout.sbxFolders.map(f => ({ path: f.path ?? '', readOnly: f.readOnly === true }));
     }
     this.updateAutoName();
   }

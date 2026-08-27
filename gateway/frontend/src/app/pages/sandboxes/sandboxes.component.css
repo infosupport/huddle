@@ -10,6 +10,13 @@
 .create__row label.grow { flex: 1 1 240px; }
 .create__row input { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 13px; }
 .create__hint { margin: 8px 0 0; font-size: 11.5px; color: var(--text-muted); }
+.create__folder { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.create__folder input[type=text] { flex: 1 1 240px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 13px; }
+.create__ro { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-muted); }
+.create__settings { margin: 4px 0 0 18px; padding: 0; font-size: 11.5px; color: var(--text-muted); }
+.create__settings code { font-size: 11px; }
+.create__settings--skip li { color: var(--warn, #d08a2a); }
 .create__err { margin-top: 8px; font-size: 12px; color: var(--danger); }
 .create__err code { word-break: break-word; }
 

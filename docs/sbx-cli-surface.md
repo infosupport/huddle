@@ -18,7 +18,7 @@ and open questions, see [`docs/ADR-workspace-runtime-abstraction.md`](./ADR-work
 |---|---|---|
 | `sbx.version` | `sbx version` | `execFile` |
 | `settings.setProxy` | `sbx settings set <key> <url>` where `<key>` = `proxy.sandbox` \| `proxy.daemon` \| `proxy` | `execFile` |
-| `sandbox.create` | `sbx create --name <name> <agent> <path>` | `spawn` (streaming) |
+| `sandbox.create` | `sbx create --name <name> <agent> <path> [<path>[:ro] …]` | `spawn` (streaming) |
 | `sandbox.list` | `sbx ls` | `execFile` |
 | `sandbox.remove` | `sbx rm [--force] <name>` | `execFile` |
 | `sandbox.exec` | `sbx exec [-it] <name> -- <cmd...>` | `spawn` (streaming) |
@@ -35,6 +35,23 @@ and open questions, see [`docs/ADR-workspace-runtime-abstraction.md`](./ADR-work
   - `'both'` → `proxy` (the umbrella key)
   - `proxy.sandbox` (not `proxy`) is used for the sandbox path so **daemon
     auth/registry traffic stays direct** — see the ADR.
+- **`sandbox.create` folders**: the argv is `PATH [PATH...]` — confirmed against the
+  real CLI (`sbx create claude PATH [PATH...]`, docs 2026-08). The first path is the
+  workspace the agent starts in; every extra path is mounted alongside it, with the
+  documented `:ro` suffix for a read-only one. **sbx mounts each path INSIDE the
+  sandbox at the same path it has on the host** — there is no `--mount
+  host:container`, so a container path cannot be chosen. For a Windows host that
+  means the MSYS form: `T:\projects\huddle` is `/t/projects/huddle` in the sandbox
+  (`hostPathToSandboxPath` in `sandbox/settings-folders.ts`; the reverse translation
+  lives in `bridge/sbx-watcher.sh`). `buildCreateArgs` drops duplicate paths (sbx
+  refuses the same folder twice) and validates every path first: no leading `-`, no
+  newline (the mailbox writes argv one argument per line), no `|`.
+- **Settings folders**: Huddle's folder mappings ride along as extra paths on
+  `sbx create`, followed by one `sbx exec <name> -- sh -c '…'` that links each one
+  from the mapping's container path (re-anchored on the sandbox user's `$HOME`).
+  Existing content is never overwritten — only missing entries are linked into an
+  existing folder — so agent credentials sbx manages itself stay intact. Docker
+  volume mappings cannot travel (sbx mounts host folders only) and are reported.
 - **`sandbox.create`**: if `CreateParams.proxySandbox` is set, the agent runs
   `settings.setProxy({which:'sandbox', url})` **first** (a separate `sbx settings
   set proxy.sandbox <url>` call) before `sbx create`. The agent positional is

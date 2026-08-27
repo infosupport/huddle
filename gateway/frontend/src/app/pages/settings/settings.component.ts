@@ -56,9 +56,13 @@ import {
     <div class="card">
       <h2>Folder mappings</h2>
       <p class="hint">
-        Folders or volumes that are automatically mounted in every new devcontainer.
+        Folders or volumes that are automatically mounted in every new devcontainer,
+        and — for mappings with a host path — in every new sandbox as well.
         Use a host path for bind mounts, or a volume name for Docker volumes.
         Stored in <code>~/.huddle/config.json</code> so the team can review them in version control.
+        A sandbox can only mount host folders: sbx mounts each folder at its own host
+        path and Huddle links it at the container path below, without ever overwriting
+        what the agent already has there.
       </p>
 
       <table class="mappings-table">

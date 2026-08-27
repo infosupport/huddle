@@ -30,10 +30,40 @@
     <div class="create__row">
       <label>Name <input type="text" [ngModel]="newName()" (ngModelChange)="newName.set($event)" placeholder="auto (huddle-sbx-…)" /></label>
       <label>Agent <input type="text" [ngModel]="newAgent()" (ngModelChange)="newAgent.set($event)" placeholder="claude" /></label>
-      <label class="grow">Workspace <input type="text" [ngModel]="newWorkspace()" (ngModelChange)="newWorkspace.set($event)" placeholder="host path, e.g. T:\projects\myrepo" /></label>
       <button class="btn btn--accent" (click)="create()" [disabled]="creating()">{{ creating() ? 'Creating…' : 'Create' }}</button>
       <button class="btn btn-ghost" (click)="showCreate.set(false)">Cancel</button>
     </div>
+
+    <!-- Folders: the first one is where the agent starts, the rest ride along.
+         sbx mounts every folder at its own host path inside the sandbox. -->
+    @for (f of newFolders(); track $index) {
+      <div class="create__folder">
+        <input type="text" [ngModel]="f.path" (ngModelChange)="setFolderPath($index, $event)"
+               placeholder="{{ $first ? 'host path the agent starts in, e.g. T:\projects\myrepo' : 'extra folder, e.g. T:\projects\mylib' }}" />
+        <label class="create__ro" title="Mount this folder read-only (sbx :ro)">
+          <input type="checkbox" [ngModel]="f.readOnly" (ngModelChange)="setFolderReadOnly($index, $event)" /> read-only
+        </label>
+        <button class="btn btn-ghost btn-sm" (click)="removeFolder($index)" [disabled]="newFolders().length === 1" title="Remove folder">✕</button>
+      </div>
+    }
+    <button class="btn btn-ghost btn-sm" (click)="addFolder()">+ Add folder</button>
+
+    @if (settingsFolders(); as sf) {
+      @if (sf.folders.length) {
+        <p class="create__hint">Settings folders mounted automatically (Settings → Folder mappings):</p>
+        <ul class="create__settings">
+          @for (m of sf.folders; track m.targetPath) {
+            <li><code>{{ m.hostPath }}</code> → <code>{{ m.targetPath }}</code>@if (m.readOnly) { <span> (read-only)</span> }</li>
+          }
+        </ul>
+      }
+      @if (sf.skipped.length) {
+        <p class="create__hint">Not available in a sandbox:</p>
+        <ul class="create__settings create__settings--skip">
+          @for (k of sf.skipped; track k.name) { <li>{{ k.name }} — {{ k.reason }}</li> }
+        </ul>
+      }
+    }
     <p class="create__hint">Huddle is set as upstream proxy and its CA is installed automatically, so HTTPS + editor backends work.</p>
     @if (createError(); as r) {
       <div class="create__err">

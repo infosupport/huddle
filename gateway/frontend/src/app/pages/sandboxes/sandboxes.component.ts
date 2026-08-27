@@ -9,6 +9,7 @@ import {
   SandboxInfo,
   SbxReconcileReport,
   SbxCommandResult,
+  SbxSettingsFolders,
 } from '../../core/services/api.service';
 import { Rule } from '../../core/models/rule.model';
 
@@ -34,9 +35,14 @@ export class SandboxesComponent {
   showCreate = signal(false);
   newName = signal('');
   newAgent = signal('claude');
-  newWorkspace = signal('');
+  // A sandbox can hold several folders: the first is the one the agent starts in,
+  // the rest ride along. sbx mounts each folder at its own host path, so there is
+  // no container path to choose (unlike a devcontainer mount).
+  newFolders = signal<{ path: string; readOnly: boolean }[]>([{ path: '', readOnly: false }]);
   creating = signal(false);
   createError = signal<SbxStartResult | null>(null);
+  /** Settings folders (folder mappings) every new sandbox gets — shown in the form. */
+  settingsFolders = signal<SbxSettingsFolders | null>(null);
 
   busy = signal<Record<string, string>>({});
   msg = signal<Record<string, string>>({});
@@ -47,7 +53,30 @@ export class SandboxesComponent {
 
   ready = computed(() => !!this.status()?.available);
 
-  constructor() { this.refresh(); }
+  constructor() {
+    this.refresh();
+    this.api.sbxSettingsFolders().subscribe({
+      next: (s) => this.settingsFolders.set(s),
+      error: () => this.settingsFolders.set(null),
+    });
+  }
+
+  addFolder(): void {
+    this.newFolders.set([...this.newFolders(), { path: '', readOnly: false }]);
+  }
+
+  removeFolder(i: number): void {
+    const next = this.newFolders().filter((_, idx) => idx !== i);
+    this.newFolders.set(next.length ? next : [{ path: '', readOnly: false }]);
+  }
+
+  setFolderPath(i: number, path: string): void {
+    this.newFolders.set(this.newFolders().map((f, idx) => (idx === i ? { ...f, path } : f)));
+  }
+
+  setFolderReadOnly(i: number, readOnly: boolean): void {
+    this.newFolders.set(this.newFolders().map((f, idx) => (idx === i ? { ...f, readOnly } : f)));
+  }
 
   refresh(): void {
     this.api.sbxStatus().subscribe({ next: (s) => this.status.set(s), error: () => this.status.set(null) });
@@ -71,17 +100,21 @@ export class SandboxesComponent {
   }
 
   create(): void {
+    const workspaces = this.newFolders()
+      .map((f) => ({ path: f.path.trim(), readOnly: f.readOnly === true }))
+      .filter((f) => f.path !== '');
+    if (workspaces.length === 0) { this.error.set('Add at least one folder'); return; }
     this.creating.set(true);
     this.createError.set(null);
     this.error.set(null);
     this.api.startSbx({
       name: this.newName().trim() || undefined,
       agent: this.newAgent().trim() || undefined,
-      workspace: this.newWorkspace().trim() || undefined,
+      workspaces,
     }).subscribe({
       next: (r) => {
         this.creating.set(false);
-        if (r.ok) { this.newName.set(''); this.newWorkspace.set(''); this.showCreate.set(false); }
+        if (r.ok) { this.newName.set(''); this.newFolders.set([{ path: '', readOnly: false }]); this.showCreate.set(false); }
         else this.createError.set(r);
         this.refresh();
       },

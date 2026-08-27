@@ -11,7 +11,15 @@
 
 import * as ops from './sandbox/ops';
 import { reconcile, type ReconcileReport } from './sandbox/reconcile';
-import type { SandboxInfo } from './sandbox/protocol';
+import type { SandboxInfo, WorkspaceSpec } from './sandbox/protocol';
+import { normalizeWorkspacePath, workspaceArg } from './sandbox/protocol';
+import {
+  planSettingsFolders,
+  mergeSandboxWorkspaces,
+  buildSettingsFolderScript,
+  type SandboxSettingsPlan,
+} from './sandbox/settings-folders';
+import { listFolderMappings } from './host-config';
 import { getCaCertPem } from './tls-ca';
 
 export { reconcile };
@@ -34,6 +42,11 @@ export interface SbxStartResult {
   upstreamUrl: string;
   proxyPort: number;
   steps: SbxStep[];
+  /** The folders the sandbox was created with (primary first), for the portal. */
+  workspaces?: { path: string; readOnly: boolean }[];
+  /** Which settings folders (folder mappings) travelled along, and which did not. */
+  settingsFolders?: { name: string; hostPath: string; targetPath: string; readOnly: boolean }[];
+  settingsSkipped?: { name: string; reason: string }[];
 }
 
 const CAP = 8 * 1024;
@@ -60,41 +73,116 @@ export async function sbxAvailable(): Promise<{ available: boolean; version: str
 }
 
 /**
- * Start an sbx sandbox with Huddle as its upstream proxy: (1) point the upstream
- * proxy at Huddle, (2) create the sandbox. Returns per-step output so the portal
- * shows exactly which command broke.
+ * The folders a sandbox is created with: every folder the caller asked for, plus
+ * Huddle's settings folders (folder mappings) so a sandbox is equipped like a
+ * devcontainer. The first entry is the primary workspace (the folder the agent
+ * starts in); the rest become extra `sbx create` positionals.
  */
-export async function startSandbox(opts: { name: string; agent?: string; workspace?: string }): Promise<SbxStartResult> {
+function resolveWorkspaces(opts: { workspace?: string; workspaces?: WorkspaceSpec[] }): {
+  primary: WorkspaceSpec;
+  extras: WorkspaceSpec[];
+  settings: SandboxSettingsPlan;
+} {
+  // Folder mappings are the same source of truth devcontainers mount from; a
+  // missing/unreadable config must never block a sandbox, hence the guard.
+  let settings: SandboxSettingsPlan = { folders: [], skipped: [] };
+  try {
+    settings = planSettingsFolders(listFolderMappings());
+  } catch (err) {
+    settings = { folders: [], skipped: [{ name: 'folder mappings', reason: (err as Error).message }] };
+  }
+  const { primary, extras } = mergeSandboxWorkspaces(opts.workspaces ?? [], settings, opts.workspace || DEFAULT_WORKSPACE);
+  return { primary, extras, settings };
+}
+
+/**
+ * Start an sbx sandbox with Huddle as its upstream proxy: (1) point the upstream
+ * proxy at Huddle, (2) create the sandbox with every requested folder plus the
+ * settings folders, (3) trust Huddle's CA, (4) link the settings folders where
+ * the agent looks for them. Returns per-step output so the portal shows exactly
+ * which command broke.
+ */
+export async function startSandbox(opts: {
+  name: string;
+  agent?: string;
+  workspace?: string;
+  workspaces?: WorkspaceSpec[];
+}): Promise<SbxStartResult> {
   const upstreamUrl = sbxUpstreamUrl();
   const agentName = opts.agent || SBX_AGENT;
-  const workspace = opts.workspace || DEFAULT_WORKSPACE;
+  const { primary, extras, settings } = resolveWorkspaces(opts);
+  const workspace = primary.path;
   const steps: SbxStep[] = [];
+  const info = {
+    workspaces: [primary, ...extras].map((w) => ({ path: normalizeWorkspacePath(w.path), readOnly: w.readOnly === true })),
+    settingsFolders: settings.folders.map((f) => ({ name: f.name, hostPath: f.hostPath, targetPath: f.targetPath, readOnly: f.readOnly })),
+    settingsSkipped: settings.skipped,
+  };
 
   try {
     await ops.setProxy({ which: 'sandbox', url: upstreamUrl });
     steps.push({ label: 'set sandbox upstream proxy → Huddle', command: `sbx settings set proxy.sandbox ${upstreamUrl}`, code: 0, stdout: '', stderr: '' });
   } catch (err) {
     steps.push({ label: 'set sandbox upstream proxy → Huddle', command: `sbx settings set proxy.sandbox ${upstreamUrl}`, code: 1, stdout: '', stderr: cap((err as Error).message) });
-    return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps };
+    return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
   }
 
   let out = '';
   let errOut = '';
-  const command = `sbx create --name ${opts.name} ${agentName} ${workspace}`;
+  // Every extra folder is one more positional: `sbx create AGENT PATH [PATH...]`,
+  // `:ro` for a read-only one.
+  const pathArgs = [normalizeWorkspacePath(workspace), ...extras.map((w) => workspaceArg(w))].join(' ');
+  const command = `sbx create --name ${opts.name} ${agentName} ${pathArgs}`;
   try {
-    const code = await ops.create({ name: opts.name, agent: agentName, path: workspace }, (s, d) => {
+    const code = await ops.create({ name: opts.name, agent: agentName, path: workspace, extraPaths: extras }, (s, d) => {
       if (s === 'stdout') out = cap(out + d);
       else errOut = cap(errOut + d);
     });
-    steps.push({ label: 'create sandbox', command, code, stdout: out, stderr: errOut });
-    if (code !== 0) return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps };
+    steps.push({ label: `create sandbox (${info.workspaces.length} folder(s))`, command, code, stdout: out, stderr: errOut });
+    if (code !== 0) return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
     // Trust Huddle's MITM CA inside the sandbox so HTTPS works (IDE downloads etc.).
     steps.push(await trustCa(opts.name));
-    return { ok: steps.every((s) => s.code === 0), upstreamUrl, proxyPort: SBX_PROXY_PORT, steps };
+    // Link the settings folders where the agent looks for them (~/.claude etc.).
+    const linkStep = await linkSettingsFolders(opts.name, settings);
+    if (linkStep) steps.push(linkStep);
+    return { ok: steps.every((s) => s.code === 0), upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
   } catch (err) {
     steps.push({ label: 'create sandbox', command, code: 1, stdout: out, stderr: cap(errOut || (err as Error).message) });
-    return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps };
+    return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
   }
+}
+
+/**
+ * Link Huddle's settings folders (mounted by `sbx create` at their host path) to
+ * the path the agent reads them from. Returns null when there is nothing to do,
+ * so a plain sandbox keeps the exact same step list as before. Skipped mappings
+ * are reported in the step output — a mapping that silently doesn't arrive is the
+ * failure mode we want visible.
+ */
+export async function linkSettingsFolders(name: string, plan: SandboxSettingsPlan): Promise<SbxStep | null> {
+  const notes = plan.skipped.map((s) => `huddle-settings: NOT MOUNTED ${s.name} — ${s.reason}`).join('\n');
+  if (plan.folders.length === 0) {
+    if (!notes) return null;
+    return { label: 'mount settings folders', command: '(nothing to link)', code: 0, stdout: notes, stderr: '' };
+  }
+  const script = buildSettingsFolderScript(plan.folders);
+  const command = `sbx exec ${name} -- sh -c '…link ${plan.folders.length} settings folder(s)…'`;
+  let out = '';
+  let errOut = '';
+  try {
+    const code = await ops.exec({ name, cmd: ['sh', '-c', script] }, (s, d) => {
+      if (s === 'stdout') out = cap(out + d);
+      else errOut = cap(errOut + d);
+    });
+    return { label: `link settings folders (${plan.folders.length})`, command, code, stdout: cap(notes ? `${notes}\n${out}` : out), stderr: errOut };
+  } catch (err) {
+    return { label: `link settings folders (${plan.folders.length})`, command, code: 1, stdout: cap(notes ? `${notes}\n${out}` : out), stderr: cap(errOut || (err as Error).message) };
+  }
+}
+
+/** The settings-folder plan for the CURRENT folder mappings (portal/CLI preview). */
+export function settingsFolderPlan(): SandboxSettingsPlan {
+  return planSettingsFolders(listFolderMappings());
 }
 
 /**

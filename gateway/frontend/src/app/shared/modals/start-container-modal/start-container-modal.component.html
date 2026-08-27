@@ -99,9 +99,61 @@
           <input id="sbx-name" type="text" [(ngModel)]="sbxName" placeholder="auto (huddle-sbx-…)" />
           <label for="sbx-agent">Agent</label>
           <input id="sbx-agent" type="text" [(ngModel)]="sbxAgent" placeholder="claude" />
-          <label for="sbx-ws">Workspace</label>
-          <input id="sbx-ws" type="text" [(ngModel)]="sbxWorkspace" placeholder="host path, e.g. T:\projects\myrepo" />
+          <label>Folders</label>
+          <p class="mount-hint">The first folder is where the agent starts; every folder is mounted inside the sandbox at its own host path.</p>
+          @for (f of sbxFolders; track $index) {
+            <div class="mount-row">
+              <app-folder-select class="mount-host" [value]="f.path" [folders]="indexedFolders"
+                                 placeholder="host path, e.g. T:\projects\myrepo" [multiple]="true"
+                                 pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
+                                 (valueChange)="onSbxFolderInput(f, $event)"
+                                 (valuesChange)="onSbxFolderPicked($event)" />
+              <label class="ro-toggle" title="Mount this folder read-only (sbx :ro)">
+                <input type="checkbox" [(ngModel)]="f.readOnly" /> read-only
+              </label>
+              <button type="button" class="btn btn-ghost btn-sm" (click)="removeSbxFolder($index)" [disabled]="sbxFolders.length === 1" title="Remove folder">✕</button>
+            </div>
+          }
+          <div class="mount-add">
+            <button type="button" class="btn btn-ghost btn-sm" (click)="addSbxFolder()">+ Add folder</button>
+            @if (indexedFolders.length) {
+              <button type="button" class="btn btn-ghost btn-sm" (click)="sbxFolderPickerOpen = true">
+                Browse folders…
+              </button>
+            }
+          </div>
+          @if (indexedFolders.length === 0) {
+            <p class="mount-hint">
+              No indexed folders yet — run <code>huddle indexfolder</code> on the host and
+              <b>Browse</b> opens your folders as a tree instead of typing paths from memory.
+            </p>
+          }
+
+          @if (sbxSettings; as s) {
+            @if (s.folders.length) {
+              <p class="mount-hint">Settings folders mounted automatically (Settings → Folder mappings):</p>
+              <ul class="settings-list">
+                @for (f of s.folders; track f.targetPath) {
+                  <li><code>{{ f.hostPath }}</code> → <code>{{ f.targetPath }}</code>@if (f.readOnly) { <span> (read-only)</span> }</li>
+                }
+              </ul>
+            }
+            @if (s.skipped.length) {
+              <p class="mount-hint">Not available in a sandbox:</p>
+              <ul class="settings-list settings-list--skip">
+                @for (k of s.skipped; track k.name) { <li>{{ k.name }} — {{ k.reason }}</li> }
+              </ul>
+            }
+          }
           <p class="mount-hint">Huddle becomes the sandbox's upstream proxy and its CA is installed automatically, so HTTPS + editor backends work.</p>
+        }
+
+        @if (sbxFolderPickerOpen) {
+          <app-folder-picker-modal [folders]="indexedFolders" [multiple]="true"
+                                   title="Add folders"
+                                   subtitle="Every folder you pick is mounted in the sandbox at its own host path."
+                                   (pickedMany)="onSbxFoldersPickedBulk($event)"
+                                   (cancel)="sbxFolderPickerOpen = false" />
         }
 
         @if (folderPickerOpen) {

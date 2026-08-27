@@ -78,12 +78,35 @@ export interface SbxStep {
   stderr: string;
 }
 
+/** One folder a sandbox is created with. sbx mounts it at the same path inside. */
+export interface SbxWorkspace {
+  path: string;
+  readOnly: boolean;
+}
+
+/** A folder mapping as it lands in a sandbox (settings folder). */
+export interface SbxSettingsFolder {
+  name: string;
+  hostPath: string;
+  targetPath: string;
+  readOnly: boolean;
+}
+
+export interface SbxSettingsFolders {
+  folders: SbxSettingsFolder[];
+  /** Mappings that cannot travel to a sandbox (volumes, ~-paths), with the reason. */
+  skipped: { name: string; reason: string }[];
+}
+
 export interface SbxStartResult {
   name: string;
   ok: boolean;
   upstreamUrl: string;
   proxyPort: number;
   steps: SbxStep[];
+  workspaces?: SbxWorkspace[];
+  settingsFolders?: SbxSettingsFolder[];
+  settingsSkipped?: { name: string; reason: string }[];
 }
 
 export interface SandboxInfo {
@@ -310,8 +333,15 @@ export class ApiService {
     return this.handle(this.http.get<SbxStatus>('/api/sbx/status'));
   }
 
-  startSbx(body: { name?: string; agent?: string; workspace?: string } = {}): Observable<SbxStartResult> {
+  startSbx(
+    body: { name?: string; agent?: string; workspace?: string; workspaces?: { path: string; readOnly?: boolean }[] } = {}
+  ): Observable<SbxStartResult> {
     return this.handle(this.http.post<SbxStartResult>('/api/sbx/start', body));
+  }
+
+  /** The settings folders (folder mappings) a new sandbox will get. */
+  sbxSettingsFolders(): Observable<SbxSettingsFolders> {
+    return this.handle(this.http.get<SbxSettingsFolders>('/api/sbx/settings-folders'));
   }
 
   listSbxSandboxes(): Observable<{ sandboxes: SandboxInfo[] }> {
