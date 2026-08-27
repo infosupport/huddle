@@ -6,6 +6,7 @@ import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
+import { runNode } from './node';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
@@ -27,9 +28,9 @@ interface ParsedArgs {
   mounts: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent', 'entry', 'port', 'data-dir']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'dry-run']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'node', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -175,10 +176,22 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle node [options]              Run Huddle Node (portal + API + orchestration)
+                                     directly on this host instead of in the
+                                     gateway container. The firewall stays in
+                                     huddle-gateway. Foreground; Ctrl-C to stop.
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
   huddle experiment status           Show the active channel and CLI version
+
+Node options:
+  --entry <path>                     Path to the built Huddle Node entrypoint
+                                     (default: the gateway build in this checkout;
+                                     also via HUDDLE_NODE_ENTRY)
+  --port <port>                      Portal + API port (default: 24842)
+  --data-dir <path>                  Database, CA and config location
+                                     (default: ~/.huddle)
 
 Init options:
   --runtime <docker|podman>          Container runtime (default: auto-detected;
@@ -285,6 +298,18 @@ async function main(): Promise<void> {
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),
+    });
+    return;
+  }
+
+  if (cmd === 'node') {
+    // Runs Huddle Node in the foreground on this host (control plane only; the
+    // firewall stays in huddle-gateway). Additive for now — `huddle init` still
+    // starts the combined container. See docs/ADR-huddle-node-split.md.
+    await runNode({
+      entry: flagString(flags, 'entry'),
+      port: flagString(flags, 'port'),
+      dataDir: flagString(flags, 'data-dir'),
     });
     return;
   }
