@@ -55,6 +55,17 @@ export function sbxUnavailableReason(): string | null {
 const DEFAULT_AGENT = process.env.HUDDLE_SBX_AGENT ?? 'claude';
 const STEP_TIMEOUT_MS = Number(process.env.HUDDLE_SBX_TIMEOUT_MS ?? '300000');
 
+/**
+ * No console window per child process on Windows.
+ *
+ * Before the split this module ran inside the gateway container, where spawning
+ * costs nothing visible. Huddle Node runs on the user's own machine, and every
+ * portal refresh and every ingest poll exec's sbx — so without this Windows
+ * flashes a terminal window at the user several times a minute. Same reason,
+ * same fix as cli/src/sbx-host.ts.
+ */
+const NO_WINDOW = { windowsHide: true } as const;
+
 /** Agent identifiers become an argv positional; keep them tame (no leading `-`). */
 const AGENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
@@ -72,7 +83,7 @@ export function runSbx(args: string[]): Promise<RunResult> {
     execFile(
       SBX_BIN,
       args,
-      { timeout: STEP_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 },
+      { timeout: STEP_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, ...NO_WINDOW },
       (err, stdout, stderr) => {
         const e = err as (NodeJS.ErrnoException & { code?: number | string; killed?: boolean }) | null;
         let code = 0;
@@ -119,7 +130,7 @@ export function streamSbx(
     let stderrBuf = '';
     let child;
     try {
-      child = spawn(SBX_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(SBX_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], ...NO_WINDOW });
     } catch (err) {
       const msg = `[spawn error] ${(err as Error).message}`;
       onChunk('stderr', msg);
