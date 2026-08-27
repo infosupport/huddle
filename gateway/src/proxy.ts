@@ -13,8 +13,9 @@ import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from './token-exchange';
 import { logIdentityProbe } from './identity-probe';
+import { runtimeEnv } from './runtime-env';
 
-const PROXY_PORT = 80;
+const PROXY_PORT = runtimeEnv.proxyPort;
 
 // Domains that skip the MITM (keep a raw TCP tunnel). For clients with
 // cert-pinning (npm registry, some Java libs) MITM is a breaker.

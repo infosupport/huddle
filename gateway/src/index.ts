@@ -9,6 +9,7 @@ import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 import { SBX_PROXY_PORT, sbxUpstreamUrl } from './sbx';
 import { startAutoSync } from './sandbox/auto-sync';
+import { runtimeEnv } from './runtime-env';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -19,7 +20,7 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-const SOCKET_DIR = '/tmp/dc-sockets';
+const SOCKET_DIR = runtimeEnv.socketDir;
 
 initDb();
 // Resource limits + folder mappings moved from the DB into config.json (#98).

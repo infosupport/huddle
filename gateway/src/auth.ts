@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { IncomingMessage } from 'http';
+import { runtimeEnv } from './runtime-env';
 
 // ── Operator-authenticatie voor de control plane ────────────────────────────
 // Root-cause van de "missing auth"-cluster (findings #4/#5/#9/#10/#11/#13): de
@@ -23,8 +24,7 @@ const SESSION_COOKIE = 'huddle_session';
 
 function tokenFilePath(): string {
   if (process.env.HUDDLE_OPERATOR_TOKEN_FILE) return process.env.HUDDLE_OPERATOR_TOKEN_FILE;
-  const dbPath = process.env.DB_PATH || '/data/huddle.db';
-  return path.join(path.dirname(dbPath), 'operator-token');
+  return path.join(path.dirname(runtimeEnv.dbPath), 'operator-token');
 }
 
 let cachedToken: string | null = null;

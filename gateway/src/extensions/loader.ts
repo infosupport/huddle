@@ -6,8 +6,9 @@ import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
 import { stateEvents } from '../events';
+import { runtimeEnv } from '../runtime-env';
 
-export const EXT_DIR = process.env.EXT_DIR ?? '/data/extensions';
+export const EXT_DIR = runtimeEnv.extDir;
 
 export interface ExtensionManifest {
   id: string;
@@ -115,7 +116,7 @@ function dockerRequest(method: string, urlPath: string, body?: unknown): Promise
       'Connection: close',
     ].join('\r\n') + '\r\n\r\n' + (payload ?? '');
 
-    const sock = net.connect('/var/run/docker.sock');
+    const sock = net.connect(runtimeEnv.dockerSocketPath);
     let raw = '';
     sock.on('data', (d) => { raw += d.toString(); });
     sock.on('end', () => {
@@ -226,7 +227,7 @@ function unloadModule(id: string): void {
 
 // Team-managed extensions folder (#69): the CLI binds the configured host
 // folder here, alongside the uploaded extensions in EXT_DIR.
-export const TEAM_EXT_DIR = process.env.HUDDLE_EXTENSIONS_MOUNT ?? '/extensions';
+export const TEAM_EXT_DIR = runtimeEnv.teamExtDir;
 
 export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
   // Defense-in-depth: the id indexes a directory under baseDir, so it must be a
