@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { isHostPortApproved } from './db';
 import { authorizeAction, classifyRequest, getMountPermissions, MountPermissions } from './docker-actions';
+import { runtimeEnv } from './runtime-env';
 
 // Default mount policy when no per-container perms are supplied (e.g. unit
 // tests): all mount kinds denied. Mirrors the secure-by-default catalog in
@@ -14,7 +15,7 @@ function mountDenied(kind: string): string {
   return `${kind} mounts are disabled for this devcontainer. Enable them in the Huddle portal.`;
 }
 
-const DOCKER_SOCKET = '/var/run/docker.sock';
+const DOCKER_SOCKET = runtimeEnv.dockerSocketPath;
 const proxyServers = new Map<string, net.Server>();
 
 // ── Devcontainer registry ─────────────────────────────────────────────────────

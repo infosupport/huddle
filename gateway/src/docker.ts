@@ -7,8 +7,9 @@ import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
+import { runtimeEnv } from './runtime-env';
 
-const SOCKET_DIR = '/tmp/dc-sockets';
+const SOCKET_DIR = runtimeEnv.socketDir;
 
 // The CLI passes the detected container engine via HUDDLE_RUNTIME. On (rootless)
 // Podman the per-container proxy socket is SELinux-labeled; a SELinux-confined
@@ -30,7 +31,7 @@ export function dockerRequest(method: string, path: string, body?: unknown): Pro
   return new Promise((resolve, reject) => {
     const bodyStr = body !== undefined ? JSON.stringify(body) : undefined;
     const options: http.RequestOptions = {
-      socketPath: '/var/run/docker.sock',
+      socketPath: runtimeEnv.dockerSocketPath,
       method,
       path,
       headers: bodyStr ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(bodyStr) } : {},
@@ -245,7 +246,7 @@ export async function execContainerOutput(containerId: string, cmd: string[]): P
     const startBody = JSON.stringify({ Detach: false, Tty: false });
     const req = http.request(
       {
-        socketPath: '/var/run/docker.sock',
+        socketPath: runtimeEnv.dockerSocketPath,
         method: 'POST',
         path: `/exec/${execCreate.Id}/start`,
         headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
@@ -323,7 +324,7 @@ function startExec(execId: string, stdin: string): Promise<void> {
     const startBody = JSON.stringify({ Detach: false, Tty: false });
     const req = http.request(
       {
-        socketPath: '/var/run/docker.sock',
+        socketPath: runtimeEnv.dockerSocketPath,
         method: 'POST',
         path: `/exec/${execId}/start`,
         headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
@@ -456,7 +457,7 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
 
   await new Promise<void>((resolve, reject) => {
     const options: http.RequestOptions = {
-      socketPath: '/var/run/docker.sock',
+      socketPath: runtimeEnv.dockerSocketPath,
       method: 'POST',
       path: `/build?t=${encodeURIComponent(imageName)}`,
       headers: {

@@ -15,8 +15,9 @@
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 import path from 'path';
+import { runtimeEnv } from './runtime-env';
 
-const HOME_DIR = process.env.HUDDLE_HOME_DIR || '/huddle-home';
+const HOME_DIR = runtimeEnv.homeDir;
 const CONFIG_FILE = path.join(HOME_DIR, 'config.json');
 
 // A folder mapping as stored in config.json: camelCase and real booleans, so the

@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import forge from 'node-forge';
+import { runtimeEnv } from './runtime-env';
 
 // Persistente root-CA voor het MITM-intercepten van HTTPS-verkeer naar
 // devcontainers. Wordt eenmalig gegenereerd in /data (volume) en daarna
 // hergebruikt zodat clients de CA maar één keer hoeven te trusten.
 
-const CA_DIR = process.env.CA_DIR ?? '/data';
+const CA_DIR = runtimeEnv.caDir;
 const CA_KEY_PATH = path.join(CA_DIR, 'ca.key');
 const CA_CRT_PATH = path.join(CA_DIR, 'ca.crt');
 

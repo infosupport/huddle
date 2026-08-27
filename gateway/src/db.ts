@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
+import { runtimeEnv } from './runtime-env';
 
-const DB_PATH = process.env.DB_PATH || '/data/huddle.db';
+const DB_PATH = runtimeEnv.dbPath;
 
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
