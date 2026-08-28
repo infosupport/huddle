@@ -247,12 +247,12 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 You can start devcontainers via the CLI or via the web UI at `http://localhost:24842`.
 
-> **Selecting host folders in the web UI.** Huddle runs in a container, so the portal cannot
-> open a folder dialog on your host — a host path had to be typed from memory. Run
-> `huddle indexfolder` in your projects folder once and the **Browse** button next to every
-> host-path field opens a folder tree of what was found. Ctrl-click several folders when
-> starting a devcontainer and each one is mounted as its own worktree. See
-> [Indexing host folders](#indexing-host-folders).
+> **Selecting host folders in the web UI.** A browser cannot hand a server a folder path,
+> so Huddle keeps an index of your host folders. Point **Settings → Indexed folders →
+> Scan folder** at your projects folder once (or run `huddle indexfolder` there) and the
+> **Browse** button next to every host-path field opens a folder tree of what was found.
+> Ctrl-click several folders when starting a devcontainer and each one is mounted as its
+> own worktree. See [Indexing host folders](#indexing-host-folders).
 
 ### Via the CLI
 
@@ -295,10 +295,13 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 
 ## Indexing host folders
 
-The portal runs inside a container and has no view of your host filesystem, so it cannot
-offer a folder picker. `huddle indexfolder` closes that gap: it walks your host where you
-run it and hands the folders it finds to Huddle, which offers them wherever a host path is
-needed — starting a devcontainer, the folder mappings, and the team-managed folders.
+A browser cannot hand a server a folder path, so Huddle keeps an index of the folders on
+your host and offers it wherever a host path is needed — starting a devcontainer, the
+folder mappings, and the team-managed folders.
+
+Huddle Node runs on your host, so it can fill that index itself: **Settings → Indexed
+folders → Scan folder** walks the folder you name. The CLI does the same thing from
+wherever your shell is:
 
 ```bash
 cd T:/projects

@@ -47,14 +47,16 @@ Default API URL: `http://localhost:24842` — Huddle Node, on the host. Override
 
 ## Making host folders selectable in the portal
 
-Huddle's portal runs inside a container, so it cannot open a folder dialog on your
-host: every host path had to be typed from memory. `huddle indexfolder` scans your
-host once and stores what it finds, and every host-path field in the portal grows a
-**Browse** button that opens those folders as a tree — starting a devcontainer, the
-folder mappings, and the team-managed folders. Starting a devcontainer, Ctrl-click picks
-several folders at once and each becomes its own worktree. Typing a path by hand keeps working:
-the index is a snapshot, so a folder created after the last scan must not be
-unreachable.
+A browser cannot hand a server a folder path, so Huddle keeps an index of your host
+folders and every host-path field in the portal grows a **Browse** button that opens
+them as a tree — starting a devcontainer, the folder mappings, and the team-managed
+folders. Starting a devcontainer, Ctrl-click picks several folders at once and each
+becomes its own worktree. Typing a path by hand keeps working: the index is a snapshot,
+so a folder created after the last scan must not be unreachable.
+
+`huddle indexfolder` fills the index from wherever your shell is; the portal does the
+same from **Settings → Indexed folders → Scan folder**. Both ask Huddle Node — which
+runs on your host — to do the walk.
 
 ```bash
 cd T:/projects

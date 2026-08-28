@@ -1,33 +1,14 @@
-import fs from 'fs';
 import path from 'path';
 import { get, post, del } from './api';
 import { bold, green, yellow, cyan, dim, printTable } from './utils';
 
 // `huddle indexfolder` — make host folders selectable in the portal.
 //
-// The portal runs inside a container: it cannot open a file dialog on the host,
-// so every host path had to be typed from memory. This command walks the host
-// filesystem where the operator already is (their projects folder) and posts the
-// folders it finds to the gateway, which stores them as an index. The portal then
-// offers that index wherever a host path is needed.
-//
-// Deliberately a snapshot, not a live view: the gateway has no way to read the
-// host filesystem, and re-running the command is cheap.
-
-// Folders that are never a workspace choice but do contain thousands of
-// subfolders. Skipping them is what keeps a scan of a projects folder in the
-// hundreds rather than the tens of thousands. `--all` turns this off; hidden
-// (dot) folders stay skipped either way.
-const NOISE = new Set([
-  'node_modules', 'dist', 'build', 'out', 'bin', 'obj', 'target', 'vendor',
-  'venv', '__pycache__', 'coverage', 'packages', 'AppData', 'Library',
-  '$RECYCLE.BIN', 'System Volume Information', 'Windows', 'Program Files',
-  'Program Files (x86)', 'ProgramData',
-]);
-
-// Hard stop on discovery, well under the gateway's own cap. Pointing the command
-// at a drive root should end in a clear warning, not a ten-minute walk.
-const MAX_FOLDERS = 1500;
+// The walk itself lives in Huddle Node (gateway/src/host-scan.ts), which runs on
+// the host and can read the filesystem directly. This command only resolves the
+// folder from the operator's shell — `huddle indexfolder` with no argument means
+// "here", and only the shell knows where that is — and asks Node to scan it.
+// The portal has a Scan button that calls the same endpoint.
 
 export interface IndexFolderOptions {
   path?: string;
@@ -54,6 +35,9 @@ interface IndexResponse {
   invalid: { path: string; error: string }[];
   total: number;
   max: number;
+  root: string;
+  truncated: boolean;
+  scanMax: number;
 }
 
 // Host paths travel to the gateway with forward slashes: `path.resolve` hands
@@ -81,8 +65,8 @@ function parseDepth(raw: string | undefined): number {
 // derive from this value.
 function resolveScanRoot(raw: string | undefined): string {
   const input = raw ?? process.cwd();
-  // A null byte makes every fs call throw ERR_INVALID_ARG_VALUE with a stack
-  // trace; say what is wrong instead.
+  // A null byte makes every filesystem call throw ERR_INVALID_ARG_VALUE with a
+  // stack trace; say what is wrong instead.
   if (input.includes('\0')) throw new Error('Invalid folder: the path contains a null byte.');
   return path.resolve(input);
 }
@@ -91,42 +75,6 @@ function resolveScanRoot(raw: string | undefined): string {
 function contains(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-// Breadth-first so a depth cut-off keeps the folders nearest the root — those are
-// the ones an operator actually mounts. Symlinks are not followed: `isDirectory()`
-// is false for a symlink entry, which also rules out a link loop.
-function scan(root: string, depth: number, all: boolean): { folders: string[]; truncated: boolean } {
-  const folders: string[] = [root];
-  let level = [root];
-  for (let d = 0; d < depth; d++) {
-    const next: string[] = [];
-    for (const dir of level) {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        continue; // unreadable folder (permissions, a vanished dir) — skip it
-      }
-      for (const e of entries) {
-        if (!e.isDirectory()) continue;
-        if (e.name.startsWith('.')) continue;
-        if (!all && NOISE.has(e.name)) continue;
-        const full = path.join(dir, e.name);
-        // Nothing outside the folder the operator named ever enters the index or
-        // gets opened by the next round of readdirSync. Entries come from
-        // readdirSync and symlinks are already skipped, so this should never
-        // fire — it is here so a scan can never walk out of its root by accident.
-        if (!contains(root, full)) continue;
-        folders.push(full);
-        next.push(full);
-        if (folders.length >= MAX_FOLDERS) return { folders, truncated: true };
-      }
-    }
-    level = next;
-    if (level.length === 0) break;
-  }
-  return { folders, truncated: false };
 }
 
 export async function runIndexFolder(opts: IndexFolderOptions): Promise<void> {
@@ -155,27 +103,21 @@ export async function runIndexFolder(opts: IndexFolderOptions): Promise<void> {
   }
 
   const depth = parseDepth(opts.depth);
-  const root = resolveScanRoot(opts.path);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(root);
-  } catch {
-    throw new Error(`Folder does not exist: ${root}`);
-  }
-  if (!stat.isDirectory()) throw new Error(`Not a folder: ${root}`);
+  // Resolved here, against the shell's cwd, so `huddle indexfolder` with no
+  // argument still means "this folder". Everything after this is an absolute
+  // path Node can act on without knowing where the CLI was run.
+  const posixRoot = toPosix(resolveScanRoot(opts.path));
 
-  const posixRoot = toPosix(root);
   console.log(`Indexing ${bold(posixRoot)} ${dim(`(depth ${depth}${opts.all ? ', including build folders' : ''})`)}`);
-  const { folders, truncated } = scan(root, depth, opts.all === true);
-  if (truncated) {
-    console.log(yellow(`[!] Stopped at ${MAX_FOLDERS} folders. Index a more specific folder, or lower --depth.`));
-  }
-
-  const res = await post<IndexResponse>('/api/indexed-folders', {
-    paths: folders.map(toPosix),
-    root: posixRoot,
+  const res = await post<IndexResponse>('/api/indexed-folders/scan', {
+    path: posixRoot,
+    depth,
+    all: opts.all === true,
     replace: opts.replace === true,
   });
+  if (res.truncated) {
+    console.log(yellow(`[!] Stopped at ${res.scanMax} folders. Index a more specific folder, or lower --depth.`));
+  }
 
   if (res.removed) console.log(dim(`  Replaced: removed ${res.removed} earlier entr(y|ies) under this folder.`));
   console.log(green(`[OK] ${res.added} added, ${res.updated} already known — ${res.total} folder(s) in the index.`));

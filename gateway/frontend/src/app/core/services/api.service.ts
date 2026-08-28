@@ -49,6 +49,15 @@ export interface IndexResult {
   max: number;
 }
 
+// A host scan is an IndexResult plus what the walk itself did. `truncated` means
+// the walk hit its own ceiling (scanMax) and stopped early, so the index is
+// incomplete for that root — the operator has to narrow the folder or the depth.
+export interface ScanResult extends IndexResult {
+  root: string;
+  truncated: boolean;
+  scanMax: number;
+}
+
 export interface FolderMapping {
   id: number;
   name: string;
@@ -476,6 +485,12 @@ export class ApiService {
 
   addIndexedFolder(path: string): Observable<IndexResult> {
     return this.handle(this.http.post<IndexResult>('/api/indexed-folders', { path, source: 'manual' }));
+  }
+
+  // Ask Huddle Node to walk a folder ON THE HOST and index what it finds — the
+  // portal's equivalent of `huddle indexfolder`.
+  scanIndexedFolders(path: string, depth: number, all = false): Observable<ScanResult> {
+    return this.handle(this.http.post<ScanResult>('/api/indexed-folders/scan', { path, depth, all }));
   }
 
   deleteIndexedFolder(id: number): Observable<{ ok: boolean }> {
