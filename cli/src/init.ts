@@ -17,18 +17,22 @@ import { bold, green, cyan, dim, red, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, baseImageEnv } from './images';
 import { readConfig, updateConfig } from './config';
-import { bridgeGateway, resolveControlAddress } from './control-address';
+import { bridgeGateway, resolveControlAddress, HOST_ALIAS, type ControlAddress } from './control-address';
+import { engineHostAddress, probeControlUrl } from './control-probe';
 import {
   DEFAULT_NODE_PORT,
   MissingNodeEntryError,
   NODE_LOG_FILE,
+  NODE_PID_FILE,
   nodeCaDir,
   nodeDataDir,
   nodeProbeUrls,
   nodeUrl,
+  pingNode,
   readGatewayToken,
   readOperatorToken,
   startNodeDetached,
+  stopNode,
 } from './node';
 import fs from 'fs';
 
@@ -64,6 +68,92 @@ async function rewireGateway(port: string, token: string | null): Promise<void> 
     console.log(yellow(`[!] Could not wire the gateway into the devcontainer networks: ${(err as Error).message}`));
     console.log(dim('    Existing devcontainers may not reach Huddle until you reconnect them in the portal.'));
   }
+}
+
+/**
+ * Confirm the gateway can actually reach Huddle Node — and move the control
+ * channel if it cannot.
+ *
+ * resolveControlAddress() derives an address from what the engine reports about
+ * itself, and that derivation is right until it is not: on Rancher Desktop for
+ * Windows the engine is a WSL distro, so `host.docker.internal` resolves to that
+ * distro's own docker0 gateway while Huddle Node is a Windows process on the
+ * Windows loopback. Both halves are healthy and they cannot see each other.
+ *
+ * There is no way to tell that from a derivation, and getting it wrong is
+ * expensive: the gateway fails closed, so every devcontainer is denied all
+ * egress and nothing appears in the portal to approve — a firewall that looks
+ * installed and blocks everything. So open the connection for real, from the
+ * gateway's own image on the gateway's own network, and believe the result.
+ *
+ * `rebind` restarts Huddle Node on a different interface and reports whether it
+ * managed to. Passed in rather than done here because init owns the options
+ * Node was started with.
+ */
+async function verifyControlChannel(
+  rt: string,
+  image: string,
+  network: string,
+  control: ControlAddress,
+  rebind: (bindHost: string) => Promise<boolean>,
+): Promise<ControlAddress> {
+  const first = probeControlUrl(rt, image, control.url, network, control.runArgs);
+  if (first.reachable) {
+    console.log(dim(`  reachable from a container at ${control.url} (${first.detail})`));
+    return { ...control, reachable: true };
+  }
+
+  const unreachable = (fixed: ControlAddress, detail: string): ControlAddress => {
+    console.log(yellow(`[!] The gateway cannot reach Huddle Node at ${fixed.url} (${detail}).`));
+    console.log(yellow('    It fails closed, so every devcontainer will be denied all egress and'));
+    console.log(yellow('    nothing will show up in the portal to approve.'));
+    return { ...fixed, reachable: false };
+  };
+
+  // An address someone named by hand is not ours to overrule — they know their
+  // own topology, and silently moving the channel would hide the real problem.
+  if (process.env.HUDDLE_NODE_CONTROL_URL?.trim() || process.env.HUDDLE_CONTROL_HOST?.trim()) {
+    const out = unreachable(control, first.detail);
+    console.log(dim('    That address was set explicitly, so it is left as it is.'));
+    return out;
+  }
+
+  console.log(dim(`  ${control.url} did not answer (${first.detail}) — asking the engine for its host address`));
+  const hostIp = engineHostAddress(rt, image);
+  if (!hostIp || hostIp === control.bindHost) {
+    const out = unreachable(control, first.detail);
+    console.log(dim('    No better address could be found from the engine either.'));
+    console.log(dim('    Name it yourself and re-run init:'));
+    console.log(cyan('      HUDDLE_CONTROL_HOST=<address the container reaches this host on> huddle init'));
+    return out;
+  }
+
+  const moved: ControlAddress = {
+    bindHost: hostIp,
+    url: `http://${hostIp}:${CONTROL_PORT}`,
+    runArgs: [],
+    reason: `${HOST_ALIAS} does not reach this machine; the engine does, at ${hostIp}`,
+    reachable: false,
+  };
+  console.log(dim(`  moving the control channel to ${hostIp} and restarting Huddle Node`));
+  if (!(await rebind(hostIp))) {
+    const out = unreachable(moved, 'Huddle Node would not restart');
+    console.log(dim(`    Stop it yourself (its pid is in ${NODE_PID_FILE}) and re-run init.`));
+    return out;
+  }
+
+  const second = probeControlUrl(rt, image, moved.url, network, []);
+  if (second.reachable) {
+    console.log(dim(`  reachable from a container at ${moved.url} (${second.detail})`));
+    return { ...moved, reachable: true };
+  }
+
+  const out = unreachable(moved, second.detail);
+  console.log(dim('    The address is right — the engine routes to this machine there — so'));
+  console.log(dim('    something on this machine is dropping the connection. On Windows that'));
+  console.log(dim('    is Defender Firewall: allow inbound TCP ' + CONTROL_PORT + ' for node.exe'));
+  console.log(dim('    on the adapter Huddle just bound. Nothing needs re-running afterwards.'));
+  return out;
 }
 
 /**
@@ -220,7 +310,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // Where the gateway will look for the control channel, and therefore which
   // interface Node has to bind it on. The two are one decision, so they are
   // resolved together (control-address.ts).
-  const control = resolveControlAddress({
+  let control = resolveControlAddress({
     isRemote: runtime.isRemote,
     port: CONTROL_PORT,
     gatewayIp: bridgeGateway(rt, runtime.defaultNetwork),
@@ -256,6 +346,20 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     ? `  already running on ${nodeUrl(node.port)}`
     : `  pid ${node.pid}, log ${NODE_LOG_FILE}`));
   console.log(dim(`  control channel: ${control.bindHost}:${CONTROL_PORT} — ${control.reason}`));
+
+  // Both halves are up; now prove they can see each other, before the gateway is
+  // handed an address it may never reach.
+  control = await verifyControlChannel(rt, IMAGE, runtime.defaultNetwork, control, async (bindHost) => {
+    // A running Node keeps the interface it was started on, and startNodeDetached
+    // deliberately reuses one that answers — so it has to actually stop first.
+    await stopNode();
+    for (let i = 0; i < 40 && (await pingNode(HOST_PORT)); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (await pingNode(HOST_PORT)) return false;
+    node = await startNodeDetached({ port: HOST_PORT, controlHost: bindHost, operatorToken, extraEnv });
+    return true;
+  });
 
   // Huddle Node persists the token it generated on first boot; from here on the
   // CLI reads it rather than inventing one.
@@ -295,16 +399,6 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
 
   await rewireGateway(HOST_PORT, token);
-
-  if (!control.reachable) {
-    console.log();
-    console.log(yellow('[!] Could not work out how the gateway container reaches this host.'));
-    console.log(yellow('    The control channel is bound to loopback, which the container'));
-    console.log(yellow('    probably cannot reach — and a gateway without policy denies'));
-    console.log(yellow('    every request rather than allowing them.'));
-    console.log(dim('    Fix it by naming the address yourself and re-running init:'));
-    console.log(cyan('      HUDDLE_CONTROL_HOST=<address the container reaches this host on> huddle init'));
-  }
 
   console.log();
 
