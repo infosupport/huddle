@@ -158,7 +158,7 @@ import {
         </div>
         <div class="field">
           <label for="firewallRulesFolder">Firewall rules folder</label>
-          <p class="hint">Path to folder containing firewall rules (read on startup &amp; reload).</p>
+          <p class="hint">Path to folder containing firewall rules, read from the host on startup &amp; reload.</p>
           <div class="tmd-input-row">
             <app-folder-select inputId="firewallRulesFolder" [value]="resources.firewallRulesFolder"
                                [folders]="indexedFolders()" placeholder="/path/to/firewall_rules"
@@ -176,10 +176,32 @@ import {
           <h2>Indexed folders</h2>
           <p class="hint">Manage the folders available to devcontainers.</p>
         </div>
-        <button type="button" class="btn btn--accent index-add-btn" (click)="showAddFolder.set(!showAddFolder())">
-          <app-icon name="plus" [size]="14" /> Add folder
-        </button>
+        <div class="index-head-actions">
+          <button type="button" class="btn btn-ghost" (click)="showScanFolder.set(!showScanFolder()); showAddFolder.set(false)">
+            <app-icon name="search" [size]="14" /> Scan folder
+          </button>
+          <button type="button" class="btn btn--accent index-add-btn" (click)="showAddFolder.set(!showAddFolder()); showScanFolder.set(false)">
+            <app-icon name="plus" [size]="14" /> Add folder
+          </button>
+        </div>
       </div>
+
+      @if (showScanFolder()) {
+        <form class="index-add" (ngSubmit)="scanIndexedFolders()">
+          <input [(ngModel)]="scanRoot" name="scanRoot" id="scan-root"
+                 placeholder="C:/projects" autocomplete="off" spellcheck="false">
+          <input [(ngModel)]="scanDepth" name="scanDepth" id="scan-depth" type="number" min="0" max="8"
+                 class="index-depth" title="How many levels below the folder to index">
+          <button type="submit" class="btn btn--accent" [disabled]="scanning()">
+            {{ scanning() ? 'Scanning…' : 'Scan' }}
+          </button>
+          <button type="button" class="btn btn-ghost" (click)="showScanFolder.set(false)">Cancel</button>
+        </form>
+        <p class="hint index-add-hint">
+          Huddle reads this folder on the host and indexes everything up to the given depth.
+          Build folders (<code>node_modules</code>, <code>dist</code>, …) and hidden folders are skipped.
+        </p>
+      }
 
       @if (showAddFolder()) {
         <form class="index-add" (ngSubmit)="addIndexedFolder()">
@@ -191,15 +213,14 @@ import {
           <button type="button" class="btn btn-ghost" (click)="showAddFolder.set(false)">Cancel</button>
         </form>
         <p class="hint index-add-hint">
-          One folder at a time. For a whole projects folder, run
-          <code>huddle indexfolder</code> on the host — it scans and adds everything below it.
+          One folder at a time. Use <strong>Scan folder</strong> for a whole projects folder.
         </p>
       }
 
       @if (indexedFolders().length === 0) {
         <p class="hint">
-          Nothing indexed yet. Run <code>huddle indexfolder</code> on the host in the folder that
-          holds your projects, or add a single folder by hand.
+          Nothing indexed yet. Use <strong>Scan folder</strong> on the folder that holds your
+          projects, or add a single folder by hand.
         </p>
       } @else {
         <div class="index-toolbar">
@@ -328,9 +349,12 @@ huddle indexfolder --list     <span class="cmd-note"># what is indexed right now
     /* Indexed folders — the file-manager style panel from the design. */
     .index-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
     .index-head .hint { margin-bottom: 12px; }
+    .index-head-actions { display: flex; gap: .5rem; flex: 0 0 auto; }
+    .index-head-actions .btn { display: inline-flex; align-items: center; gap: .35rem; }
     .index-add-btn { display: inline-flex; align-items: center; gap: .35rem; flex: 0 0 auto; }
     .index-add { display: flex; gap: .5rem; align-items: center; margin-bottom: .25rem; }
     .index-add input { flex: 1; }
+    .index-add input.index-depth { flex: 0 0 4.5rem; }
     .index-add-hint { margin-bottom: 12px; }
 
     .index-toolbar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
@@ -441,6 +465,7 @@ export class SettingsComponent implements OnInit {
   indexQuery = signal('');
   indexCwd = signal('');
   showAddFolder = signal(false);
+  showScanFolder = signal(false);
   removingIndexed = signal(false);
 
   private indexTree = computed(() => buildFolderTree(this.indexedFolders().map((f) => f.path)));
@@ -463,6 +488,11 @@ export class SettingsComponent implements OnInit {
   );
   newIndexedFolder = '';
   addingIndexed = signal(false);
+  scanRoot = '';
+  // Two levels below the root is the shape of a projects folder: the projects
+  // themselves and one level inside them. Same default as `huddle indexfolder`.
+  scanDepth = 2;
+  scanning = signal(false);
   indexNote = signal<string | null>(null);
 
   ngOnInit(): void {
@@ -589,6 +619,27 @@ export class SettingsComponent implements OnInit {
     });
   }
 
+  // Walk a host folder and index it — the portal's `huddle indexfolder`. Huddle
+  // Node runs on the host, so the portal no longer has to send the operator to a
+  // shell to fill the index.
+  scanIndexedFolders(): void {
+    const path = this.scanRoot.trim();
+    if (!path) return;
+    this.scanning.set(true);
+    this.indexNote.set(null);
+    this.error.set(null);
+    this.api.scanIndexedFolders(path, Number(this.scanDepth)).subscribe({
+      next: (r) => {
+        this.scanning.set(false);
+        this.showScanFolder.set(false);
+        const capped = r.truncated ? ` — stopped at ${r.scanMax} folders, narrow the folder or lower the depth` : '';
+        this.indexNote.set(`${r.added} added, ${r.updated} already known — ${r.total} indexed${capped}`);
+        this.loadIndexedFolders();
+      },
+      error: (e) => { this.scanning.set(false); this.error.set(e.message); },
+    });
+  }
+
   private loadMappings(): void {
     this.api.getFolderMappings().subscribe({
       next: (m) => this.mappings.set(m),
@@ -619,9 +670,9 @@ export class SettingsComponent implements OnInit {
     });
   }
 
-  // Save both folder paths. They are written into the mounted ~/.huddle/config.json
-  // and only take effect once the CLI re-mounts them — so tell the operator to
-  // restart. Used by the Extensions-folder Reload button too.
+  // Save both folder paths into ~/.huddle/config.json. Huddle Node reads that
+  // file per call, so the firewall-rules folder is live immediately; extensions
+  // are loaded once at boot, which is what `restartRequired` reports.
   saveFolders(): void {
     this.savingFolders.set(true);
     this.folderNote.set(null);
@@ -633,9 +684,11 @@ export class SettingsComponent implements OnInit {
       next: (res) => {
         this.savingFolders.set(false);
         if (res.persisted === false) {
-          this.folderNote.set('Could not save — the CLI config is not mounted into Huddle. Run `huddle restart` on the host first.');
+          this.folderNote.set('Could not save — Huddle could not write ~/.huddle/config.json.');
         } else {
-          this.folderNote.set('Saved to config. Run `huddle restart` on the host to (re)mount the folder(s).');
+          this.folderNote.set(res.restartRequired
+            ? 'Saved. Run `huddle restart` on the host to load extensions from the new folder.'
+            : 'Saved.');
         }
       },
       error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
@@ -656,7 +709,9 @@ export class SettingsComponent implements OnInit {
           next: (r) => {
             this.savingFolders.set(false);
             if (!r.mounted) {
-              this.folderNote.set('Saved to config, but the folder is not mounted into Huddle yet — run `huddle restart` on the host, then Reload.');
+              this.folderNote.set(r.folder
+                ? `Saved, but Huddle cannot read ${r.folder} — check the path exists on the host.`
+                : 'Saved. Set a firewall rules folder to load rules from.');
             } else {
               const errs = r.errors.length ? `, ${r.errors.length} error(s)` : '';
               this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)${errs}`);
