@@ -97,6 +97,35 @@ export interface ControlClient {
   stop(): void;
 }
 
+// What actually went wrong, not `fetch failed`.
+//
+// undici collapses every transport failure — DNS, refused, timed out, TLS —
+// into one message with that text and hangs the real reason off `cause`. The
+// distinction is the whole diagnosis when the gateway cannot reach Node: a name
+// that does not resolve and a port nothing listens on need opposite fixes, and
+// both print identically without this.
+export function describeControlError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  if (!(cause instanceof Error)) return err.message;
+  const code = (cause as NodeJS.ErrnoException).code;
+  const hint = code ? CONTROL_ERROR_HINTS[code] : undefined;
+  const detail = code ? `${code}: ${cause.message}` : cause.message;
+  return `${err.message} (${detail})${hint ? ` — ${hint}` : ''}`;
+}
+
+// Only the ones that mean something specific here. Anything else prints its
+// code and message, which is already far more than `fetch failed`.
+const CONTROL_ERROR_HINTS: Record<string, string> = {
+  ENOTFOUND: 'that hostname does not resolve inside this container',
+  EAI_AGAIN: 'that hostname does not resolve inside this container',
+  ECONNREFUSED: 'the address resolves but nothing is listening on that port',
+  EHOSTUNREACH: 'no route from this container to that address',
+  ENETUNREACH: 'no route from this container to that address',
+  ETIMEDOUT: 'the address resolves but the connection was dropped, which usually means a host firewall',
+  UND_ERR_CONNECT_TIMEOUT: 'the address resolves but the connection was dropped, which usually means a host firewall',
+};
+
 export function createControlClient(opts: ControlClientOptions): ControlClient {
   const doFetch = opts.fetchImpl ?? fetch;
   const nowSeconds = opts.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
@@ -145,7 +174,7 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
   // up) and must not turn the log into a scroll of the same line. Report a
   // change of state, not every tick.
   function notePollError(err: unknown): void {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = describeControlError(err);
     if (message === lastPollError) return;
     lastPollError = message;
     console.warn(`[control] Huddle Node unreachable at ${base}: ${message}` +
