@@ -33,6 +33,16 @@ export interface PolicyFeed {
 export interface ContainerFeed {
   version: string;
   byIp: Record<string, string>;
+  /**
+   * Running devcontainers, by name.
+   *
+   * Not for filtering — for the Docker-socket relay. The socket a devcontainer
+   * mounts has to exist on the ENGINE host, which is Huddle Node's machine only
+   * when the engine is native; so the gateway creates it and tunnels it back
+   * (../socket-relay.ts). It needs to know which containers to create one for,
+   * and it has no Docker socket of its own to ask.
+   */
+  devcontainers?: string[];
 }
 
 // ── The write half ───────────────────────────────────────────────────────────

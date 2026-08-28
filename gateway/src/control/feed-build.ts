@@ -9,7 +9,7 @@
 // and usually gets a 304 back.
 
 import { db } from '../db';
-import { containerIpMap } from '../docker';
+import { containerSnapshot } from '../docker';
 import { knownSandboxNames } from '../sandbox/registry';
 import type { RuleRow } from '../rule-match';
 import type { ContainerFeed, PolicyFeed } from './feed';
@@ -35,8 +35,8 @@ export function buildPolicyFeed(): PolicyFeed {
 }
 
 export async function buildContainerFeed(): Promise<ContainerFeed> {
-  const map = await containerIpMap();
+  const { byIp: map, devcontainers } = await containerSnapshot();
   const byIp: Record<string, string> = {};
   for (const ip of [...map.keys()].sort()) byIp[ip] = map.get(ip)!;
-  return { version: feedVersion(JSON.stringify(byIp)), byIp };
+  return { version: feedVersion(JSON.stringify({ byIp, devcontainers })), byIp, devcontainers };
 }

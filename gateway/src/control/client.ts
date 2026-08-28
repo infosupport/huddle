@@ -49,6 +49,15 @@ export interface ControlClientOptions {
   nowSeconds?: () => number;
   /** A stable id for this gateway process; generated when absent. */
   session?: string;
+  /**
+   * Called with the running devcontainers whenever that set changes.
+   *
+   * The socket relay hangs off this rather than polling Docker itself: the
+   * gateway has no Docker socket, and the feed it already fetches carries the
+   * list. Only on a real change — the poll is conditional, so an unchanged feed
+   * comes back 304 and never reaches here.
+   */
+  onDevcontainers?: (names: string[]) => void;
 }
 
 interface Batch {
@@ -221,6 +230,7 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     const feed = (await res.json()) as ContainerFeed;
     containersByIp = feed.byIp ?? {};
     containerVersion = feed.version;
+    opts.onDevcontainers?.(feed.devcontainers ?? []);
   }
 
   async function refresh(): Promise<void> {

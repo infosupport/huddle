@@ -19,6 +19,7 @@ import { getGatewayToken } from './auth';
 import { runtimeEnv } from './runtime-env';
 import { createControlClient } from './control/client';
 import { setControlPlane } from './control/plane';
+import { syncSocketRelay } from './socket-relay';
 
 export function bootGateway(): void {
   // Load the CA, never mint one: the gateway gets CA_DIR bind-mounted read-only
@@ -26,11 +27,20 @@ export function bootGateway(): void {
   // a gateway that cannot MITM cannot enforce path rules.
   initCa({ generate: false });
 
+  const token = getGatewayToken();
+
+  // The Docker socket a devcontainer mounts is created HERE, because this
+  // process runs on the engine and Huddle Node may not; the filter behind it
+  // still runs on Node. ./socket-relay.ts explains why the two are split that
+  // way, and why this half is deliberately incapable of deciding anything.
+  const relay = { socketDir: runtimeEnv.socketDir, baseUrl: runtimeEnv.nodeControlUrl, token };
+
   // The control plane, before the proxies: the proxy denies everything until a
   // policy has arrived, and there is no reason to widen that window.
   const client = createControlClient({
     baseUrl: runtimeEnv.nodeControlUrl,
-    token: getGatewayToken(),
+    token,
+    onDevcontainers: (names) => syncSocketRelay(relay, names),
   });
   setControlPlane(client.plane);
   client.start();

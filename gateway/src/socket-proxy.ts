@@ -1,7 +1,5 @@
 import net from 'net';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
 import { isHostPortApproved } from './db';
 import { authorizeAction, classifyRequest, getMountPermissions, MountPermissions } from './docker-actions';
 import { runtimeEnv } from './runtime-env';
@@ -16,7 +14,6 @@ function mountDenied(kind: string): string {
 }
 
 const DOCKER_SOCKET = runtimeEnv.dockerSocketPath;
-const proxyServers = new Map<string, net.Server>();
 
 // ── Devcontainer registry ─────────────────────────────────────────────────────
 
@@ -478,10 +475,11 @@ function deny403(client: net.Socket, msg: string): void {
 
 // ── Per-container socket proxy ────────────────────────────────────────────────
 
-// containerName flows into path.join() for the socket directory. The name comes from
-// huddle's own orchestration (Docker container name), but we explicitly enforce the
-// Docker naming grammar here: no slashes and no leading dot,
-// so it is impossible to write or read outside socketDir with `..`/`/`.
+// The Docker naming grammar, enforced rather than assumed: no slashes, no
+// leading dot. The name comes from huddle's own orchestration, but it also
+// selects which container's rules apply and it reaches path.join() in the
+// gateway's relay (../socket-relay.ts) — so both ends check it, and neither
+// trusts the other to have done so.
 const CONTAINER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
 function assertSafeContainerName(name: string): void {
@@ -489,671 +487,660 @@ function assertSafeContainerName(name: string): void {
     throw new Error(`unsafe container name: ${JSON.stringify(name)}`);
 }
 
-export async function createContainerProxy(containerName: string, socketDir: string): Promise<net.Server> {
+/**
+ * Everything the filter does to one client connection, independent of how that
+ * connection arrived.
+ *
+ * Extracted from createContainerProxy because the socket a devcontainer mounts
+ * is no longer necessarily one this process can create: the engine can live in
+ * a VM (see ./control/socket-relay-server.ts). What identifies the caller is the
+ * container name bound here, and that is bound by whoever accepted the
+ * connection — never by anything the caller sends.
+ */
+export function containerProxyHandler(containerName: string): (client: net.Socket) => void {
   assertSafeContainerName(containerName);
-  const existing = proxyServers.get(containerName);
-  if (existing) { existing.close(); proxyServers.delete(containerName); }
+  return (client) => {
+    let upstream: net.Socket | null = null;
+    let phase: 'headers' | 'body' | 'tunnel' = 'headers';
+    let headerBuf = Buffer.alloc(0);
 
-  const { id, shortId } = await lookupContainerId(containerName);
-  registerDevcontainer(containerName, id);
+    // Body-accumulation state (for POST /containers/create and /networks/create)
+    let bodyBuf = Buffer.alloc(0);
+    let bodyContentLength = 0;
+    let savedHeaderPart = '';
+    let bodyHandler: (() => void) | null = null;
 
-  // The socket lives in a per-container subdirectory that is mounted as a DIRECTORY
-  // into the devcontainer. A bind-mount of the socket file itself pins
-  // the inode: after a huddle restart (unlink + new listen) such a mount
-  // points forever at the dead old socket. A directory mount survives that.
-  const containerDir = path.join(socketDir, containerName);
-  const socketPath = path.join(containerDir, 'docker.sock');
-  // Old flat path (`<name>.sock`): remains as a symlink for
-  // devcontainers from before the directory mount; those then work again after their
-  // own restart (docker follows the symlink when setting up the bind).
-  const legacySocketPath = path.join(socketDir, `${containerName}.sock`);
-  try {
-    fs.mkdirSync(containerDir, { recursive: true });
-  } catch (err) {
-    console.error(`[socket-proxy] failed to create directory ${containerDir}:`, err);
-  }
-  try { fs.unlinkSync(socketPath); } catch {}
+    client.on('error', () => upstream?.destroy());
+    client.on('end', () => upstream?.end());
 
-  return new Promise((resolve, reject) => {
-    const server = net.createServer((client) => {
-      let upstream: net.Socket | null = null;
-      let phase: 'headers' | 'body' | 'tunnel' = 'headers';
-      let headerBuf = Buffer.alloc(0);
+    function openUpstream(firstData: Buffer, opts?: { allowUpgrade?: boolean }): void {
+      phase = 'tunnel';
+      upstream = net.createConnection(DOCKER_SOCKET);
+      upstream.on('error', (err) => {
+        if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET')
+          console.error(`[socket-proxy] upstream error for ${containerName}:`, err.message);
+        client.destroy();
+      });
+      upstream.on('end', () => client.end());
+      upstream.pipe(client);
 
-      // Body-accumulation state (for POST /containers/create and /networks/create)
-      let bodyBuf = Buffer.alloc(0);
-      let bodyContentLength = 0;
-      let savedHeaderPart = '';
-      let bodyHandler: (() => void) | null = null;
+      const sep = firstData.indexOf('\r\n\r\n');
+      if (sep === -1) { upstream.write(firstData); return; }
+      const headerStr = firstData.slice(0, sep).toString();
+      const tail = firstData.slice(sep + 4);
+      const lines = headerStr.split('\r\n');
 
-      client.on('error', () => upstream?.destroy());
-      client.on('end', () => upstream?.end());
-
-      function openUpstream(firstData: Buffer, opts?: { allowUpgrade?: boolean }): void {
-        phase = 'tunnel';
-        upstream = net.createConnection(DOCKER_SOCKET);
-        upstream.on('error', (err) => {
-          if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET')
-            console.error(`[socket-proxy] upstream error for ${containerName}:`, err.message);
-          client.destroy();
-        });
-        upstream.on('end', () => client.end());
-        upstream.pipe(client);
-
-        const sep = firstData.indexOf('\r\n\r\n');
-        if (sep === -1) { upstream.write(firstData); return; }
-        const headerStr = firstData.slice(0, sep).toString();
-        const tail = firstData.slice(sep + 4);
-        const lines = headerStr.split('\r\n');
-
-        // Connection hijack (docker attach / attach ws): the client negotiates
-        // an HTTP Upgrade, the daemon replies 101 and the socket becomes a
-        // dedicated raw bidirectional stdio stream that is never reused for
-        // another HTTP request. Forward the Upgrade/Connection headers verbatim
-        // — forcing `Connection: close` (below) would break the hijack. Gated
-        // on the caller opting in (only the attach handlers do) AND the request
-        // genuinely being an upgrade, so a non-upgrade request still gets the
-        // single-use `Connection: close` rewrite and cannot pipeline a second
-        // request that would be tunnelled raw past the classifier.
-        if (opts?.allowUpgrade &&
-            lines.some(l => /^connection:\s*upgrade/i.test(l)) &&
-            lines.some(l => /^upgrade:\s*/i.test(l))) {
-          upstream.write(firstData);
-          return;
-        }
-
-        // Force Connection: close so docker CLI cannot reuse this TCP socket
-        // for a second request — every request must reopen and re-enter our
-        // header parser (otherwise we'd tunnel subsequent requests raw and
-        // bypass /containers/json filtering).
-        const fixed = [
-          lines[0],
-          'Connection: close',
-          ...lines.slice(1).filter(l => !/^connection:\s*/i.test(l)),
-        ].join('\r\n');
-        upstream.write(Buffer.concat([Buffer.from(fixed + '\r\n\r\n'), tail]));
+      // Connection hijack (docker attach / attach ws): the client negotiates
+      // an HTTP Upgrade, the daemon replies 101 and the socket becomes a
+      // dedicated raw bidirectional stdio stream that is never reused for
+      // another HTTP request. Forward the Upgrade/Connection headers verbatim
+      // — forcing `Connection: close` (below) would break the hijack. Gated
+      // on the caller opting in (only the attach handlers do) AND the request
+      // genuinely being an upgrade, so a non-upgrade request still gets the
+      // single-use `Connection: close` rewrite and cannot pipeline a second
+      // request that would be tunnelled raw past the classifier.
+      if (opts?.allowUpgrade &&
+          lines.some(l => /^connection:\s*upgrade/i.test(l)) &&
+          lines.some(l => /^upgrade:\s*/i.test(l))) {
+        upstream.write(firstData);
+        return;
       }
 
-      function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
-        const newHeader = rewriteFirstLine(headerPart, newUrl) + '\r\n\r\n';
-        openUpstream(Buffer.concat([Buffer.from(newHeader), remainder]));
-      }
+      // Force Connection: close so docker CLI cannot reuse this TCP socket
+      // for a second request — every request must reopen and re-enter our
+      // header parser (otherwise we'd tunnel subsequent requests raw and
+      // bypass /containers/json filtering).
+      const fixed = [
+        lines[0],
+        'Connection: close',
+        ...lines.slice(1).filter(l => !/^connection:\s*/i.test(l)),
+      ].join('\r\n');
+      upstream.write(Buffer.concat([Buffer.from(fixed + '\r\n\r\n'), tail]));
+    }
 
-      async function processInjectedBody(): Promise<void> {
-        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
-        const rest = bodyBuf.slice(bodyContentLength);
-        let body: any;
-        try {
-          body = JSON.parse(bodyBytes.toString());
-        } catch {
-          // Unparseable body must not bypass HostConfig validation.
-          deny403(client, 'invalid container create body');
-          return;
-        }
-        // Parser-differential (PoC #1a/#1b/#1c): deny case-insensitive duplicate
-        // keys anywhere in the body, and canonicalize the keys that the proxy
-        // itself injects into. That way a lowercase `hostconfig`/`labels`/`env`
-        // does not land as a second key — merged by the daemon — next to our injection,
-        // and validateHostConfig is guaranteed to see the same HostConfig as the daemon.
-        const amb = findAmbiguousKey(body);
-        if (amb) { deny403(client, `ambiguous duplicate key not permitted: ${amb}`); return; }
-        renameKeyCI(body, 'HostConfig');
-        renameKeyCI(body, 'Labels');
-        renameKeyCI(body, 'Env');
-        renameKeyCI(body, 'NetworkingConfig');
-        if (body.NetworkingConfig && typeof body.NetworkingConfig === 'object') {
-          renameKeyCI(body.NetworkingConfig, 'EndpointsConfig');
-        }
-        const denial = validateHostConfig(body.HostConfig, getMountPermissions(containerName));
-        if (denial) {
-          if (denial.startsWith('__PORT_CHECK__:')) {
-            const [, portStr, proto] = denial.split(':');
-            const hostPort = parseInt(portStr, 10);
-            if (!isHostPortApproved(containerName, hostPort, proto)) {
-              deny403(client, `Host port ${hostPort}/${proto} is not approved for this devcontainer. Approve it in the Huddle portal first.`);
-              return;
-            }
-          } else {
-            deny403(client, denial);
+    function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
+      const newHeader = rewriteFirstLine(headerPart, newUrl) + '\r\n\r\n';
+      openUpstream(Buffer.concat([Buffer.from(newHeader), remainder]));
+    }
+
+    async function processInjectedBody(): Promise<void> {
+      const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+      const rest = bodyBuf.slice(bodyContentLength);
+      let body: any;
+      try {
+        body = JSON.parse(bodyBytes.toString());
+      } catch {
+        // Unparseable body must not bypass HostConfig validation.
+        deny403(client, 'invalid container create body');
+        return;
+      }
+      // Parser-differential (PoC #1a/#1b/#1c): deny case-insensitive duplicate
+      // keys anywhere in the body, and canonicalize the keys that the proxy
+      // itself injects into. That way a lowercase `hostconfig`/`labels`/`env`
+      // does not land as a second key — merged by the daemon — next to our injection,
+      // and validateHostConfig is guaranteed to see the same HostConfig as the daemon.
+      const amb = findAmbiguousKey(body);
+      if (amb) { deny403(client, `ambiguous duplicate key not permitted: ${amb}`); return; }
+      renameKeyCI(body, 'HostConfig');
+      renameKeyCI(body, 'Labels');
+      renameKeyCI(body, 'Env');
+      renameKeyCI(body, 'NetworkingConfig');
+      if (body.NetworkingConfig && typeof body.NetworkingConfig === 'object') {
+        renameKeyCI(body.NetworkingConfig, 'EndpointsConfig');
+      }
+      const denial = validateHostConfig(body.HostConfig, getMountPermissions(containerName));
+      if (denial) {
+        if (denial.startsWith('__PORT_CHECK__:')) {
+          const [, portStr, proto] = denial.split(':');
+          const hostPort = parseInt(portStr, 10);
+          if (!isHostPortApproved(containerName, hostPort, proto)) {
+            deny403(client, `Host port ${hostPort}/${proto} is not approved for this devcontainer. Approve it in the Huddle portal first.`);
             return;
           }
+        } else {
+          deny403(client, denial);
+          return;
         }
-        // Finding #8: named-volume ownership. A devcontainer may only mount its
-        // own (huddle.parent) or unlabeled/operator volumes — never
-        // a volume that belongs to ANOTHER devcontainer (cross-container
-        // theft of source/credential volumes). Same semantics as the
-        // delete/prune paths. Unlabeled (pre-existing) volumes remain
-        // allowed; a not-yet-existing named volume (404) counts as unlabeled.
-        for (const src of namedVolumeSources(body.HostConfig)) {
-          const { parent } = await lookupParentLabel('volume', src);
-          if (parent && parent !== containerName) {
-            deny403(client, `cannot mount volume owned by another devcontainer: ${src}`);
-            return;
-          }
+      }
+      // Finding #8: named-volume ownership. A devcontainer may only mount its
+      // own (huddle.parent) or unlabeled/operator volumes — never
+      // a volume that belongs to ANOTHER devcontainer (cross-container
+      // theft of source/credential volumes). Same semantics as the
+      // delete/prune paths. Unlabeled (pre-existing) volumes remain
+      // allowed; a not-yet-existing named volume (404) counts as unlabeled.
+      for (const src of namedVolumeSources(body.HostConfig)) {
+        const { parent } = await lookupParentLabel('volume', src);
+        if (parent && parent !== containerName) {
+          deny403(client, `cannot mount volume owned by another devcontainer: ${src}`);
+          return;
         }
-        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
-        // Force spawned containers onto the parent devcontainer's network only.
-        // Canonicalize NetworkMode within HostConfig so that a lowercase
-        // `networkmode` from the client does not remain as a second key next to our forcing
-        // (which the daemon could merge back into the original network).
-        const netName = `dc-net-${containerName}`;
-        const hcOut = { ...(body.HostConfig ?? {}) };
-        renameKeyCI(hcOut, 'NetworkMode');
-        hcOut.NetworkMode = netName;
-        body.HostConfig = hcOut;
-        // Compose also puts a NetworkingConfig.EndpointsConfig in the create body
-        // that points to its own network (e.g. `socialekaart_default`). If we
-        // only convert NetworkMode, that EndpointsConfig wins and the
-        // container still lands on the compose network — unreachable for the devcontainer and
-        // without egress via the huddle proxy. Therefore collapse all endpoints into
-        // one entry on dc-net-<name>, preserving the Aliases (service names)
-        // so that DNS between compose services keeps working.
-        const endpoints = body.NetworkingConfig?.EndpointsConfig;
-        if (endpoints && typeof endpoints === 'object') {
-          const aliases = new Set<string>();
-          for (const ep of Object.values(endpoints)) {
-            const a = (ep as any)?.Aliases;
-            if (Array.isArray(a)) for (const x of a) if (typeof x === 'string') aliases.add(x);
-          }
-          body.NetworkingConfig = {
-            EndpointsConfig: { [netName]: aliases.size ? { Aliases: [...aliases] } : {} },
-          };
+      }
+      body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+      // Force spawned containers onto the parent devcontainer's network only.
+      // Canonicalize NetworkMode within HostConfig so that a lowercase
+      // `networkmode` from the client does not remain as a second key next to our forcing
+      // (which the daemon could merge back into the original network).
+      const netName = `dc-net-${containerName}`;
+      const hcOut = { ...(body.HostConfig ?? {}) };
+      renameKeyCI(hcOut, 'NetworkMode');
+      hcOut.NetworkMode = netName;
+      body.HostConfig = hcOut;
+      // Compose also puts a NetworkingConfig.EndpointsConfig in the create body
+      // that points to its own network (e.g. `socialekaart_default`). If we
+      // only convert NetworkMode, that EndpointsConfig wins and the
+      // container still lands on the compose network — unreachable for the devcontainer and
+      // without egress via the huddle proxy. Therefore collapse all endpoints into
+      // one entry on dc-net-<name>, preserving the Aliases (service names)
+      // so that DNS between compose services keeps working.
+      const endpoints = body.NetworkingConfig?.EndpointsConfig;
+      if (endpoints && typeof endpoints === 'object') {
+        const aliases = new Set<string>();
+        for (const ep of Object.values(endpoints)) {
+          const a = (ep as any)?.Aliases;
+          if (Array.isArray(a)) for (const x of a) if (typeof x === 'string') aliases.add(x);
         }
-        // Inject Huddle proxy env vars so child containers can reach the internet
-        // through the proxy without requiring manual configuration.
-        const proxyEnv = [
-          'http_proxy=http://huddle:80',
-          'https_proxy=http://huddle:80',
-          'HTTP_PROXY=http://huddle:80',
-          'HTTPS_PROXY=http://huddle:80',
-          // Loopback never via the proxy; `[::1]` bracketed for .NET/Aspire
-          // (see the explanation for the same lines in docker.ts).
-          'no_proxy=localhost,127.0.0.1,::1,[::1]',
-          'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
-          'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
-          'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
-          'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
-        ];
-        const existingEnv: string[] = body.Env ?? [];
-        const existingKeys = new Set(existingEnv.map((e: string) => e.split('=')[0]));
-        body.Env = [...existingEnv, ...proxyEnv.filter(e => !existingKeys.has(e.split('=')[0]))];
-        const newBodyBuf = Buffer.from(JSON.stringify(body));
-        const newHeader = savedHeaderPart.replace(
-          /content-length:\s*\d+/i,
-          `Content-Length: ${newBodyBuf.length}`
-        ) + '\r\n\r\n';
-        openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+        body.NetworkingConfig = {
+          EndpointsConfig: { [netName]: aliases.size ? { Aliases: [...aliases] } : {} },
+        };
+      }
+      // Inject Huddle proxy env vars so child containers can reach the internet
+      // through the proxy without requiring manual configuration.
+      const proxyEnv = [
+        'http_proxy=http://huddle:80',
+        'https_proxy=http://huddle:80',
+        'HTTP_PROXY=http://huddle:80',
+        'HTTPS_PROXY=http://huddle:80',
+        // Loopback never via the proxy; `[::1]` bracketed for .NET/Aspire
+        // (see the explanation for the same lines in docker.ts).
+        'no_proxy=localhost,127.0.0.1,::1,[::1]',
+        'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
+        'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
+        'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
+        'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
+      ];
+      const existingEnv: string[] = body.Env ?? [];
+      const existingKeys = new Set(existingEnv.map((e: string) => e.split('=')[0]));
+      body.Env = [...existingEnv, ...proxyEnv.filter(e => !existingKeys.has(e.split('=')[0]))];
+      const newBodyBuf = Buffer.from(JSON.stringify(body));
+      const newHeader = savedHeaderPart.replace(
+        /content-length:\s*\d+/i,
+        `Content-Length: ${newBodyBuf.length}`
+      ) + '\r\n\r\n';
+      openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+    }
+
+    function processNetworkCreate(): void {
+      const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+      const rest = bodyBuf.slice(bodyContentLength);
+      let body: any;
+      try {
+        body = JSON.parse(bodyBytes.toString());
+      } catch {
+        deny403(client, 'invalid network create body');
+        return;
+      }
+      // Canonicalize the keys we inject into so that a lowercase
+      // `labels`/`options` does not remain as a second, merged key (a
+      // spoofed `labels.huddle.parent` could otherwise forge ownership).
+      const netAmb = findAmbiguousKey(body);
+      if (netAmb) { deny403(client, `ambiguous duplicate key not permitted: ${netAmb}`); return; }
+      renameKeyCI(body, 'Options');
+      renameKeyCI(body, 'Labels');
+      body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
+      body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+      const newBodyBuf = Buffer.from(JSON.stringify(body));
+      const newHeader = savedHeaderPart.replace(
+        /content-length:\s*\d+/i,
+        `Content-Length: ${newBodyBuf.length}`
+      ) + '\r\n\r\n';
+      openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+    }
+
+    function processVolumeCreate(): void {
+      const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+      const rest = bodyBuf.slice(bodyContentLength);
+      let body: any;
+      try {
+        body = JSON.parse(bodyBytes.toString());
+      } catch {
+        deny403(client, 'invalid volume create body');
+        return;
+      }
+      const denial = validateVolumeCreate(body);
+      if (denial) { deny403(client, denial); return; }
+      // Canonicalize `labels` so that the ownership injection does not land next to a
+      // spoofed lowercase variant.
+      renameKeyCI(body, 'Labels');
+      // Label injection makes volumes traceable to their devcontainer, so that
+      // remove/prune can enforce ownership.
+      body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+      const newBodyBuf = Buffer.from(JSON.stringify(body));
+      const newHeader = savedHeaderPart.replace(
+        /content-length:\s*\d+/i,
+        `Content-Length: ${newBodyBuf.length}`
+      ) + '\r\n\r\n';
+      openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+    }
+
+    // Finding #7: exec-create body was never inspected, so a
+    // `{"Privileged":true}` exec got all capabilities → raw host disk.
+    // Buffer the body and deny a privileged exec; forward otherwise unchanged.
+    function processExecCreate(): void {
+      const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+      const rest = bodyBuf.slice(bodyContentLength);
+      let body: any;
+      try {
+        body = JSON.parse(bodyBytes.toString());
+      } catch {
+        // Fail-closed: an unparseable exec body must not skip the Privileged
+        // check.
+        deny403(client, 'invalid exec create body');
+        return;
+      }
+      const denial = validateExecConfig(body);
+      if (denial) { deny403(client, denial); return; }
+      openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
+    }
+
+    client.on('data', (chunk: Buffer) => {
+      if (phase === 'tunnel') { upstream?.write(chunk); return; }
+
+      if (phase === 'body') {
+        bodyBuf = Buffer.concat([bodyBuf, chunk]);
+        if (bodyBuf.length >= bodyContentLength) bodyHandler?.();
+        return;
       }
 
-      function processNetworkCreate(): void {
-        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
-        const rest = bodyBuf.slice(bodyContentLength);
-        let body: any;
-        try {
-          body = JSON.parse(bodyBytes.toString());
-        } catch {
-          deny403(client, 'invalid network create body');
-          return;
-        }
-        // Canonicalize the keys we inject into so that a lowercase
-        // `labels`/`options` does not remain as a second, merged key (a
-        // spoofed `labels.huddle.parent` could otherwise forge ownership).
-        const netAmb = findAmbiguousKey(body);
-        if (netAmb) { deny403(client, `ambiguous duplicate key not permitted: ${netAmb}`); return; }
-        renameKeyCI(body, 'Options');
-        renameKeyCI(body, 'Labels');
-        body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
-        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
-        const newBodyBuf = Buffer.from(JSON.stringify(body));
-        const newHeader = savedHeaderPart.replace(
-          /content-length:\s*\d+/i,
-          `Content-Length: ${newBodyBuf.length}`
-        ) + '\r\n\r\n';
-        openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+      // ── Header accumulation ──────────────────────────────────────────────
+      headerBuf = Buffer.concat([headerBuf, chunk]);
+      const end = headerBuf.indexOf('\r\n\r\n');
+      if (end === -1) return;
+
+      const headerPart = headerBuf.slice(0, end).toString();
+      const remainder = headerBuf.slice(end + 4);
+      headerBuf = Buffer.alloc(0);
+
+      const firstLine = headerPart.split('\r\n')[0] ?? '';
+      const parts = firstLine.split(' ');
+      const method = (parts[0] ?? '').toUpperCase();
+      const rawUrl = parts[1] ?? '';
+      const p = rawUrl.replace(/^\/v[\d.]+/, '').split('?')[0];
+
+      const action = classifyRequest(method, p);
+      if (!action) {
+        console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
+        deny403(client, 'path not allowed');
+        return;
+      }
+      const policyDenial = authorizeAction(containerName, action);
+      if (policyDenial) {
+        deny403(client, policyDenial);
+        return;
       }
 
-      function processVolumeCreate(): void {
-        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
-        const rest = bodyBuf.slice(bodyContentLength);
-        let body: any;
-        try {
-          body = JSON.parse(bodyBytes.toString());
-        } catch {
-          deny403(client, 'invalid volume create body');
-          return;
-        }
-        const denial = validateVolumeCreate(body);
-        if (denial) { deny403(client, denial); return; }
-        // Canonicalize `labels` so that the ownership injection does not land next to a
-        // spoofed lowercase variant.
-        renameKeyCI(body, 'Labels');
-        // Label injection makes volumes traceable to their devcontainer, so that
-        // remove/prune can enforce ownership.
-        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
-        const newBodyBuf = Buffer.from(JSON.stringify(body));
-        const newHeader = savedHeaderPart.replace(
-          /content-length:\s*\d+/i,
-          `Content-Length: ${newBodyBuf.length}`
-        ) + '\r\n\r\n';
-        openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
-      }
+      // ── DELETE ───────────────────────────────────────────────────────────
+      if (method === 'DELETE') {
+        const ctId = p.match(/^\/containers\/([^/]+)$/)?.[1];
+        // Image names can contain slashes (registry/repo:tag).
+        const imgId = p.match(/^\/images\/(.+)$/)?.[1];
+        const targetId = ctId ?? imgId;
+        const type = ctId ? 'container' : 'image';
 
-      // Finding #7: exec-create body was never inspected, so a
-      // `{"Privileged":true}` exec got all capabilities → raw host disk.
-      // Buffer the body and deny a privileged exec; forward otherwise unchanged.
-      function processExecCreate(): void {
-        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
-        const rest = bodyBuf.slice(bodyContentLength);
-        let body: any;
-        try {
-          body = JSON.parse(bodyBytes.toString());
-        } catch {
-          // Fail-closed: an unparseable exec body must not skip the Privileged
-          // check.
-          deny403(client, 'invalid exec create body');
-          return;
-        }
-        const denial = validateExecConfig(body);
-        if (denial) { deny403(client, denial); return; }
-        openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
-      }
-
-      client.on('data', (chunk: Buffer) => {
-        if (phase === 'tunnel') { upstream?.write(chunk); return; }
-
-        if (phase === 'body') {
-          bodyBuf = Buffer.concat([bodyBuf, chunk]);
-          if (bodyBuf.length >= bodyContentLength) bodyHandler?.();
-          return;
-        }
-
-        // ── Header accumulation ──────────────────────────────────────────────
-        headerBuf = Buffer.concat([headerBuf, chunk]);
-        const end = headerBuf.indexOf('\r\n\r\n');
-        if (end === -1) return;
-
-        const headerPart = headerBuf.slice(0, end).toString();
-        const remainder = headerBuf.slice(end + 4);
-        headerBuf = Buffer.alloc(0);
-
-        const firstLine = headerPart.split('\r\n')[0] ?? '';
-        const parts = firstLine.split(' ');
-        const method = (parts[0] ?? '').toUpperCase();
-        const rawUrl = parts[1] ?? '';
-        const p = rawUrl.replace(/^\/v[\d.]+/, '').split('?')[0];
-
-        const action = classifyRequest(method, p);
-        if (!action) {
-          console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
-          deny403(client, 'path not allowed');
-          return;
-        }
-        const policyDenial = authorizeAction(containerName, action);
-        if (policyDenial) {
-          deny403(client, policyDenial);
-          return;
-        }
-
-        // ── DELETE ───────────────────────────────────────────────────────────
-        if (method === 'DELETE') {
-          const ctId = p.match(/^\/containers\/([^/]+)$/)?.[1];
-          // Image names can contain slashes (registry/repo:tag).
-          const imgId = p.match(/^\/images\/(.+)$/)?.[1];
-          const targetId = ctId ?? imgId;
-          const type = ctId ? 'container' : 'image';
-
-          // Network delete — only own (huddle.parent-labeled) networks.
-          // Unlabeled networks from before this change remain deletable,
-          // except the huddle-managed dc-net-* networks.
-          const netId = p.match(/^\/networks\/([^/]+)$/)?.[1];
-          if (netId) {
-            client.pause();
-            lookupParentLabel('network', netId).then(({ parent, name }) => {
-              if (parent === containerName) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              } else if (parent) {
-                deny403(client, 'cannot delete network owned by another devcontainer');
-              } else if (name.startsWith('dc-net-') || netId.startsWith('dc-net-')) {
-                deny403(client, 'cannot delete huddle-managed network');
-              } else {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              }
-              client.resume();
-            });
-            return;
-          }
-
-          // Volume delete — needed for docker compose down -v. Only own or
-          // unlabeled (pre-existing) volumes; volumes of another
-          // devcontainer are untouchable.
-          const volId = p.match(/^\/volumes\/([^/]+)$/)?.[1];
-          if (volId) {
-            client.pause();
-            lookupParentLabel('volume', volId).then(({ parent }) => {
-              if (parent && parent !== containerName) {
-                deny403(client, 'cannot delete volume owned by another devcontainer');
-              } else {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              }
-              client.resume();
-            });
-            return;
-          }
-
-          if (!targetId) { deny403(client, 'delete not permitted'); return; }
-
+        // Network delete — only own (huddle.parent-labeled) networks.
+        // Unlabeled networks from before this change remain deletable,
+        // except the huddle-managed dc-net-* networks.
+        const netId = p.match(/^\/networks\/([^/]+)$/)?.[1];
+        if (netId) {
           client.pause();
-          hasOwnLabel(type, targetId, containerName).then(ok => {
-            if (ok) {
+          lookupParentLabel('network', netId).then(({ parent, name }) => {
+            if (parent === containerName) {
               openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            } else if (parent) {
+              deny403(client, 'cannot delete network owned by another devcontainer');
+            } else if (name.startsWith('dc-net-') || netId.startsWith('dc-net-')) {
+              deny403(client, 'cannot delete huddle-managed network');
             } else {
-              deny403(client, `cannot delete ${type} not created by this container`);
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             }
             client.resume();
           });
           return;
         }
 
-        // ── GET / HEAD ───────────────────────────────────────────────────────
-        if (method === 'GET' || method === 'HEAD') {
-          if (p === '/version' || p === '/info' || p === '/_ping' ||
-              /^\/exec\/[^/]+\/json$/.test(p) ||
-              /^\/images\/.+\/json$/.test(p)) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-          if (p === '/images/json') {
-            // Show all images — agent needs to know available base images
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-          if (p === '/containers/json') {
-            // Filter to own containers only
-            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
-            return;
-          }
-          // Network listing — filter to own networks; inspect — allow for networking
-          if (p === '/networks' || p === '/networks/json') {
-            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
-            return;
-          }
-          if (/^\/networks\/[^/]+$/.test(p)) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-
-          // Volume listing — filter to own volumes so that peer volume names
-          // are not enumerable (finding #8), consistent with the container
-          // and network listings above.
-          if (p === '/volumes') {
-            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
-            return;
-          }
-          // Volume inspect — needed for docker compose named volumes.
-          if (/^\/volumes\/[^/]+$/.test(p)) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-
-          // Events stream — needed for docker compose up log following
-          if (p === '/events') {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-
-          // WebSocket attach — same hijack semantics as the POST attach above.
-          // Only on own spawned containers, never a devcontainer itself.
-          const attachWsCt = p.match(/^\/containers\/([^/]+)\/attach\/ws$/)?.[1];
-          if (attachWsCt) {
-            if (devcontainerIds.has(attachWsCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
-              return;
+        // Volume delete — needed for docker compose down -v. Only own or
+        // unlabeled (pre-existing) volumes; volumes of another
+        // devcontainer are untouchable.
+        const volId = p.match(/^\/volumes\/([^/]+)$/)?.[1];
+        if (volId) {
+          client.pause();
+          lookupParentLabel('volume', volId).then(({ parent }) => {
+            if (parent && parent !== containerName) {
+              deny403(client, 'cannot delete volume owned by another devcontainer');
+            } else {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             }
-            client.pause();
-            hasOwnLabel('container', attachWsCt, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
-              } else {
-                deny403(client, 'container was not created by this devcontainer');
-              }
-              client.resume();
-            });
-            return;
-          }
-
-          // Inspect / logs / top / archive (docker cp stat+download) — only on
-          // containers labeled by this devcontainer
-          const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
-          if (inspectCt) {
-            if (devcontainerIds.has(inspectCt)) {
-              deny403(client, 'inspect of devcontainer not permitted');
-              return;
-            }
-            client.pause();
-            hasOwnLabel('container', inspectCt, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              } else {
-                deny403(client, 'container not owned by this devcontainer');
-              }
-              client.resume();
-            });
-            return;
-          }
-          console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
-          deny403(client, 'path not allowed');
+            client.resume();
+          });
           return;
         }
 
-        // ── POST ─────────────────────────────────────────────────────────────
-        if (method === 'POST') {
-          // Exec session control (exec IDs are opaque)
-          if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) {
+        if (!targetId) { deny403(client, 'delete not permitted'); return; }
+
+        client.pause();
+        hasOwnLabel(type, targetId, containerName).then(ok => {
+          if (ok) {
             openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
+          } else {
+            deny403(client, `cannot delete ${type} not created by this container`);
           }
+          client.resume();
+        });
+        return;
+      }
 
-          // Spawn container — inject huddle.parent label
-          if (p === '/containers/create') {
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
-            savedHeaderPart = headerPart;
-            bodyHandler = processInjectedBody;
-            phase = 'body';
-            bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) bodyHandler();
-            return;
-          }
-
-          // Docker build — add huddle.parent label via query param
-          if (p === '/build') {
-            const labelParam = encodeURIComponent(JSON.stringify({ 'huddle.parent': containerName }));
-            const newUrl = rawUrl.includes('?') ? `${rawUrl}&labels=${labelParam}` : `${rawUrl}?labels=${labelParam}`;
-            forwardWithRewrittenUrl(headerPart, newUrl, remainder);
-            return;
-          }
-
-          // Pull image — allow (no labeling possible, agent may need base images)
-          if (p === '/images/create') {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-
-          // Image tag — local metadata operation, allowed on any image.
-          if (/^\/images\/.+\/tag$/.test(p)) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-
-          // Image push — only own (huddle.parent-labeled, thus self-
-          // built) images. Push goes through the host's docker daemon and
-          // therefore does not pass the huddle egress firewall; the action is
-          // moreover disabled by default in the portal.
-          const pushImg = p.match(/^\/images\/(.+)\/push$/)?.[1];
-          if (pushImg) {
-            client.pause();
-            hasOwnLabel('image', pushImg, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              } else {
-                deny403(client, 'cannot push image not built by this devcontainer');
-              }
-              client.resume();
-            });
-            return;
-          }
-
-          // Exec-create — buffer + validate the body (finding #7: Privileged exec).
-          // Only on own spawned containers, never on a devcontainer itself.
-          const execCt = p.match(/^\/containers\/([^/]+)\/exec$/)?.[1];
-          if (execCt) {
-            if (devcontainerIds.has(execCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
-              return;
-            }
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            const bodyLen = clMatch ? parseInt(clMatch[1]) : 0;
-            client.pause();
-            hasOwnLabel('container', execCt, containerName).then(ok => {
-              if (!ok) {
-                deny403(client, 'container was not created by this devcontainer');
-                client.resume();
-                return;
-              }
-              // Ownership ok → switch to body buffering; processExecCreate
-              // validates the exec config once the full body is in.
-              bodyContentLength = bodyLen;
-              savedHeaderPart = headerPart;
-              bodyHandler = processExecCreate;
-              phase = 'body';
-              bodyBuf = remainder;
-              if (bodyBuf.length >= bodyContentLength) bodyHandler();
-              client.resume();
-            });
-            return;
-          }
-
-          // Attach — foreground `docker run` and `docker attach` hijack the
-          // connection into a raw bidirectional stdio stream. Only on own
-          // spawned containers, never a devcontainer itself. Tunnel raw (via
-          // allowUpgrade) so the daemon's 101/TCP upgrade survives.
-          const attachCt = p.match(/^\/containers\/([^/]+)\/attach$/)?.[1];
-          if (attachCt) {
-            if (devcontainerIds.has(attachCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
-              return;
-            }
-            client.pause();
-            hasOwnLabel('container', attachCt, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
-              } else {
-                deny403(client, 'container was not created by this devcontainer');
-              }
-              client.resume();
-            });
-            return;
-          }
-
-          // Container management: only for own spawned containers, never devcontainers
-          const ctId = p.match(/^\/containers\/([^/]+)\/(start|stop|restart|kill|wait|update)$/)?.[1];
-          if (ctId) {
-            if (devcontainerIds.has(ctId)) {
-              deny403(client, 'operation on devcontainer not permitted');
-              return;
-            }
-            client.pause();
-            hasOwnLabel('container', ctId, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              } else {
-                deny403(client, 'container was not created by this devcontainer');
-              }
-              client.resume();
-            });
-            return;
-          }
-
-          // Volume create — needed for docker compose named volumes. Body is
-          // buffered and validated: local bind-backed volumes (host-path
-          // escape) are denied.
-          if (p === '/volumes/create') {
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
-            savedHeaderPart = headerPart;
-            bodyHandler = processVolumeCreate;
-            phase = 'body';
-            bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) bodyHandler();
-            return;
-          }
-
-          // Volume prune — restricted to own volumes by injecting a mandatory
-          // label filter; volumes of other containers (or from
-          // before the label injection) stay out of range.
-          if (p === '/volumes/prune') {
-            forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
-            return;
-          }
-
-          // Network management — create, connect, disconnect
-          if (p === '/networks/create') {
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
-            savedHeaderPart = headerPart;
-            bodyHandler = processNetworkCreate;
-            phase = 'body';
-            bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) bodyHandler();
-            return;
-          }
-          if (/^\/networks\/[^/]+\/(connect|disconnect)$/.test(p)) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-            return;
-          }
-
-          deny403(client, 'operation not permitted');
+      // ── GET / HEAD ───────────────────────────────────────────────────────
+      if (method === 'GET' || method === 'HEAD') {
+        if (p === '/version' || p === '/info' || p === '/_ping' ||
+            /^\/exec\/[^/]+\/json$/.test(p) ||
+            /^\/images\/.+\/json$/.test(p)) {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+        if (p === '/images/json') {
+          // Show all images — agent needs to know available base images
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+        if (p === '/containers/json') {
+          // Filter to own containers only
+          forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+          return;
+        }
+        // Network listing — filter to own networks; inspect — allow for networking
+        if (p === '/networks' || p === '/networks/json') {
+          forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+          return;
+        }
+        if (/^\/networks\/[^/]+$/.test(p)) {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
           return;
         }
 
-        // ── PUT ──────────────────────────────────────────────────────────────
-        if (method === 'PUT') {
-          // Archive upload (docker cp to a container) — Aspire's DCP among others
-          // copies dev-certs into every started container (CopyFile, issue #12).
-          // Only allowed on own spawned containers, never devcontainers.
-          const archiveCt = p.match(/^\/containers\/([^/]+)\/archive$/)?.[1];
-          if (archiveCt) {
-            if (devcontainerIds.has(archiveCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
-              return;
-            }
-            client.pause();
-            hasOwnLabel('container', archiveCt, containerName).then(ok => {
-              if (ok) {
-                openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
-              } else {
-                deny403(client, 'container was not created by this devcontainer');
-              }
-              client.resume();
-            });
-            return;
-          }
-          deny403(client, 'operation not permitted');
+        // Volume listing — filter to own volumes so that peer volume names
+        // are not enumerable (finding #8), consistent with the container
+        // and network listings above.
+        if (p === '/volumes') {
+          forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+          return;
+        }
+        // Volume inspect — needed for docker compose named volumes.
+        if (/^\/volumes\/[^/]+$/.test(p)) {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
           return;
         }
 
-        deny403(client, 'method not allowed');
-      });
+        // Events stream — needed for docker compose up log following
+        if (p === '/events') {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+
+        // WebSocket attach — same hijack semantics as the POST attach above.
+        // Only on own spawned containers, never a devcontainer itself.
+        const attachWsCt = p.match(/^\/containers\/([^/]+)\/attach\/ws$/)?.[1];
+        if (attachWsCt) {
+          if (devcontainerIds.has(attachWsCt)) {
+            deny403(client, 'operation on devcontainer not permitted');
+            return;
+          }
+          client.pause();
+          hasOwnLabel('container', attachWsCt, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
+            } else {
+              deny403(client, 'container was not created by this devcontainer');
+            }
+            client.resume();
+          });
+          return;
+        }
+
+        // Inspect / logs / top / archive (docker cp stat+download) — only on
+        // containers labeled by this devcontainer
+        const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
+        if (inspectCt) {
+          if (devcontainerIds.has(inspectCt)) {
+            deny403(client, 'inspect of devcontainer not permitted');
+            return;
+          }
+          client.pause();
+          hasOwnLabel('container', inspectCt, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            } else {
+              deny403(client, 'container not owned by this devcontainer');
+            }
+            client.resume();
+          });
+          return;
+        }
+        console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
+        deny403(client, 'path not allowed');
+        return;
+      }
+
+      // ── POST ─────────────────────────────────────────────────────────────
+      if (method === 'POST') {
+        // Exec session control (exec IDs are opaque)
+        if (/^\/exec\/[^/]+\/(start|resize)$/.test(p)) {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+
+        // Spawn container — inject huddle.parent label
+        if (p === '/containers/create') {
+          const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+          bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+          savedHeaderPart = headerPart;
+          bodyHandler = processInjectedBody;
+          phase = 'body';
+          bodyBuf = remainder;
+          if (bodyBuf.length >= bodyContentLength) bodyHandler();
+          return;
+        }
+
+        // Docker build — add huddle.parent label via query param
+        if (p === '/build') {
+          const labelParam = encodeURIComponent(JSON.stringify({ 'huddle.parent': containerName }));
+          const newUrl = rawUrl.includes('?') ? `${rawUrl}&labels=${labelParam}` : `${rawUrl}?labels=${labelParam}`;
+          forwardWithRewrittenUrl(headerPart, newUrl, remainder);
+          return;
+        }
+
+        // Pull image — allow (no labeling possible, agent may need base images)
+        if (p === '/images/create') {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+
+        // Image tag — local metadata operation, allowed on any image.
+        if (/^\/images\/.+\/tag$/.test(p)) {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+
+        // Image push — only own (huddle.parent-labeled, thus self-
+        // built) images. Push goes through the host's docker daemon and
+        // therefore does not pass the huddle egress firewall; the action is
+        // moreover disabled by default in the portal.
+        const pushImg = p.match(/^\/images\/(.+)\/push$/)?.[1];
+        if (pushImg) {
+          client.pause();
+          hasOwnLabel('image', pushImg, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            } else {
+              deny403(client, 'cannot push image not built by this devcontainer');
+            }
+            client.resume();
+          });
+          return;
+        }
+
+        // Exec-create — buffer + validate the body (finding #7: Privileged exec).
+        // Only on own spawned containers, never on a devcontainer itself.
+        const execCt = p.match(/^\/containers\/([^/]+)\/exec$/)?.[1];
+        if (execCt) {
+          if (devcontainerIds.has(execCt)) {
+            deny403(client, 'operation on devcontainer not permitted');
+            return;
+          }
+          const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+          const bodyLen = clMatch ? parseInt(clMatch[1]) : 0;
+          client.pause();
+          hasOwnLabel('container', execCt, containerName).then(ok => {
+            if (!ok) {
+              deny403(client, 'container was not created by this devcontainer');
+              client.resume();
+              return;
+            }
+            // Ownership ok → switch to body buffering; processExecCreate
+            // validates the exec config once the full body is in.
+            bodyContentLength = bodyLen;
+            savedHeaderPart = headerPart;
+            bodyHandler = processExecCreate;
+            phase = 'body';
+            bodyBuf = remainder;
+            if (bodyBuf.length >= bodyContentLength) bodyHandler();
+            client.resume();
+          });
+          return;
+        }
+
+        // Attach — foreground `docker run` and `docker attach` hijack the
+        // connection into a raw bidirectional stdio stream. Only on own
+        // spawned containers, never a devcontainer itself. Tunnel raw (via
+        // allowUpgrade) so the daemon's 101/TCP upgrade survives.
+        const attachCt = p.match(/^\/containers\/([^/]+)\/attach$/)?.[1];
+        if (attachCt) {
+          if (devcontainerIds.has(attachCt)) {
+            deny403(client, 'operation on devcontainer not permitted');
+            return;
+          }
+          client.pause();
+          hasOwnLabel('container', attachCt, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
+            } else {
+              deny403(client, 'container was not created by this devcontainer');
+            }
+            client.resume();
+          });
+          return;
+        }
+
+        // Container management: only for own spawned containers, never devcontainers
+        const ctId = p.match(/^\/containers\/([^/]+)\/(start|stop|restart|kill|wait|update)$/)?.[1];
+        if (ctId) {
+          if (devcontainerIds.has(ctId)) {
+            deny403(client, 'operation on devcontainer not permitted');
+            return;
+          }
+          client.pause();
+          hasOwnLabel('container', ctId, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            } else {
+              deny403(client, 'container was not created by this devcontainer');
+            }
+            client.resume();
+          });
+          return;
+        }
+
+        // Volume create — needed for docker compose named volumes. Body is
+        // buffered and validated: local bind-backed volumes (host-path
+        // escape) are denied.
+        if (p === '/volumes/create') {
+          const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+          bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+          savedHeaderPart = headerPart;
+          bodyHandler = processVolumeCreate;
+          phase = 'body';
+          bodyBuf = remainder;
+          if (bodyBuf.length >= bodyContentLength) bodyHandler();
+          return;
+        }
+
+        // Volume prune — restricted to own volumes by injecting a mandatory
+        // label filter; volumes of other containers (or from
+        // before the label injection) stay out of range.
+        if (p === '/volumes/prune') {
+          forwardWithRewrittenUrl(headerPart, withLabelFilter(rawUrl, `huddle.parent=${containerName}`), remainder);
+          return;
+        }
+
+        // Network management — create, connect, disconnect
+        if (p === '/networks/create') {
+          const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+          bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+          savedHeaderPart = headerPart;
+          bodyHandler = processNetworkCreate;
+          phase = 'body';
+          bodyBuf = remainder;
+          if (bodyBuf.length >= bodyContentLength) bodyHandler();
+          return;
+        }
+        if (/^\/networks\/[^/]+\/(connect|disconnect)$/.test(p)) {
+          openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          return;
+        }
+
+        deny403(client, 'operation not permitted');
+        return;
+      }
+
+      // ── PUT ──────────────────────────────────────────────────────────────
+      if (method === 'PUT') {
+        // Archive upload (docker cp to a container) — Aspire's DCP among others
+        // copies dev-certs into every started container (CopyFile, issue #12).
+        // Only allowed on own spawned containers, never devcontainers.
+        const archiveCt = p.match(/^\/containers\/([^/]+)\/archive$/)?.[1];
+        if (archiveCt) {
+          if (devcontainerIds.has(archiveCt)) {
+            deny403(client, 'operation on devcontainer not permitted');
+            return;
+          }
+          client.pause();
+          hasOwnLabel('container', archiveCt, containerName).then(ok => {
+            if (ok) {
+              openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+            } else {
+              deny403(client, 'container was not created by this devcontainer');
+            }
+            client.resume();
+          });
+          return;
+        }
+        deny403(client, 'operation not permitted');
+        return;
+      }
+
+      deny403(client, 'method not allowed');
     });
+  };
+}
 
-    server.on('error', reject);
-    server.listen(socketPath, () => {
-      try { fs.chmodSync(socketPath, 0o777); } catch {}
-      try { fs.unlinkSync(legacySocketPath); } catch {}
-      try { fs.symlinkSync(socketPath, legacySocketPath); } catch {}
-      console.log(`[socket-proxy] ${containerName} (${shortId || 'id-unknown'}) → ${socketPath}`);
-      proxyServers.set(containerName, server);
-      resolve(server);
-    });
-  });
+/**
+ * Learn a devcontainer, so its own id stops looking like somebody else's.
+ *
+ * The filter answers questions like "is this container one of ours?" out of the
+ * registry, so a container has to be in it before its socket serves anything.
+ * Split from serving the socket: on a VM engine the socket is served by the
+ * gateway container and this is all Node does for it.
+ */
+export async function registerContainerProxy(containerName: string): Promise<void> {
+  assertSafeContainerName(containerName);
+  const { id } = await lookupContainerId(containerName);
+  registerDevcontainer(containerName, id);
 }
