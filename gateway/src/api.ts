@@ -32,6 +32,7 @@ import {
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
 import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
+import { scanHostFolders, scanRootProblem, MAX_SCAN_FOLDERS, MAX_SCAN_DEPTH } from './host-scan';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -109,6 +110,19 @@ interface ShareableRule {
   path_pattern: string | null;
   path_mode: number;
   expires_at: number | null;
+}
+
+// What indexPaths() reports back: the same shape the batch endpoint has always
+// returned, so the CLI and the portal are unaffected by the scan endpoint
+// sharing it.
+interface IndexBatchResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  removed: number;
+  invalid: { path: string; error: string }[];
+  total: number;
+  max: number;
 }
 
 export async function createApiServer(): Promise<FastifyInstance> {
@@ -1649,6 +1663,44 @@ export async function createApiServer(): Promise<FastifyInstance> {
     max: MAX_INDEXED_FOLDERS,
   }));
 
+  // Shared by the batch endpoint and the host scan below: normalize, validate,
+  // dedupe and upsert a list of paths, optionally replacing the subtree first.
+  // One implementation, so a scan and a hand-posted batch cannot disagree about
+  // what a valid host path is.
+  function indexPaths(
+    raw: unknown[],
+    opts: { source: 'cli' | 'manual'; root: string; replace: boolean },
+  ): IndexBatchResult {
+    // Replace is scoped to the subtree that was just re-scanned, so indexing one
+    // project again never discards folders indexed from anywhere else. The
+    // caller guarantees a non-empty root when replacing; wiping the whole index
+    // is the DELETE endpoint's job, and that one is explicit about it.
+    const removed = opts.replace ? clearIndexedFolders(opts.root) : 0;
+
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    const invalid: { path: string; error: string }[] = [];
+    // Dedupe inside the batch too: the caller may well send two spellings of the
+    // same folder, and 'skipped' should not depend on insertion order.
+    const seen = new Set<string>();
+    let total = countIndexedFolders();
+    for (const candidate of raw) {
+      if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
+      const normalized = normalizeHostPath(candidate);
+      const err = hostPathError(normalized);
+      if (err) { invalid.push({ path: candidate, error: err }); continue; }
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) { skipped++; continue; }
+      seen.add(key);
+      if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
+      const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: opts.source });
+      if (result === 'added') { added++; total++; } else { updated++; }
+    }
+    notifyStateChanged();
+    return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
+  }
+
   app.post<{ Body: { path?: string; paths?: string[]; root?: string; source?: string; replace?: boolean } }>(
     '/api/indexed-folders',
     async (req, reply) => {
@@ -1660,41 +1712,40 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // scan must not silently relabel a hand-added folder as machine-found.
       const src = source === 'manual' ? 'manual' : 'cli';
 
-      // Replace is scoped to the subtree that was just re-scanned, so indexing
-      // one project again never discards folders indexed from anywhere else.
-      // Without a usable root there is no subtree to scope to, and falling back
-      // to "clear everything" would turn a re-index of one project into total
-      // index loss. Refuse instead — wiping the index is the DELETE endpoint's
-      // job, and that one is explicit about it.
+      // Without a usable root there is no subtree to scope the replace to, and
+      // falling back to "clear everything" would turn a re-index of one project
+      // into total index loss. Refuse instead.
       const normalizedRoot = root ? normalizeHostPath(root) : '';
       if (replace && !normalizedRoot) {
         return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
       }
-      let removed = 0;
-      if (replace) removed = clearIndexedFolders(normalizedRoot);
+      return indexPaths(raw, { source: src, root: normalizedRoot, replace: replace === true });
+    }
+  );
 
-      let added = 0;
-      let updated = 0;
-      let skipped = 0;
-      const invalid: { path: string; error: string }[] = [];
-      // Dedupe inside the batch too: the caller may well send two spellings of
-      // the same folder, and 'skipped' should not depend on insertion order.
-      const seen = new Set<string>();
-      let total = countIndexedFolders();
-      for (const candidate of raw) {
-        if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
-        const normalized = normalizeHostPath(candidate);
-        const err = hostPathError(normalized);
-        if (err) { invalid.push({ path: candidate, error: err }); continue; }
-        const key = normalized.toLowerCase();
-        if (seen.has(key)) { skipped++; continue; }
-        seen.add(key);
-        if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
-        const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: src });
-        if (result === 'added') { added++; total++; } else { updated++; }
+  // Walk the host filesystem and index what is found — the portal's equivalent
+  // of `huddle indexfolder`, and what that command now calls.
+  //
+  // Only Huddle Node can do this: it runs on the host. The gateway would walk
+  // its own container filesystem and index paths that mean nothing outside it,
+  // so this refuses outright rather than returning plausible nonsense.
+  app.post<{ Body: { path?: string; depth?: number; all?: boolean; replace?: boolean } }>(
+    '/api/indexed-folders/scan',
+    async (req, reply) => {
+      if (!runtimeEnv.hostMode) return reply.code(503).send({ error: 'not_host_mode' });
+      const { path: rawPath, depth = 2, all, replace } = req.body ?? {};
+      const root = normalizeHostPath(rawPath ?? '');
+      const problem = hostPathError(root);
+      if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `path ${problem}` });
+      if (!Number.isInteger(depth) || depth < 0 || depth > MAX_SCAN_DEPTH) {
+        return reply.code(400).send({ error: 'invalid_depth', message: `depth must be a whole number between 0 and ${MAX_SCAN_DEPTH}` });
       }
-      notifyStateChanged();
-      return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
+      const unreadable = scanRootProblem(root);
+      if (unreadable) return reply.code(400).send({ error: 'unreadable_root', message: `path ${unreadable}` });
+
+      const scan = scanHostFolders(root, depth, all === true);
+      const res = indexPaths(scan.folders, { source: 'cli', root, replace: replace === true });
+      return { ...res, root, truncated: scan.truncated, scanMax: MAX_SCAN_FOLDERS };
     }
   );
 
