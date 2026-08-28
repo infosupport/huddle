@@ -7,7 +7,7 @@ import { stateEvents, notifyStateChanged } from './events';
 import { runtimeEnv } from './runtime-env';
 import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -31,8 +31,8 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
-import { scanHostFolders, scanRootProblem, MAX_SCAN_FOLDERS, MAX_SCAN_DEPTH } from './host-scan';
+import { normalizeHostPath, hostPathError } from './host-path';
+import { hostRoots, listHostFolders, hostFolderProblem, MAX_FOLDER_ENTRIES } from './host-browse';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -110,19 +110,6 @@ interface ShareableRule {
   path_pattern: string | null;
   path_mode: number;
   expires_at: number | null;
-}
-
-// What indexPaths() reports back: the same shape the batch endpoint has always
-// returned, so the CLI and the portal are unaffected by the scan endpoint
-// sharing it.
-interface IndexBatchResult {
-  added: number;
-  updated: number;
-  skipped: number;
-  removed: number;
-  invalid: { path: string; error: string }[];
-  total: number;
-  max: number;
 }
 
 export async function createApiServer(): Promise<FastifyInstance> {
@@ -1652,121 +1639,38 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── Indexed host folders ──────────────────────────────────────────────────
-  // Huddle's portal runs in a container: it cannot open a file dialog on the
-  // host, so a host path has always had to be typed from memory. `huddle
-  // indexfolder` walks the host once and posts what it found here; the portal
-  // then offers those folders wherever a host path is needed. Operators can also
-  // add or remove single entries from Settings.
-  app.get('/api/indexed-folders', async () => ({
-    folders: listIndexedFolders(),
-    max: MAX_INDEXED_FOLDERS,
-  }));
-
-  // Shared by the batch endpoint and the host scan below: normalize, validate,
-  // dedupe and upsert a list of paths, optionally replacing the subtree first.
-  // One implementation, so a scan and a hand-posted batch cannot disagree about
-  // what a valid host path is.
-  function indexPaths(
-    raw: unknown[],
-    opts: { source: 'cli' | 'manual'; root: string; replace: boolean },
-  ): IndexBatchResult {
-    // Replace is scoped to the subtree that was just re-scanned, so indexing one
-    // project again never discards folders indexed from anywhere else. The
-    // caller guarantees a non-empty root when replacing; wiping the whole index
-    // is the DELETE endpoint's job, and that one is explicit about it.
-    const removed = opts.replace ? clearIndexedFolders(opts.root) : 0;
-
-    let added = 0;
-    let updated = 0;
-    let skipped = 0;
-    const invalid: { path: string; error: string }[] = [];
-    // Dedupe inside the batch too: the caller may well send two spellings of the
-    // same folder, and 'skipped' should not depend on insertion order.
-    const seen = new Set<string>();
-    let total = countIndexedFolders();
-    for (const candidate of raw) {
-      if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
-      const normalized = normalizeHostPath(candidate);
-      const err = hostPathError(normalized);
-      if (err) { invalid.push({ path: candidate, error: err }); continue; }
-      const key = normalized.toLowerCase();
-      if (seen.has(key)) { skipped++; continue; }
-      seen.add(key);
-      if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
-      const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: opts.source });
-      if (result === 'added') { added++; total++; } else { updated++; }
-    }
-    notifyStateChanged();
-    return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
-  }
-
-  app.post<{ Body: { path?: string; paths?: string[]; root?: string; source?: string; replace?: boolean } }>(
-    '/api/indexed-folders',
-    async (req, reply) => {
-      const { path: single, paths, root, source, replace } = req.body ?? {};
-      const raw = [...(Array.isArray(paths) ? paths : []), ...(single ? [single] : [])];
-      if (raw.length === 0) return reply.code(400).send({ error: 'no_paths' });
-      // 'cli' when a scan posted the batch, 'manual' when an operator typed one
-      // entry in Settings — the portal shows which is which, and re-running the
-      // scan must not silently relabel a hand-added folder as machine-found.
-      const src = source === 'manual' ? 'manual' : 'cli';
-
-      // Without a usable root there is no subtree to scope the replace to, and
-      // falling back to "clear everything" would turn a re-index of one project
-      // into total index loss. Refuse instead.
-      const normalizedRoot = root ? normalizeHostPath(root) : '';
-      if (replace && !normalizedRoot) {
-        return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
-      }
-      return indexPaths(raw, { source: src, root: normalizedRoot, replace: replace === true });
-    }
-  );
-
-  // Walk the host filesystem and index what is found — the portal's equivalent
-  // of `huddle indexfolder`, and what that command now calls.
+  // ── Host folders ──────────────────────────────────────────────────────────
+  // The folder dialog the portal cannot ask the operating system for: a browser
+  // will not hand a server a folder path, so a host path used to be typed from
+  // memory, and #69 papered over that with an index the operator filled from a
+  // shell (`huddle indexfolder`).
   //
-  // Only Huddle Node can do this: it runs on the host. The gateway would walk
-  // its own container filesystem and index paths that mean nothing outside it,
-  // so this refuses outright rather than returning plausible nonsense.
-  app.post<{ Body: { path?: string; depth?: number; all?: boolean; replace?: boolean } }>(
-    '/api/indexed-folders/scan',
+  // Huddle Node runs on the host, so it can simply look. One call lists one
+  // folder; the picker asks again as you open folders. Nothing is stored, so a
+  // folder created a second ago is there and a renamed one is gone — which no
+  // snapshot could manage.
+  //
+  // Reading only, and only folder names. This is the same filesystem the process
+  // already mounts into containers on request, so listing it exposes nothing it
+  // could not already reach; file contents are never read.
+  app.get<{ Querystring: { path?: string } }>(
+    '/api/host-folders',
     async (req, reply) => {
+      // The gateway would list its own container filesystem and hand back paths
+      // that mean nothing on the host.
       if (!runtimeEnv.hostMode) return reply.code(503).send({ error: 'not_host_mode' });
-      const { path: rawPath, depth = 2, all, replace } = req.body ?? {};
-      const root = normalizeHostPath(rawPath ?? '');
-      const problem = hostPathError(root);
+
+      const raw = (req.query?.path ?? '').trim();
+      // No path means "where do I start": the drives, or / and home.
+      if (!raw) return { path: '', folders: hostRoots(), truncated: false, max: MAX_FOLDER_ENTRIES };
+
+      const dir = normalizeHostPath(raw);
+      const problem = hostPathError(dir);
       if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `path ${problem}` });
-      if (!Number.isInteger(depth) || depth < 0 || depth > MAX_SCAN_DEPTH) {
-        return reply.code(400).send({ error: 'invalid_depth', message: `depth must be a whole number between 0 and ${MAX_SCAN_DEPTH}` });
-      }
-      const unreadable = scanRootProblem(root);
-      if (unreadable) return reply.code(400).send({ error: 'unreadable_root', message: `path ${unreadable}` });
+      const unreadable = hostFolderProblem(dir);
+      if (unreadable) return reply.code(404).send({ error: 'unreadable_folder', message: `path ${unreadable}` });
 
-      const scan = scanHostFolders(root, depth, all === true);
-      const res = indexPaths(scan.folders, { source: 'cli', root, replace: replace === true });
-      return { ...res, root, truncated: scan.truncated, scanMax: MAX_SCAN_FOLDERS };
-    }
-  );
-
-  app.delete<{ Params: { id: string } }>(
-    '/api/indexed-folders/:id',
-    async (req) => {
-      deleteIndexedFolder(Number(req.params.id));
-      notifyStateChanged();
-      return { ok: true };
-    }
-  );
-
-  // Clearing the whole index (or one subtree) is a separate, explicit call so a
-  // malformed single-entry delete can never wipe the list.
-  app.delete<{ Querystring: { root?: string } }>(
-    '/api/indexed-folders',
-    async (req) => {
-      const root = req.query?.root ? normalizeHostPath(req.query.root) : undefined;
-      const removed = clearIndexedFolders(root);
-      notifyStateChanged();
-      return { removed };
+      return { ...listHostFolders(dir), max: MAX_FOLDER_ENTRIES };
     }
   );
 

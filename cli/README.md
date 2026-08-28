@@ -45,45 +45,22 @@ huddle --ide vscode \
 Default API URL: `http://localhost:24842` — Huddle Node, on the host. Override it with
 `--url` or `HUDDLE_URL`.
 
-## Making host folders selectable in the portal
+## Selecting host folders in the portal
 
-A browser cannot hand a server a folder path, so Huddle keeps an index of your host
-folders and every host-path field in the portal grows a **Browse** button that opens
-them as a tree — starting a devcontainer, the folder mappings, and the team-managed
-folders. Starting a devcontainer, Ctrl-click picks several folders at once and each
-becomes its own worktree. Typing a path by hand keeps working: the index is a snapshot,
-so a folder created after the last scan must not be unreachable.
+A browser cannot hand a server a folder path, so every host-path field in the portal
+grows a **Browse** button that opens Huddle's own folder dialog — starting a
+devcontainer, the folder mappings, and the team-managed folders. Ctrl-click picks
+several folders at once when starting a devcontainer, and each becomes its own
+worktree.
 
-`huddle indexfolder` fills the index from wherever your shell is; the portal does the
-same from **Settings → Indexed folders → Scan folder**. Both ask Huddle Node — which
-runs on your host — to do the walk.
+It browses your host live: Huddle Node runs there and lists one folder per request as
+you open them, so a project you cloned a minute ago is simply in the list. There is
+nothing to index and no CLI command to run first. Hidden (dot) folders are left out of
+the listing; typing one still works, because every input keeps accepting a path you
+type or paste.
 
-```bash
-cd T:/projects
-huddle indexfolder                  # this folder + 2 levels below it
-huddle indexfolder T:/projects --depth 3
-huddle indexfolder --all            # also index node_modules, dist, target, ...
-huddle indexfolder --replace        # re-scan: drop the earlier entries under this folder first
-huddle indexfolder --list           # show what is indexed
-huddle indexfolder --clear          # empty the index (with a folder: only that subtree)
-```
-
-Hidden (dot) folders and the usual build folders (`node_modules`, `dist`, `target`,
-`obj`, …) are skipped, which is what keeps a scan of a projects folder in the
-hundreds instead of the tens of thousands; `--all` turns that off. The scan stops
-at 1500 folders and the index holds at most 2000 — index a more specific folder if
-you hit that.
-
-The index is a **snapshot**, not a live view: the gateway cannot read your host, so
-re-run the command after adding projects. Every input keeps accepting a typed path,
-so a folder you created a minute ago works without re-indexing first. Windows paths
-may be typed either way (`T:\projects\app` or `T:/projects/app`) — they are stored
-in one canonical form, and the two spellings are the same entry.
-
-Individual folders can also be added or removed under **Settings > Indexed
-folders** in the portal. The index lives in Huddle's database, not in
-`~/.huddle/config.json`: it describes this machine, so unlike the team-managed
-settings it is not something to share in version control.
+Windows paths may be typed either way (`T:\projects\app` or `T:/projects/app`) —
+Huddle stores one canonical form, so the two spellings are the same folder.
 
 ## Starting sandboxes (Docker Sandboxes / sbx)
 

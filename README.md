@@ -248,11 +248,10 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 You can start devcontainers via the CLI or via the web UI at `http://localhost:24842`.
 
 > **Selecting host folders in the web UI.** A browser cannot hand a server a folder path,
-> so Huddle keeps an index of your host folders. Point **Settings → Indexed folders →
-> Scan folder** at your projects folder once (or run `huddle indexfolder` there) and the
-> **Browse** button next to every host-path field opens a folder tree of what was found.
-> Ctrl-click several folders when starting a devcontainer and each one is mounted as its
-> own worktree. See [Indexing host folders](#indexing-host-folders).
+> so Huddle brings its own folder dialog: the **Browse** button next to every host-path
+> field opens the folders on your host, read live by Huddle Node. Ctrl-click several
+> folders when starting a devcontainer and each one is mounted as its own worktree. See
+> [Selecting host folders](#selecting-host-folders).
 
 ### Via the CLI
 
@@ -293,34 +292,24 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 
 ---
 
-## Indexing host folders
+## Selecting host folders
 
-A browser cannot hand a server a folder path, so Huddle keeps an index of the folders on
-your host and offers it wherever a host path is needed — starting a devcontainer, the
-folder mappings, and the team-managed folders.
+A browser cannot hand a server a folder path — a file input gives you file contents, never
+a location. So Huddle brings its own folder dialog: **Browse** next to any host-path field
+opens the folders on your host, and every input still accepts a typed or pasted path.
 
-Huddle Node runs on your host, so it can fill that index itself: **Settings → Indexed
-folders → Scan folder** walks the folder you name. The CLI does the same thing from
-wherever your shell is:
+What you see is the host as it is right now. Huddle Node runs there, so the dialog asks it
+for one folder at a time as you open them — nothing is scanned up front and nothing is
+cached, which is why a folder you created a minute ago is simply there. Hidden (dot)
+folders are left out of the listing; typing one still works.
 
-```bash
-cd T:/projects
-huddle indexfolder                  # this folder + 2 levels below it
-huddle indexfolder --depth 3        # deeper
-huddle indexfolder --list           # what is indexed right now
-huddle indexfolder --clear          # empty the index
-```
-
-Hidden folders and build folders (`node_modules`, `dist`, `target`, …) are skipped; `--all`
-includes them. Individual folders can be added or removed under **Settings → Indexed
-folders**, and every input still accepts a typed path, so a folder created after the last
-scan works without re-indexing.
+This is the same dialog everywhere a host path is needed: starting a devcontainer or a
+sandbox, the folder mappings, and the team-managed folders in Settings.
 
 Windows paths may be written either way (`T:\projects\app` or `T:/projects/app`): Huddle
 stores one canonical form and translates it to the mount prefix your engine uses
 (`/mnt/t/...` for a native dockerd in WSL2, `/run/desktop/mnt/host/t/...` for Docker
-Desktop). The index is per machine and lives in Huddle's database — unlike the team-managed
-settings in `~/.huddle/config.json`, it is not meant to be shared.
+Desktop).
 
 ---
 
@@ -553,10 +542,7 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
 | GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
-| GET | `/api/indexed-folders` | Indexed host folders the portal can offer as choices |
-| POST | `/api/indexed-folders` | Add folders (body: `{ path }` or `{ paths, root, replace }`) |
-| DELETE | `/api/indexed-folders/:id` | Remove one indexed folder |
-| DELETE | `/api/indexed-folders` | Empty the index (`?root=` limits it to one subtree) |
+| GET | `/api/host-folders` | Folders on the host, one level at a time (`?path=` — omit it for the roots). Huddle Node only |
 
 All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
 
