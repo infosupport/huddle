@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { createControlClient, type ControlClient } from '../src/control/client';
+import { createControlClient, describeControlError, type ControlClient } from '../src/control/client';
 import type { PolicyFeed, ReportBody } from '../src/control/feed';
 import type { RuleRow } from '../src/rule-match';
 
@@ -255,5 +255,41 @@ describe('control client — the report queue', () => {
     h.client.plane.reportSudoAudit('dc-a', 'COMMAND=/usr/bin/id');
     await h.client.flush();
     expect(h.calls.some((c) => c.path === '/control/report')).toBe(true);
+  });
+});
+
+describe('describeControlError', () => {
+  // `fetch failed` on its own sent us hunting the wrong half of the problem
+  // once already: it is what undici says for a name that does not resolve AND
+  // for a port nothing listens on, and those need opposite fixes.
+  function fetchFailed(code: string, message: string): Error {
+    const cause = Object.assign(new Error(message), { code });
+    return Object.assign(new Error('fetch failed'), { cause });
+  }
+
+  it('names the code and says what it means', () => {
+    const out = describeControlError(fetchFailed('ENOTFOUND', 'getaddrinfo ENOTFOUND host.docker.internal'));
+    expect(out).toContain('ENOTFOUND');
+    expect(out).toContain('does not resolve inside this container');
+  });
+
+  it('tells a refused port apart from an unresolvable name', () => {
+    const refused = describeControlError(fetchFailed('ECONNREFUSED', 'connect ECONNREFUSED 192.168.65.254:24843'));
+    expect(refused).toContain('nothing is listening');
+    expect(refused).not.toContain('does not resolve');
+  });
+
+  it('still reports a cause it has no hint for', () => {
+    const out = describeControlError(fetchFailed('ECONNRESET', 'socket hang up'));
+    expect(out).toContain('ECONNRESET');
+    expect(out).toContain('socket hang up');
+  });
+
+  it('falls back to the message when there is no cause', () => {
+    expect(describeControlError(new Error('/control/policy \u2192 401'))).toBe('/control/policy \u2192 401');
+  });
+
+  it('survives a thrown non-Error', () => {
+    expect(describeControlError('boom')).toBe('boom');
   });
 });
