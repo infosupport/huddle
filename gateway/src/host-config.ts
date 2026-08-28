@@ -5,10 +5,10 @@
 // version control or hand-edit the file.
 //
 // What lives here:
-//  - the team-managed folders (#69): `huddle init`/`restart` reads the same file
-//    to mount those folders into the gateway. The gateway itself never needs to
-//    resolve the host paths — it reads the folders at the fixed mount points the
-//    CLI binds them to (see firewall-groups.ts / extensions).
+//  - the team-managed folders (#69). These used to be bind-mounted into the
+//    gateway at fixed paths; Huddle Node runs on the host and reads them where
+//    they are, straight out of this file, so an edit applies to the next reload
+//    (see firewall-rules-folder.ts / extensions/loader.ts).
 //  - the resource-limit defaults and the folder mappings (#98). These need no
 //    remount: the gateway reads them out of this file whenever it creates a
 //    devcontainer, so an edit applies to the next container immediately.

@@ -344,9 +344,11 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   });
 
   console.log(dim('Starting Huddle Node (host)'));
+  // Deliberately NOT passed as environment: Huddle Node reads both folders from
+  // this same config file, per call. Handing them over at startup would freeze
+  // them for the lifetime of the process — and since startNodeDetached() reuses
+  // an already-running Node, even `huddle restart` would not always refresh it.
   const extraEnv: NodeJS.ProcessEnv = { ...baseImageEnv(images), HUDDLE_RUNTIME: runtime.name };
-  if (fwFolder) extraEnv.HUDDLE_FIREWALL_RULES_MOUNT = fwFolder;
-  if (extFolder) extraEnv.HUDDLE_EXTENSIONS_MOUNT = extFolder;
 
   let node;
   try {
