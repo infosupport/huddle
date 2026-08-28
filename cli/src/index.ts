@@ -9,6 +9,7 @@ import { runInit } from './init';
 import { runNode, nodeUrl } from './node';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runLogs } from './logs';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
@@ -29,9 +30,9 @@ export interface ParsedArgs {
   folders: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent', 'entry', 'port', 'data-dir']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'dry-run']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'node', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent', 'entry', 'port', 'data-dir', 'lines', 'n']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'dry-run', 'follow', 'f', 'node', 'gateway']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'node', 'logs', 'log', 'help', 'version']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -180,6 +181,10 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle logs [options]              Show both halves' output: Huddle Node's log
+                                     file on this host and the gateway container
+                                     (-n <lines>, -f to follow, --node/--gateway
+                                     for one half)
   huddle node [options]              Run Huddle Node (portal + API + orchestration)
                                      directly on this host instead of in the
                                      gateway container. The firewall stays in
@@ -413,6 +418,16 @@ async function main(): Promise<void> {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
       process.exit(1);
     }
+    return;
+  }
+
+  if (cmd === 'logs' || cmd === 'log') {
+    await runLogs({
+      lines: flagString(flags, 'lines', 'n'),
+      follow: flagBool(flags, 'follow', 'f'),
+      node: flagBool(flags, 'node'),
+      gateway: flagBool(flags, 'gateway'),
+    });
     return;
   }
 
