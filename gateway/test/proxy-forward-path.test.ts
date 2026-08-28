@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
+import { forwardableHost } from './helpers/upstream-host';
 
 // ── Regressie op de finding #7-fix (#67) ─────────────────────────────────────
 // De proxy BESLIST op de gedecodeerde vorm (normalizePathname), maar FORWARDT de
@@ -31,6 +32,11 @@ let db: typeof import('../src/db').db;
 // after refresh(), exactly as it would be after a poll.
 let control: import('./helpers/local-plane').LocalPlane;
 
+// Niet 127.0.0.1: de proxy weigert alles wat aan Huddle zelf gericht is, en dat
+// is het hele 127.0.0.0/8-blok (src/proxy-self.ts). Een upstream op loopback
+// levert 403 op nog voordat er een regel bekeken wordt.
+const upstreamHost = forwardableHost();
+
 let upstream: http.Server;
 let upstreamPort = 0;
 let lastUpstreamUrl: string | null = null;
@@ -48,8 +54,8 @@ function proxyGet(pathAndQuery: string): Promise<number> {
         host: '127.0.0.1',
         port: proxyPort,
         method: 'GET',
-        path: `http://127.0.0.1:${upstreamPort}${pathAndQuery}`,
-        headers: { host: `127.0.0.1:${upstreamPort}` },
+        path: `http://${upstreamHost}:${upstreamPort}${pathAndQuery}`,
+        headers: { host: `${upstreamHost}:${upstreamPort}` },
       },
       (res) => {
         res.resume();
@@ -61,7 +67,7 @@ function proxyGet(pathAndQuery: string): Promise<number> {
   });
 }
 
-describe.skipIf(!sqliteAvailable)('proxy forwards the original encoded request-path', () => {
+describe.skipIf(!sqliteAvailable || !upstreamHost)('proxy forwards the original encoded request-path', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;
@@ -79,7 +85,7 @@ describe.skipIf(!sqliteAvailable)('proxy forwards the original encoded request-p
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('ok');
     });
-    await new Promise<void>((r) => upstream.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => upstream.listen(0, upstreamHost!, () => r()));
     upstreamPort = (upstream.address() as AddressInfo).port;
 
     // createProxyServer bindt zelf (poort 0 = vrije efemere poort); wacht op
@@ -102,7 +108,7 @@ describe.skipIf(!sqliteAvailable)('proxy forwards the original encoded request-p
     lastUpstreamUrl = null;
     // Host-only allow voor de upstream-host: matcht elk pad, zodat de test het
     // pad-forwardgedrag isoleert (niet de rule-matching).
-    db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
+    db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES (?, NULL, 'allow')`).run(upstreamHost);
     await control.refresh();
   });
 
