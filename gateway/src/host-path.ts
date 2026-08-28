@@ -1,15 +1,15 @@
 // Host paths as the gateway receives them — one choke point for Windows notation.
 //
-// Huddle's portal runs in a container and cannot see the host filesystem, so
-// every host path arrives as text: typed in the modal, typed in Settings, or
-// indexed by `huddle indexfolder` on the host. On Windows that text can look
+// A browser cannot hand a server a folder path, so every host path arrives as
+// text: typed in the modal, typed in Settings, or clicked together in the folder
+// picker from what Node listed. On Windows that text can look
 // like `T:\projects\huddle`, `t:/projects/huddle` or `T:\projects\huddle\`, all
 // meaning the same folder. Normalising once, on ingest, keeps the rest of the
 // gateway from having to care:
 //  - backslashes become forward slashes (Docker's mount `Source` and
 //    toLinuxPath() in docker.ts both accept that form),
 //  - a drive letter is upper-cased and repeated/trailing slashes collapse, so
-//    two spellings of one folder dedupe to a single index entry,
+//    two spellings of one folder are one string again,
 //  - UNC paths (`\\server\share`) keep their leading double slash.
 // Translating a host path to the path the ENGINE mounts (/mnt/<drive>/… or
 // /run/desktop/mnt/host/<drive>/…) stays in docker.ts: that depends on the

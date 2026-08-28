@@ -28,34 +28,21 @@ export interface ApprovedHostPort {
   created_at: number;
 }
 
-// A host folder indexed by `huddle indexfolder` on the host. The portal cannot
-// browse the host filesystem, so this index is the only list of real host folders
-// it can offer the operator.
-export interface IndexedFolder {
-  id: number;
+// One folder on the host, as Huddle Node found it just now. A browser cannot
+// hand a server a folder path, so the picker builds one out of these.
+export interface HostFolder {
   path: string;
-  label: string;
-  source: string;
-  created_at: number;
+  name: string;
 }
 
-export interface IndexResult {
-  added: number;
-  updated: number;
-  skipped: number;
-  removed: number;
-  invalid: { path: string; error: string }[];
-  total: number;
-  max: number;
-}
-
-// A host scan is an IndexResult plus what the walk itself did. `truncated` means
-// the walk hit its own ceiling (scanMax) and stopped early, so the index is
-// incomplete for that root — the operator has to narrow the folder or the depth.
-export interface ScanResult extends IndexResult {
-  root: string;
+// The contents of exactly one folder. `truncated` means the folder holds more
+// than `max` subfolders and the listing stops there — scrolling past two
+// thousand entries is not how anyone finds a workspace anyway.
+export interface HostFolderListing {
+  path: string;
+  folders: HostFolder[];
   truncated: boolean;
-  scanMax: number;
+  max: number;
 }
 
 export interface FolderMapping {
@@ -478,32 +465,15 @@ export class ApiService {
     return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
   }
 
-  // ── Indexed host folders ────────────────────────────────────────────────────
-  getIndexedFolders(): Observable<{ folders: IndexedFolder[]; max: number }> {
-    return this.handle(this.http.get<{ folders: IndexedFolder[]; max: number }>('/api/indexed-folders'));
-  }
-
-  addIndexedFolder(path: string): Observable<IndexResult> {
-    return this.handle(this.http.post<IndexResult>('/api/indexed-folders', { path, source: 'manual' }));
-  }
-
-  // Ask Huddle Node to walk a folder ON THE HOST and index what it finds — the
-  // portal's equivalent of `huddle indexfolder`.
-  scanIndexedFolders(path: string, depth: number, all = false): Observable<ScanResult> {
-    return this.handle(this.http.post<ScanResult>('/api/indexed-folders/scan', { path, depth, all }));
-  }
-
-  deleteIndexedFolder(id: number): Observable<{ ok: boolean }> {
-    return this.handle(this.http.delete<{ ok: boolean }>(`/api/indexed-folders/${id}`));
-  }
-
-  // Without a root this empties the whole index; with one it removes that folder
-  // and everything below it, which is what pruning a branch in the tree means.
-  clearIndexedFolders(root?: string): Observable<{ removed: number }> {
-    const url = root
-      ? `/api/indexed-folders?root=${encodeURIComponent(root)}`
-      : '/api/indexed-folders';
-    return this.handle(this.http.delete<{ removed: number }>(url));
+  // ── Host folders ────────────────────────────────────────────────────────────
+  // One call, one folder. Without a path this returns the roots to start from
+  // (the drives on Windows, / and home elsewhere); with one it returns that
+  // folder's immediate subfolders. The picker asks again as you open folders,
+  // which is what keeps browsing a drive root cheap and what makes a folder
+  // created a second ago show up.
+  listHostFolders(path?: string): Observable<HostFolderListing> {
+    const url = path ? `/api/host-folders?path=${encodeURIComponent(path)}` : '/api/host-folders';
+    return this.handle(this.http.get<HostFolderListing>(url));
   }
 
   // ── Approved Host Ports ──────────────────────────────────────────────────────

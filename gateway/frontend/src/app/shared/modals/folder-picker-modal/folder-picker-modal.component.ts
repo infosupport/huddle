@@ -1,17 +1,21 @@
-import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, inject } from '@angular/core';
 import { IconComponent } from '../../components/icon/icon.component';
-import { IndexedFolder } from '../../../core/services/api.service';
+import { ApiService } from '../../../core/services/api.service';
 import {
-  FolderNode, FolderRow, ancestorPaths, breadcrumbs, buildFolderTree, canonicalPath, findNode,
-  flattenNodes, folderRows, prettyPath,
+  FolderNode, FolderRow, ancestorPaths, breadcrumbs, canonicalPath, findNode,
+  flattenNodes, folderRows, makeNode, prettyPath, setChildren,
 } from '../../components/folder-select/folder-tree.util';
 
-// The folder dialog Huddle cannot ask the operating system for.
+// The folder dialog a browser will not give us.
 //
-// The portal runs in a container: no native folder picker, no way to look at the
-// host filesystem. `huddle indexfolder` fills an index on the host, and this
-// modal browses it the way a file dialog does — a tree for structure, an icon
-// view for scanning, a breadcrumb for where you are, one folder as the answer.
+// A file input hands over file contents, never a folder path, so the portal has
+// to build the dialog itself: a tree for structure, an icon view for scanning, a
+// breadcrumb for where you are, one folder as the answer.
+//
+// What it browses is the host, live: Huddle Node runs there and lists one folder
+// per request, so the tree grows as you open it. It used to browse an index that
+// `huddle indexfolder` filled from a shell — a snapshot that was already wrong
+// by the time anyone opened this dialog.
 //
 // It stays a *picker*: it selects a path, it does not save anything. The caller
 // decides what the chosen folder means (workspace, mount, mapping).
@@ -35,7 +39,7 @@ import {
           </div>
 
           <nav class="fp-crumbs" aria-label="Location">
-            <button type="button" class="fp-crumb" title="All indexed roots" (click)="goHome()">
+            <button type="button" class="fp-crumb" title="Drives and home folder" (click)="goHome()">
               <app-icon name="home" [size]="15" />
             </button>
             @for (crumb of crumbs; track crumb.path) {
@@ -62,10 +66,9 @@ import {
         }
 
         <div class="fp-body">
-          @if (!folders.length) {
-            <p class="fp-empty">
-              Nothing indexed yet. Run <code>huddle indexfolder</code> on the host in the folder
-              that holds your projects, then reopen this dialog. Typing a path by hand keeps working.
+          @if (error) {
+            <p class="fp-empty fp-error">
+              {{ error }} Typing a path by hand keeps working.
             </p>
           } @else if (view === 'tree') {
             <div class="fp-tree" role="tree">
@@ -73,7 +76,7 @@ import {
                 <div class="fp-row" role="treeitem" [class.sel]="isSelected(row.node)"
                      [style.padding-left.px]="8 + row.depth * 18"
                      (click)="select(row.node, $event, rows)" (dblclick)="enter(row.node)">
-                  @if (row.node.children.length) {
+                  @if (row.canExpand) {
                     <button type="button" class="fp-twist" (click)="toggle(row.node, $event)"
                             [title]="row.open ? 'Collapse' : 'Expand'">
                       <app-icon [name]="row.open ? 'chevron-down' : 'chevron-right'" [size]="14" />
@@ -82,10 +85,15 @@ import {
                     <span class="fp-twist"></span>
                   }
                   <span class="fp-icon folder-img" aria-hidden="true"></span>
-                  <span class="fp-name" [class.dim]="!row.node.indexed">{{ row.node.name }}</span>
+                  <span class="fp-name">{{ row.node.name }}</span>
+                  @if (isLoading(row.node)) { <span class="fp-loading">…</span> }
                 </div>
               } @empty {
-                <p class="fp-empty">No folder matches “{{ query }}”.</p>
+                <p class="fp-empty">
+                  @if (query) { No folder matches “{{ query }}”. }
+                  @else if (busy) { Reading the host… }
+                  @else { Nothing to show here. }
+                </p>
               }
             </div>
           } @else {
@@ -93,16 +101,24 @@ import {
               @for (node of tiles; track node.path) {
                 <button type="button" class="fp-tile" [class.sel]="isSelected(node)"
                         (click)="select(node, $event, tiles)" (dblclick)="enter(node)"
-                        [title]="node.children.length ? node.path + ' — double-click to open' : node.path">
+                        [title]="node.path + ' — double-click to open'">
                   <span class="fp-tile-icon folder-img" aria-hidden="true"></span>
                   <span class="fp-tile-name">{{ node.name }}</span>
                 </button>
               } @empty {
                 <p class="fp-empty">
-                  @if (query) { No folder matches “{{ query }}”. } @else { This folder has nothing indexed below it. }
+                  @if (query) { No folder matches “{{ query }}”. }
+                  @else if (busy) { Reading the host… }
+                  @else { This folder has no subfolders. }
                 </p>
               }
             </div>
+          }
+          @if (truncated) {
+            <p class="fp-empty fp-note">
+              Only the first {{ max }} subfolders are shown. Type the path if the folder
+              you want is not among them.
+            </p>
           }
         </div>
 
@@ -202,18 +218,22 @@ import {
     .fp-multi-hint { margin: 0; padding: 0 1.25rem .6rem; font-size: .76rem; color: var(--text-muted); }
     .fp-empty { margin: 0; padding: 1.25rem; font-size: .82rem; color: var(--text-muted); }
     .fp-empty code { font-size: .78rem; }
+    .fp-error { color: var(--danger, #c0392b); }
+    .fp-note { padding-top: 0; }
+    .fp-loading { font-size: .8rem; color: var(--text-muted); }
   `],
 })
-export class FolderPickerModalComponent implements OnChanges {
-  @Input() folders: IndexedFolder[] = [];
+export class FolderPickerModalComponent implements OnInit, OnChanges {
   @Input() value = '';
   @Input() title = 'Select folder';
-  @Input() subtitle = 'Choose a folder from your indexed locations.';
+  @Input() subtitle = 'Browse the folders on this host.';
   /** Ctrl/Shift-click picks several folders; the answer arrives on pickedMany. */
   @Input() multiple = false;
   @Output() picked = new EventEmitter<string>();
   @Output() pickedMany = new EventEmitter<string[]>();
   @Output() cancel = new EventEmitter<void>();
+
+  private api = inject(ApiService);
 
   view: 'tree' | 'grid' = 'tree';
   query = '';
@@ -222,27 +242,48 @@ export class FolderPickerModalComponent implements OnChanges {
   crumbs: { name: string; path: string }[] = [];
   /** Picked folders, in the order they were picked. One entry unless multiple. */
   selected: string[] = [];
+  /** Set when the host could not be listed at all — the box says so and stays open. */
+  error = '';
+  max = 0;
 
   private tree: FolderNode[] = [];
   private expanded = new Set<string>();
+  // Folders currently being fetched, so a second click does not fetch twice and
+  // the row can show that something is happening.
+  private loading = new Set<string>();
+  // Folders the API had to cut short, so the note is about the folder you are
+  // looking at rather than about whichever listing happened to arrive last.
+  private truncatedPaths = new Set<string>();
   // Where a Shift-click measures its range from.
   private anchor = '';
-  // The folder we are browsing. Empty means "all indexed roots".
+  // The folder we are browsing. Empty means "the roots".
   private cwd = '';
 
+  ngOnInit(): void {
+    void this.loadRoots();
+  }
+
   ngOnChanges(changes: SimpleChanges): void {
-    if (changes['folders']) this.tree = buildFolderTree(this.folders.map((f) => f.path));
-    if (changes['folders'] || changes['value']) {
-      const current = this.value.trim() ? canonicalPath(this.value) : '';
-      this.selected = current ? [current] : [];
-      this.anchor = current;
-      // Open where the current value lives, so reopening the dialog does not
-      // start over at the root every time.
-      const parents = ancestorPaths(current);
-      for (const p of parents) this.expanded.add(p.toLowerCase());
-      this.cwd = parents.length > 1 ? parents[parents.length - 1] : '';
-      this.refresh();
-    }
+    if (!changes['value']) return;
+    const current = this.value.trim() ? canonicalPath(this.value) : '';
+    this.selected = current ? [current] : [];
+    this.anchor = current;
+    // Only reveal once the roots are in: before that there is no tree to hang
+    // the path on, and loadRoots() does the reveal itself.
+    if (this.tree.length) void this.reveal(current);
+  }
+
+  get busy(): boolean {
+    return this.loading.size > 0;
+  }
+
+  /** The folder on screen holds more subfolders than the API will list. */
+  get truncated(): boolean {
+    return this.truncatedPaths.has(this.cwd.toLowerCase());
+  }
+
+  isLoading(node: FolderNode): boolean {
+    return this.loading.has(node.path.toLowerCase());
   }
 
   pretty(path: string): string {
@@ -290,17 +331,19 @@ export class FolderPickerModalComponent implements OnChanges {
 
   /** Double-click / breadcrumb navigation: browse *into* a folder. */
   enter(node: FolderNode): void {
-    if (!node.children.length) return;
     this.selected = [node.path];
     this.anchor = node.path;
     this.cwd = node.path;
     this.expanded.add(node.path.toLowerCase());
     this.refresh();
+    void this.load(node);
   }
 
   goTo(path: string): void {
     this.cwd = path;
     this.refresh();
+    const at = findNode(this.tree, path);
+    if (at) void this.load(at);
   }
 
   goHome(): void {
@@ -311,8 +354,12 @@ export class FolderPickerModalComponent implements OnChanges {
   toggle(node: FolderNode, event: Event): void {
     event.stopPropagation();
     const key = node.path.toLowerCase();
-    if (this.expanded.has(key)) this.expanded.delete(key);
-    else this.expanded.add(key);
+    if (this.expanded.has(key)) {
+      this.expanded.delete(key);
+    } else {
+      this.expanded.add(key);
+      void this.load(node);
+    }
     if (this.query) this.query = '';
     this.refresh();
   }
@@ -335,9 +382,76 @@ export class FolderPickerModalComponent implements OnChanges {
     if ((event.target as HTMLElement).classList.contains('modal')) this.cancel.emit();
   }
 
+  private async loadRoots(): Promise<void> {
+    const listing = await this.fetch('');
+    if (!listing) {
+      this.error = 'Huddle Node could not list the folders on this host.';
+      return;
+    }
+    this.tree = listing.folders.map((f) => makeNode(f.path, f.name));
+    this.refresh();
+    // Reopen where the current value lives, so the dialog does not start over at
+    // the drive root every time it opens.
+    await this.reveal(this.value.trim() ? canonicalPath(this.value) : '');
+  }
+
+  /**
+   * Loads one folder's contents, once.
+   *
+   * A folder that has already been listed is not listed again: browsing back up
+   * and down again must not fire a request per click. Reopening the dialog does
+   * re-list, which is when a folder created in the meantime shows up.
+   */
+  private async load(node: FolderNode): Promise<void> {
+    const key = node.path.toLowerCase();
+    if (node.loaded || this.loading.has(key)) return;
+    this.loading.add(key);
+    this.refresh();
+    const listing = await this.fetch(node.path);
+    this.loading.delete(key);
+    // A folder we cannot read (permissions, unplugged drive) is marked loaded
+    // with nothing in it: the twisty goes away instead of retrying forever.
+    setChildren(node, listing?.folders ?? []);
+    this.refresh();
+  }
+
+  private async fetch(path: string): Promise<{ folders: { path: string; name: string }[]; truncated: boolean; max: number } | null> {
+    try {
+      const res = await new Promise<{ folders: { path: string; name: string }[]; truncated: boolean; max: number }>(
+        (resolve, reject) => this.api.listHostFolders(path || undefined).subscribe({ next: resolve, error: reject })
+      );
+      if (res.truncated) this.truncatedPaths.add(path.toLowerCase());
+      else this.truncatedPaths.delete(path.toLowerCase());
+      this.max = res.max;
+      return res;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Opens the tree down to `path`, one level at a time.
+   *
+   * Sequential on purpose: each level has to be listed before its child node
+   * exists to be listed in turn. A path that no longer exists simply stops the
+   * walk where the host ran out of folders.
+   */
+  private async reveal(path: string): Promise<void> {
+    if (!path) return;
+    const parents = ancestorPaths(path);
+    for (const p of parents) {
+      this.expanded.add(p.toLowerCase());
+      const node = findNode(this.tree, p);
+      if (!node) break;
+      await this.load(node);
+    }
+    this.cwd = parents.length > 1 ? parents[parents.length - 1] : '';
+    this.refresh();
+  }
+
   private refresh(): void {
     const at = findNode(this.tree, this.cwd);
-    if (this.cwd && !at) this.cwd = ''; // index re-scanned: the branch is gone
+    if (this.cwd && !at) this.cwd = ''; // the folder is gone from the host
 
     // The tree shows the browsed folder itself as its top row, so you can pick
     // the folder you navigated into, not just its children.
