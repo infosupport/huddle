@@ -293,3 +293,21 @@ describe('describeControlError', () => {
     expect(describeControlError('boom')).toBe('boom');
   });
 });
+
+describe('control client — attributing a request to its container', () => {
+  it('resolves a dual-stack socket address against the plain feed key', async () => {
+    const h = harness();
+    await h.client.refresh();
+    // What Node's proxy actually sees: it listens without a bind host, so the
+    // socket is dual-stack and an IPv4 peer arrives IPv4-mapped. The feed is
+    // keyed on what Docker reports. Miss this and every rule is filed global.
+    expect(await h.client.plane.resolveContainerByIp('::ffff:172.20.0.5')).toBe('dc-alpha');
+    expect(await h.client.plane.resolveContainerByIp('172.20.0.5')).toBe('dc-alpha');
+  });
+
+  it('still returns null for an address no container owns', async () => {
+    const h = harness();
+    await h.client.refresh();
+    expect(await h.client.plane.resolveContainerByIp('::ffff:10.9.9.9')).toBeNull();
+  });
+});
