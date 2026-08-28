@@ -596,12 +596,29 @@ export async function deleteNetwork(name: string): Promise<void> {
   await dockerRequest('DELETE', `/networks/${encodeURIComponent(name)}`);
 }
 
+/**
+ * POST /containers/<id>/start — with NO body at all.
+ *
+ * Not even `{}`. A start used to carry the host config, and the daemon rejects
+ * any non-empty body on this endpoint rather than ignoring it:
+ *
+ *   400 starting container with non-empty request body was deprecated since
+ *       API v1.22 and removed in v1.24
+ *
+ * `{}` serializes to two bytes, which is non-empty, so this is the difference
+ * between a container that starts and one that does not. Podman and newer moby
+ * both enforce it; older daemons let it slide, which is why it survived here.
+ */
+async function startContainer(idOrName: string): Promise<void> {
+  await dockerRequest('POST', `/containers/${idOrName}/start`);
+}
+
 export async function forceDeleteContainer(containerId: string): Promise<void> {
   await dockerRequest('DELETE', `/containers/${encodeURIComponent(containerId)}?force=true`);
 }
 
 export async function startExistingContainer(containerId: string): Promise<void> {
-  await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/start`, {});
+  await startContainer(encodeURIComponent(containerId));
 }
 
 export async function cleanupContainerNetwork(containerName: string): Promise<void> {
@@ -1240,7 +1257,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   const created = await dockerRequest('POST', `/containers/create?name=${encodeURIComponent(containerName)}`, createBody);
   const id: string = created.Id;
-  await dockerRequest('POST', `/containers/${id}/start`, {});
+  await startContainer(id);
 
   const containerPaths = folderMounts.map(m => m.Target);
   const seedScript = buildFolderMappingSeedScript(containerPaths);
