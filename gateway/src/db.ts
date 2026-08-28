@@ -106,6 +106,37 @@ export function initDb(): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_indexed_folders_path
       ON indexed_folders (path COLLATE NOCASE);
+    -- Environment variable mappings (#108). The DEFINITIONS live in the CLI
+    -- config (~/.huddle/config.json, see host-config.ts) so a team can review
+    -- them in version control. What lives here is everything that must NOT be in
+    -- a committed file, plus per-machine runtime state:
+    --   env_secrets            the real secret value behind a secret mapping
+    --   env_mapping_containers which mapping a container got, and the placeholder
+    --                          it was handed instead of the secret
+    --   env_mapping_workspaces the "remember for this workspace" pre-selection
+    CREATE TABLE IF NOT EXISTS env_secrets (
+      mapping_id INTEGER PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    -- Persisted rather than in-memory (unlike token-exchange.ts): a container's
+    -- Env survives a huddle restart, so the route from placeholder back to the
+    -- real secret has to survive it too.
+    CREATE TABLE IF NOT EXISTS env_mapping_containers (
+      mapping_id INTEGER NOT NULL,
+      container_id TEXT NOT NULL,
+      placeholder TEXT,
+      PRIMARY KEY (mapping_id, container_id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_env_mapping_placeholder
+      ON env_mapping_containers (placeholder) WHERE placeholder IS NOT NULL;
+    -- Per-machine preference, not team configuration — hence the DB and not
+    -- config.json (same reasoning as indexed_folders above).
+    CREATE TABLE IF NOT EXISTS env_mapping_workspaces (
+      workspace_dir TEXT NOT NULL COLLATE NOCASE,
+      mapping_id INTEGER NOT NULL,
+      PRIMARY KEY (workspace_dir, mapping_id)
+    );
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -701,6 +732,119 @@ export function deleteGroup(id: number): void {
     db.prepare('DELETE FROM firewall_groups WHERE id = ?').run(id);
   });
   tx();
+}
+
+// ── Environment variable mappings — secrets & runtime state (#108) ────────────
+//
+// The mapping definitions live in ~/.huddle/config.json (host-config.ts). Only
+// what must stay out of a committed file lives here.
+
+/** Store (or replace) the real secret behind a mapping. Never logged. */
+export function setEnvSecret(mappingId: number, value: string): void {
+  db.prepare(
+    `INSERT INTO env_secrets (mapping_id, value, updated_at) VALUES (?, ?, unixepoch())
+     ON CONFLICT(mapping_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).run(mappingId, value);
+}
+
+/** The real secret, for the one caller that needs it: building a container's Env. */
+export function getEnvSecret(mappingId: number): string | null {
+  const row = db.prepare('SELECT value FROM env_secrets WHERE mapping_id = ?')
+    .get(mappingId) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function deleteEnvSecret(mappingId: number): void {
+  db.prepare('DELETE FROM env_secrets WHERE mapping_id = ?').run(mappingId);
+}
+
+/**
+ * Ids of every mapping that has a secret stored. The API answers with membership
+ * of this set instead of the value, so the portal can show "set" without the
+ * secret ever being serialised into a response.
+ */
+export function listEnvSecretIds(): Set<number> {
+  const rows = db.prepare('SELECT mapping_id FROM env_secrets').all() as { mapping_id: number }[];
+  return new Set(rows.map(r => r.mapping_id));
+}
+
+// ── Per-container bookkeeping ────────────────────────────────────────────────
+
+export interface ContainerEnvMapping {
+  mapping_id: number;
+  /** Only set for a secret mapping: the value the container actually received. */
+  placeholder: string | null;
+}
+
+// Replace the set recorded for a container, so a container name reused for a new
+// container never inherits the previous one's placeholders.
+export function setContainerEnvMappings(containerId: string, entries: ContainerEnvMapping[]): void {
+  const tx = db.transaction((cid: string, rows: ContainerEnvMapping[]) => {
+    db.prepare('DELETE FROM env_mapping_containers WHERE container_id = ?').run(cid);
+    const insert = db.prepare(
+      'INSERT INTO env_mapping_containers (mapping_id, container_id, placeholder) VALUES (?, ?, ?)'
+    );
+    for (const r of rows) insert.run(r.mapping_id, cid, r.placeholder);
+  });
+  tx(containerId, entries);
+}
+
+export function deleteContainerEnvMappings(containerId: string): void {
+  db.prepare('DELETE FROM env_mapping_containers WHERE container_id = ?').run(containerId);
+}
+
+// Drop every trace of a mapping that no longer exists: its secret, the
+// placeholders handed out for it, and any remembered pre-selection.
+export function purgeEnvMapping(mappingId: number): void {
+  const tx = db.transaction((id: number) => {
+    db.prepare('DELETE FROM env_secrets WHERE mapping_id = ?').run(id);
+    db.prepare('DELETE FROM env_mapping_containers WHERE mapping_id = ?').run(id);
+    db.prepare('DELETE FROM env_mapping_workspaces WHERE mapping_id = ?').run(id);
+  });
+  tx(mappingId);
+}
+
+/**
+ * The mapping id and real secret behind a placeholder, bound to the container
+ * that was handed it (the binding principle of token-exchange.ts, finding #12).
+ * Returns null — never a value — for an unknown placeholder or another caller.
+ * Whether the mapping may be redeemed towards a given host is decided by the
+ * caller against the config file; this only answers "whose secret is this".
+ */
+export function resolveEnvPlaceholder(
+  placeholder: string,
+  containerId: string,
+): { mappingId: number; value: string } | null {
+  const row = db.prepare(
+    `SELECT c.mapping_id AS mappingId, s.value AS value
+       FROM env_mapping_containers c
+       JOIN env_secrets s ON s.mapping_id = c.mapping_id
+      WHERE c.placeholder = ? AND c.container_id = ?`
+  ).get(placeholder, containerId) as { mappingId: number; value: string } | undefined;
+  return row ?? null;
+}
+
+// ── Remembered workspace pre-selection ───────────────────────────────────────
+
+export function getRememberedEnvMappings(workspaceDir: string): number[] {
+  if (!workspaceDir) return [];
+  const rows = db.prepare('SELECT mapping_id FROM env_mapping_workspaces WHERE workspace_dir = ?')
+    .all(workspaceDir) as { mapping_id: number }[];
+  return rows.map(r => r.mapping_id);
+}
+
+// Replaces (does not merge) the remembered selection: unticking a mapping and
+// starting again with "remember" on must actually forget it.
+export function rememberEnvMappings(workspaceDir: string, mappingIds: number[]): void {
+  if (!workspaceDir) return;
+  const tx = db.transaction((dir: string, ids: number[]) => {
+    db.prepare('DELETE FROM env_mapping_workspaces WHERE workspace_dir = ?').run(dir);
+    const insert = db.prepare(
+      'INSERT OR IGNORE INTO env_mapping_workspaces (workspace_dir, mapping_id) VALUES (?, ?)'
+    );
+    for (const id of ids) insert.run(dir, id);
+  });
+  tx(workspaceDir, mappingIds);
 }
 
 // ── Approved Host Ports ───────────────────────────────────────────────────────

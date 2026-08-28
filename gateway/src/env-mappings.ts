@@ -1,0 +1,263 @@
+import crypto from 'crypto';
+import type http from 'http';
+import { matchDomain } from './rules';
+import { getEnvMapping, listEnvMappings, type HostEnvMapping } from './host-config';
+import {
+  getEnvSecret,
+  resolveEnvPlaceholder,
+  setContainerEnvMappings,
+  type ContainerEnvMapping,
+} from './db';
+
+// ── Environment variable mappings (issue #108) ───────────────────────────────
+//
+// A mapping hands a devcontainer an environment variable at create time. For a
+// mapping marked secret the container does NOT get the real value: it gets an
+// opaque placeholder, and only the egress proxy swaps that placeholder back for
+// the real secret — and then only towards the hosts the operator explicitly
+// listed on that mapping.
+//
+// The definitions live in ~/.huddle/config.json (host-config.ts); the secrets and
+// the issued placeholders live in the DB (db.ts). This module is the decision
+// layer between them, with the security-critical parts written as pure functions
+// so they can be tested without a container or a proxy.
+
+export const ENV_PLACEHOLDER_PREFIX = 'huddle_env_';
+
+// 32 random bytes: unguessable, so a container cannot brute-force a placeholder
+// it was never handed.
+const PLACEHOLDER_BYTES = 32;
+const PLACEHOLDER_HEX = PLACEHOLDER_BYTES * 2;
+
+// Global so every occurrence in a header value is swapped; the fixed hex length
+// keeps the match from swallowing surrounding text.
+const PLACEHOLDER_RE = new RegExp(`${ENV_PLACEHOLDER_PREFIX}[0-9a-f]{${PLACEHOLDER_HEX}}`, 'g');
+
+export function newEnvPlaceholder(): string {
+  return ENV_PLACEHOLDER_PREFIX + crypto.randomBytes(PLACEHOLDER_BYTES).toString('hex');
+}
+
+export function isEnvPlaceholder(value: string): boolean {
+  return new RegExp(`^${ENV_PLACEHOLDER_PREFIX}[0-9a-f]{${PLACEHOLDER_HEX}}$`).test(value);
+}
+
+// ── Validation ───────────────────────────────────────────────────────────────
+
+// Variables that carry Huddle's own security posture into the container. A
+// mapping that could set HTTPS_PROXY would route traffic around the egress
+// firewall; one that could set SSL_CERT_FILE would break CA trust. Refused at the
+// API, and the Env array in docker.ts puts Huddle's own entries last as a second
+// line of defense (in Docker's Env the last entry wins).
+export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'no_proxy',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+  'CURL_CA_BUNDLE', 'GIT_SSL_CAINFO', 'NODE_TLS_REJECT_UNAUTHORIZED',
+  'DOCKER_HOST', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
+  'JAVA_TOOL_OPTIONS', 'DEVCONTAINER_CONFIG_PATH', 'XDG_DATA_HOME',
+  '_CONTAINER_USER', '_CONTAINER_USER_HOME', '_REMOTE_USER', '_REMOTE_USER_HOME',
+  'LD_PRELOAD', 'LD_LIBRARY_PATH', 'PATH',
+]);
+
+const VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Throws with an operator-readable message when `name` is not usable. Fail-closed:
+ * anything outside the POSIX-ish shape, or on the reserved list, is rejected
+ * rather than sanitized.
+ */
+export function validateEnvVarName(name: string): void {
+  if (!name || !VAR_NAME_RE.test(name)) {
+    throw new Error(
+      `invalid variable name '${name}': use letters, digits and underscore, not starting with a digit`
+    );
+  }
+  if (RESERVED_ENV_VARS.has(name)) {
+    throw new Error(`variable '${name}' is reserved by Huddle and cannot be overridden`);
+  }
+}
+
+/**
+ * Docker's Env is a list of `NAME=value` strings, so a newline or NUL would split
+ * or truncate the entry. Reject rather than trim — silently altering a credential
+ * is worse than refusing it.
+ */
+export function validateEnvValue(value: string): void {
+  if (/[\n\r\0]/.test(value)) {
+    throw new Error('value must not contain newlines or NUL bytes');
+  }
+}
+
+// ── Secret host allowlist ────────────────────────────────────────────────────
+
+/** Comma- or whitespace-separated patterns, e.g. "api.github.com, *.github.com". */
+export function parseSecretHosts(csv: string): string[] {
+  return (csv ?? '')
+    .split(/[,\s]+/)
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * May a secret be redeemed towards `host`? Fail-closed on every uncertainty: an
+ * empty allowlist never matches, so a secret saved without hosts is inert rather
+ * than universally redeemable. Reuses matchDomain() so `*.example.com` means
+ * exactly what it means in a firewall rule.
+ */
+export function secretHostAllowed(hosts: string[], host: string): boolean {
+  if (!host || hosts.length === 0) return false;
+  return hosts.some(p => matchDomain(p, host));
+}
+
+// ── Header substitution at the egress proxy ──────────────────────────────────
+
+/** Resolves a placeholder to the real secret and the hosts it may be sent to. */
+export type SecretLookup = (
+  placeholder: string,
+  containerId: string,
+) => { value: string; hosts: string } | null;
+
+/**
+ * The production lookup: the placeholder binding comes from the DB, the host
+ * allowlist and the enabled/secret flags from the config file — so disabling a
+ * mapping or clearing its hosts immediately stops redemption, without restarting
+ * the containers that already hold the placeholder.
+ */
+export const lookupEnvSecret: SecretLookup = (placeholder, containerId) => {
+  const bound = resolveEnvPlaceholder(placeholder, containerId);
+  if (!bound) return null;
+  const mapping = getEnvMapping(bound.mappingId);
+  if (!mapping || !mapping.enabled || !mapping.secret) return null;
+  return { value: bound.value, hosts: mapping.secretHosts };
+};
+
+function substituteInValue(
+  raw: string,
+  host: string,
+  containerId: string,
+  lookup: SecretLookup,
+): string {
+  return raw.replace(PLACEHOLDER_RE, (placeholder) => {
+    const entry = lookup(placeholder, containerId);
+    if (!entry) return placeholder;
+    if (!secretHostAllowed(parseSecretHosts(entry.hosts), host)) return placeholder;
+    return entry.value;
+  });
+}
+
+/**
+ * Swap every placeholder in the outgoing headers for its real secret, in place.
+ * Call this on the UPSTREAM COPY of the headers only — the audit log serialises
+ * the original request headers and must keep showing the placeholder.
+ *
+ * A placeholder survives untouched (never an error, never an empty value) when
+ * the caller is unidentified, does not own it, or the target host is not on that
+ * mapping's allowlist. The unmodified placeholder then simply fails to
+ * authenticate upstream, which is the safe outcome.
+ */
+export function substituteEnvSecrets(
+  headers: http.OutgoingHttpHeaders,
+  host: string,
+  containerId: string | null,
+  lookup: SecretLookup = lookupEnvSecret,
+): void {
+  // An unidentified caller can never own a placeholder — bail before touching
+  // anything, so an unknown source cannot harvest secrets.
+  if (!containerId) return;
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === 'string') {
+      if (!value.includes(ENV_PLACEHOLDER_PREFIX)) continue;
+      headers[key] = substituteInValue(value, host, containerId, lookup);
+    } else if (Array.isArray(value)) {
+      if (!value.some(v => typeof v === 'string' && v.includes(ENV_PLACEHOLDER_PREFIX))) continue;
+      headers[key] = value.map(v =>
+        typeof v === 'string' ? substituteInValue(v, host, containerId, lookup) : v
+      );
+    }
+  }
+}
+
+// ── Building the container's Env entries ─────────────────────────────────────
+
+export interface BuiltEnvMappings {
+  /** `NAME=value` entries to put in front of the container's Env array. */
+  entries: string[];
+  /** Which mapping the container got, and the placeholder it was handed. */
+  containerRows: ContainerEnvMapping[];
+  /** Mappings left out because they failed validation, for operator-visible logging. */
+  skipped: Array<{ id: number; var_name: string; reason: string }>;
+}
+
+/**
+ * Turn the selected mappings into Docker Env entries. A secret mapping yields a
+ * freshly generated placeholder (so two containers never share one) and its real
+ * value stays in the DB.
+ *
+ * `secretFor` supplies the stored secret; a secret mapping with nothing stored is
+ * skipped rather than exported as an empty variable, which would look like a
+ * working credential.
+ *
+ * Later entries win in Docker's Env, so the caller passes globals first and the
+ * explicitly picked mappings after: picking a mapping at start time is an
+ * intentional override of the global default for the same variable.
+ */
+export function buildEnvEntries(
+  mappings: HostEnvMapping[],
+  secretFor: (mappingId: number) => string | null,
+  makePlaceholder: () => string = newEnvPlaceholder,
+): BuiltEnvMappings {
+  const entries: string[] = [];
+  const containerRows: ContainerEnvMapping[] = [];
+  const skipped: Array<{ id: number; var_name: string; reason: string }> = [];
+
+  for (const m of mappings) {
+    if (!m.enabled) continue;
+    const value = m.secret ? secretFor(m.id) : m.value;
+    try {
+      validateEnvVarName(m.varName);
+      if (value === null) throw new Error('secret mapping has no stored value');
+      validateEnvValue(value);
+    } catch (err) {
+      // config.json is hand-editable, so a stored mapping can be invalid. Skip it
+      // and say so, rather than letting it break (or weaken) the container start.
+      skipped.push({ id: m.id, var_name: m.varName, reason: (err as Error).message });
+      continue;
+    }
+    const placeholder = m.secret ? makePlaceholder() : null;
+    entries.push(`${m.varName}=${placeholder ?? value}`);
+    containerRows.push({ mapping_id: m.id, placeholder });
+  }
+
+  return { entries, containerRows, skipped };
+}
+
+/**
+ * The mappings that apply to a container: every enabled global one, followed by
+ * the non-global ones the operator picked at start time.
+ */
+export function applicableEnvMappings(selectedIds: number[] = []): HostEnvMapping[] {
+  const selected = new Set(selectedIds);
+  const all = listEnvMappings().filter(m => m.enabled);
+  return [
+    ...all.filter(m => m.global),
+    ...all.filter(m => !m.global && selected.has(m.id)),
+  ];
+}
+
+/**
+ * Everything the container start needs: the Env entries to inject, plus the
+ * bookkeeping that lets the proxy later resolve the placeholders back. Always
+ * writes the bookkeeping, also when empty, so a container name reused for a new
+ * container does not inherit the previous container's placeholders.
+ */
+export function buildEnvMappings(containerName: string, selectedIds: number[] = []): string[] {
+  const { entries, containerRows, skipped } = buildEnvEntries(
+    applicableEnvMappings(selectedIds),
+    getEnvSecret,
+  );
+  for (const s of skipped) {
+    console.warn(`[env-mappings] skipping mapping #${s.id} ('${s.var_name}'): ${s.reason}`);
+  }
+  setContainerEnvMappings(containerName, containerRows);
+  return entries;
+}

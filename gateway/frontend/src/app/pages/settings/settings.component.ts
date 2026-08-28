@@ -1,7 +1,7 @@
 import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
-import { ApiService, HuddleSettings, FolderMapping, IndexedFolder } from '../../core/services/api.service';
+import { ApiService, HuddleSettings, FolderMapping, EnvMapping, IndexedFolder } from '../../core/services/api.service';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { FolderSelectComponent } from '../../shared/components/folder-select/folder-select.component';
 import {
@@ -126,6 +126,108 @@ import {
           <div class="actions">
             <button type="submit" class="btn btn--accent" [disabled]="addingMapping()">
               {{ addingMapping() ? 'Adding…' : 'Add' }}
+            </button>
+          </div>
+        </form>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Environment variables</h2>
+      <p class="hint">
+        Environment variables handed to a devcontainer when it is created.
+        <strong>Global</strong> variables go into every new devcontainer; the others are
+        offered as a choice in the start dialog.
+        Mark a variable <strong>secret</strong> and the container never receives the real
+        value — it gets a placeholder that Huddle swaps back only for the hosts you list
+        here. The definitions live in <code>~/.huddle/config.json</code>; secret values stay
+        in Huddle's own database and are never shown again.
+      </p>
+
+      <table class="mappings-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Variable</th>
+            <th>Value</th>
+            <th>Scope</th>
+            <th>On</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (m of envMappings(); track m.id) {
+            <tr [class.disabled-row]="!m.enabled">
+              <td>{{ m.name }}</td>
+              <td class="mono">{{ m.var_name }}</td>
+              <td class="source-cell">
+                @if (m.is_secret) {
+                  <span class="secret-badge" [title]="'Redeemable for: ' + (m.secret_hosts || 'nothing — add hosts')">
+                    <app-icon name="shield-check" [size]="11" /> secret
+                  </span>
+                  <span class="mono secret-hosts">{{ m.secret_hosts || '— no hosts, never sent' }}</span>
+                } @else {
+                  <span class="mono">{{ m.value || '—' }}</span>
+                }
+              </td>
+              <td>{{ m.is_global ? 'Global' : 'On request' }}</td>
+              <td>
+                <input type="checkbox" [checked]="m.enabled" (change)="toggleEnvMapping(m)">
+              </td>
+              <td>
+                <button class="btn btn--danger btn--sm" (click)="deleteEnvMapping(m.id)">
+                  Delete
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <details class="add-form">
+        <summary>+ Add variable</summary>
+        <form (ngSubmit)="addEnvMapping()" class="add-mapping-form">
+          <div class="field-row">
+            <div class="field">
+              <label>Name</label>
+              <input [(ngModel)]="newEnvMapping.name" name="ne_name" placeholder="e.g. Anthropic API key" autocomplete="off" required>
+            </div>
+            <div class="field">
+              <label>Variable</label>
+              <input [(ngModel)]="newEnvMapping.var_name" name="ne_var" placeholder="ANTHROPIC_API_KEY" autocomplete="off" required>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Value</label>
+              <input [type]="newEnvSecret ? 'password' : 'text'" [(ngModel)]="newEnvMapping.value"
+                     name="ne_value" placeholder="value" autocomplete="off">
+            </div>
+          </div>
+          <div class="field-row">
+            <label class="checkbox-label">
+              <input type="checkbox" [(ngModel)]="newEnvSecret" name="ne_secret"> Secret (container gets a placeholder)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" [(ngModel)]="newEnvGlobal" name="ne_global"> Global (every devcontainer)
+            </label>
+          </div>
+          @if (newEnvSecret) {
+            <div class="field-row">
+              <div class="field">
+                <label>Redeem for hosts (comma-separated, <code>*.example.com</code> allowed)</label>
+                <input [(ngModel)]="newEnvMapping.secret_hosts" name="ne_hosts"
+                       placeholder="api.anthropic.com, *.anthropic.com" autocomplete="off">
+                <p class="hint secret-warning">
+                  The real value is only sent to these hosts. Leave it empty and the secret is
+                  never handed over at all.
+                </p>
+              </div>
+            </div>
+          }
+          <div class="actions">
+            <button type="submit" class="btn btn--accent" [disabled]="addingEnvMapping()">
+              {{ addingEnvMapping() ? 'Adding…' : 'Add' }}
             </button>
           </div>
         </form>
@@ -320,6 +422,9 @@ huddle indexfolder --list     <span class="cmd-note"># what is indexed right now
     .add-form { margin-top: 16px; }
     .add-form summary { cursor: pointer; color: var(--accent); font-size: 0.9em; padding: 4px 0; }
     .add-mapping-form { margin-top: 12px; }
+    .secret-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 0.8em; margin-right: 6px; }
+    .secret-hosts { font-size: 0.8em; color: var(--muted, #888); }
+    .secret-warning { margin: 6px 0 0; }
     .cmd { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 0.85em; overflow-x: auto; margin: 0 0 16px; }
     /* Indexed folders — the file-manager style panel from the design. */
     .index-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
@@ -426,6 +531,14 @@ export class SettingsComponent implements OnInit {
   newMapping = { name: '', host_path: '', volume_name: '', container_path: '' };
   newMappingReadOnly = false;
 
+  // Environment variable mappings (#108). The list never carries a secret value —
+  // the gateway does not serialise one — so editing a secret means replacing it.
+  envMappings = signal<EnvMapping[]>([]);
+  addingEnvMapping = signal(false);
+  newEnvMapping = { name: '', var_name: '', value: '', secret_hosts: '' };
+  newEnvSecret = false;
+  newEnvGlobal = false;
+
   // The host folder index (`huddle indexfolder`). Lives in the DB, not in
   // config.json: it is a scan of THIS machine, not team-managed configuration.
   indexedFolders = signal<IndexedFolder[]>([]);
@@ -467,6 +580,7 @@ export class SettingsComponent implements OnInit {
       error: (e) => this.error.set(e.message),
     });
     this.loadMappings();
+    this.loadEnvMappings();
     this.loadIndexedFolders();
   }
 
@@ -695,6 +809,53 @@ export class SettingsComponent implements OnInit {
         this.loadMappings();
       },
       error: (e) => { this.addingMapping.set(false); this.error.set(e.message); },
+    });
+  }
+
+  // ── Environment variable mappings (#108) ────────────────────────────────────
+
+  private loadEnvMappings(): void {
+    this.api.getEnvMappings().subscribe({
+      next: (m) => this.envMappings.set(m),
+      error: (e) => this.error.set(e.message),
+    });
+  }
+
+  toggleEnvMapping(m: EnvMapping): void {
+    // Only `enabled` is sent: omitting `value` leaves a stored secret alone.
+    this.api.updateEnvMapping(m.id, { enabled: m.enabled ? 0 : 1 }).subscribe({
+      next: () => this.loadEnvMappings(),
+      error: (e) => this.error.set(e.message),
+    });
+  }
+
+  deleteEnvMapping(id: number): void {
+    this.api.deleteEnvMapping(id).subscribe({
+      next: () => this.loadEnvMappings(),
+      error: (e) => this.error.set(e.message),
+    });
+  }
+
+  addEnvMapping(): void {
+    const { name, var_name, value, secret_hosts } = this.newEnvMapping;
+    if (!name || !var_name) return;
+    this.addingEnvMapping.set(true);
+    this.error.set(null);
+    this.api.createEnvMapping({
+      name, var_name, value,
+      is_secret: this.newEnvSecret ? 1 : 0,
+      secret_hosts: this.newEnvSecret ? secret_hosts : '',
+      is_global: this.newEnvGlobal ? 1 : 0,
+      enabled: 1, sort_order: 0,
+    }).subscribe({
+      next: () => {
+        this.addingEnvMapping.set(false);
+        this.newEnvMapping = { name: '', var_name: '', value: '', secret_hosts: '' };
+        this.newEnvSecret = false;
+        this.newEnvGlobal = false;
+        this.loadEnvMappings();
+      },
+      error: (e) => { this.addingEnvMapping.set(false); this.error.set(e.message); },
     });
   }
 }

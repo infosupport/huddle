@@ -10,6 +10,7 @@ import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
+import { substituteEnvSecrets } from './env-mappings';
 
 const PROXY_PORT = 80;
 
@@ -420,6 +421,11 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
     delete outgoingHeaders['proxy-connection'];
 
+    // Env-mapping secrets (#108): the container only ever holds a placeholder.
+    // Swap it here, on the upstream COPY — the audit entry below serializes
+    // req.headers and must keep showing the placeholder, not the secret.
+    substituteEnvSecrets(outgoingHeaders, host, containerId);
+
     const reqChunks: Buffer[] = [];
     let reqBytes = 0;
     const resChunks: Buffer[] = [];
@@ -568,6 +574,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
     stripProxyHeaders(outgoingHeaders);
+    // A WebSocket handshake can carry the credential in a header too (#108).
+    substituteEnvSecrets(outgoingHeaders, host, containerId);
     const upstreamPort = target.port || 80;
     forwardUpgrade(
       false,
@@ -761,6 +769,10 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       const upstreamHeaders = { ...innerReq.headers };
       delete upstreamHeaders['proxy-connection'];
 
+      // Env-mapping secrets (#108) — see the plain-HTTP path. Runs on the copy,
+      // so the audit entry below records only the placeholder.
+      substituteEnvSecrets(upstreamHeaders, hostname, containerId);
+
       // Token replacement: replace placeholder with the real token for api.anthropic.com
       if (hostname === 'api.anthropic.com') {
         const authVal = upstreamHeaders['authorization'] as string | undefined;
@@ -925,6 +937,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const upstreamHeaders = { ...innerReq.headers };
       stripProxyHeaders(upstreamHeaders);
+      substituteEnvSecrets(upstreamHeaders, hostname, containerId);
       forwardUpgrade(
         true,
         {

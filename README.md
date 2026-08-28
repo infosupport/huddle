@@ -124,6 +124,16 @@ Two servers run in the same process:
 - Force-remove a container including network cleanup
 - A per-container Docker socket proxy is created automatically on start
 
+### Environment variable mappings
+Variables handed to a devcontainer when it is created, configured once in **Settings → Environment variables**.
+
+- **Global** variables go into every new devcontainer; the rest are offered as tick boxes in the start dialog, with an option to remember that choice for the workspace directory
+- **Secret** variables never reach the container: it receives an opaque placeholder (`huddle_env_…`), and the egress proxy swaps in the real value — only for requests to the hosts listed on that mapping (exact or `*.example.com`, the same matching as a firewall rule). No hosts means the secret is never handed over at all
+- A placeholder is bound to the container that received it, so one devcontainer cannot redeem another's secret, and it is revoked when that container is removed
+- The network log records the placeholder, never the secret
+- Definitions live in `~/.huddle/config.json` so a team can review them in version control; secret **values** stay in Huddle's own database and are never sent back to the portal
+- Variables that carry Huddle's own security posture (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `DOCKER_HOST`, `PATH`, …) cannot be overridden by a mapping
+
 ### Admin access (sudo)
 Each managed container has two users: `vscode` (the normal dev user, **without** sudo) and `noot` (administrator **with** sudo). Instead of a permanent admin password, Huddle uses an **ephemeral per-grant model**:
 
