@@ -126,6 +126,18 @@ const CONTROL_ERROR_HINTS: Record<string, string> = {
   UND_ERR_CONNECT_TIMEOUT: 'the address resolves but the connection was dropped, which usually means a host firewall',
 };
 
+/**
+ * A socket's remote address in the form the container feed is keyed on.
+ *
+ * The proxy calls `server.listen(port)` with no host, so Node hands it a
+ * dual-stack socket and an IPv4 peer shows up as `::ffff:172.20.0.5`. Docker
+ * reports plain `172.20.0.5`, so the two only ever meet after this. Exported
+ * because it is the whole of the fix and worth pinning in a test.
+ */
+export function normalizeIp(raw: string): string {
+  return raw.replace(/^::ffff:/i, '');
+}
+
 export function createControlClient(opts: ControlClientOptions): ControlClient {
   const doFetch = opts.fetchImpl ?? fetch;
   const nowSeconds = opts.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
@@ -326,8 +338,14 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
 
     // Async in the interface because the in-container version asked Docker.
     // Here it is a map lookup, and the feed is refreshed on the poll timer.
+    //
+    // Strip the IPv4-mapped-IPv6 prefix first. The proxy listens without a bind
+    // host, so Node gives it a dual-stack socket and every devcontainer arrives
+    // as `::ffff:172.20.0.5`; the feed is keyed on what Docker reports, which is
+    // the bare `172.20.0.5`. Without this every lookup misses, every request is
+    // attributed to no container, and the rules it files land as global ones.
     async resolveContainerByIp(ip) {
-      return containersByIp[ip] ?? null;
+      return containersByIp[normalizeIp(ip)] ?? null;
     },
 
     logAudit(entry) {
