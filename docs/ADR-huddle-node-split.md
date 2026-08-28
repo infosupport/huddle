@@ -61,6 +61,7 @@ operator token from `~/.huddle/config.json` (`cli/src/api.ts`).
 | REST API + WS + portal | `api.ts` (`:3000`, `@fastify/static` → `dist/ui/browser`) | **Node** |
 | devcontainer lifecycle | `docker.ts` (55 kB) | **Node** |
 | per-container Docker socket filter | `socket-proxy.ts` (56 kB) | **Node** (host-side) |
+| the socket file that filter is reached through | `socket-relay.ts` | **Gateway** (it is the one on the engine — see 17) |
 | container terminals / PTY | `terminal.ts`, `pty-manager.ts` | **Node** |
 | sudo grant sweeper | `sudo-grant.ts` | **Node** |
 | extensions | `extensions/` | **Node** |
@@ -533,3 +534,33 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
     does not fix it — `socket-proxy.ts` is Huddle Node's, and it now genuinely
     runs on the host, which is the right side, but nothing calls it for containers
     Huddle did not start. The flag stays opt-in and prints a warning.
+
+17. **The Docker socket a devcontainer mounts is created by the gateway.**
+    Resolved; recorded here because the first cut of the split got it wrong and
+    the reason it was wrong is not obvious.
+
+    `/tmp/dc-sockets/<name>/docker.sock` is a path on the DOCKER ENGINE's host,
+    because that is where the bind mount is resolved. Before the split the
+    process serving it was the gateway container, which runs on the engine, so
+    the two were the same machine by construction. Moving `socket-proxy.ts` to
+    Huddle Node broke that silently on every engine that runs in a VM — Docker
+    Desktop, Rancher, `podman machine` — where Node would create the socket on
+    macOS/Windows and the devcontainer would mount one out of the VM. On Windows
+    it did not even get that far: Node's `net` has no AF_UNIX server, so
+    `listen('/tmp/dc-sockets/…/docker.sock')` failed with `EACCES` and took
+    container creation down with it.
+
+    The two candidate fixes were "serve the sockets over TCP from Node" and
+    "keep a socket-serving helper inside the engine". The first does not close:
+    a devcontainer needs a *Unix socket*, and its network is `--internal`, so it
+    could not reach a TCP port on Node even if it wanted to. So: the gateway
+    creates the socket, Node keeps the filter, and each connection is tunnelled
+    between them as an HTTP Upgrade on the control port
+    (`control/socket-relay-protocol.ts`).
+
+    The control port rather than a new listener, deliberately: it is a port the
+    gateway already has a token for, already knows how to reach, and that the
+    operator has already had to get through their host firewall once. The
+    security shape is unchanged — the gateway forwards bytes and decides
+    nothing, and the container name is bound to the socket path by the side that
+    accepted the connection, never sent by the caller.

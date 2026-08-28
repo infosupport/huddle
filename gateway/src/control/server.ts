@@ -21,6 +21,7 @@ import { isGatewayAuthenticated } from '../auth';
 import { runtimeEnv } from '../runtime-env';
 import { isControlPath } from './http';
 import { registerControlRoutes } from './routes';
+import { attachSocketRelay } from './socket-relay-server';
 
 // A report carries audit rows, and an audit row carries up to four 20 KB
 // header/body fields (CAP in proxy.ts). Fastify's 1 MB default would reject a
@@ -53,6 +54,10 @@ export async function createControlServer(): Promise<FastifyInstance> {
     console.error('[control] request failed:', err.message);
     if (!reply.sent) reply.code(500).send({ error: err.message });
   });
+
+  // Before listen(), so the first connection cannot arrive without a handler:
+  // an HTTP server with no `upgrade` listener destroys the socket outright.
+  attachSocketRelay(app.server);
 
   const address = await app.listen({ port: runtimeEnv.controlPort, host: runtimeEnv.controlBindHost });
   console.log(`[control] listening on ${address}`);

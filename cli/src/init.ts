@@ -40,7 +40,6 @@ import {
   startNodeDetached,
   stopNode,
 } from './node';
-import fs from 'fs';
 
 const CONTAINER = 'huddle';
 
@@ -237,36 +236,21 @@ function runArgsSilent(file: string, args: string[]): boolean {
 }
 
 /**
- * The directory where each devcontainer's filtered Docker socket is served.
+ * Report where each devcontainer's filtered Docker socket will be served.
  *
- * ARCHITECTURAL BLOCKER, recorded rather than papered over. This path is on the
- * Docker ENGINE host. That used to be the same machine as the process serving
- * the sockets, because that process was the gateway container. It is Huddle Node
- * now, and Huddle Node runs on the OPERATOR's machine — which is the engine host
- * only when the engine is native (Linux). On Docker Desktop, Rancher and
- * `podman machine` the engine lives in a VM, so Node creates the sockets on
- * macOS/Windows while the devcontainers mount them out of the VM, and the two
- * never meet.
+ * On the ENGINE host, and by the GATEWAY — which is the only process guaranteed
+ * to be there. Huddle Node is on the operator's machine, and that is the engine
+ * host only when the engine is native: on Docker Desktop, Rancher and `podman
+ * machine` the engine lives in a VM, so a socket Node created would sit on
+ * macOS/Windows while the devcontainer mounts one out of the VM. Node keeps the
+ * filter — the security boundary — and the gateway tunnels each connection to
+ * it over the control channel (gateway/src/control/socket-relay-protocol.ts).
  *
- * Solving it needs a decision that is not this step's to make (serve the sockets
- * over TCP from Node, or keep a socket-serving helper inside the engine). Until
- * then init says so plainly instead of leaving the operator with devcontainers
- * whose Docker access silently does nothing.
+ * Nothing to create here, therefore: the directory is the gateway's bind mount,
+ * and the engine makes it on the engine side when it does not exist.
  */
-function ensureSocketDir(runtime: { name: string; isRemote: boolean }): void {
-  console.log(dim(`Socket directory: ${HOST_SOCKET_DIR}`));
-  if (!runtime.isRemote) {
-    try {
-      fs.mkdirSync(HOST_SOCKET_DIR, { recursive: true });
-    } catch (err) {
-      console.log(yellow(`[!] Could not create ${HOST_SOCKET_DIR}: ${err}`));
-    }
-    return;
-  }
-  console.log(yellow(`[!] ${runtime.name} runs its engine in a VM, so ${HOST_SOCKET_DIR} on this`));
-  console.log(yellow('    machine is not the directory devcontainers mount. Per-devcontainer'));
-  console.log(yellow('    Docker access will not work until Huddle Node can serve those'));
-  console.log(yellow('    sockets on the engine host (docs/ADR-huddle-node-split.md).'));
+function reportSocketDir(): void {
+  console.log(dim(`Socket directory: ${HOST_SOCKET_DIR} (on the engine host, served by the gateway)`));
 }
 
 /**
@@ -322,7 +306,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   console.log(dim(`Removing old container if it exists`));
   runArgsSilent(rt, ['rm', '-f', CONTAINER]);
 
-  ensureSocketDir(runtime);
+  reportSocketDir();
 
   // ── Huddle Node, on this host ──────────────────────────────────────────────
   //
@@ -432,6 +416,13 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // The MITM CA, read-only. Its own directory precisely so this mount can exist:
   // the rest of ~/.huddle is the database and the operator token.
   dockerArgs.push('-v', `${nodeCaDir()}:/ca:ro`);
+  // Where the per-devcontainer Docker sockets live. Both sides of this bind are
+  // the ENGINE host's path, which is the point: the gateway creates the socket
+  // here and the devcontainer mounts the same path, so the two meet whether or
+  // not the engine runs in a VM. Read-write, and it has to be: creating those
+  // sockets is the job. It grants nothing — the filter behind them is Huddle
+  // Node's, and reaching it costs the gateway token.
+  dockerArgs.push('-v', `${HOST_SOCKET_DIR}:${HOST_SOCKET_DIR}`);
   dockerArgs.push(IMAGE);
   runArgs(rt, dockerArgs);
 
