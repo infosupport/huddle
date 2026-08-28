@@ -3,7 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { registerContainerProxy } from './socket-proxy';
 import { listFolderMappings, getResourceDefaults } from './host-config';
-import type { ExecResult } from './sudo-grant';
+import type { ContainerExec, ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
@@ -212,6 +212,62 @@ iptables -A OUTPUT -p tcp -j DROP
   } catch (err: any) {
     console.warn(`[iptables] refresh failed for ${containerName}:`, err.message);
   }
+}
+
+/**
+ * Reinstall the current root CA in an existing devcontainer.
+ *
+ * The CA is injected once, by the config script that runs when a devcontainer is
+ * created. That was enough while the CA lived in the gateway's data volume and
+ * outlived every restart. After the split it does not: Huddle Node owns the CA
+ * and keeps it in its own data dir on the host, so the first run after the split
+ * — or any run against a fresh data dir — mints a NEW root. Devcontainers
+ * created before that still trust only the old one and every HTTPS request
+ * through the proxy dies with CERT_SIGNATURE_FAILURE: the leaf is signed by a CA
+ * the container has never heard of.
+ *
+ * So the CA is refreshed wherever the gateway is rewired — same trigger, same
+ * reason. Idempotent, and cheap when nothing changed: the script compares the
+ * cert it is handed against the one on disk and exits before touching the
+ * keystores if they are the same. Returns whether it actually changed anything.
+ */
+export async function refreshContainerCa(
+  containerId: string,
+  containerName: string,
+  exec: ContainerExec = execInContainer,
+): Promise<boolean> {
+  const caB64 = Buffer.from(getCaCertPem(), 'utf8').toString('base64');
+  const SYS = '/usr/local/share/ca-certificates/huddle-ca.crt';
+  // Exit 3 means "already current" — not a failure, and worth not logging as a
+  // change. Anything else non-zero is a real problem and gets reported.
+  const script = `
+set -e
+mkdir -p /usr/local/share/ca-certificates
+NEW=/tmp/.huddle-ca-new.crt
+echo '${caB64}' | base64 -d > "$NEW"
+if cmp -s "$NEW" ${SYS}; then rm -f "$NEW"; exit 3; fi
+mv "$NEW" ${SYS}
+chmod 644 ${SYS}
+command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
+printf 'export NODE_EXTRA_CA_CERTS=${SYS}\n' > /etc/profile.d/99-huddle-ca.sh
+chmod 644 /etc/profile.d/99-huddle-ca.sh
+# The JetBrains backend validates TLS against the JBR's own keystore, not the
+# system store — see buildJbConfigScript. Every dist/ that has one gets the new
+# root; a container without an IDE deployed yet simply has no match.
+for JBR in /.jbdevcontainer/JetBrains/RemoteDev/dist/*/jbr; do
+  [ -x "$JBR/bin/keytool" ] && [ -f "$JBR/lib/security/cacerts" ] || continue
+  "$JBR/bin/keytool" -delete -alias huddle-ca -keystore "$JBR/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 || true
+  "$JBR/bin/keytool" -importcert -noprompt -trustcacerts -alias huddle-ca -file ${SYS} \
+    -keystore "$JBR/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 || true
+done
+`;
+  const res = await exec(containerId, ['sh', '-c', script], '');
+  if (res.exitCode === 3) return false;
+  if (res.exitCode !== 0) {
+    throw new Error(`CA refresh exited ${res.exitCode}: ${(res.stdout ?? '').trim().slice(0, 200)}`);
+  }
+  console.log(`[tls-ca] root CA reinstalled in ${containerName}`);
+  return true;
 }
 
 export type IdeName = 'rider' | 'intellij' | 'vscode';

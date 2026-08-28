@@ -75,7 +75,10 @@ async function wireGatewayWhenItAppears(): Promise<void> {
     await new Promise((r) => setTimeout(r, GATEWAY_POLL_MS));
   }
   const rep = await rewireGatewayIntoDevcontainers();
-  console.log(`[wiring] ${rep.attached.length} network(s), ${rep.refreshed.length} devcontainer(s) refreshed`);
+  console.log(
+    `[wiring] ${rep.attached.length} network(s), ${rep.refreshed.length} devcontainer(s) refreshed` +
+    (rep.reissued.length ? `, CA reinstalled in ${rep.reissued.length}` : '')
+  );
 }
 
 // Ephemeral sudo grants must be locked INTERNALLY in the container as soon as they
