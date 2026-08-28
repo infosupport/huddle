@@ -42,10 +42,13 @@ huddle init
   └── sbx host CA + startBridge()            ← host-side watcher, detached node process
 ```
 
-Everything else — `huddle start`, `huddle firewall …`, `huddle indexfolder`,
-`huddle sbx …` — is an HTTP client against `http://localhost:3000` with the
-operator token from `~/.huddle/config.json` (`cli/src/api.ts`).
-`huddle restart` = `runInit` again. There is no `huddle stop`.
+Everything else — `huddle start`, `huddle firewall …`, `huddle sbx …` — is an
+HTTP client against `http://localhost:3000` with the operator token from
+`~/.huddle/config.json` (`cli/src/api.ts`). `huddle restart` = `runInit` again.
+There is no `huddle stop`. The exception is `huddle logs`, which reads
+`~/.huddle/node.log` and `docker logs huddle` straight from disk: the log of a
+Node that failed to start is exactly the log you need, and the API cannot serve
+it.
 
 ### 1.2 What runs in `huddle-gateway`
 

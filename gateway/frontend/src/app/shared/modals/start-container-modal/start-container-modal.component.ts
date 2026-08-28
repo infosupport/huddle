@@ -4,7 +4,7 @@ import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
-import { IndexedFolder, SbxSettingsFolders } from '../../../core/services/api.service';
+import { SbxSettingsFolders } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
 import { FolderPickerModalComponent } from '../folder-picker-modal/folder-picker-modal.component';
@@ -65,9 +65,6 @@ export class StartContainerModalComponent {
   sbxSettings: SbxSettingsFolders | null = null;
 
   images: DockerImage[] = [];
-  // Host folders indexed by `huddle indexfolder`; loaded once per open and passed
-  // to every folder input, so N mount rows do not each fetch the same list.
-  indexedFolders: IndexedFolder[] = [];
   baseImage = '';
   selectedImage = '';
   ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
@@ -112,12 +109,6 @@ export class StartContainerModalComponent {
     this.kind = 'sandbox'; // always default to Sandbox on open (the primary box type)
     this.restoreRemembered();
     this.loadImagesForIde();
-    this.api.getIndexedFolders().subscribe({
-      next: r => { this.indexedFolders = r.folders; },
-      // No index is a normal state (nobody ran `huddle indexfolder` yet), and the
-      // inputs still take free text — so a failure here must not block the modal.
-      error: () => { this.indexedFolders = []; },
-    });
     // Show which settings folders (folder mappings) the sandbox will get, and
     // which mappings cannot travel — that difference is otherwise invisible.
     this.api.sbxSettingsFolders().subscribe({
@@ -138,7 +129,7 @@ export class StartContainerModalComponent {
   // Same deal as the devcontainer mounts: browse once, Ctrl-click several
   // folders, and each one lands as its own row rather than making the user open
   // the dialog once per folder. Additive — filled rows (including hand-typed
-  // paths that are not indexed) stay, and a folder already listed is not added
+  // paths never browsed to) stay, and a folder already listed is not added
   // twice.
   onSbxFoldersPicked(paths: string[]): void {
     const known = new Set(
@@ -228,7 +219,7 @@ export class StartContainerModalComponent {
   // Picking the folders of a multi-folder container one dialog at a time is a
   // lot of clicking for what is one decision. Browse once, Ctrl-click the
   // folders, and every one of them lands as its own row. Purely additive: rows
-  // already filled in (including hand-typed paths that are not indexed) stay,
+  // already filled in (including hand-typed paths) stay,
   // and a folder that is already mounted is not added twice.
   onFoldersPicked(paths: string[]): void {
     this.folderPickerOpen = false;

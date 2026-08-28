@@ -1,17 +1,15 @@
 import { Component, EventEmitter, Input, Output } from '@angular/core';
-import { IndexedFolder } from '../../../core/services/api.service';
 import { FolderPickerModalComponent } from '../../modals/folder-picker-modal/folder-picker-modal.component';
 
 // One host-path input, used everywhere a host folder has to be named.
 //
-// Huddle's portal runs in a container, so it cannot open a native folder dialog:
-// a host path could only ever be typed from memory. `huddle indexfolder` fills an
-// index of real folders on the host, and Browse… opens that index in a proper
-// picker dialog.
+// A browser will not hand a server a folder path, so there is no native folder
+// dialog to open: Browse… opens Huddle's own, which browses the host through
+// Huddle Node.
 //
-// The text box stays authoritative on purpose: the index is a snapshot taken by
-// the CLI, not a live view of the host, so a folder created five minutes ago must
-// still be usable without re-indexing first.
+// The text box stays authoritative on purpose. A path is still the fastest way
+// to name a folder you already know, it survives a host Node cannot read, and
+// pasting one from a terminal has to keep working.
 let uid = 0;
 
 @Component({
@@ -23,22 +21,16 @@ let uid = 0;
       <input type="text" [id]="inputId" [value]="value" [placeholder]="placeholder"
              autocomplete="off" spellcheck="false"
              (input)="onInput($any($event.target).value)" />
-      <button type="button" class="fs-browse" [title]="browseTitle()" (click)="open = true">Browse…</button>
+      <button type="button" class="fs-browse" title="Browse the folders on this host"
+              (click)="open = true">Browse…</button>
     </div>
 
     @if (hint) {
-      <p class="fs-hint">
-        @if (folders.length) {
-          {{ folders.length }} indexed folder(s) available.
-        } @else {
-          No indexed folders yet — run <code>huddle indexfolder</code> on the host to browse
-          your folders here. Typing a path keeps working.
-        }
-      </p>
+      <p class="fs-hint">Browse… opens the folders on this host, or type a path.</p>
     }
 
     @if (open) {
-      <app-folder-picker-modal [folders]="folders" [value]="value" [multiple]="multiple"
+      <app-folder-picker-modal [value]="value" [multiple]="multiple"
                                [title]="pickerTitle" [subtitle]="pickerSubtitle"
                                (picked)="onPicked($event)" (pickedMany)="onPickedMany($event)"
                                (cancel)="open = false" />
@@ -60,13 +52,12 @@ let uid = 0;
 })
 export class FolderSelectComponent {
   @Input() value = '';
-  @Input() folders: IndexedFolder[] = [];
   @Input() placeholder = '';
   // The <label for="..."> of the caller points at the text box, not the wrapper.
   @Input() inputId = `folder-input-${++uid}`;
   @Input() hint = false;
   @Input() pickerTitle = 'Select folder';
-  @Input() pickerSubtitle = 'Choose a folder from your indexed locations.';
+  @Input() pickerSubtitle = 'Browse the folders on this host.';
   // Let the dialog pick more than one. The field itself still holds a single
   // path — the extra folders are the caller's problem, handed over on
   // valuesChange, because only the caller knows what several folders mean.
@@ -75,12 +66,6 @@ export class FolderSelectComponent {
   @Output() valuesChange = new EventEmitter<string[]>();
 
   open = false;
-
-  browseTitle(): string {
-    return this.folders.length
-      ? 'Browse indexed host folders'
-      : 'No indexed folders yet — run "huddle indexfolder" on the host';
-  }
 
   onPicked(path: string): void {
     this.open = false;

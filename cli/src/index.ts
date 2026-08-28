@@ -8,7 +8,6 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runNode, nodeUrl } from './node';
 import { runMigrate } from './migrate';
-import { runIndexFolder } from './indexfolder';
 import { runLogs } from './logs';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
 import { resolveImages } from './images';
@@ -30,9 +29,9 @@ export interface ParsedArgs {
   folders: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth', 'agent', 'entry', 'port', 'data-dir', 'lines', 'n']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'dry-run', 'follow', 'f', 'node', 'gateway']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'sbx', 'node', 'logs', 'log', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'agent', 'entry', 'port', 'data-dir', 'lines', 'n']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'dry-run', 'follow', 'f', 'node', 'gateway']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'sbx', 'node', 'logs', 'log', 'help', 'version']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -137,14 +136,10 @@ Usage:
   huddle start [options] [folder]    Explicitly start a devcontainer
   huddle init [options]              Pull the Huddle + devcontainer base images and
                                      start them via Docker or Podman
-  huddle restart                     Recreate the gateway (e.g. to mount a changed
-                                     team firewall-rules folder)
+  huddle restart                     Recreate the gateway (e.g. after changing the
+                                     team extensions folder, which loads at boot)
   huddle migrate [folder]            Wire an existing docker-compose devcontainer
                                      behind Huddle by generating an override file
-  huddle indexfolder [folder]        Index the folders under this one so the portal
-                                     can offer them where a host path is needed
-                                     (the portal runs in a container and cannot
-                                     browse your host)
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
@@ -228,16 +223,6 @@ Migrate options:
   --output <path>                    Override file to write
                                      (default: docker-compose.huddle.yml next to the source)
   --force                            Overwrite an existing override file
-
-Indexfolder options:
-  --depth <n>                        How deep to walk (default: 2, max 8)
-  --all                              Also index build folders (node_modules, dist,
-                                     target, ...); hidden folders stay skipped
-  --replace                          Drop the earlier entries under this folder
-                                     first, instead of merging
-  --list                             Show the current index and exit
-  --clear                            Empty the index (or, with a folder, only the
-                                     entries under it)
 
 Firewall options:
   -i, --interactive                  Interactively approve/deny (list)
@@ -427,18 +412,6 @@ async function main(): Promise<void> {
       follow: flagBool(flags, 'follow', 'f'),
       node: flagBool(flags, 'node'),
       gateway: flagBool(flags, 'gateway'),
-    });
-    return;
-  }
-
-  if (cmd === 'indexfolder' || cmd === 'indexfolders') {
-    await runIndexFolder({
-      path: positional[1],
-      depth: flagString(flags, 'depth'),
-      all: flagBool(flags, 'all'),
-      replace: flagBool(flags, 'replace'),
-      clear: flagBool(flags, 'clear'),
-      list: flagBool(flags, 'list'),
     });
     return;
   }
