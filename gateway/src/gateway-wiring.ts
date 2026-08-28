@@ -18,7 +18,7 @@
 // Hence one function, callable whenever the gateway container has (re)appeared:
 // at boot, and from /api/docker/rewire-gateway when init has just created it.
 
-import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables } from './docker';
+import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, refreshContainerCa } from './docker';
 
 export interface RewireReport {
   /** Devcontainers seen. */
@@ -27,6 +27,8 @@ export interface RewireReport {
   attached: string[];
   /** Devcontainers whose iptables were refreshed against the current gateway IP. */
   refreshed: string[];
+  /** Devcontainers that were handed a root CA they did not already trust. */
+  reissued: string[];
 }
 
 /**
@@ -38,7 +40,7 @@ export interface RewireReport {
  * is already on, and rebuilding iptables that are already correct, both no-op.
  */
 export async function rewireGatewayIntoDevcontainers(): Promise<RewireReport> {
-  const report: RewireReport = { containers: 0, attached: [], refreshed: [] };
+  const report: RewireReport = { containers: 0, attached: [], refreshed: [], reissued: [] };
 
   let containers;
   try {
@@ -71,6 +73,20 @@ export async function rewireGatewayIntoDevcontainers(): Promise<RewireReport> {
       report.refreshed.push(c.name);
     } catch (err: any) {
       console.error(`[wiring] iptables ${c.name}:`, err.message);
+    }
+  }
+
+  // Routing a devcontainer to a gateway it does not trust is not connectivity.
+  // The CA moved out of the gateway's volume and onto Huddle Node's host at the
+  // split, so a container created before it still pins the previous root and
+  // every HTTPS request fails the signature check. Same trigger as the rewiring
+  // above because it is the same event: the enforcement point changed under a
+  // container that is still running. See refreshContainerCa.
+  for (const c of containers) {
+    try {
+      if (await refreshContainerCa(c.id, c.name)) report.reissued.push(c.name);
+    } catch (err: any) {
+      console.error(`[wiring] CA ${c.name}:`, err.message);
     }
   }
 

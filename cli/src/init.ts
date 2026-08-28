@@ -66,9 +66,14 @@ async function rewireGateway(port: string, token: string | null): Promise<void> 
       headers: token ? { authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rep = (await res.json()) as { attached?: string[]; refreshed?: string[] };
+    const rep = (await res.json()) as { attached?: string[]; refreshed?: string[]; reissued?: string[] };
     const attached = rep.attached?.length ?? 0;
+    const reissued = rep.reissued?.length ?? 0;
     console.log(dim(`  wired into ${attached} devcontainer network(s), ${rep.refreshed?.length ?? 0} refreshed`));
+    // Only when it happened: a container that already trusted this root is the
+    // normal case and says nothing. A container that did NOT is worth seeing,
+    // because until this ran its HTTPS was failing on the CA signature.
+    if (reissued) console.log(dim(`  root CA reinstalled in ${reissued} devcontainer(s)`));
   } catch (err) {
     console.log(yellow(`[!] Could not wire the gateway into the devcontainer networks: ${(err as Error).message}`));
     console.log(dim('    Existing devcontainers may not reach Huddle until you reconnect them in the portal.'));
