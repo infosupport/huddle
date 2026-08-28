@@ -18,22 +18,27 @@ import { createControlServer } from './control/server';
 import { listDevcontainers, inspectContainer, execInContainer } from './docker';
 import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
 import { sweepExpiredSudoGrants } from './sudo-grant';
-import { createContainerProxy } from './socket-proxy';
+import { registerContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
 import { startAutoSync } from './sandbox/auto-sync';
-import { runtimeEnv } from './runtime-env';
 
-const SOCKET_DIR = runtimeEnv.socketDir;
-
-// Re-create proxy sockets for all existing devcontainers (survives a restart).
+// Learn the devcontainers that already exist (survives a restart).
+//
+// Registering, not listening. The socket a devcontainer mounts has to live on
+// the DOCKER ENGINE's host, and Huddle Node is only on that host when the engine
+// is native — so the gateway creates it and tunnels each connection back to the
+// filter here (control/socket-relay-protocol.ts). What Node still owes the
+// filter is the registry: which names and ids are devcontainers of ours.
 async function initContainerProxies(): Promise<void> {
   try {
     const containers = await listDevcontainers();
     for (const c of containers) {
-      await createContainerProxy(c.name, SOCKET_DIR);
+      await registerContainerProxy(c.name).catch((err: Error) => {
+        console.warn(`[socket-proxy] ${c.name}: ${err.message}`);
+      });
     }
     if (containers.length) {
-      console.log(`[socket-proxy] restored ${containers.length} proxy socket(s)`);
+      console.log(`[socket-proxy] registered ${containers.length} devcontainer(s)`);
     }
   } catch (err: any) {
     console.error('[socket-proxy] init failed:', err.message);

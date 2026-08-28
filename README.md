@@ -62,8 +62,9 @@ split — the half a devcontainer can reach is the half that can do the least.
 Devcontainer
   └─ HTTP/HTTPS traffic → huddle-gateway proxy (port 80, in Docker)
        └─ locally held policy → allow / deny / request
-  └─ Docker socket → /tmp/dc-sockets/<name>/docker.sock (per-container proxy)
-       └─ label isolation + time-limited grant check
+  └─ Docker socket → /tmp/dc-sockets/<name>/docker.sock (served by the gateway)
+       └─ tunnelled to Huddle Node's filter over the control channel
+            └─ label isolation + time-limited grant check
 
 huddle-gateway ──▶ Huddle Node control channel (port 24843, host)
        policy + container feeds in, decisions and audit rows out
@@ -116,6 +117,7 @@ arrives it denies everything. See
 
 ### Docker Socket Proxy
 - Every devcontainer gets its own Unix socket at `/tmp/dc-sockets/<name>/docker.sock`; the per-container *directory* is mounted into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the socket. A file mount of the socket itself would keep seeing the dead old inode after a Huddle restart; a directory mount does not. The old flat path `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created before this change.
+- The socket file is created by the **gateway**, the filter behind it runs on **Huddle Node**. That path has to exist on the Docker *engine's* host, and Huddle Node is only on that host when the engine is native Linux — on Docker Desktop, Rancher and `podman machine` the engine lives in a VM. So the gateway (which is always on the engine) creates the socket and tunnels every connection to Node over the control channel as an HTTP Upgrade; the gateway forwards bytes and decides nothing.
 - Fine-grained permissions per devcontainer, in two classes:
   - **Temporary actions** (mutations: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — only effective while the time-bound grant (1–120 minutes) is active *and* the action toggle is enabled in the portal
   - **Always-allowed actions** (read-only: list/inspect/logs/stats, ping/version/events) — independent of the timer, enabled per action
@@ -222,9 +224,10 @@ If auto-detection ever fails, make sure the `rancher-desktop` context is active
 (`docker context use rancher-desktop`) and that `docker info` works, then re-run
 `huddle init --runtime docker`.
 
-> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used for
-> the per-container proxy sockets) into its VM. The defaults cover this, but if you
-> customized the VM's mounts you may need to add those paths back.
+> Note: Rancher Desktop must share the engine socket path into its VM. The defaults
+> cover this, but if you customized the VM's mounts you may need to add it back.
+> `/tmp/dc-sockets` does *not* need sharing: it lives inside the VM, where both the
+> gateway and the devcontainers see it.
 
 ---
 

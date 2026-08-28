@@ -1,7 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
-import { createContainerProxy } from './socket-proxy';
+import { registerContainerProxy } from './socket-proxy';
 import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
@@ -59,19 +59,42 @@ export function dockerRequest(method: string, path: string, body?: unknown): Pro
 
 // ── IP resolution (proxy use) ────────────────────────────────────────────────
 
-async function fetchContainerMap(): Promise<Map<string, string>> {
+export interface ContainerSnapshot {
+  /** Source address → the container whose rules apply to it. */
+  byIp: Map<string, string>;
+  /** Running devcontainers, by name — the ones a Docker socket is served for. */
+  devcontainers: string[];
+}
+
+/**
+ * One `/containers/json` call, both answers.
+ *
+ * The IP map and the devcontainer list come out of the same listing, and the
+ * gateway polls for both on the same timer — asking Docker twice per poll for
+ * two views of one response would be the only cost of keeping them apart.
+ */
+async function fetchContainerSnapshot(): Promise<ContainerSnapshot> {
   const containers: any[] = await dockerRequest('GET', '/containers/json');
-  const map = new Map<string, string>();
+  const byIp = new Map<string, string>();
+  const devcontainers: string[] = [];
   for (const c of containers) {
     const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
     // Child containers inherit their parent's allowlist: map their IP to the
     // parent container name so proxy rule lookups use the parent's rules.
     const parentName = (c.Labels?.['huddle.parent'] as string | undefined) ?? name;
     for (const net of Object.values<any>(c.NetworkSettings?.Networks ?? {})) {
-      if (net.IPAddress) map.set(net.IPAddress, parentName);
+      if (net.IPAddress) byIp.set(net.IPAddress, parentName);
     }
+    // The same label listDevcontainers filters on. Running only, deliberately:
+    // a stopped devcontainer has nothing to serve a socket to.
+    if (name && c.Labels?.['com.intellij.devcontainer.id']) devcontainers.push(name);
   }
-  return map;
+  devcontainers.sort();
+  return { byIp, devcontainers };
+}
+
+async function fetchContainerMap(): Promise<Map<string, string>> {
+  return (await fetchContainerSnapshot()).byIp;
 }
 
 // The same mapping resolveContainerByIp caches, served whole. Huddle Node hands
@@ -79,6 +102,10 @@ async function fetchContainerMap(): Promise<Map<string, string>> {
 // gateway has no Docker socket to build it from itself.
 export async function containerIpMap(): Promise<Map<string, string>> {
   return fetchContainerMap();
+}
+
+export async function containerSnapshot(): Promise<ContainerSnapshot> {
+  return fetchContainerSnapshot();
 }
 
 export async function resolveContainerByIp(rawIp: string): Promise<string | null> {
@@ -1027,8 +1054,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     console.log(`[huddle] Base image '${imageName}' built successfully`);
   }
 
-  // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
-  await createContainerProxy(containerName, SOCKET_DIR);
+  // Claim the name for the Docker socket filter. The SOCKET itself is created by
+  // the gateway, on the engine host, as soon as its next container feed shows
+  // this container running — which is why the mount below is a directory: the
+  // socket appears inside it a moment later (control/socket-relay-protocol.ts).
+  await registerContainerProxy(containerName);
 
   // JB-specific env (host-config path, JBR/RemoteDev data, java-proxy) is skipped
   // for VS Code; the proxy and user env stay the same.
