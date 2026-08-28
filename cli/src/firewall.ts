@@ -353,11 +353,11 @@ export async function runFirewallFolder(opts: FirewallFolderOptions): Promise<vo
   if (action === 'set') {
     const path = (opts.path ?? '').trim();
     if (!path) throw new Error('Usage: huddle firewall folder set <path>');
-    // Config-only: the gateway reads the folder at the fixed mount point the CLI
-    // binds it to; there is no DB setting. Persist here and mount on restart.
+    // Config-only: Huddle Node reads this file per call, so the new folder is
+    // live immediately — no remount, no restart.
     updateConfig({ firewallRulesFolder: path });
     console.log(green(`[OK] Firewall rules folder set to ${cyan(path)}`));
-    console.log(dim('  Run `huddle restart` to mount it into the gateway; it is then read on start & reload.'));
+    console.log(dim('  Read on start and on `huddle firewall folder reload`.'));
     return;
   }
 
@@ -367,7 +367,9 @@ export async function runFirewallFolder(opts: FirewallFolderOptions): Promise<vo
       {},
     );
     if (!res.mounted) {
-      console.log(dim('No firewall rules folder mounted. Set one with `huddle firewall folder set <path>` and run `huddle restart`.'));
+      console.log(dim(res.folder
+        ? `Cannot read ${res.folder} — set an existing folder with \`huddle firewall folder set <path>\`.`
+        : 'No firewall rules folder configured. Set one with `huddle firewall folder set <path>`.'));
       return;
     }
     console.log(green(`[OK] Reloaded: ${res.groups} group(s), ${res.imported} rule(s), ${res.errors.length} error(s)`));
@@ -382,11 +384,13 @@ export async function runFirewallFolder(opts: FirewallFolderOptions): Promise<vo
       {},
     );
     if (!res.mounted) {
-      console.log(dim('No firewall rules folder mounted. Set one with `huddle firewall folder set <path>` and run `huddle restart`.'));
+      console.log(dim(res.folder
+        ? `Cannot read ${res.folder} — set an existing folder with \`huddle firewall folder set <path>\`.`
+        : 'No firewall rules folder configured. Set one with `huddle firewall folder set <path>`.'));
       return;
     }
     if (res.written === 0 && res.errors.length > 0) {
-      console.error(red('[!] Could not write to the folder — it may still be mounted read-only. Run `huddle restart` to remount it writable.'));
+      console.error(red('[!] Could not write to the folder — check that Huddle Node may write there.'));
       for (const e of res.errors) console.error(red(`  [!] ${e.file}: ${e.message}`));
       return;
     }

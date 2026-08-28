@@ -103,9 +103,13 @@ export interface RuntimeEnv {
   extDir: string;
   /** Where `~/.huddle/config.json` is readable — a bind mount in container mode. */
   homeDir: string;
-  /** Team-managed firewall-rules folder. Absent is fine; callers report "not mounted". */
+  /**
+   * Fallback mount points for the two team-managed folders (#69), for container
+   * mode and for an explicit environment override. In host mode neither is used:
+   * Huddle Node reads both folders straight out of ~/.huddle/config.json, per
+   * call — see firewall-rules-folder.ts and extensions/loader.ts.
+   */
   firewallRulesMount: string;
-  /** Team-managed extensions folder. Absent is fine. */
   teamExtDir: string;
 }
 

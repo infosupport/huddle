@@ -1549,18 +1549,20 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (defaultMemory !== undefined || defaultCpus !== undefined) {
         persisted = setResourceDefaults({ defaultMemory, defaultCpus }) && persisted;
       }
-      // Folder paths are written into the mounted CLI config. They only take
-      // effect after the CLI re-mounts them, so signal that a restart is needed.
-      // `huddle init` passes them to the engine as a `-v` argument WITHOUT a
-      // shell, so they get the same normalizer as every other host path: one
-      // notation in the config file, and no `~` that nothing would expand.
+      // Folder paths are written into the CLI config, which Huddle Node reads
+      // per call — no remount, so the firewall-rules folder is live on the next
+      // reload. Extensions are the exception: they are loaded once at boot, so
+      // pointing at a different folder does need a restart.
+      //
+      // Both go through the host-path normalizer: one notation in the config
+      // file, and no `~` that nothing would expand.
       for (const [key, raw] of [['extensionsFolder', extensionsFolder], ['firewallRulesFolder', firewallRulesFolder]] as const) {
         if (raw === undefined) continue;
         const folder = normalizeHostPath(raw);
         const problem = folder ? hostPathError(folder) : null;   // empty clears the setting
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
-        restartRequired = true;
+        if (key === 'extensionsFolder') restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };

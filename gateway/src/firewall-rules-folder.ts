@@ -12,6 +12,7 @@ import path from 'path';
 import { db, listGroups, logAudit } from './db';
 import { notifyStateChanged } from './events';
 import { runtimeEnv } from './runtime-env';
+import { readHostConfig } from './host-config';
 import {
   serializeGroupEnvelope,
   validateGroupEnvelope,
@@ -24,12 +25,25 @@ import {
   retagGroupAsFolderManaged,
 } from './firewall-group-store';
 
-// The team firewall-rules folder is bound by the CLI to this fixed path inside
-// the gateway (#69). The gateway therefore never resolves the host path itself;
-// the configured host path lives only in the CLI config and is shown in the
-// portal for reference. Read per-call so it is overridable in tests.
+// Where the team firewall-rules folder actually is, for THIS process.
+//
+// It used to be a bind mount at a fixed path inside the gateway (#69), because
+// the gateway could not see the host filesystem. Huddle Node runs ON the host,
+// so it reads the folder where the operator put it and the CLI config is the
+// source of truth. Read per call, and read from the config rather than from an
+// environment variable captured at startup: that is what makes `firewall folder
+// set` (CLI or portal) take effect on the very next reload instead of on the
+// next restart — and a restart would not have helped either, since `huddle init`
+// reuses an already-running Node and never re-applies its environment.
+//
+// Empty is a normal outcome (no folder configured); the callers report it as
+// "not mounted". The environment variable stays as an override for tests and for
+// container mode, where nothing calls this any more.
 export function firewallRulesMount(): string {
-  return process.env.HUDDLE_FIREWALL_RULES_MOUNT?.trim() || runtimeEnv.firewallRulesMount;
+  const override = process.env.HUDDLE_FIREWALL_RULES_MOUNT?.trim();
+  if (override) return override;
+  if (runtimeEnv.hostMode) return readHostConfig().firewallRulesFolder?.trim() || '';
+  return runtimeEnv.firewallRulesMount;
 }
 
 // The *.json entries in the folder, or null when the folder is not mounted at all
@@ -186,9 +200,9 @@ export function reloadFirewallRulesFolder(): FolderReloadSummary {
 //
 // The reverse of reloadFirewallRulesFolder: writes every current group to the
 // folder as a `<slug>.json` envelope, so the folder mirrors what's in the portal.
-// Requires the folder to be mounted read-write (the CLI mounts it `:rw`; an older
-// gateway started with `:ro` needs `huddle restart` first — surfaced via the
-// per-file errors / writable flag). A synced group becomes folder-managed
+// Requires the folder to be writable by the account Huddle Node runs as — a
+// read-only folder is surfaced via the per-file errors / writable flag rather
+// than thrown. A synced group becomes folder-managed
 // (source='startup-folder') so the next reload updates it in place instead of
 // aborting on the "don't overwrite a manual group from the folder" guard.
 

@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
 import { stateEvents } from '../events';
 import { runtimeEnv } from '../runtime-env';
+import { readHostConfig } from '../host-config';
 
 export const EXT_DIR = runtimeEnv.extDir;
 
@@ -225,9 +226,16 @@ function unloadModule(id: string): void {
   }
 }
 
-// Team-managed extensions folder (#69): the CLI binds the configured host
-// folder here, alongside the uploaded extensions in EXT_DIR.
-export const TEAM_EXT_DIR = runtimeEnv.teamExtDir;
+// Team-managed extensions folder (#69), alongside the uploaded extensions in
+// EXT_DIR. Same story as the firewall-rules folder (firewall-rules-folder.ts):
+// it used to be a bind mount at a fixed container path, and Huddle Node reads it
+// on the host straight from the CLI config instead.
+export function teamExtDir(): string {
+  const override = process.env.HUDDLE_EXTENSIONS_MOUNT?.trim();
+  if (override) return override;
+  if (runtimeEnv.hostMode) return readHostConfig().extensionsFolder?.trim() || '';
+  return runtimeEnv.teamExtDir;
+}
 
 export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
   // Defense-in-depth: the id indexes a directory under baseDir, so it must be a
@@ -273,10 +281,11 @@ async function loadExtensionsFrom(baseDir: string): Promise<void> {
 }
 
 export async function loadAllExtensions(): Promise<void> {
-  // Uploaded extensions (EXT_DIR volume) + the team-managed folder the CLI
-  // mounts at TEAM_EXT_DIR. Team folder loads last so a team extension can
-  // override an uploaded one with the same id.
-  for (const baseDir of [EXT_DIR, TEAM_EXT_DIR]) {
+  // Uploaded extensions (EXT_DIR) + the team-managed folder from the CLI config.
+  // Team folder loads last so a team extension can override an uploaded one with
+  // the same id. An unconfigured team folder is '' — loadExtensionsFrom() sees no
+  // such directory and skips it.
+  for (const baseDir of [EXT_DIR, teamExtDir()]) {
     await loadExtensionsFrom(baseDir);
   }
 }
