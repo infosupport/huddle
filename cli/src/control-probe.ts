@@ -19,6 +19,7 @@
 // for the same reason.
 
 import { execFileSync } from 'child_process';
+import os from 'os';
 
 /** How long any single engine call may take before we call it a failure. */
 const PROBE_TIMEOUT_MS = 25_000;
@@ -136,4 +137,57 @@ export function parseDefaultGateway(routeOutput: string | null): string | null {
  */
 export function engineHostAddress(rt: string, image: string): string | null {
   return parseDefaultGateway(runInImage(rt, image, ['--network', 'host'], 'ip', ['-4', 'route', 'show', 'default']));
+}
+
+/**
+ * The other names and addresses a container might reach this machine on, tried
+ * only when the derived one did not answer.
+ *
+ * `host.docker.internal` is not a promise. Rancher Desktop points it at the
+ * WSL distro's own docker0 gateway, which is the distro, not this machine —
+ * measured, and it is what sent us here. So try the aliases other engines
+ * publish, and then the one address that is not a guess at all:
+ *
+ * Rancher Desktop and `podman machine` both route the VM through
+ * gvisor-tap-vsock, which serves 192.168.127.0/24 with the gateway on .1 and
+ * THIS MACHINE on .254 — a userspace forwarder running here, so it reaches the
+ * host loopback exactly like Docker Desktop's alias does. Derived from whatever
+ * gateway the engine reported rather than hardcoded, because the subnet is
+ * configurable.
+ *
+ * Every one of these is a candidate, not an answer: each is probed, and only an
+ * address that replies is used.
+ */
+export function hostCandidateUrls(port: number | string, vmGateway: string | null): string[] {
+  const hosts = ['host.rancher-desktop.internal', 'host.containers.internal'];
+  const octets = vmGateway ? /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(vmGateway) : null;
+  if (octets) hosts.push(`${octets[1]}.254`);
+  return hosts.map((h) => `http://${h}:${port}`);
+}
+
+/** Every IPv4 address this machine actually has, loopback excluded. */
+export function localIpv4Addresses(): string[] {
+  const out: string[] = [];
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+    }
+  }
+  return out;
+}
+
+/**
+ * An address Huddle Node can BIND that the engine can also reach.
+ *
+ * Both halves matter, and the second one is the trap: the engine's default
+ * gateway is not this machine. On Rancher Desktop it is 192.168.127.1, served by
+ * a forwarder — binding it fails with EADDRNOTAVAIL and takes Huddle Node down
+ * with it, which is exactly how a control-channel fix turned into no Huddle at
+ * all. So only ever offer an address this machine really owns, on the same
+ * subnet the engine routes through.
+ */
+export function pickBindAddress(local: string[], vmGateway: string | null): string | null {
+  if (!vmGateway) return null;
+  const prefix = vmGateway.replace(/\.\d+$/, '.');
+  return local.find((a) => a.startsWith(prefix)) ?? null;
 }

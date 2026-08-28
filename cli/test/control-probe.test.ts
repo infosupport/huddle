@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
-import { parseDefaultGateway, parseProbeOutput } from '../src/control-probe';
+import {
+  hostCandidateUrls,
+  parseDefaultGateway,
+  parseProbeOutput,
+  pickBindAddress,
+} from '../src/control-probe';
 
 // The impure half of control-probe.ts spawns containers, so only the parsing is
 // tested here — which is fine, because the parsing is where a wrong answer turns
@@ -66,5 +71,49 @@ describe('parseDefaultGateway', () => {
   it('returns null when the command produced nothing', () => {
     expect(parseDefaultGateway(null)).toBeNull();
     expect(parseDefaultGateway('')).toBeNull();
+  });
+});
+
+describe('hostCandidateUrls', () => {
+  it('derives the gvisor-tap-vsock host address from the engine gateway', () => {
+    // Rancher Desktop and `podman machine` both route the VM through
+    // gvisor-tap-vsock: gateway on .1, this machine on .254.
+    expect(hostCandidateUrls(24843, '192.168.127.1')).toContain('http://192.168.127.254:24843');
+  });
+
+  it('follows the reported subnet rather than assuming 192.168.127', () => {
+    expect(hostCandidateUrls(24843, '10.4.0.1')).toContain('http://10.4.0.254:24843');
+  });
+
+  it('still offers the engine aliases when there is no gateway to derive from', () => {
+    const urls = hostCandidateUrls(24843, null);
+    expect(urls).toContain('http://host.rancher-desktop.internal:24843');
+    expect(urls).toContain('http://host.containers.internal:24843');
+    expect(urls.some((u) => /\d+\.\d+\.\d+\.254/.test(u))).toBe(false);
+  });
+
+  it('never offers host.docker.internal — that is the one already tried', () => {
+    expect(hostCandidateUrls(24843, '192.168.127.1').join(' ')).not.toContain('host.docker.internal');
+  });
+});
+
+describe('pickBindAddress', () => {
+  // The bug this exists to prevent: binding the engine's own gateway. It is not
+  // an address of this machine, so Node dies with EADDRNOTAVAIL at boot and
+  // takes the portal and the API down with it.
+  it('never returns the gateway itself when this machine does not own it', () => {
+    expect(pickBindAddress(['10.0.0.5', '172.30.1.8'], '192.168.127.1')).toBeNull();
+  });
+
+  it('picks the local address on the subnet the engine routes through', () => {
+    expect(pickBindAddress(['10.0.0.5', '192.168.127.7'], '192.168.127.1')).toBe('192.168.127.7');
+  });
+
+  it('has nothing to offer without a gateway to match against', () => {
+    expect(pickBindAddress(['10.0.0.5'], null)).toBeNull();
+  });
+
+  it('does not match a subnet that merely shares a prefix string', () => {
+    expect(pickBindAddress(['192.168.12.9'], '192.168.1.1')).toBeNull();
   });
 });

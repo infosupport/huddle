@@ -18,7 +18,13 @@ import { resolveRuntime } from './runtime';
 import { ResolvedImages, baseImageEnv } from './images';
 import { readConfig, updateConfig } from './config';
 import { bridgeGateway, resolveControlAddress, HOST_ALIAS, type ControlAddress } from './control-address';
-import { engineHostAddress, probeControlUrl } from './control-probe';
+import {
+  engineHostAddress,
+  hostCandidateUrls,
+  localIpv4Addresses,
+  pickBindAddress,
+  probeControlUrl,
+} from './control-probe';
 import {
   DEFAULT_NODE_PORT,
   MissingNodeEntryError,
@@ -118,27 +124,57 @@ async function verifyControlChannel(
     return out;
   }
 
-  console.log(dim(`  ${control.url} did not answer (${first.detail}) — asking the engine for its host address`));
-  const hostIp = engineHostAddress(rt, image);
-  if (!hostIp || hostIp === control.bindHost) {
+  console.log(dim(`  ${control.url} did not answer (${first.detail}) — looking for an address that does`));
+  const vmGateway = engineHostAddress(rt, image);
+
+  // Cheapest first: another way for the container to reach the loopback Node is
+  // already bound to. Nothing restarts, and nothing about how Huddle is exposed
+  // changes — so this is the outcome to want, not merely the quickest one.
+  for (const url of hostCandidateUrls(CONTROL_PORT, vmGateway)) {
+    const probe = probeControlUrl(rt, image, url, network, []);
+    if (!probe.reachable) continue;
+    console.log(dim(`  reachable from a container at ${url} (${probe.detail})`));
+    return {
+      bindHost: control.bindHost,
+      url,
+      runArgs: [],
+      reason: `${HOST_ALIAS} does not reach this machine from ${rt}; ${new URL(url).hostname} does`,
+      reachable: true,
+    };
+  }
+
+  // Nothing reaches loopback, so Huddle Node has to move to an interface the
+  // engine can route to. Only an address this machine actually owns: the
+  // engine's own gateway is not one, and binding it kills Node outright.
+  const bindIp = pickBindAddress(localIpv4Addresses(), vmGateway);
+  if (!bindIp) {
     const out = unreachable(control, first.detail);
-    console.log(dim('    No better address could be found from the engine either.'));
-    console.log(dim('    Name it yourself and re-run init:'));
-    console.log(cyan('      HUDDLE_CONTROL_HOST=<address the container reaches this host on> huddle init'));
+    console.log(dim(`    Tried every address ${rt} suggested${vmGateway ? ` (its gateway is ${vmGateway})` : ''}.`));
+    console.log(dim('    Name one yourself and re-run init:'));
+    console.log(cyan('      HUDDLE_CONTROL_HOST=<address the container reaches this machine on> huddle init'));
     return out;
   }
 
   const moved: ControlAddress = {
-    bindHost: hostIp,
-    url: `http://${hostIp}:${CONTROL_PORT}`,
+    bindHost: bindIp,
+    url: `http://${bindIp}:${CONTROL_PORT}`,
     runArgs: [],
-    reason: `${HOST_ALIAS} does not reach this machine; the engine does, at ${hostIp}`,
+    reason: `${HOST_ALIAS} does not reach this machine; ${rt} routes to it at ${bindIp}`,
     reachable: false,
   };
-  console.log(dim(`  moving the control channel to ${hostIp} and restarting Huddle Node`));
-  if (!(await rebind(hostIp))) {
-    const out = unreachable(moved, 'Huddle Node would not restart');
-    console.log(dim(`    Stop it yourself (its pid is in ${NODE_PID_FILE}) and re-run init.`));
+  console.log(dim(`  moving the control channel to ${bindIp} and restarting Huddle Node`));
+  if (!(await rebind(bindIp))) {
+    // Put it back where it was. A control channel that does not work is a broken
+    // firewall; no Huddle Node at all is a broken machine — no portal, no API,
+    // and init about to hand the gateway a token it cannot read.
+    console.log(yellow(`[!] Huddle Node would not start on ${bindIp} — restoring ${control.bindHost}.`));
+    if (!(await rebind(control.bindHost))) {
+      console.log(red('    It would not start there either. Check the log:'));
+      console.log(cyan(`      ${NODE_LOG_FILE}`));
+    }
+    const out = unreachable(control, first.detail);
+    console.log(dim('    Name an address yourself and re-run init:'));
+    console.log(cyan('      HUDDLE_CONTROL_HOST=<address the container reaches this machine on> huddle init'));
     return out;
   }
 
@@ -149,10 +185,10 @@ async function verifyControlChannel(
   }
 
   const out = unreachable(moved, second.detail);
-  console.log(dim('    The address is right — the engine routes to this machine there — so'));
-  console.log(dim('    something on this machine is dropping the connection. On Windows that'));
-  console.log(dim('    is Defender Firewall: allow inbound TCP ' + CONTROL_PORT + ' for node.exe'));
-  console.log(dim('    on the adapter Huddle just bound. Nothing needs re-running afterwards.'));
+  console.log(dim(`    ${rt} routes to this machine at ${bindIp} and Huddle Node is bound there,`));
+  console.log(dim('    so something here is dropping the connection. On Windows that is Defender'));
+  console.log(dim(`    Firewall: allow inbound TCP ${CONTROL_PORT} for node.exe on that adapter.`));
+  console.log(dim('    Nothing needs re-running afterwards — the gateway keeps retrying.'));
   return out;
 }
 
@@ -357,8 +393,14 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
       await new Promise((r) => setTimeout(r, 250));
     }
     if (await pingNode(HOST_PORT)) return false;
-    node = await startNodeDetached({ port: HOST_PORT, controlHost: bindHost, operatorToken, extraEnv });
-    return true;
+    try {
+      node = await startNodeDetached({ port: HOST_PORT, controlHost: bindHost, operatorToken, extraEnv });
+      return true;
+    } catch {
+      // Reported by the caller, which knows whether this was the move or the
+      // rollback. Throwing here would abort init with Huddle Node already down.
+      return false;
+    }
   });
 
   // Huddle Node persists the token it generated on first boot; from here on the
