@@ -1,7 +1,7 @@
 # Identifying a Docker Sandbox at the Huddle gateway
 
-Status: **proposed** — gated on the experiment in section 6, which has not been
-run yet. Nothing here is implemented.
+Status: **accepted** — the experiment in section 6 ran on 2026-08-30 and confirms
+the mechanism. Nothing is implemented yet.
 Branch: `feat/sbx-sandboxes-rebased`.
 
 Goal: set the sbx network policy to allow-all outbound and make the Huddle
@@ -103,40 +103,38 @@ Only the URL needs a per-box secret. The mechanism is in place.
 identity advisory: anything that omits the credential would receive the widest
 rights in the system, which is the opposite of what this ADR is for.
 
-## 4. The restart hazard, and the mitigation
+## 4. The restart question, and what we keep anyway
 
-"…or restart" is the sharp edge. A restarting sandbox re-reads the *current*
-global setting, which by then holds the most recently created box's credential.
-Box A restarts and presents box B's identity. The gateway believes it, and A
-inherits B's rules.
+"…or restart" in that sentence is what made this look dangerous. A restarting
+sandbox re-reading the *current* global value would come back holding the most
+recently created box's credential — box A restarts, presents box B's identity,
+and the gateway believes it. That does not fail; it silently succeeds as the
+wrong box, which is worse than a denial.
 
-This does not fail — it silently succeeds as the wrong box. That is worse than a
-denial, and it is not a corner case: **Huddle does not restart sandboxes.**
-`sandbox/ops.ts` exposes `create` and `remove` and no start/stop/restart, so
-every restart is out-of-band by construction.
+**It does not happen.** Measured 2026-08-30: box A was stopped while the global
+setting held box B's credential, brought back, and still presented `secret-a` —
+on the request we sent and on its own background traffic afterwards. The
+credential is fixed at create and a restart does not revisit it.
 
-Worse than out-of-band: nobody ever says "restart". `sbx --help` (checked
-2026-08-30) has `stop` and no `start` and no `restart` — a stopped sandbox comes
-back the moment someone uses it again. So the re-read of the global setting is
-not an operator action we could hook, it is a side effect of `sbx exec`. There
-is no point at which Huddle could set the right credential first, which is why
-the mitigation cannot be "own the restart path".
+Two reasons not to close the question on that alone. The documentation says the
+opposite of what we measured, so one of the two is describing a case the other
+does not cover. And sbx has `stop` and no `start` and no `restart` (`sbx --help`,
+2026-08-30) — a stopped sandbox returns when someone next uses it, so the only
+restart we *can* drive is that one. A sandboxd restart or a reboot re-enters
+through a path we have not exercised. `sbx-identity-test.mjs --daemon` covers the
+daemon case; a reboot stays untested.
 
-Two measures, both required:
+So the mitigation stays, demoted from required to cheap:
 
-1. **Reset to an unclaimed credential after every create.** Huddle sets
-   `proxy.sandbox` back to a URL whose credential maps to no sandbox. An
-   out-of-band restart then presents an identity the gateway does not know, and
-   is denied with a message naming the cause — instead of impersonating the last
-   box created. This makes the failure mode safe without Huddle needing to own
-   the restart path.
-2. **Serialise sandbox creation.** A global key plus set-then-create is a race;
-   `sbx.ts` has no lock today. Two concurrent creates can hand both boxes the
-   same identity, or swap them.
-
-A later step may add a Huddle-driven restart that sets the right credential
-first. That is an improvement, not a substitute: measure 1 has to hold for
-restarts Huddle never sees.
+1. **Reset to an unclaimed credential after every create.** One extra
+   `sbx settings set` per sandbox. If some restart path we have not hit does
+   re-read the global value, it finds a credential mapping to no sandbox and is
+   denied with a readable message, instead of impersonating the last box created.
+   The price is one command; the thing it prevents is silent privilege transfer.
+2. **Serialise sandbox creation.** This one is not about restarts and is not
+   optional: a global key plus set-then-create is a race, and `sbx.ts` has no
+   lock today. Two concurrent creates can hand both boxes the same identity, or
+   swap them.
 
 ## 5. What changes where
 
@@ -149,43 +147,39 @@ restarts Huddle never sees.
 | 5 | rules + portal | Sandboxes as a rule scope alongside containers, so a blocked domain is filed against the box that asked and path rules work per sandbox. |
 | 6 | sbx policy | **Last.** Set the network policy to allow-all, once 1–5 demonstrably work. |
 
-## 6. What has to be measured first
+## 6. What was measured
 
-Two questions decide whether any of this is buildable, and both are about sbx's
-behaviour rather than ours. `sbx-identity-test.mjs` answers them in one run: it
-stands up a listener that enforces nothing and only records the credential it
-was shown, creates two sandboxes with different credentials, curls from each,
-then stops the first and curls again to bring it back.
+`sbx-identity-test.mjs` stands up a listener that enforces nothing and only
+records the credential it was shown, creates two sandboxes with different
+credentials, curls from each to its own destination, then stops the first and
+curls again to bring it back. Run on 2026-08-30:
 
-Two things it has to get right, both learned by getting them wrong. Each box
-curls its **own** destination, because a sandbox calls out on its own and
-attributing hits to whatever phase was running counts that background traffic as
-the answer. And each destination is allowed in that box's sbx policy first,
-because otherwise sbx returns 403 on its own and the request never arrives —
-which reads as "no identity" when nothing was measured at all.
+```
+curl huddle-probe-a        example.com   huddle-probe-a:secret-a
+curl huddle-probe-b        example.org   huddle-probe-b:secret-b
+curl huddle-probe-a na herstart  example.net   huddle-probe-a:secret-a
+```
 
-1. **Does the credential arrive, per box, on CONNECT?** Two boxes presenting
-   their own distinct credentials means the URL really is baked in at create and
-   section 3 holds. Both presenting the *same* credential means the daemon reads
-   the global setting live, and this channel is not an identity either — at which
-   point there is no known mechanism left and the task needs a different plan.
-2. **What does a restarted box present?** If it keeps its own credential, the
-   mitigation in section 4 is unnecessary. If it adopts the current global value,
-   measure 1 is mandatory before anything ships.
+Both boxes present their own credential, and box A keeps it across a restart
+while the global setting says otherwise. Section 3 holds.
 
-The script saves and restores the operator's existing `proxy.sandbox` on the way
-out, including on failure: it is one setting for the whole machine, and a
-sandbox created while it points at a dead port reaches nothing.
+Three things the experiment had to get right, each learned by getting it wrong
+first, and each worth keeping in mind before trusting a future run:
 
-### 6.1 Measured so far
+- **Each box curls its own destination.** A sandbox calls out on its own —
+  `api.anthropic.com`, continuously — and attributing hits to whatever phase was
+  running counts that background traffic as the answer.
+- **The destination is allowed in that box's sbx policy first.** Otherwise sbx
+  returns 403 by itself and the request never arrives, which reads as "no
+  identity" when nothing was measured at all.
+- **`proxy.sandbox` is restored on the way out, and never restored to our own
+  probe URL.** It is one setting for the whole machine; a sandbox created while
+  it points at a dead port reaches nothing.
 
-Background traffic settles the question about half way. During the first run the
-sandboxes' own calls to `api.anthropic.com` carried `secret-a` while box A was
-the only one alive, and `secret-b` after box B was created — including hits that
-arrived while the global setting had already moved on. A credential that
-outlives the setting that produced it is a credential that was baked in. What is
-still missing is the same evidence from a request we control, and the answer to
-the restart question.
+The background traffic is worth a note of its own, because it is the strongest
+single piece of evidence: box A's calls carried `secret-a` while the global
+setting had already moved to box B. A credential that outlives the setting that
+produced it was baked in.
 
 ## 7. Scope of the guarantee
 

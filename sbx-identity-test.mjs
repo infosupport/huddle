@@ -10,6 +10,8 @@
 //
 // --keep       ruimt de testsandboxen niet op
 // --no-restart slaat de herstart-fase over
+// --daemon     herstart ook sandboxd (de enige herstart die nog onbeproefd is;
+//              raakt AL je sandboxen, dus alleen als je dat wil)
 //
 // SBX_BIN wijst naar een andere sbx (of naar een stub, om het script zelf te
 // beproeven zonder sandboxen aan te maken).
@@ -42,6 +44,9 @@ const BOXES = [
 // Aparte bestemming voor de herstart, zodat die hit niet op één hoop valt met de
 // eerste curl van doos A.
 const RESTART_TARGET = 'example.net';
+// Weer een eigen bestemming: anders valt de hit na een daemon-herstart samen met
+// die van de gewone herstart en weet je niet welke van de twee je leest.
+const DAEMON_TARGET = 'example.edu';
 
 // Zelfde ontsnapping als ops.ts (HUDDLE_SBX_BIN), zodat dit script tegen een stub
 // gedraaid kan worden.
@@ -196,6 +201,22 @@ async function main() {
         console.log((help.out || help.err).trim().split('\n').map((l) => `     ${l}`).join('\n'));
       }
     }
+    // Fase 4 — de herstart die we NIET met stop/exec te pakken krijgen. Een doos
+    // houdt zijn credential over een gewone herstart heen; of dat ook geldt als
+    // sandboxd zelf opnieuw begint, is de laatste open vraag. Opt-in: dit raakt
+    // elke sandbox op de machine, niet alleen de onze.
+    if (flag('--daemon')) {
+      const a = BOXES[0];
+      console.log(`\n[4] sandboxd herstarten, dan opnieuw ${a.name}`);
+      if (await restartDaemon()) {
+        phase = `curl ${a.name} na daemon`;
+        await curlFrom(a, DAEMON_TARGET);
+      } else {
+        console.log('   ! sandboxd niet herstart — fase 4 overgeslagen');
+        const help = await sbx(['daemon', '--help'], { quiet: true });
+        console.log((help.out || help.err).trim().split('\n').map((l) => `     ${l}`).join('\n'));
+      }
+    }
   } catch (err) {
     console.log(`\nAFGEBROKEN: ${err.message}`);
   } finally {
@@ -215,6 +236,17 @@ async function main() {
  */
 async function restart(name) {
   return (await sbx(['stop', name], { quiet: true })).code === 0;
+}
+
+/** `sbx daemon` beheert sandboxd; welk werkwoord dat doet is niet gedocumenteerd. */
+async function restartDaemon() {
+  for (const argv of [['daemon', 'restart'], ['daemon', 'stop']]) {
+    const r = await sbx(argv, { quiet: true });
+    if (r.code !== 0) continue;
+    if (argv[1] === 'restart') return true;
+    if ((await sbx(['daemon', 'start'], { quiet: true })).code === 0) return true;
+  }
+  return false;
 }
 
 /**
@@ -249,7 +281,7 @@ async function restore(original) {
 // ── wat we ervan leren ───────────────────────────────────────────────────────
 
 function verdict() {
-  const mine = new Set([...BOXES.map((b) => b.target), RESTART_TARGET]);
+  const mine = new Set([...BOXES.map((b) => b.target), RESTART_TARGET, DAEMON_TARGET]);
 
   console.log('\n─── waargenomen ────────────────────────────────────────────');
   if (!hits.length) {
@@ -270,6 +302,7 @@ function verdict() {
   const credFor = (host) => hits.filter((h) => h.host === host && h.credential).at(-1) ?? null;
   const [a, b] = BOXES;
   const ha = credFor(a.target), hb = credFor(b.target), hr = credFor(RESTART_TARGET);
+  const hd = credFor(DAEMON_TARGET);
   const want = (x) => `${x.user}:${x.pass}`;
 
   console.log('\n─── conclusie ──────────────────────────────────────────────');
@@ -294,11 +327,19 @@ function verdict() {
 
   if (hr) {
     console.log(`\n  na herstart van ${a.name} (${RESTART_TARGET}): ${hr.credential}`);
-    if (hr.credential === want(a)) console.log('  → Herstart behoudt de identiteit. Geen mitigatie nodig.');
-    else {
+    if (hr.credential === want(a)) {
+      console.log('  → Herstart behoudt de identiteit; de doos leest de globale instelling');
+      console.log('    niet opnieuw. Draai met --daemon voor de herstart die dit nog niet dekt.');
+    } else {
       console.log(`  → Herstart neemt de globale waarde over (${hr.credential}). De unclaimed-`);
       console.log('    mitigatie uit de ADR is verplicht: dit is stille overname van rechten.');
     }
+  }
+
+  if (hd) {
+    console.log(`\n  na herstart van sandboxd (${DAEMON_TARGET}): ${hd.credential}`);
+    if (hd.credential === want(a)) console.log('  → Ook een daemon-herstart behoudt de identiteit.');
+    else console.log(`  → sandboxd deelt na een herstart de globale waarde uit (${hd.credential}).`);
   }
 }
 
