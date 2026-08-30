@@ -1,27 +1,37 @@
-// ── Rule reconciliation (Huddle → sbx policy), one-way ────────────────────────
-// Huddle's SQLite `rules` table is the SINGLE SOURCE OF TRUTH. In sbx mode we
-// PROJECT that ruleset into sbx's own policy engine and let sbx enforce
-// per-sandbox. The sync is strictly one-way and reconciled on drift:
+// ── sbx policy reconciliation: one allow-all rule per Huddle sandbox ──────────
+// Huddle-managed sandboxes are ALLOW-ALL in sbx and every egress decision is
+// taken at Huddle's proxy, which can now attribute a request to one box by the
+// credential its upstream-proxy URL carries (docs/ADR-sbx-identity.md §6).
 //
-//   • a rule in Huddle but missing in sbx → CREATE it in sbx
-//   • a rule in sbx but not in Huddle     → DELETE it from sbx (drift)
+// This file used to mirror Huddle's whole ruleset into sbx' own policy engine.
+// That existed because the proxy could not tell boxes apart, and it cost path
+// rules entirely — sbx policy is domain-level, so a path rule could only ever be
+// enforced fleet-wide or not at all. With identity in place the second engine
+// buys nothing, so sbx gets out of the way and Huddle becomes the single
+// enforcement point, with one audit trail and one place to approve a domain.
 //
-// See docs/ADR-workspace-runtime-abstraction.md §4. Honest limits enforced here:
-//   • sbx policy is DOMAIN-LEVEL ONLY (no path patterns). Path-mode rules are
-//     therefore NOT projected — they are reported as `notProjected` so the UI can
-//     surface them honestly as "enforced fleet-wide at Huddle's proxy, not sbx".
-//   • per the ADR, path rules are only meaningful GLOBALLY in sbx mode; we never
-//     invent per-sandbox path attribution that sbx cannot express.
+// Per Huddle-managed sandbox, reconciliation now keeps exactly one rule —
+// `allow *` — and clears what the old projection left behind:
+//
+//   • no allow-all rule             → CREATE it
+//   • more than one allow-all rule  → DELETE the extras
+//   • a target Huddle projected here → DELETE it (stale)
+//
+// Two things it must never do: touch the GLOBAL scope, and touch a rule an
+// operator wrote by hand. A machine can hold sandboxes Huddle did not create;
+// widening their policy — or the whole machine's — is not ours to do.
+//
+// Allow-all only holds together with per-box identity: it removes the premise
+// the proxy's fleet merge rested on, so the two land in the same release (ADR §6).
 
 import { db } from '../db';
 import * as ops from './ops';
 import type { ActualPolicyRule } from './ops';
-import { type Scope, type PolicyRule } from './protocol';
-import { projectRules, scopeKey, ruleKey, type HuddleRuleRow, type SkippedRule } from './projection';
-import { setKnownSandboxes } from './registry';
+import { isValidSandboxName, type Scope } from './protocol';
+import { hasSandboxIdentity } from './registry';
 
-export type { HuddleRuleRow, SkippedRule } from './projection';
-export { projectRules } from './projection';
+/** sbx' wildcard network target — the single rule Huddle authors per sandbox. */
+export const ALLOW_ALL_TARGET = '*';
 
 export interface ReconcileAction {
   op: 'create' | 'delete';
@@ -35,58 +45,77 @@ export interface ReconcileAction {
 export interface ReconcileReport {
   ok: boolean;
   dryRun: boolean;
-  desired: number;
+  /** The sandboxes Huddle manages, i.e. the ones this run was allowed to touch. */
+  sandboxes: string[];
   created: number;
   deleted: number;
   failed: number;
   actions: ReconcileAction[];
-  /** Path-mode rules that sbx cannot express — enforced at Huddle's proxy instead. */
-  notProjected: SkippedRule[];
-  /** Rules skipped for another reason (invalid target/name, expired, requested). */
-  skipped: SkippedRule[];
-  sandboxes: string[];
   error?: string;
 }
 
-/** Read every enforceable rule straight from the source of truth. */
-function readHuddleRules(): HuddleRuleRow[] {
-  // Defensive column list — path_pattern/path_mode/expires_at are migration-added.
-  const rows = db
-    .prepare(
-      `SELECT domain,
-              container_id,
-              status,
-              COALESCE(path_pattern, NULL) AS path_pattern,
-              COALESCE(path_mode, 0)       AS path_mode,
-              COALESCE(expires_at, NULL)   AS expires_at
-         FROM rules`
-    )
-    .all() as HuddleRuleRow[];
-  return rows;
+/**
+ * The sandboxes Huddle created. `sbx ls` says what exists on the machine; the
+ * identity minted at create (registry.ts, ADR §7.1) says which of those are
+ * ours. A box Huddle never created has no identity row and keeps its own policy.
+ *
+ * Existence is the whole question here, so ask the predicate: the reconciler has
+ * no use for a sandbox' secret and should not be a place one can be read from.
+ */
+async function managedSandboxes(): Promise<string[]> {
+  const all = await ops.list();
+  return all.map((s) => s.name).filter((name) => isValidSandboxName(name) && hasSandboxIdentity(name));
+}
+
+/** Normalise like parsePolicyLsJson does, so `host:443` matches a bare host. */
+function normalizeTarget(t: string): string {
+  return t.trim().toLowerCase().replace(/:\d+$/, '');
 }
 
 /**
- * Compute and (unless dryRun) apply the one-way projection. Never throws for an
- * enforcement gap — everything is captured in the report so the UI/CLI can be
- * honest about what synced and what could not.
+ * Per sandbox, the targets HUDDLE put in its sbx policy — everything else there
+ * is the operator's and stays. An sbx rule carries no author, so Huddle's own
+ * ruleset is the only fingerprint there is: the old projection wrote a box' own
+ * allow/deny domains into that box' scope, and nothing else.
+ *
+ * The gap this leaves is deliberate rather than hidden: a rule already deleted
+ * from Huddle's table is no longer recognisable and its sbx rule stays behind.
+ * A leftover allow is inert under allow-all; a leftover deny is not, and shows
+ * up as sbx refusing traffic Huddle permits.
+ */
+function projectedTargets(managed: Set<string>): Map<string, Set<string>> {
+  const rows = db
+    .prepare(`SELECT domain, container_id FROM rules WHERE status IN ('allow','deny')`)
+    .all() as { domain: string; container_id: string | null }[];
+  const out = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!r.container_id || !managed.has(r.container_id)) continue;
+    let set = out.get(r.container_id);
+    if (!set) out.set(r.container_id, (set = new Set<string>()));
+    set.add(normalizeTarget(r.domain));
+  }
+  return out;
+}
+
+/**
+ * Converge every Huddle-managed sandbox on a single allow-all rule. Idempotent:
+ * a second run over an already-converged machine performs no sbx call that
+ * mutates. Never throws for an enforcement gap — everything lands in the report,
+ * so the UI/CLI can be honest about what happened.
  */
 export async function reconcile(opts: { dryRun?: boolean } = {}): Promise<ReconcileReport> {
   const dryRun = !!opts.dryRun;
-  const nowSec = Math.floor(Date.now() / 1000);
   const report: ReconcileReport = {
     ok: false,
     dryRun,
-    desired: 0,
+    sandboxes: [],
     created: 0,
     deleted: 0,
     failed: 0,
     actions: [],
-    notProjected: [],
-    skipped: [],
-    sandboxes: [],
   };
 
-  // Verify sbx is reachable (through the mailbox) before we do anything mutating.
+  // Is sbx there at all? Ask before anything mutating.
   try {
     await ops.version();
   } catch (err) {
@@ -94,74 +123,113 @@ export async function reconcile(opts: { dryRun?: boolean } = {}): Promise<Reconc
     return report;
   }
 
-  // Which sandboxes exist? Global rules → sbx global; each sandbox's own rules →
-  // that sandbox's sbx policy. We reconcile the global scope + every live sandbox.
-  const sandboxNames = new Set<string>();
+  // Without the box list we would not know whose policy we are editing, so a
+  // failed `sbx ls` aborts rather than falling back to a wider scope.
+  let names: string[];
   try {
-    for (const s of await ops.list()) sandboxNames.add(s.name);
-  } catch {
-    /* sbx ls may fail — reconcile global only */
+    names = await managedSandboxes();
+  } catch (err) {
+    report.error = (err as Error).message;
+    return report;
   }
-  setKnownSandboxes(sandboxNames);
+  report.sandboxes = names;
+  if (names.length === 0) {
+    report.ok = true;
+    return report;
+  }
 
-  const { desired, notProjected, skipped } = projectRules(readHuddleRules(), nowSec, sandboxNames);
-  report.desired = desired.size;
-  report.notProjected = notProjected;
-  report.skipped = skipped;
-
-  report.sandboxes = [...sandboxNames];
-
-  // Read the actual sbx policy in one call (`sbx policy ls --json`). Keyed by
-  // scope|action|target (port stripped so host:443 matches a bare host). Only
-  // scopes Huddle projects (global + known sandboxes) are considered — never
-  // touch rules for other sandboxes or non-editable org/system rules.
-  const actual = new Map<string, ActualPolicyRule>();
+  let actual: ActualPolicyRule[];
   try {
-    for (const rule of await ops.policyListAll()) {
-      if (rule.scope.kind === 'sandbox' && !sandboxNames.has(rule.scope.name)) continue;
-      actual.set(ruleKey(rule.action, rule.target, rule.scope), rule);
-    }
+    actual = await ops.policyListAll();
   } catch (err) {
     report.error = (err as Error).message; // can't diff safely → abort (don't blind-create)
     return report;
   }
 
-  // CREATE: desired \ actual
-  for (const [key, rule] of desired) {
-    if (actual.has(key)) continue;
-    if (dryRun) {
-      report.actions.push({ op: 'create', action: rule.action, target: rule.target, scope: rule.scope, ok: true });
-      report.created++;
-      continue;
-    }
-    try {
-      await ops.policySet({ scope: rule.scope, action: rule.action, target: rule.target });
-      report.actions.push({ op: 'create', action: rule.action, target: rule.target, scope: rule.scope, ok: true });
-      report.created++;
-    } catch (err) {
-      report.actions.push({ op: 'create', action: rule.action, target: rule.target, scope: rule.scope, ok: false, error: (err as Error).message });
-      report.failed++;
-    }
-  }
+  const projected = projectedTargets(new Set(names));
 
-  // DELETE: actual \ desired (drift — sbx has a rule Huddle does not author)
-  for (const [key, rule] of actual) {
-    if (desired.has(key)) continue;
-    if (dryRun) {
-      report.actions.push({ op: 'delete', action: rule.action, target: rule.target, scope: rule.scope, ok: true });
-      report.deleted++;
-      continue;
+  for (const name of names) {
+    const scope: Scope = { kind: 'sandbox', name };
+    // parsePolicyLsJson has already dropped org/system and inactive rules, which
+    // is what keeps an operator's non-editable policy out of reach here.
+    const mine = actual.filter((r) => r.scope.kind === 'sandbox' && r.scope.name === name);
+    const allowAll = mine.filter((r) => r.action === 'allow' && r.target === ALLOW_ALL_TARGET);
+    const keepId = allowAll.length > 0 ? allowAll[0].id : null;
+
+    if (keepId === null) {
+      await create(report, dryRun, scope);
     }
-    try {
-      await ops.policyRemove(rule.id, rule.scope);
-      report.actions.push({ op: 'delete', action: rule.action, target: rule.target, scope: rule.scope, ok: true });
-      report.deleted++;
-    } catch (err) {
-      report.actions.push({ op: 'delete', action: rule.action, target: rule.target, scope: rule.scope, ok: false, error: (err as Error).message });
-      report.failed++;
+
+    // A `deny *` is not the mirror of our rule — it is an operator locking the box
+    // down, and dropping it would widen the box without anyone asking.
+    const ours = (r: ActualPolicyRule): boolean =>
+      (r.action === 'allow' && r.target === ALLOW_ALL_TARGET) ||
+      projected.get(name)?.has(r.target) === true;
+
+    // sbx removes a rule by ID and one rule can list several targets, so an ID is
+    // only ours to delete when every target under it is — otherwise the
+    // operator's target would go with it.
+    const byId = new Map<string, ActualPolicyRule[]>();
+    for (const r of mine) {
+      const list = byId.get(r.id);
+      if (list) list.push(r);
+      else byId.set(r.id, [r]);
+    }
+    for (const [id, rules] of byId) {
+      if (id === keepId) continue;
+      if (!rules.every(ours)) continue;
+      await remove(report, dryRun, id, rules, scope);
     }
   }
 
   report.ok = report.failed === 0;
   return report;
+}
+
+async function create(report: ReconcileReport, dryRun: boolean, scope: Scope): Promise<void> {
+  const act: ReconcileAction = { op: 'create', action: 'allow', target: ALLOW_ALL_TARGET, scope, ok: true };
+  if (dryRun) {
+    report.actions.push(act);
+    report.created++;
+    return;
+  }
+  try {
+    await ops.policySet({ scope, action: 'allow', target: ALLOW_ALL_TARGET });
+    report.actions.push(act);
+    report.created++;
+  } catch (err) {
+    report.actions.push({ ...act, ok: false, error: (err as Error).message });
+    report.failed++;
+  }
+}
+
+async function remove(
+  report: ReconcileReport,
+  dryRun: boolean,
+  id: string,
+  rules: ActualPolicyRule[],
+  scope: Scope
+): Promise<void> {
+  // One action per sbx rule ID, listing every target that ID carried — the call
+  // takes the ID, so reporting per target would claim calls we never made.
+  const act: ReconcileAction = {
+    op: 'delete',
+    action: rules[0].action,
+    target: rules.map((r) => r.target).join(', '),
+    scope,
+    ok: true,
+  };
+  if (dryRun) {
+    report.actions.push(act);
+    report.deleted++;
+    return;
+  }
+  try {
+    await ops.policyRemove(id, scope);
+    report.actions.push(act);
+    report.deleted++;
+  } catch (err) {
+    report.actions.push({ ...act, ok: false, error: (err as Error).message });
+    report.failed++;
+  }
 }

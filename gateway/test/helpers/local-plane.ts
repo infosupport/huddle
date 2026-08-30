@@ -26,6 +26,8 @@ import type { ControlPlane } from '../../src/control/plane';
 export interface LocalPlaneOptions {
   /** The IP→container map the plane answers from. Most suites need none. */
   containersByIp?: Record<string, string>;
+  /** sha256(secret) → sandbox name, as the container feed carries it. */
+  sandboxAuth?: Record<string, string>;
   /** Injected clock, unix seconds — for expiry tests. */
   nowSeconds?: () => number;
 }
@@ -48,6 +50,7 @@ export async function createLocalPlane(opts: LocalPlaneOptions = {}): Promise<Lo
 
   let applied: unknown = null;
   const containers = opts.containersByIp ?? {};
+  const sandboxAuth = opts.sandboxAuth ?? {};
 
   const json = (body: unknown, status = 200): Response =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -58,7 +61,11 @@ export async function createLocalPlane(opts: LocalPlaneOptions = {}): Promise<Lo
     const url = String(input);
     if (url.endsWith('/control/policy')) return json(buildPolicyFeed());
     if (url.endsWith('/control/containers')) {
-      return json({ version: feedVersion(JSON.stringify(containers)), byIp: containers });
+      return json({
+        version: feedVersion(JSON.stringify({ containers, sandboxAuth })),
+        byIp: containers,
+        sandboxAuth,
+      });
     }
     if (url.endsWith('/control/report')) {
       applied = applyReport(JSON.parse(String(init?.body ?? '{}')));

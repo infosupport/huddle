@@ -129,23 +129,14 @@ export interface SbxReconcileAction {
   error?: string;
 }
 
-export interface SbxSkippedRule {
-  domain: string;
-  container_id: string | null;
-  reason: string;
-}
-
 export interface SbxReconcileReport {
   ok: boolean;
   dryRun: boolean;
-  desired: number;
+  sandboxes: string[];
   created: number;
   deleted: number;
   failed: number;
   actions: SbxReconcileAction[];
-  notProjected: SbxSkippedRule[];
-  skipped: SbxSkippedRule[];
-  sandboxes: string[];
   error?: string;
 }
 

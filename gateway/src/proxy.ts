@@ -7,6 +7,7 @@ import zlib from 'zlib';
 import { URL } from 'url';
 import { canonicalizeHost, normalizePathname } from './rule-match';
 import { SBX_PROXY_PORT } from './sbx-upstream';
+import { parseProxyAuthorization, sandboxContainerId, UNCLAIMED_SANDBOX } from './sbx-identity';
 import { controlPlane } from './control/plane';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from './token-exchange';
@@ -20,10 +21,9 @@ import { isPublicSelfEndpoint, isSelfHost } from './proxy-self';
 // on every call, so a swapped binding takes effect without rebinding here.
 const {
   checkRule,
-  checkFleetRule,
   isPathMode,
-  knownSandboxNames,
   resolveContainerByIp,
+  resolveSandboxBySecret,
   logAudit,
   updateAuditResponse,
   reportSudoAudit,
@@ -44,15 +44,18 @@ const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
 function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
 
-// Hop-by-hop proxy headers that must never reach upstream: proxy-connection and
-// the reusable proxy credential proxy-authorization.
+// Hop-by-hop proxy headers that must never reach upstream: proxy-connection, and
+// proxy-authorization — which authenticates the hop TO US (it is how a sandbox
+// is identified, see identifySandbox) and is meant for nobody behind us.
 function stripProxyHeaders(h: http.OutgoingHttpHeaders): void {
   delete h['proxy-connection'];
   delete h['proxy-authorization'];
 }
 
-// Serialize request headers for the audit log with the reusable proxy credential
-// redacted, so it is never persisted in the network log.
+// Serialize request headers for the audit log with the proxy credential redacted,
+// so it is never persisted in the network log. Every path that logs REQUEST
+// headers goes through this: on the sbx listener that credential is a sandbox'
+// identity, and an audit log is exactly the wrong place to keep one.
 function auditReqHeaders(h: http.IncomingHttpHeaders): string {
   return h['proxy-authorization'] === undefined
     ? headersToJson(h)
@@ -84,14 +87,14 @@ function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string
   }
 }
 
-function send403(res: http.ServerResponse, domain: string, status: string, containerId?: string | null): void {
+function send403(res: http.ServerResponse, domain: string, status: string, containerId?: string | null, reason?: string): void {
   const body = JSON.stringify({
     error: 'REQUEST_BLOCKED_BY_HUDDLE',
     message: 'This request is blocked by Huddle security policy.',
     blockedEndpoint: domain,
-    reason: status === 'requested'
+    reason: reason ?? (status === 'requested'
       ? 'This endpoint has not yet been approved for this devcontainer.'
-      : 'This endpoint is denied by a firewall rule.',
+      : 'This endpoint is denied by a firewall rule.'),
     actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
     devcontainerId: containerId ?? undefined,
     huddlePortal: 'http://localhost:3000',
@@ -169,14 +172,14 @@ const REJECT_REASON: Record<number, string> = {
   502: 'Bad Gateway', 504: 'Gateway Timeout',
 };
 
-function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string, domain: string, containerId?: string | null): void {
+function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string, domain: string, containerId?: string | null, reason?: string): void {
   const body = JSON.stringify({
     error: 'REQUEST_BLOCKED_BY_HUDDLE',
     message: 'This request is blocked by Huddle security policy.',
     blockedEndpoint: domain,
-    reason: blockStatus === 'requested'
+    reason: reason ?? (blockStatus === 'requested'
       ? 'This endpoint has not yet been approved for this devcontainer.'
-      : 'This endpoint is denied by a firewall rule.',
+      : 'This endpoint is denied by a firewall rule.'),
     actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
     devcontainerId: containerId ?? undefined,
     huddlePortal: 'http://localhost:3000',
@@ -398,22 +401,66 @@ function handleTokenExchangeResponse(
   });
 }
 
+// ── Which sandbox is calling ─────────────────────────────────────────────────
+//
+// The gateway never talks to a sandbox: it talks to the host-side sbx daemon,
+// which terminates and rewrites, so every box arrives on one socket and nothing
+// set inside a box survives the trip. The credential in the daemon's
+// upstream-proxy URL does survive — it is the hop's own authentication, baked
+// in when the box was created — and that is what names the caller here.
+// See sbx-identity.ts and docs/ADR-sbx-identity.md.
+
+/** A sandbox recognised by its proxy credential, or why it was not. */
+type SbxIdentity = { containerId: string; denied?: undefined } | { containerId?: undefined; denied: string };
+
+// A sandbox name is `[a-z0-9-]`-ish, but this one came off the wire and is only
+// ever shown back to the operator — so it is echoed as sanitized, bounded text.
+function shownName(raw: string): string {
+  const clean = raw.replace(/[^\w.-]/g, '');
+  return clean.slice(0, 64) || '(empty)';
+}
+
+// There is no wider rule set to fall back to, and that is the point: sbx is set
+// to allow-all outbound, so this gateway is the only thing between a sandbox and
+// the internet (ADR §6). A credential we cannot place is a request we cannot
+// attribute, and the only safe answer to that is no — said in words an operator
+// can act on, because "403" alone does not distinguish a removed sandbox from a
+// feed that has not caught up yet.
+function identifySandbox(headers: http.IncomingHttpHeaders): SbxIdentity {
+  const cred = parseProxyAuthorization(headers['proxy-authorization']);
+  if (!cred) {
+    return { denied:
+      'No sandbox credential on this request. Huddle identifies a sandbox by the credential ' +
+      'sbx presents from its upstream-proxy URL; this sandbox was created without one, so the ' +
+      'gateway cannot tell which box is calling. Recreate the sandbox from Huddle.' };
+  }
+  const name = resolveSandboxBySecret(cred.secret);
+  if (!name) {
+    return { denied: cred.name === UNCLAIMED_SANDBOX
+      ? `This sandbox presented the unclaimed credential (${UNCLAIMED_SANDBOX}), which belongs to no ` +
+        'sandbox. It re-read the global proxy setting instead of the URL it was created with, so its ' +
+        'identity is gone. Recreate the sandbox from Huddle.'
+      : `The credential for "${shownName(cred.name)}" matches no sandbox Huddle knows. Either this ` +
+        'sandbox was removed (its secret is gone with it), or the gateway\'s identity feed is stale — ' +
+        'check that Huddle Node is reachable and that this sandbox still exists in the portal.' };
+  }
+  return { containerId: sandboxContainerId(name) };
+}
+
 // `port` defaults to the fixed proxy port; tests bind on 0 (a free
 // ephemeral port) so the path-forwarding behavior can be tested hermetically.
 export function createProxyServer(port: number = PROXY_PORT): http.Server {
   const server = http.createServer();
-  // Traffic on the dedicated sbx port comes from the sandbox FLEET. Huddle can't
-  // attribute a live request to a specific box, so those requests are evaluated
-  // against the MERGE of global + every sandbox's rules (checkFleetRule). sbx has
-  // already enforced per-box before forwarding, so allow-if-any-sandbox-allows is
-  // safe. See docs/ADR §5.
+  // Traffic on the dedicated sbx port comes from sandboxes, identified by the
+  // credential sbx presents rather than by a source address (identifySandbox).
+  //
+  // Both listeners therefore take the SAME checkRule: a sandbox is one more
+  // scope — its own name, next to a devcontainer id. The fleet merge that used to
+  // stand in for identity is gone — it was only ever safe because sbx enforced
+  // per-box policy before forwarding, and sbx is now allow-all, which turns
+  // allow-if-any-sandbox-allows from a conservative approximation into a hole
+  // (docs/ADR-sbx-identity.md §1).
   const isSbxProxy = port === SBX_PROXY_PORT;
-  // Rule evaluation for this server: per-container/global for the devcontainer
-  // proxy; fleet-merge for the sbx proxy. For the fleet, PATH-MODE domains are
-  // handled globally (sbx allows the domain in every sandbox; Huddle enforces the
-  // paths here) — so the path is passed through.
-  const evalRule = (host: string, containerId: string | null, path: string | null) =>
-    isSbxProxy ? checkFleetRule(host, knownSandboxNames(), path) : checkRule(host, containerId, path);
   // OAuth token hiding is a DEVCONTAINER mechanism: it binds a placeholder to the
   // container that obtained it, and the sbx port has no such identity. sbx runs
   // its own proxy-managed credentials there anyway — see managesTokenExchange().
@@ -422,9 +469,16 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   server.on('request', async (req, res) => {
     // Extension server-side fetch is identified via the X-Huddle-Ext header
     const extHeader = req.headers['x-huddle-ext'];
-    const containerId = extHeader
-      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
-      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    // Resolved before the URL is even parsed, so the probe below reports the
+    // caller this request will actually be judged as. An unrecognised sandbox is
+    // no caller at all, hence null — the denial follows once the host is known,
+    // so the audit row names what was being reached.
+    const sbx = isSbxProxy ? identifySandbox(req.headers) : null;
+    const containerId = sbx
+      ? sbx.containerId ?? null
+      : extHeader
+        ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
+        : await resolveContainerByIp(req.socket.remoteAddress ?? '');
     logIdentityProbe('request', req, req.socket.remoteAddress, containerId);
     const rawUrl = req.url || '';
 
@@ -442,6 +496,15 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const host = canonicalizeHost(target.hostname);
     if (host === null) {
       send502(res, 'invalid target host');
+      return;
+    }
+
+    if (sbx?.denied) {
+      logAudit({
+        containerId: null, domain: host, action: 'deny', ruleId: null,
+        method: req.method ?? null, path: `${target.pathname}${target.search}`, resStatus: 403,
+      });
+      send403(res, host, 'deny', null, sbx.denied);
       return;
     }
 
@@ -487,7 +550,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       handleSudoAudit(req, res, containerId);
       return;
     } else {
-      const result = evalRule(host, containerId, normPath);
+      const result = checkRule(host, containerId, normPath);
       if (result.status !== 'allow') {
         logAudit({
           containerId,
@@ -505,7 +568,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     }
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
-    delete outgoingHeaders['proxy-connection'];
+    stripProxyHeaders(outgoingHeaders);
 
     const reqChunks: Buffer[] = [];
     let reqBytes = 0;
@@ -521,7 +584,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       ruleId,
       method: req.method ?? null,
       path: forwardPath,
-      reqHeaders: headersToJson(req.headers),
+      reqHeaders: auditReqHeaders(req.headers),
     });
     let completed = false;
     const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
@@ -586,9 +649,12 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   // normalized path, forward the original encoded bytes.
   server.on('upgrade', async (req, clientSocket, head) => {
     const extHeader = req.headers['x-huddle-ext'];
-    const containerId = extHeader
-      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
-      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    const sbx = isSbxProxy ? identifySandbox(req.headers) : null;
+    const containerId = sbx
+      ? sbx.containerId ?? null
+      : extHeader
+        ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
+        : await resolveContainerByIp(req.socket.remoteAddress ?? '');
     logIdentityProbe('upgrade', req, req.socket.remoteAddress, containerId);
     const rawUrl = req.url || '';
 
@@ -603,6 +669,15 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const host = canonicalizeHost(target.hostname);
     if (host === null) {
       rejectSocket(clientSocket, 400, 'deny', '', containerId);
+      return;
+    }
+
+    if (sbx?.denied) {
+      logAudit({
+        containerId: null, domain: host, action: 'deny', ruleId: null,
+        method: req.method ?? null, path: `${target.pathname}${target.search}`, resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, 'deny', host, null, sbx.denied);
       return;
     }
 
@@ -639,7 +714,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       return;
     }
 
-    const result = evalRule(host, containerId, normPath);
+    const result = checkRule(host, containerId, normPath);
     if (result.status !== 'allow') {
       logAudit({
         containerId, domain: host, action: result.status, ruleId: null,
@@ -668,7 +743,12 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
   server.on('connect', async (req, clientSocket, head) => {
     const remoteAddress = (clientSocket as net.Socket).remoteAddress ?? '';
-    const containerId = await resolveContainerByIp(remoteAddress);
+    // The one that matters most: almost all sandbox traffic is HTTPS, so this is
+    // where a box is identified in practice. The credential rides the CONNECT
+    // itself and the tunnel inherits it — the inner MITM handlers below close
+    // over this containerId rather than re-deriving one from encrypted bytes.
+    const sbx = isSbxProxy ? identifySandbox(req.headers) : null;
+    const containerId = sbx ? sbx.containerId ?? null : await resolveContainerByIp(remoteAddress);
     logIdentityProbe('connect', req, remoteAddress, containerId);
     const [rawHostname, portStr] = (req.url || '').split(':');
     const port = Number(portStr) || 443;
@@ -681,6 +761,15 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const hostname = canonicalizeHost(rawHostname);
     if (!hostname) {
       rejectSocket(clientSocket, 400, 'deny', '', null);
+      return;
+    }
+
+    if (sbx?.denied) {
+      logAudit({
+        containerId: null, domain: hostname, port, action: 'deny', ruleId: null,
+        method: 'CONNECT', resStatus: 403,
+      });
+      rejectSocket(clientSocket, 403, 'deny', hostname, null, sbx.denied);
       return;
     }
 
@@ -698,7 +787,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       rejectSocket(clientSocket, 403, 'deny', hostname, containerId);
       return;
     }
-    const { status, ruleId } = evalRule(hostname, containerId, null);
+    const { status, ruleId } = checkRule(hostname, containerId, null);
     // Path-allowlist domains are closed at the host level, but the CONNECT tunnel
     // must be open so that MITM sees the path after TLS termination and can enforce
     // per request (see the innerHttp handler). Only meaningful if we can
@@ -810,7 +899,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const pathResult = normPath === null
         ? { status: 'deny' as const, ruleId: null }
-        : evalRule(hostname, containerId, checkUrl);
+        : checkRule(hostname, containerId, checkUrl);
       // Block everything except 'allow': a 'deny' path rule, but also a not-yet-
       // reviewed subpath ('requested') of a path-allowlist domain —
       // fail-closed until the operator explicitly allows the path.
@@ -825,7 +914,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           ruleRef: pathResult.ruleRef,
           method: innerReq.method ?? null,
           path: innerReq.url ?? null,
-          reqHeaders: headersToJson(innerReq.headers),
+          reqHeaders: auditReqHeaders(innerReq.headers),
           resStatus: 403,
         });
         const blockedBody = JSON.stringify({
@@ -849,7 +938,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       }
 
       const upstreamHeaders = { ...innerReq.headers };
-      delete upstreamHeaders['proxy-connection'];
+      stripProxyHeaders(upstreamHeaders);
 
       // Token replacement: replace placeholder with the real token for
       // api.anthropic.com. Skipped in sbx mode — sbx manages the credential
@@ -894,7 +983,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         ruleId,
         method: innerReq.method ?? null,
         path: innerReq.url ?? null,
-        reqHeaders: headersToJson(innerReq.headers),
+        reqHeaders: auditReqHeaders(innerReq.headers),
       });
       let completed = false;
       // resBody: pass explicitly for scrubbed paths (token-exchange) so the
@@ -989,7 +1078,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const pathResult = normPath === null
         ? { status: 'deny' as const, ruleId: null }
-        : evalRule(hostname, containerId, checkUrl);
+        : checkRule(hostname, containerId, checkUrl);
       if (pathResult.status !== 'allow') {
         logAudit({
           containerId,
@@ -1001,7 +1090,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           ruleRef: pathResult.ruleRef,
           method: innerReq.method ?? null,
           path: innerReq.url ?? null,
-          reqHeaders: headersToJson(innerReq.headers),
+          reqHeaders: auditReqHeaders(innerReq.headers),
           resStatus: 403,
         });
         rejectSocket(innerSocket, 403, pathResult.status, hostname, containerId);

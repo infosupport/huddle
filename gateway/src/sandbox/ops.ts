@@ -75,6 +75,19 @@ export interface RunResult {
   stderr: string;
 }
 
+/**
+ * Any `//user:pass@` in sbx output, redacted.
+ *
+ * `settings set proxy.sandbox` is handed a URL carrying a sandbox' secret
+ * (docs/ADR-sbx-identity.md), and sbx echoes the value it was given back in its
+ * own error text. Everything this module surfaces — thrown messages, streamed
+ * chunks — ends up in `SbxStep`, which the portal and the CLI print verbatim.
+ * Redact on the way out, so no caller has to remember to.
+ */
+export function redactCredentials(text: string): string {
+  return text.replace(/\/\/[^\s/@]*:[^\s/@]*@/g, '//***:***@');
+}
+
 /** Non-streaming run of `sbx <args>`. Resolves even on non-zero exit. */
 export function runSbx(args: string[]): Promise<RunResult> {
   const blocked = sbxUnavailableReason();
@@ -137,9 +150,9 @@ export function streamSbx(
       resolve({ code: -1, stderr: msg });
       return;
     }
-    child.stdout.on('data', (d) => onChunk('stdout', d.toString()));
+    child.stdout.on('data', (d) => onChunk('stdout', redactCredentials(d.toString())));
     child.stderr.on('data', (d) => {
-      const s = d.toString();
+      const s = redactCredentials(d.toString());
       // Cap what we retain for error detection; keep the tail (errors surface last).
       stderrBuf = (stderrBuf + s).slice(-64 * 1024);
       onChunk('stderr', s);
@@ -315,8 +328,11 @@ export function buildCreateArgs(p: CreateParams): string[] {
 
 export async function create(p: CreateParams, onChunk: StreamChunk): Promise<number> {
   const args = buildCreateArgs(p);
-  // proxy.sandbox (NOT proxy) so daemon auth/registry stays direct — see docs.
-  if (p.proxySandbox) await setProxy({ which: 'sandbox', url: p.proxySandbox });
+  // Deliberately NO setProxy here. `proxy.sandbox` is one global setting, so
+  // set-then-create is a race and the URL it carries is a sandbox' identity —
+  // both of which sbx.ts owns (serialised, minted, parked afterwards). A second
+  // way in from here would create a box the gateway cannot identify, which under
+  // sbx allow-all is a box with no rules at all. See docs/ADR-sbx-identity.md.
   const { code, stderr } = await streamSbx(args, onChunk);
   if (code !== 0) {
     const login = detectDockerLoginError(stderr);
@@ -636,5 +652,5 @@ export function parsePolicyLogJson(stdout: string): DeniedEntry[] {
 function throwSbxError(r: RunResult, fallback: string): never {
   const login = detectDockerLoginError(r.stderr, r.stdout);
   if (login) throw new Error(login);
-  throw new Error((r.stderr || r.stdout).trim() || fallback);
+  throw new Error(redactCredentials((r.stderr || r.stdout).trim()) || fallback);
 }
