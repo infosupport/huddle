@@ -50,6 +50,7 @@ export async function rewireGatewayIntoDevcontainers(): Promise<RewireReport> {
     return report;
   }
   report.containers = containers.length;
+  const running = containers.filter((c) => c.running);
 
   for (const c of containers) {
     const netName = `dc-net-${c.name}`;
@@ -67,7 +68,12 @@ export async function rewireGatewayIntoDevcontainers(): Promise<RewireReport> {
 
   // Only after the networks exist: the refresh resolves `huddle` from INSIDE the
   // devcontainer, so doing it first would resolve nothing and quietly do nothing.
-  for (const c of containers) {
+  //
+  // Running containers only, here and for the CA below. Both work by exec'ing
+  // into the container, and the daemon answers 409 for one that is not running —
+  // a stopped devcontainer would report a failure on every pass without anything
+  // being wrong. It gets its rules and its CA when it starts.
+  for (const c of running) {
     try {
       await refreshContainerIptables(c.id, c.name);
       report.refreshed.push(c.name);
@@ -82,7 +88,7 @@ export async function rewireGatewayIntoDevcontainers(): Promise<RewireReport> {
   // every HTTPS request fails the signature check. Same trigger as the rewiring
   // above because it is the same event: the enforcement point changed under a
   // container that is still running. See refreshContainerCa.
-  for (const c of containers) {
+  for (const c of running) {
     try {
       if (await refreshContainerCa(c.id, c.name)) report.reissued.push(c.name);
     } catch (err: any) {
