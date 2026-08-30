@@ -6,15 +6,21 @@
 // en volgens de docs bakt sbx hem in bij `create`. Dit script controleert of dat
 // echt zo is — en wat er bij een herstart gebeurt.
 //
-//   node sbx-identity-test.mjs [--port 32999] [--target URL] [--keep] [--no-restart]
+//   node sbx-identity-test.mjs [--port 32999] [--keep] [--no-restart]
 //
-// --target     waar de curl heen gaat; standaard https://example.com. Kies een
-//              domein dat je gateway toestaat, anders meet je zijn blokkade.
 // --keep       ruimt de testsandboxen niet op
-// --no-restart slaat fase 4 over (de herstart-vraag)
+// --no-restart slaat de herstart-fase over
 //
 // SBX_BIN wijst naar een andere sbx (of naar een stub, om het script zelf te
 // beproeven zonder sandboxen aan te maken).
+//
+// Elke doos belt een EIGEN bestemming. Een sandbox praat namelijk uit zichzelf
+// ook — agent-updates, telemetrie — en die verzoeken komen door dezelfde proxy
+// binnen. Toewijzen op "welke fase liep er toen" telt dat achtergrondverkeer mee
+// en levert een antwoord op dat er stellig uitziet en niets betekent. CONNECT
+// toont de doelhost, dus laat die de hit tekenen: example.com hoort bij doos A,
+// example.org bij doos B, example.net bij doos A na herstart. Alles wat daar
+// niet bij staat is ruis, en zichtbaar als ruis.
 //
 // Alles stdlib. De globale proxy-instelling wordt vóór de test gelezen en na
 // afloop teruggezet, ook als er iets misgaat: het is één instelling voor je hele
@@ -30,10 +36,12 @@ const val = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] :
 
 const PORT = Number(val('--port', 32999));
 const BOXES = [
-  { name: 'huddle-probe-a', user: 'huddle-probe-a', pass: 'secret-a' },
-  { name: 'huddle-probe-b', user: 'huddle-probe-b', pass: 'secret-b' },
+  { name: 'huddle-probe-a', user: 'huddle-probe-a', pass: 'secret-a', target: 'example.com' },
+  { name: 'huddle-probe-b', user: 'huddle-probe-b', pass: 'secret-b', target: 'example.org' },
 ];
-const TARGET = val('--target', 'https://example.com');
+// Aparte bestemming voor de herstart, zodat die hit niet op één hoop valt met de
+// eerste curl van doos A.
+const RESTART_TARGET = 'example.net';
 
 // Zelfde ontsnapping als ops.ts (HUDDLE_SBX_BIN), zodat dit script tegen een stub
 // gedraaid kan worden.
@@ -41,9 +49,9 @@ const SBX = process.env.SBX_BIN ?? 'sbx';
 
 // ── de luisteraar ────────────────────────────────────────────────────────────
 //
-// Handhaaft niets. Noteert alleen welke credential er binnenkwam, onder het label
-// van de fase die op dat moment loopt — daarom draaien de curls één voor één.
+// Handhaaft niets. Noteert alleen welke credential er binnenkwam en waarheen.
 
+const t0 = Date.now();
 let phase = 'setup';
 const hits = [];
 
@@ -56,7 +64,14 @@ function credentialOf(headers) {
 }
 
 function note(kind, target, socket, headers) {
-  hits.push({ phase, kind, target, from: socket.remoteAddress, credential: credentialOf(headers) });
+  hits.push({
+    at: ((Date.now() - t0) / 1000).toFixed(1),
+    phase, kind,
+    host: String(target).replace(/^https?:\/\//, '').split(/[:/]/)[0],
+    target,
+    from: socket.remoteAddress,
+    credential: credentialOf(headers),
+  });
 }
 
 const server = http.createServer((req, res) => {
@@ -100,6 +115,18 @@ function sbx(argv, { quiet = false } = {}) {
 const setProxy = (url) => sbx(['settings', 'set', 'proxy.sandbox', url]);
 const proxyUrl = (b) => `http://${b.user}:${b.pass}@localhost:${PORT}`;
 
+/**
+ * Eén curl in een doos, met de uitkomst zichtbaar. Zwijgend een exitcode 0
+ * accepteren is hier gevaarlijk: dan lijkt "geen hit" een uitspraak over sbx,
+ * terwijl curl misschien niet eens bestaat in het image.
+ */
+async function curlFrom(box, host) {
+  const url = `https://${host}`;
+  const r = await sbx(['exec', box.name, '--', 'curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', url]);
+  const said = (r.out || r.err).trim().split('\n').pop() || '(niets)';
+  console.log(`     ${box.name} → ${url}: exit ${r.code}, curl zei ${said}`);
+}
+
 // ── de test ──────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -123,84 +150,127 @@ async function main() {
       if (c.code !== 0) throw new Error(`create ${box.name} mislukt`);
     }
 
-    // Fase 2/3 — één voor één curlen, zodat elke hit bij de juiste doos hoort.
+    // Fase 2 — elk naar zijn eigen host, zodat de hit zichzelf toewijst.
     for (const box of BOXES) {
       phase = `curl ${box.name}`;
-      console.log(`\n[2] ${box.name}: curl ${TARGET}`);
-      await sbx(['exec', box.name, '--', 'curl', '-s', '-o', '/dev/null', TARGET]);
+      console.log(`\n[2] ${box.name}: curl https://${box.target}`);
+      await curlFrom(box, box.target);
     }
 
-    // Fase 4 — de beslissende. De globale instelling staat nu op de LAATSTE doos.
+    // Fase 3 — de beslissende. De globale instelling staat nu op de LAATSTE doos.
     // Leest een herstartende doos hem opnieuw, dan presenteert doos A straks de
     // identiteit van doos B, en is dat stille overname van rechten.
     if (!flag('--no-restart')) {
       const a = BOXES[0];
       console.log(`\n[3] ${a.name} herstarten (globale proxy staat nu op ${BOXES[1].name})`);
-      let r = await sbx(['restart', a.name], { quiet: true });
-      if (r.code !== 0) {
-        await sbx(['stop', a.name], { quiet: true });
-        r = await sbx(['start', a.name], { quiet: true });
-      }
-      if (r.code !== 0) {
-        console.log('   ! herstarten lukte niet — fase 4 overgeslagen');
-      } else {
+      if (await restart(a.name)) {
         phase = `curl ${a.name} na herstart`;
-        await sbx(['exec', a.name, '--', 'curl', '-s', '-o', '/dev/null', TARGET]);
+        await curlFrom(a, RESTART_TARGET);
+      } else {
+        // Welke werkwoorden sbx wél heeft, is de helft van het antwoord: heeft
+        // het er geen, dan kan Huddle een herstart ook niet zelf afdwingen en is
+        // de mitigatie uit de ADR het enige dat overblijft.
+        console.log('   ! geen herstart-werkwoord gevonden — fase 3 overgeslagen');
+        const help = await sbx(['--help'], { quiet: true });
+        console.log((help.out || help.err).trim().split('\n').map((l) => `     ${l}`).join('\n'));
       }
     }
   } catch (err) {
     console.log(`\nAFGEBROKEN: ${err.message}`);
   } finally {
-    if (original) await setProxy(original);
+    await restore(original);
     if (!flag('--keep')) for (const b of BOXES) await sbx(['rm', '--force', b.name], { quiet: true });
-    console.log(original ? '\nproxy.sandbox teruggezet' : '\nproxy.sandbox NIET teruggezet — controleer hem zelf');
   }
 
   verdict();
 }
 
+/** sbx' herstart-werkwoord is niet gedocumenteerd; probeer de gangbare vormen. */
+async function restart(name) {
+  const forms = [['restart', name], ['sandbox', 'restart', name], ['stop', name]];
+  for (const argv of forms) {
+    const r = await sbx(argv, { quiet: true });
+    if (r.code !== 0) continue;
+    if (argv[0] !== 'stop') return true;
+    const up = await sbx(['start', name], { quiet: true });
+    if (up.code === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Terugzetten is niet optioneel. Blijft proxy.sandbox op onze poort staan, dan
+ * praat elke sandbox die de operator hierna maakt tegen niets — de test zou zijn
+ * machine kapot achterlaten.
+ */
+async function restore(original) {
+  if (original) {
+    const r = await setProxy(original);
+    console.log(r.code === 0 ? `\nproxy.sandbox teruggezet op ${original}` : `\n!! proxy.sandbox NIET teruggezet — zet zelf: sbx settings set proxy.sandbox ${original}`);
+    return;
+  }
+  // Niets om terug te zetten en toch iets achtergelaten. Leeg zetten is het beste
+  // dat we kunnen; lukt dat niet, zeg het hard.
+  for (const argv of [['settings', 'unset', 'proxy.sandbox'], ['settings', 'set', 'proxy.sandbox', '']]) {
+    if ((await sbx(argv, { quiet: true })).code === 0) {
+      console.log('\nproxy.sandbox leeggemaakt (er stond niets toen we begonnen)');
+      return;
+    }
+  }
+  console.log('\n!! proxy.sandbox staat nog op onze DODE poort. Zet hem zelf terug:');
+  console.log('   sbx settings set proxy.sandbox http://localhost:32768   (wat Huddle gebruikt)');
+}
+
 // ── wat we ervan leren ───────────────────────────────────────────────────────
 
 function verdict() {
+  const mine = new Set([...BOXES.map((b) => b.target), RESTART_TARGET]);
+
   console.log('\n─── waargenomen ────────────────────────────────────────────');
   if (!hits.length) {
     console.log('geen enkel verzoek ontvangen — sbx stuurt niet via deze proxy.');
-    // Eerst uitsluiten voor je dit als antwoord leest: een target dat onder
-    // no_proxy valt gaat langs élke -x heen, en dan meet je niets in plaats van
-    // "geen identiteit".
-    console.log(`controleer no_proxy/NO_PROXY tegen ${TARGET} voor je concludeert.`);
-  }
-  for (const h of hits) {
-    console.log(`  ${h.phase.padEnd(32)} ${h.kind.padEnd(8)} ${String(h.credential ?? '(geen)').padEnd(28)} van ${h.from}`);
-  }
-
-  const credOf = (p) => hits.filter((h) => h.phase === p && h.credential).at(-1)?.credential ?? null;
-  const [a, b] = BOXES;
-  const ca = credOf(`curl ${a.name}`), cb = credOf(`curl ${b.name}`);
-  const ra = credOf(`curl ${a.name} na herstart`);
-
-  console.log('\n─── conclusie ──────────────────────────────────────────────');
-  if (!ca && !cb) {
-    console.log('  GEEN identiteit. De credential uit de proxy-URL bereikt ons niet;');
-    console.log('  dan is er via dit kanaal niets te identificeren.');
+    console.log(`controleer no_proxy/NO_PROXY tegen ${[...mine].join(', ')} voor je concludeert.`);
     return;
   }
-  const want = (x) => `${x.user}:${x.pass}`;
-  const okA = ca === want(a), okB = cb === want(b);
-  console.log(`  ${a.name}: ${ca ?? '(geen)'}  ${okA ? 'OK' : '← verwacht ' + want(a)}`);
-  console.log(`  ${b.name}: ${cb ?? '(geen)'}  ${okB ? 'OK' : '← verwacht ' + want(b)}`);
-  if (okA && okB) {
-    console.log('  → De URL wordt per doos ingebakken bij create. Identiteit werkt.');
-  } else if (ca && ca === cb) {
-    console.log('  → Beide dozen presenteren dezelfde credential: de daemon leest de');
-    console.log('    globale instelling live. Dan is dit kanaal geen identiteit.');
+  for (const h of hits) {
+    const tag = mine.has(h.host) ? '' : '  (achtergrond)';
+    console.log(`  +${h.at.padStart(5)}s ${h.kind.padEnd(8)} ${h.host.padEnd(18)} ${String(h.credential ?? '(geen)').padEnd(28)}${tag}`);
   }
 
-  if (ra !== null) {
-    console.log(`\n  na herstart van ${a.name}: ${ra}`);
-    if (ra === want(a)) console.log('  → Herstart behoudt de identiteit. Geen mitigatie nodig.');
-    else console.log(`  → Herstart neemt de globale waarde over (${ra}). De unclaimed-mitigatie`);
-    if (ra !== want(a)) console.log('    uit de ADR is verplicht: dit is stille overname van rechten.');
+  // Toewijzing op bestemming, niet op tijd: de curl van doos A is het verzoek
+  // naar example.com, wat er verder ook langskwam.
+  const credFor = (host) => hits.filter((h) => h.host === host && h.credential).at(-1) ?? null;
+  const [a, b] = BOXES;
+  const ha = credFor(a.target), hb = credFor(b.target), hr = credFor(RESTART_TARGET);
+  const want = (x) => `${x.user}:${x.pass}`;
+
+  console.log('\n─── conclusie ──────────────────────────────────────────────');
+  if (!ha && !hb) {
+    console.log('  Geen van beide curls bereikte de proxy. Kijk eerst naar de exitcodes');
+    console.log('  hierboven en naar no_proxy/NO_PROXY voor je hier iets uit afleidt.');
+    return;
+  }
+  for (const [box, hit] of [[a, ha], [b, hb]]) {
+    const got = hit?.credential ?? '(geen)';
+    console.log(`  ${box.name} (${box.target}): ${got}  ${got === want(box) ? 'OK' : '← verwacht ' + want(box)}`);
+  }
+  if (ha?.credential === want(a) && hb?.credential === want(b)) {
+    console.log('  → De URL wordt per doos ingebakken bij create. Identiteit werkt.');
+  } else if (ha && ha.credential === hb?.credential) {
+    console.log('  → Beide dozen presenteren dezelfde credential: de daemon leest de');
+    console.log('    globale instelling live. Dan is dit kanaal geen identiteit.');
+  } else {
+    console.log('  → Gemengd beeld. Lees de regels hierboven op tijdstip: de achtergrond-');
+    console.log('    hits laten zien wat een doos uit zichzelf presenteert.');
+  }
+
+  if (hr) {
+    console.log(`\n  na herstart van ${a.name} (${RESTART_TARGET}): ${hr.credential}`);
+    if (hr.credential === want(a)) console.log('  → Herstart behoudt de identiteit. Geen mitigatie nodig.');
+    else {
+      console.log(`  → Herstart neemt de globale waarde over (${hr.credential}). De unclaimed-`);
+      console.log('    mitigatie uit de ADR is verplicht: dit is stille overname van rechten.');
+    }
   }
 }
 
