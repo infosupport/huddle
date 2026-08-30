@@ -28,7 +28,9 @@ const evalRule = (host, containerId, path) =>
 
 That merge is safe today for one reason, written down at `proxy.ts:407`: **sbx
 has already enforced per-box policy before forwarding**, so allow-if-any-sandbox-
-allows can only ever be narrower than what already passed. Setting sbx to
+allows can only ever be narrower than what already passed. That is now measured
+rather than assumed: a curl from a sandbox to a host outside its allowlist comes
+back 403 without the request ever reaching the upstream proxy. Setting sbx to
 allow-all removes exactly that premise. The merge then stops being a
 conservative approximation and becomes a hole: sandbox A may reach everything
 sandbox B is allowed to reach.
@@ -113,6 +115,13 @@ denial, and it is not a corner case: **Huddle does not restart sandboxes.**
 `sandbox/ops.ts` exposes `create` and `remove` and no start/stop/restart, so
 every restart is out-of-band by construction.
 
+Worse than out-of-band: nobody ever says "restart". `sbx --help` (checked
+2026-08-30) has `stop` and no `start` and no `restart` — a stopped sandbox comes
+back the moment someone uses it again. So the re-read of the global setting is
+not an operator action we could hook, it is a side effect of `sbx exec`. There
+is no point at which Huddle could set the right credential first, which is why
+the mitigation cannot be "own the restart path".
+
 Two measures, both required:
 
 1. **Reset to an unclaimed credential after every create.** Huddle sets
@@ -146,7 +155,14 @@ Two questions decide whether any of this is buildable, and both are about sbx's
 behaviour rather than ours. `sbx-identity-test.mjs` answers them in one run: it
 stands up a listener that enforces nothing and only records the credential it
 was shown, creates two sandboxes with different credentials, curls from each,
-then restarts the first and curls again.
+then stops the first and curls again to bring it back.
+
+Two things it has to get right, both learned by getting them wrong. Each box
+curls its **own** destination, because a sandbox calls out on its own and
+attributing hits to whatever phase was running counts that background traffic as
+the answer. And each destination is allowed in that box's sbx policy first,
+because otherwise sbx returns 403 on its own and the request never arrives —
+which reads as "no identity" when nothing was measured at all.
 
 1. **Does the credential arrive, per box, on CONNECT?** Two boxes presenting
    their own distinct credentials means the URL really is baked in at create and
@@ -158,7 +174,18 @@ then restarts the first and curls again.
    measure 1 is mandatory before anything ships.
 
 The script saves and restores the operator's existing `proxy.sandbox` on the way
-out, including on failure: it is one setting for the whole machine.
+out, including on failure: it is one setting for the whole machine, and a
+sandbox created while it points at a dead port reaches nothing.
+
+### 6.1 Measured so far
+
+Background traffic settles the question about half way. During the first run the
+sandboxes' own calls to `api.anthropic.com` carried `secret-a` while box A was
+the only one alive, and `secret-b` after box B was created — including hits that
+arrived while the global setting had already moved on. A credential that
+outlives the setting that produced it is a credential that was baked in. What is
+still missing is the same evidence from a request we control, and the answer to
+the restart question.
 
 ## 7. Scope of the guarantee
 
