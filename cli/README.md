@@ -55,9 +55,8 @@ worktree.
 
 It browses your host live: Huddle Node runs there and lists one folder per request as
 you open them, so a project you cloned a minute ago is simply in the list. There is
-nothing to index and no CLI command to run first. Hidden (dot) folders are left out of
-the listing; typing one still works, because every input keeps accepting a path you
-type or paste.
+nothing to index and no CLI command to run first. Hidden (dot) folders are listed too,
+and every input keeps accepting a path you type or paste.
 
 Windows paths may be typed either way (`T:\projects\app` or `T:/projects/app`) —
 Huddle stores one canonical form, so the two spellings are the same folder.

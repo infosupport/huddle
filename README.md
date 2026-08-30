@@ -301,7 +301,7 @@ opens the folders on your host, and every input still accepts a typed or pasted 
 What you see is the host as it is right now. Huddle Node runs there, so the dialog asks it
 for one folder at a time as you open them — nothing is scanned up front and nothing is
 cached, which is why a folder you created a minute ago is simply there. Hidden (dot)
-folders are left out of the listing; typing one still works.
+folders are listed too — if you can see it in your own file manager, you can pick it here.
 
 This is the same dialog everywhere a host path is needed: starting a devcontainer or a
 sandbox, the folder mappings, and the team-managed folders in Settings.
