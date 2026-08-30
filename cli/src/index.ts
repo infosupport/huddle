@@ -6,7 +6,7 @@ import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
-import { runNode, nodeUrl } from './node';
+import { runNode } from './node';
 import { runMigrate } from './migrate';
 import { runLogs } from './logs';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
@@ -274,8 +274,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL ?? nodeUrl();
-  setBaseUrl(url);
+  // Only when the operator named an address. The fallback used to be nodeUrl(),
+  // which is the URL for a HUMAN — `http://localhost:…` — and that is the one
+  // spelling the CLI must not use: Node binds a single literal, `localhost` is
+  // two, and on Windows it resolves to ::1 first. A browser papers over that,
+  // fetch() does not, so every command failed with "Huddle does not appear to be
+  // running" against a healthy process the portal was talking to happily.
+  // Leaving this unset lets api.ts try the loopback literals instead.
+  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL;
+  if (url) setBaseUrl(url);
 
   const startsWithExistingPath = cmd !== undefined && !COMMANDS.has(cmd) && fs.existsSync(path.resolve(cmd));
   if (!cmd || cmd === 'start' || startsWithExistingPath) {
