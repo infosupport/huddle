@@ -22,14 +22,15 @@ afterAll(() => { fs.rmSync(root, { recursive: true, force: true }); });
 describe('listHostFolders', () => {
   it('geeft alleen de directe submappen, gesorteerd', () => {
     const listing = listHostFolders(root);
-    expect(listing.folders.map((f) => f.name)).toEqual(['app', 'lib', 'node_modules']);
+    expect(listing.folders.map((f) => f.name)).toEqual(['.git', 'app', 'lib', 'node_modules']);
     expect(listing.truncated).toBe(false);
   });
 
-  it('laat bestanden en verborgen mappen weg', () => {
+  it('laat bestanden weg maar verborgen mappen niet', () => {
     const names = listHostFolders(root).folders.map((f) => f.name);
     expect(names).not.toContain('README.md');
-    expect(names).not.toContain('.git');
+    // Een map die de operator in zijn eigen verkenner ziet, moet hier ook staan.
+    expect(names).toContain('.git');
   });
 
   // Eén niveau per aanroep is de hele afspraak: dat maakt bladeren in een
