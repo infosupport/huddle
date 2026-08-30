@@ -11,11 +11,17 @@
 // replace it with the host-configured upstream credential? Only the latter makes
 // a token identity unforgeable.
 //
-// Gated behind HUDDLE_IDENTITY_PROBE=1 so it is inert in normal operation and
-// safe to ship. It logs the raw Proxy-Authorization on purpose (the whole point
-// is to see it), which is why it must stay OFF by default — do not enable it in a
-// deployment where the proxy credential is a real secret you care about leaking
-// to the console log.
+// That question is answered (docs/ADR-sbx-identity.md §8) and the answer is now
+// load-bearing: the credential in Proxy-Authorization IS a sandbox' identity.
+// So the probe survives as a diagnostic — which box did a request get attributed
+// to, and why — but it no longer prints the credential. It used to log
+// Proxy-Authorization raw, on purpose, back when it was an experiment about a
+// value nobody depended on; the same line today writes a live secret to the
+// console, and ADR §5 says nothing logs it. The username half is kept (it is a
+// sandbox NAME, not a secret, and it is what makes a denial diagnosable); the
+// password half never leaves this file.
+//
+// Gated behind HUDDLE_IDENTITY_PROBE=1 so it is inert in normal operation.
 
 import type { IncomingMessage } from 'http';
 
@@ -26,7 +32,8 @@ export function identityProbeEnabled(): boolean {
 }
 
 // Headers that could carry a per-workspace identity signal from an upstream/host
-// proxy. We log all of them so the experiment shows which (if any) arrive.
+// proxy. All of them are logged so the probe shows which (if any) arrive — the
+// two that can carry a credential go through redactAuth first.
 const CANDIDATE_HEADERS = [
   'proxy-authorization',
   'authorization',
@@ -37,6 +44,18 @@ const CANDIDATE_HEADERS = [
   'x-huddle-ext',
   'user-agent',
 ];
+
+// Credential-bearing headers, logged as their scheme plus the username half of
+// a Basic credential. Enough to say WHICH box presented something and in what
+// form; never enough to present it again.
+const SECRET_HEADERS = new Set(['proxy-authorization', 'authorization']);
+
+function redactAuth(value: string): string {
+  const user = decodeBasic(value);
+  if (user !== null) return `Basic ${user}:***`;
+  const scheme = /^(\S+)/.exec(value.trim())?.[1];
+  return scheme ? `${scheme} ***` : '***';
+}
 
 function decodeBasic(value: string | undefined): string | null {
   if (typeof value !== 'string') return null;
@@ -67,7 +86,9 @@ export function logIdentityProbe(
   const headers: Record<string, string> = {};
   for (const name of CANDIDATE_HEADERS) {
     const v = req.headers[name];
-    if (v !== undefined) headers[name] = Array.isArray(v) ? v.join(', ') : v;
+    if (v === undefined) continue;
+    const flat = Array.isArray(v) ? v.join(', ') : v;
+    headers[name] = SECRET_HEADERS.has(name) ? redactAuth(flat) : flat;
   }
   const record = {
     probe: 'identity',
@@ -75,7 +96,11 @@ export function logIdentityProbe(
     remoteAddress: (remoteAddress ?? '').replace(/^::ffff:/, ''),
     target: req.url ?? '',
     resolvedId,
-    proxyAuthUser: decodeBasic(headers['proxy-authorization']),
+    proxyAuthUser: decodeBasic(
+      Array.isArray(req.headers['proxy-authorization'])
+        ? req.headers['proxy-authorization'][0]
+        : req.headers['proxy-authorization'],
+    ),
     headers,
   };
   try {
