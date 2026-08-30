@@ -21,6 +21,8 @@ import {
 } from './sandbox/settings-folders';
 import { listFolderMappings } from './host-config';
 import { getCaCertPem } from './tls-ca';
+import { dropSandboxIdentity, mintSandboxIdentity } from './sandbox/registry';
+import { UNCLAIMED_SANDBOX, mintSandboxSecret, redactProxyUrl, sandboxProxyUrl } from './sbx-identity';
 
 export { reconcile };
 export type { ReconcileReport };
@@ -39,6 +41,7 @@ export interface SbxStep {
 
 export interface SbxStartResult {
   ok: boolean;
+  /** REDACTED: the upstream proxy carries the sandbox' secret and this is shown. */
   upstreamUrl: string;
   proxyPort: number;
   steps: SbxStep[];
@@ -96,19 +99,53 @@ function resolveWorkspaces(opts: { workspace?: string; workspaces?: WorkspaceSpe
 }
 
 /**
- * Start an sbx sandbox with Huddle as its upstream proxy: (1) point the upstream
- * proxy at Huddle, (2) create the sandbox with every requested folder plus the
- * settings folders, (3) trust Huddle's CA, (4) link the settings folders where
- * the agent looks for them. Returns per-step output so the portal shows exactly
- * which command broke.
+ * `sbx settings set proxy.sandbox <url>` as a step.
+ *
+ * The real URL goes to sbx and nowhere else; the step carries the redacted one,
+ * because the portal and the CLI print `command` verbatim so an operator can see
+ * which command broke (docs/ADR-sbx-identity.md, section 5).
  */
-export async function startSandbox(opts: {
+async function setSandboxProxy(label: string, url: string): Promise<SbxStep> {
+  const command = `sbx settings set proxy.sandbox ${redactProxyUrl(url)}`;
+  try {
+    await ops.setProxy({ which: 'sandbox', url });
+    return { label, command, code: 0, stdout: '', stderr: '' };
+  } catch (err) {
+    return { label, command, code: 1, stdout: '', stderr: cap((err as Error).message) };
+  }
+}
+
+export interface SbxStartOpts {
   name: string;
   agent?: string;
   workspace?: string;
   workspaces?: WorkspaceSpec[];
-}): Promise<SbxStartResult> {
-  const upstreamUrl = sbxUpstreamUrl();
+}
+
+/** Serialises starts; see startSandbox. */
+let startQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Start an sbx sandbox with Huddle as its upstream proxy: (1) point the upstream
+ * proxy at Huddle, with this box's own credential in the URL, (2) create the
+ * sandbox with every requested folder plus the settings folders — which is where
+ * sbx bakes that URL in — (3) park the global setting on a credential that maps
+ * to no sandbox, (4) trust Huddle's CA, (5) link the settings folders where the
+ * agent looks for them. Returns per-step output so the portal shows exactly
+ * which command broke.
+ *
+ * Serialised: `proxy.sandbox` is ONE global setting and this is set-then-create,
+ * so two starts in flight can hand both boxes the same identity or swap them.
+ * The lock spans the whole sequence, from the `settings set` to the reset.
+ */
+export function startSandbox(opts: SbxStartOpts): Promise<SbxStartResult> {
+  const next = startQueue.then(() => startSandboxExclusive(opts));
+  // Swallowed, or one failed start wedges every start after it.
+  startQueue = next.then(() => {}, () => {});
+  return next;
+}
+
+async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult> {
   const agentName = opts.agent || SBX_AGENT;
   const { primary, extras, settings } = resolveWorkspaces(opts);
   const workspace = primary.path;
@@ -119,12 +156,19 @@ export async function startSandbox(opts: {
     settingsSkipped: settings.skipped,
   };
 
-  try {
-    await ops.setProxy({ which: 'sandbox', url: upstreamUrl });
-    steps.push({ label: 'set sandbox upstream proxy → Huddle', command: `sbx settings set proxy.sandbox ${upstreamUrl}`, code: 0, stdout: '', stderr: '' });
-  } catch (err) {
-    steps.push({ label: 'set sandbox upstream proxy → Huddle', command: `sbx settings set proxy.sandbox ${upstreamUrl}`, code: 1, stdout: '', stderr: cap((err as Error).message) });
-    return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
+  // A create always mints a FRESH secret: reusing one would make two boxes a
+  // single identity wearing two names.
+  const identity = mintSandboxIdentity(opts.name);
+  const credentialedUrl = sandboxProxyUrl(sbxUpstreamUrl(), opts.name, identity.secret);
+  // What every caller and every log gets to see instead.
+  const upstreamUrl = redactProxyUrl(credentialedUrl);
+  const result = (ok: boolean): SbxStartResult => ({ ok, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info });
+
+  const setStep = await setSandboxProxy('set sandbox upstream proxy → Huddle', credentialedUrl);
+  steps.push(setStep);
+  if (setStep.code !== 0) {
+    dropSandboxIdentity(opts.name);
+    return result(false);
   }
 
   let out = '';
@@ -133,23 +177,39 @@ export async function startSandbox(opts: {
   // `:ro` for a read-only one.
   const pathArgs = [normalizeWorkspacePath(workspace), ...extras.map((w) => workspaceArg(w))].join(' ');
   const command = `sbx create --name ${opts.name} ${agentName} ${pathArgs}`;
+  let created = false;
   try {
     const code = await ops.create({ name: opts.name, agent: agentName, path: workspace, extraPaths: extras }, (s, d) => {
       if (s === 'stdout') out = cap(out + d);
       else errOut = cap(errOut + d);
     });
     steps.push({ label: `create sandbox (${info.workspaces.length} folder(s))`, command, code, stdout: out, stderr: errOut });
-    if (code !== 0) return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
-    // Trust Huddle's MITM CA inside the sandbox so HTTPS works (IDE downloads etc.).
-    steps.push(await trustCa(opts.name));
-    // Link the settings folders where the agent looks for them (~/.claude etc.).
-    const linkStep = await linkSettingsFolders(opts.name, settings);
-    if (linkStep) steps.push(linkStep);
-    return { ok: steps.every((s) => s.code === 0), upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
+    created = code === 0;
   } catch (err) {
     steps.push({ label: 'create sandbox', command, code: 1, stdout: out, stderr: cap(errOut || (err as Error).message) });
-    return { ok: false, upstreamUrl, proxyPort: SBX_PROXY_PORT, steps, ...info };
   }
+
+  // The credential is baked in now, so the global setting has done its job and
+  // is only a liability: a restart path we have not exercised that re-reads it
+  // would come back holding THIS box's identity. Park it on a credential that
+  // maps to no sandbox — denied by name beats impersonating the last box
+  // created (docs/ADR-sbx-identity.md, section 4).
+  steps.push(await setSandboxProxy(
+    'reset sandbox upstream proxy → unclaimed',
+    sandboxProxyUrl(sbxUpstreamUrl(), UNCLAIMED_SANDBOX, mintSandboxSecret())
+  ));
+
+  if (!created) {
+    // No box, so no identity — leaving the row would leave a live secret behind.
+    dropSandboxIdentity(opts.name);
+    return result(false);
+  }
+  // Trust Huddle's MITM CA inside the sandbox so HTTPS works (IDE downloads etc.).
+  steps.push(await trustCa(opts.name));
+  // Link the settings folders where the agent looks for them (~/.claude etc.).
+  const linkStep = await linkSettingsFolders(opts.name, settings);
+  if (linkStep) steps.push(linkStep);
+  return result(steps.every((s) => s.code === 0));
 }
 
 /**
@@ -250,7 +310,10 @@ export async function policyLogFor(name: string): Promise<{ raw: string; denied:
 }
 
 export async function removeSandbox(name: string, force = false): Promise<number> {
-  return ops.remove({ name, force });
+  const code = await ops.remove({ name, force });
+  // A sandbox does not outlive its credential; there is no rotation beyond this.
+  if (code === 0) dropSandboxIdentity(name);
+  return code;
 }
 
 export async function sshSetup(): Promise<number> {

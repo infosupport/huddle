@@ -40,14 +40,20 @@ export interface RuleDecision {
 export interface ControlPlane {
   /** Evaluate a devcontainer request against the firewall policy. */
   checkRule(domain: string, containerId: string | null, path: string | null): RuleDecision;
-  /** Evaluate a sandbox-fleet request, which is never attributable to one box. */
-  checkFleetRule(domain: string, sandboxNames: Set<string>, path: string | null): RuleDecision;
   /** Whether this host is in path-allowlist mode. */
   isPathMode(domain: string, containerId: string | null): boolean;
-  /** The sandboxes the fleet check merges rules across. */
-  knownSandboxNames(): Set<string>;
   /** Map a connection's source address to the container that owns it. */
   resolveContainerByIp(ip: string): Promise<string | null>;
+  /**
+   * Map a sandbox' proxy secret to its name, or null if nothing matches.
+   *
+   * The sandbox counterpart of `resolveContainerByIp`: a box has no address of
+   * its own — every one of them arrives as the same host-side sbx daemon — so
+   * it is recognised by the credential that daemon presents. Synchronous like
+   * the rest of the hot path: it is a lookup in the container feed the gateway
+   * already holds.
+   */
+  resolveSandboxBySecret(secret: string): string | null;
   /** Record a request. The returned ref correlates the later response update. */
   logAudit(entry: AuditEntry): number | null;
   /** Fill in the response fields on a previously logged in-flight request. */
@@ -69,10 +75,9 @@ export interface ControlPlane {
 // connecting, and the only safe answer then is no.
 const unboundControlPlane: ControlPlane = {
   checkRule: () => ({ status: 'deny', ruleId: null }),
-  checkFleetRule: () => ({ status: 'deny', ruleId: null }),
   isPathMode: () => false,
-  knownSandboxNames: () => new Set(),
   resolveContainerByIp: async () => null,
+  resolveSandboxBySecret: () => null,
   logAudit: () => null,
   updateAuditResponse: () => {},
   reportSudoAudit: () => {},
@@ -93,10 +98,9 @@ export function resetControlPlane(): void {
 // swap takes effect immediately and cannot be captured by an early import.
 export const controlPlane: ControlPlane = {
   checkRule: (domain, containerId, path) => active.checkRule(domain, containerId, path),
-  checkFleetRule: (domain, sandboxNames, path) => active.checkFleetRule(domain, sandboxNames, path),
   isPathMode: (domain, containerId) => active.isPathMode(domain, containerId),
-  knownSandboxNames: () => active.knownSandboxNames(),
   resolveContainerByIp: (ip) => active.resolveContainerByIp(ip),
+  resolveSandboxBySecret: (secret) => active.resolveSandboxBySecret(secret),
   logAudit: (entry) => active.logAudit(entry),
   updateAuditResponse: (ref, response) => active.updateAuditResponse(ref, response),
   reportSudoAudit: (containerId, entry) => active.reportSudoAudit(containerId, entry),

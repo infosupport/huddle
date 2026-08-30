@@ -23,10 +23,9 @@ interface SbxStartResult {
 }
 interface SandboxInfo { name: string; status?: string; raw?: string }
 interface ReconcileAction { op: 'create' | 'delete'; action: 'allow' | 'deny'; target: string; scope: { kind: string; name?: string }; ok: boolean; error?: string }
-interface SkippedRule { domain: string; container_id: string | null; reason: string }
 interface ReconcileReport {
-  ok: boolean; dryRun: boolean; desired: number; created: number; deleted: number; failed: number;
-  actions: ReconcileAction[]; notProjected: SkippedRule[]; skipped: SkippedRule[]; sandboxes: string[]; error?: string;
+  ok: boolean; dryRun: boolean; sandboxes: string[]; created: number; deleted: number; failed: number;
+  actions: ReconcileAction[]; error?: string;
 }
 
 function scopeLabel(scope: { kind: string; name?: string }): string {
@@ -175,16 +174,12 @@ export async function runSbxReconcile(opts: { dryRun?: boolean }): Promise<void>
     console.error(`✗ ${mode}reconcile could not run: ${r.error}`);
     process.exit(1);
   }
-  console.log(`${mode}Reconcile Huddle → sbx policy (Huddle is the source of truth)`);
-  console.log(`  desired rules: ${r.desired}   created: ${r.created}   deleted (drift): ${r.deleted}   failed: ${r.failed}`);
-  if (r.sandboxes.length) console.log(dim(`  scopes: global, ${r.sandboxes.map((n) => 'sandbox:' + n).join(', ')}`));
+  console.log(`${mode}Reconcile sbx policy (allow-all per sandbox; Huddle's proxy enforces)`);
+  console.log(`  created: ${r.created}   removed: ${r.deleted}   failed: ${r.failed}`);
+  if (r.sandboxes.length) console.log(dim(`  sandboxes: ${r.sandboxes.map((n) => 'sandbox:' + n).join(', ')}`));
   for (const a of r.actions) {
     const sym = a.ok ? (a.op === 'create' ? '+' : '-') : '✗';
     console.log(`  ${sym} ${a.op} ${a.action} ${a.target} @ ${scopeLabel(a.scope)}${a.error ? dim('  — ' + a.error) : ''}`);
-  }
-  if (r.notProjected.length) {
-    console.log(dim(`  ${r.notProjected.length} path rule(s) NOT projected to sbx (domain-level only) —`));
-    console.log(dim(`    these are enforced fleet-wide at Huddle's proxy, never per-sandbox in sbx mode.`));
   }
   if (r.failed > 0) process.exitCode = 1;
 }

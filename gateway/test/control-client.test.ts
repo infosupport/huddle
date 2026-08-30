@@ -22,7 +22,7 @@ function rule(over: Partial<RuleRow> & { domain: string }): RuleRow {
 }
 
 function policy(rules: RuleRow[], version = 'v1'): PolicyFeed {
-  return { version, rules, airlocked: [], sandboxes: [] };
+  return { version, rules, airlocked: [] };
 }
 
 interface Harness {
@@ -98,7 +98,7 @@ describe('control client — fail closed, then fail static', () => {
     // Not `requested`: with no policy at all, filing the host as pending would
     // tell the operator a rule exists for it.
     expect(client.plane.checkRule('example.com', 'dc-alpha', null)).toEqual({ status: 'deny', ruleId: null });
-    expect(client.plane.checkFleetRule('example.com', ['box'], null)).toEqual({ status: 'deny', ruleId: null });
+    expect(client.plane.resolveSandboxBySecret('anything')).toBe(null);
     expect(client.plane.isPathMode('example.com', 'dc-alpha')).toBe(false);
   });
 

@@ -26,7 +26,8 @@
 
 import crypto from 'crypto';
 
-import { emptyPolicyIndex, indexPolicy, decideFleet, decideRequest, isPathModeIn, type PolicyIndex } from './select';
+import { emptyPolicyIndex, indexPolicy, decideRequest, isPathModeIn, type PolicyIndex } from './select';
+import { hashSandboxSecret, sameHash } from '../sbx-identity';
 import type { ContainerFeed, PolicyFeed, ReportAudit, ReportAuditUpdate, ReportBody, SudoAudit } from './feed';
 import type { ControlPlane, RuleDecision } from './plane';
 import type { PolicyEffect } from './decide';
@@ -159,6 +160,7 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
   let index: PolicyIndex = emptyPolicyIndex();
   let policyVersion = '';
   let containersByIp: Record<string, string> = {};
+  let sandboxAuth: Record<string, string> = {};
   let containerVersion = '';
   let havePolicy = false;
 
@@ -229,6 +231,10 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     if (!res.ok) throw new Error(`/control/containers → ${res.status}`);
     const feed = (await res.json()) as ContainerFeed;
     containersByIp = feed.byIp ?? {};
+    // Absent rather than empty is a Node that predates sandbox identity. Both
+    // land on "recognises no sandbox", which denies every sandbox — the safe
+    // half of the mismatch, and the one an operator can see in the log.
+    sandboxAuth = feed.sandboxAuth ?? {};
     containerVersion = feed.version;
     opts.onDevcontainers?.(feed.devcontainers ?? []);
   }
@@ -330,20 +336,9 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
       return { status: decision.status, ruleId: decision.ruleId, ruleRef: pendingRuleRef };
     },
 
-    checkFleetRule(domain, sandboxNames, path) {
-      if (!havePolicy) return CLOSED;
-      const decision = decideFleet(index, domain, sandboxNames, path, nowSeconds());
-      queueEffects(decision.effects);
-      return { status: decision.status, ruleId: decision.ruleId, ruleRef: pendingRuleRef };
-    },
-
     isPathMode(domain, containerId) {
       if (!havePolicy) return false;
       return isPathModeIn(index, domain.toLowerCase(), containerId);
-    },
-
-    knownSandboxNames() {
-      return new Set(index.sandboxes);
     },
 
     // Async in the interface because the in-container version asked Docker.
@@ -356,6 +351,18 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     // attributed to no container, and the rules it files land as global ones.
     async resolveContainerByIp(ip) {
       return containersByIp[normalizeIp(ip)] ?? null;
+    },
+
+    // Compared as HASHES, and with sameHash rather than `===`: the gateway holds
+    // no secret to leak, and a comparison that returns early on the first
+    // differing byte tells a caller how much of a guess was right. A linear scan
+    // is what constant time costs here — the map is one entry per sandbox.
+    resolveSandboxBySecret(secret) {
+      const presented = hashSandboxSecret(secret);
+      for (const [hash, name] of Object.entries(sandboxAuth)) {
+        if (sameHash(presented, hash)) return name;
+      }
+      return null;
     },
 
     logAudit(entry) {

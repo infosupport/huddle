@@ -23,7 +23,6 @@ export interface CreateParams {
   path: string;
   /** Extra folders, appended after the primary path (each may be read-only). */
   extraPaths?: WorkspaceSpec[];
-  proxySandbox?: string;
 }
 
 export interface RemoveParams {

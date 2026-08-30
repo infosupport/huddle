@@ -212,10 +212,33 @@ Two properties this makes load-bearing:
 | 1 | `sandbox/registry.ts` + db | A 256-bit CSPRNG secret per sandbox, minted at create, stored with the name. |
 | 2 | `sbx.ts:122-137`, `sandbox/ops.ts:284` | Credentialed URL handed to `setProxy`; **redact it in `SbxStep.command`**; reset to the unclaimed credential after create; serialise creates. |
 | 3 | `control/feed.ts`, `control/feed-build.ts` | SHA-256 → sandbox name in the container feed. The hash, not the secret. |
-| 4 | `proxy.ts:410-420` | Read `Proxy-Authorization` on `request`, `upgrade` and `connect`; constant-time match to `sbx:<name>`; **strip the header before forwarding**; `checkRule` instead of `checkFleetRule`. `checkFleetRule`, `knownSandboxNames` and `ContainerFeed.sandboxes` then go. |
+| 4 | `proxy.ts:410-420` | Read `Proxy-Authorization` on `request`, `upgrade` and `connect`; constant-time match to a sandbox name; **strip the header before forwarding**; `checkRule` instead of `checkFleetRule`. `checkFleetRule`, `knownSandboxNames` and `ContainerFeed.sandboxes` then go. |
 | 5 | rules + portal | Sandboxes as a rule scope alongside containers, so a blocked domain files against the box that asked and path rules work per sandbox. |
 | 6 | `sandbox/reconcile.ts`, `sandbox/projection.ts` | From mirroring the ruleset to ensuring one allow-all rule per Huddle sandbox. |
 | 7 | — | 4, 5 and 6 ship together (section 6, ordering). |
+
+Two things settled while building this, both narrowing the change list rather
+than widening it.
+
+**Row 5 was already true.** A sandbox is identified to the rule engine by its
+NAME, not by an `sbx:<name>` scope — because that is the key the rest of the
+system had been using all along: the discovery loop files a blocked host as
+`rules.container_id = <name>`, reconciliation reads Huddle's ruleset back by that
+column, and the portal counts a box' pending rows with `container_id === name`.
+A new prefix would have made the proxy file rows under a second key none of them
+read, so a sandbox' own rules would never match and every box would be denied
+everything — fail-closed, but broken. Collision with a devcontainer is not a
+risk: those ids are 32-char UUID hex. So `sandboxContainerId()` returns the name,
+and it stays a function only so there is one place to change if that ever needs
+to be a scope of its own.
+
+**The fleet merge is deleted, not deprecated.** `decideFleet`, `checkFleetRule`
+and `knownSandboxNames` are gone from `select.ts`, the `ControlPlane` interface
+and its bindings, and the sandbox-name cache in `registry.ts` went with them —
+nothing read it once identity existed. Leaving an unreachable fleet evaluator
+behind an interface is the same hazard as the `proxySandbox` back door removed
+in row 2: a second way to decide a sandbox request, reachable by anyone who
+calls it later, at a moment when sbx no longer enforces anything itself.
 
 ## 8. What was measured
 

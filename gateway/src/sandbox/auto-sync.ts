@@ -1,10 +1,12 @@
 // ── Automatic sbx sync (both directions) ──────────────────────────────────────
-// 1. Huddle → sbx: on rule changes and sandbox lifecycle, reconcile the policy
-//    projection automatically (debounced). Huddle stays the source of truth.
+// 1. Huddle → sbx: keep every Huddle-managed sandbox on its single allow-all
+//    rule (reconcile.ts), debounced. Huddle's proxy decides the rest.
 // 2. sbx → Huddle: poll each sandbox's `sbx policy log --json` for BLOCKED
 //    destinations and file them as `requested` rows so they surface in the portal
-//    for approval (the discovery loop; ADR §4.2). Approving writes a rule →
-//    reconcile → sbx allows it.
+//    for approval (the discovery loop; ADR §4.2). A Huddle-managed sandbox is
+//    allow-all in sbx and so blocks nothing itself — its denials come from
+//    Huddle's proxy — but a box created before Huddle managed it still reports
+//    here, and the rows are the same either way.
 // Everything here is best-effort: if sbx is not reachable, calls throw
 // and are swallowed quietly so normal operation is never blocked.
 
@@ -14,7 +16,6 @@ import { notifyStateChanged } from '../events';
 import { reconcile } from './reconcile';
 import * as ops from './ops';
 import { isValidSandboxName } from './protocol';
-import { setKnownSandboxes } from './registry';
 import { matchDomain } from '../rule-match';
 
 const DEBOUNCE_MS = Number(process.env.HUDDLE_SBX_RECONCILE_DEBOUNCE_MS ?? '1500');
@@ -30,7 +31,7 @@ function log(...a: unknown[]): void {
 }
 
 /**
- * Reconcile Huddle → sbx, debounced + coalesced (many rule edits → one sync).
+ * Reconcile the sbx side, debounced + coalesced (many rule edits → one sync).
  * Safe to call on every rule mutation / sandbox lifecycle event.
  */
 export function scheduleReconcile(reason: string): void {
@@ -105,10 +106,8 @@ export async function ingestPending(): Promise<number> {
 
   let added = 0;
   for (const d of ops.parsePolicyLogJson(raw)) {
-    // The log DOES tell us which box was blocked (vm_name) — file the pending
-    // under that specific sandbox so the operator approves it for that box.
-    // (Huddle's PROXY can't attribute a live request, but the LOG can; the proxy
-    // side is handled by the fleet-merge in checkFleetRule.)
+    // The log tells us which box was blocked (vm_name) — file the pending under
+    // that specific sandbox so the operator approves it for that box.
     if (!d.sandbox || !isValidSandboxName(d.sandbox)) continue;
     if (alreadyDecided(d.domain, d.sandbox)) continue; // already allowed/denied → not pending
     const info = insertRequested().run(d.domain, d.sandbox);
@@ -127,8 +126,6 @@ let poller: NodeJS.Timeout | null = null;
 export function startAutoSync(): void {
   if (poller) return;
   const tick = async () => {
-    // Keep the known-sandbox set fresh so the proxy's fleet-merge is accurate.
-    try { setKnownSandboxes((await ops.list()).map((s) => s.name)); } catch { /* sbx down */ }
     const added = await ingestPending();
     // Newly-approved rules and drift are pushed on the next reconcile; also run a
     // reconcile each tick so external drift self-heals even without rule edits.

@@ -161,8 +161,8 @@ Usage:
                                      (repeatable); Huddle's folder mappings are
                                      mounted automatically
   huddle sbx rm <name> [--force]     Remove a sandbox
-  huddle sbx reconcile [--dry-run]   Sync Huddle rules → sbx policy (one-way;
-                                     Huddle is the single source of truth)
+  huddle sbx reconcile [--dry-run]   Set every Huddle sandbox to allow-all in sbx
+                                     (Huddle's proxy enforces the rules)
   huddle sbx trust-ca <name>         Install Huddle's CA in a sandbox so HTTPS
                                      works (needed for VS Code / JetBrains backends)
   huddle sbx trust-host              Trust Huddle's CA on the HOST, where the sbx
