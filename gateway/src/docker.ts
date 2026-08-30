@@ -6,7 +6,6 @@ import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ContainerExec, ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
-import { sanitizeResolvConf } from './dns-egress';
 import { runtimeEnv } from './runtime-env';
 
 const SOCKET_DIR = runtimeEnv.socketDir;
@@ -133,6 +132,14 @@ export interface DevcontainerInfo {
   mounts?: { hostPath: string; containerPath: string }[];
   presentableName: string;
   created: number;
+  /**
+   * Docker's own `State`, not the human-readable `status`.
+   *
+   * The listing is `?all=1` because the portal shows stopped devcontainers too,
+   * so anything that goes on to *do* something to a container has to check this
+   * first — an exec against a stopped container is a 409, not a no-op.
+   */
+  running: boolean;
   inNetwork: boolean;
   huddleInNetwork: boolean;
 }
@@ -175,6 +182,7 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
       name,
       image: c.Image,
       status: c.Status,
+      running: c.State === 'running',
       workspacePath: c.Labels?.['com.intellij.devcontainer.sources.path'] ?? '',
       mounts: parseMountsLabel(c.Labels?.['com.intellij.devcontainer.mounts']),
       presentableName: c.Labels?.['com.intellij.devcontainer.presentable.name'] ?? '',
@@ -578,18 +586,22 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
   });
 }
 
+// Attaching the gateway to an (internal) devcontainer-net makes Podman put that
+// net's aardvark DNS at the front of the GATEWAY container's /etc/resolv.conf,
+// which then fails on external names (see dns-egress.ts). Repairing it is not
+// ours to do: this module runs in Huddle Node, on the operator's machine, and
+// `/etc/resolv.conf` there is the operator's own DNS configuration — a file we
+// would be reading, probing and rewriting on their behalf.
+//
+// The gateway repairs its own copy instead. It sees the same event we do: a
+// devcontainer network appears or goes away exactly when the container feed
+// changes, and boot-gateway.ts sanitizes on that.
 export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
-  // When the gateway itself attaches to an (internal) devcontainer-net, Podman
-  // puts that net's aardvark DNS at the front of resolv.conf — which fails on
-  // external names. Restore the order so egress keeps working (see dns-egress.ts).
-  if (containerName === 'huddle') await sanitizeResolvConf();
 }
 
 export async function disconnectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/disconnect`, { Container: containerName });
-  // A disconnect also makes Podman regenerate resolv.conf.
-  if (containerName === 'huddle') await sanitizeResolvConf();
 }
 
 export async function deleteNetwork(name: string): Promise<void> {
