@@ -308,9 +308,15 @@ export class SettingsComponent implements OnInit {
               this.folderNote.set(r.folder
                 ? `Saved, but Huddle cannot read ${r.folder} — check the path exists on the host.`
                 : 'Saved. Set a firewall rules folder to load rules from.');
+            } else if (r.errors.length) {
+              // A reload is all-or-nothing: one unreadable file and the previous
+              // team rules are kept rather than half-replaced. Saying only how
+              // MANY files failed leaves the operator with nothing to fix, so
+              // name them — this note is the only place they are shown.
+              const detail = r.errors.map((e) => `${e.file}: ${e.message}`).join(' · ');
+              this.folderNote.set(`Nothing loaded — the previous rules are kept. ${detail}`);
             } else {
-              const errs = r.errors.length ? `, ${r.errors.length} error(s)` : '';
-              this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)${errs}`);
+              this.folderNote.set(`Loaded ${r.groups} group(s), ${r.imported} rule(s)`);
             }
           },
           error: (e) => { this.savingFolders.set(false); this.error.set(e.message); },
