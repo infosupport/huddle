@@ -91,9 +91,11 @@ function normalizeSlashes(p: string): string {
  * makes this affordable on a drive root, and it is why there is no depth
  * parameter to get wrong.
  *
- * Hidden (dot) folders are left out — they are configuration, not workspaces,
- * and `.git` alone would double the length of every listing. A hidden folder can
- * still be used: the path box next to Browse… stays authoritative.
+ * Hidden (dot) folders are included. They were left out at first on the theory
+ * that they are configuration rather than workspaces, which is wrong often
+ * enough to matter — `.config`, `.local`, a dotted worktree — and a picker that
+ * silently omits a folder the operator can see in their own file manager reads
+ * as broken, not as tidy.
  *
  * Symlinked folders are included (they are ordinary folders to whoever made
  * them), which is safe here in a way it was not for the old recursive scan:
@@ -110,7 +112,6 @@ export function listHostFolders(dir: string): HostFolderListing {
   const folders: HostFolder[] = [];
   let truncated = false;
   for (const e of entries) {
-    if (e.name.startsWith('.')) continue;
     let isDir = e.isDirectory();
     if (!isDir && e.isSymbolicLink()) {
       try {
