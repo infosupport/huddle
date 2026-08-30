@@ -5,9 +5,18 @@ import { DEFAULT_NODE_PORT, nodeProbeUrls } from './node';
 // after the Node/Gateway split the API this talks to is the host process, and
 // the gateway container has no API at all (docs/ADR-huddle-node-split.md).
 //
-// The loopback LITERAL, not `localhost` — same reason as nodeProbeUrls(), which
-// is where that reason is written down.
-let baseUrl = normalizeBaseUrl(process.env.HUDDLE_URL ?? nodeProbeUrls(DEFAULT_NODE_PORT)[0]);
+// The loopback LITERALS, not `localhost` — nodeProbeUrls() is where that reason
+// is written down. Both are kept, not just the first: Node binds one address and
+// which one depends on the host, so the only honest default is to try each and
+// keep whichever answers.
+//
+// An explicit --url or HUDDLE_URL replaces the list entirely — the operator named
+// an address, and silently talking to a different one would be worse than failing.
+let candidates: string[] = (process.env.HUDDLE_URL
+  ? [process.env.HUDDLE_URL]
+  : nodeProbeUrls(DEFAULT_NODE_PORT)
+).map(normalizeBaseUrl);
+let baseUrl = candidates[0];
 
 export class ApiError extends Error {
   constructor(
@@ -20,7 +29,30 @@ export class ApiError extends Error {
 }
 
 export function setBaseUrl(url: string): void {
-  baseUrl = normalizeBaseUrl(url);
+  candidates = [normalizeBaseUrl(url)];
+  baseUrl = candidates[0];
+}
+
+/**
+ * The first candidate that answers, remembered for the rest of the process.
+ *
+ * A refused connection is not a failure here — it is how we find out which
+ * loopback address Node bound. Anything the server actually answers, including a
+ * 500, ends the search: it proves we found Huddle.
+ */
+async function reachHuddle(path: string, init: RequestInit): Promise<Response> {
+  const order = [baseUrl, ...candidates.filter((c) => c !== baseUrl)];
+  let detail = '';
+  for (const candidate of order) {
+    try {
+      const res = await fetch(`${candidate}${path}`, init);
+      baseUrl = candidate;
+      return res;
+    } catch (err) {
+      detail = err instanceof Error ? err.message : String(err);
+    }
+  }
+  throw new ApiError(`Cannot reach Huddle API at ${order.join(' or ')}: ${detail}`);
 }
 
 export async function apiCall<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -31,17 +63,11 @@ export async function apiCall<T>(method: string, path: string, body?: unknown): 
   const token = operatorToken();
   if (token) headers['authorization'] = `Bearer ${token}`;
 
-  let res: Response;
-  try {
-    res = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new ApiError(`Cannot reach Huddle API at ${baseUrl}: ${detail}`);
-  }
+  const res = await reachHuddle(path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
 
   const raw = await res.text();
   const payload = parsePayload(raw);
