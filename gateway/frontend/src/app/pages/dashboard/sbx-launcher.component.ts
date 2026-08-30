@@ -17,8 +17,9 @@ import { ApiService, SbxStartResult, SbxStatus } from '../../core/services/api.s
           <p class="sbx__guarantee">
             <b>Enforcement boundary: the network (egress).</b> In sandbox mode Huddle
             polices egress, <b>not</b> Docker-API calls — inside the microVM the agent
-            has full Docker. Per-sandbox domain rules are synced into sbx; path rules
-            apply <b>fleet-wide</b> at Huddle's proxy, never per-sandbox.
+            has full Docker. A sandbox is <b>allow-all</b> in sbx and every rule is
+            enforced at Huddle's proxy, which knows <b>which sandbox</b> is calling —
+            so domain and path rules both apply per sandbox.
           </p>
         </div>
         <button class="btn btn--primary" (click)="start()" [disabled]="busy()">

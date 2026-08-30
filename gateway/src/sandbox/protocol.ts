@@ -1,7 +1,7 @@
 // ── sbx types + validators ────────────────────────────────────────────────────
-// Shared shapes and input validation for the sbx passthrough (ops.ts), the pure
-// rule projection (projection.ts) and reconciliation (reconcile.ts). Validation
-// runs BEFORE any name/target reaches a child process argv.
+// Shared shapes and input validation for the sbx passthrough (ops.ts) and for
+// reconciliation (reconcile.ts). Validation runs BEFORE any name/target reaches
+// a child process argv.
 
 export type Scope = { kind: 'global' } | { kind: 'sandbox'; name: string };
 

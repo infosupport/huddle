@@ -223,9 +223,8 @@ does not work and is not meant to.
 ```
 gateway/src/sandbox/protocol.ts    types + name/target validation
 gateway/src/sandbox/ops.ts         execFile passthrough, output parsers   ← keep, retarget
-gateway/src/sandbox/projection.ts  Huddle rules → sbx policy (pure)
 gateway/src/sandbox/reconcile.ts   diff + apply
-gateway/src/sandbox/registry.ts    known-sandbox cache for the fleet merge
+gateway/src/sandbox/registry.ts    per-sandbox identity (mint/has/drop)
 gateway/src/sandbox/auto-sync.ts   debounced reconcile + policy-log ingest
 gateway/src/sbx.ts                 facade: startSandbox/trustCa/…
 cli/src/sbx-host-ca.ts             host CA trust (already host-native)
@@ -233,6 +232,11 @@ cli/src/sbx-host-ca.ts             host CA trust (already host-native)
 
 The `:32768` sbx egress proxy **stays in the gateway container** — sandbox
 traffic must keep crossing the enforcement point.
+
+`sandbox/projection.ts` was on this list and is gone: per-sandbox identity made
+sbx' own policy engine redundant, so Huddle stopped mirroring its ruleset into
+sbx and became the single enforcement point (docs/ADR-sbx-identity.md). The
+fleet merge and the sandbox-name cache went with it.
 
 ### REMOVE / REPLACE (pure Docker→host workarounds)
 
