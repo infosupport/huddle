@@ -54,6 +54,9 @@ const SBX = process.env.SBX_BIN ?? 'sbx';
 const t0 = Date.now();
 let phase = 'setup';
 const hits = [];
+// Policy-regels die we globaal moesten zetten omdat sandbox-scope niet lukte:
+// die overleven `sbx rm` en moeten we zelf opruimen.
+const globalRules = [];
 
 function credentialOf(headers) {
   const raw = headers['proxy-authorization'];
@@ -116,11 +119,28 @@ const setProxy = (url) => sbx(['settings', 'set', 'proxy.sandbox', url]);
 const proxyUrl = (b) => `http://${b.user}:${b.pass}@localhost:${PORT}`;
 
 /**
+ * sbx handhaaft zijn eigen policy VOOR hij naar de upstream-proxy gaat: een
+ * doelwit dat niet in de allowlist van de doos staat wordt met 403 geweigerd en
+ * bereikt ons nooit. Zonder deze regel meet je die weigering in plaats van de
+ * identiteit. Sandbox-scope eerst, want dan verdwijnt de regel met de doos.
+ */
+async function allowTarget(box, host) {
+  const scoped = await sbx(['policy', 'allow', 'network', host, '--sandbox', box.name], { quiet: true });
+  if (scoped.code === 0) return 'sandbox';
+  const global = await sbx(['policy', 'allow', 'network', host], { quiet: true });
+  if (global.code === 0) return 'global';
+  console.log(`   ! kon ${host} niet toestaan voor ${box.name} — verwacht een 403`);
+  return null;
+}
+
+/**
  * Eén curl in een doos, met de uitkomst zichtbaar. Zwijgend een exitcode 0
  * accepteren is hier gevaarlijk: dan lijkt "geen hit" een uitspraak over sbx,
  * terwijl curl misschien niet eens bestaat in het image.
  */
 async function curlFrom(box, host) {
+  const scope = await allowTarget(box, host);
+  if (scope === 'global') globalRules.push(host);
   const url = `https://${host}`;
   const r = await sbx(['exec', box.name, '--', 'curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', url]);
   const said = (r.out || r.err).trim().split('\n').pop() || '(niets)';
@@ -165,12 +185,13 @@ async function main() {
       console.log(`\n[3] ${a.name} herstarten (globale proxy staat nu op ${BOXES[1].name})`);
       if (await restart(a.name)) {
         phase = `curl ${a.name} na herstart`;
+        console.log(`     gestopt — de curl hierna start hem weer`);
         await curlFrom(a, RESTART_TARGET);
       } else {
         // Welke werkwoorden sbx wél heeft, is de helft van het antwoord: heeft
         // het er geen, dan kan Huddle een herstart ook niet zelf afdwingen en is
         // de mitigatie uit de ADR het enige dat overblijft.
-        console.log('   ! geen herstart-werkwoord gevonden — fase 3 overgeslagen');
+        console.log('   ! stoppen lukte niet — fase 3 overgeslagen');
         const help = await sbx(['--help'], { quiet: true });
         console.log((help.out || help.err).trim().split('\n').map((l) => `     ${l}`).join('\n'));
       }
@@ -179,23 +200,21 @@ async function main() {
     console.log(`\nAFGEBROKEN: ${err.message}`);
   } finally {
     await restore(original);
+    for (const host of globalRules) await sbx(['policy', 'rm', 'network', host], { quiet: true });
     if (!flag('--keep')) for (const b of BOXES) await sbx(['rm', '--force', b.name], { quiet: true });
   }
 
   verdict();
 }
 
-/** sbx' herstart-werkwoord is niet gedocumenteerd; probeer de gangbare vormen. */
+/**
+ * sbx heeft `stop` en geen `start` of `restart` (bevestigd via `sbx --help`,
+ * 2026-08-30). Een gestopte doos komt terug zodra je hem gebruikt, dus de curl
+ * hierna IS de herstart. Dat maakt het gevaar uit de ADR groter, niet kleiner:
+ * er is geen moment waarop iemand bewust "herstart" zegt.
+ */
 async function restart(name) {
-  const forms = [['restart', name], ['sandbox', 'restart', name], ['stop', name]];
-  for (const argv of forms) {
-    const r = await sbx(argv, { quiet: true });
-    if (r.code !== 0) continue;
-    if (argv[0] !== 'stop') return true;
-    const up = await sbx(['start', name], { quiet: true });
-    if (up.code === 0) return true;
-  }
-  return false;
+  return (await sbx(['stop', name], { quiet: true })).code === 0;
 }
 
 /**
@@ -204,6 +223,12 @@ async function restart(name) {
  * machine kapot achterlaten.
  */
 async function restore(original) {
+  // Een eerdere run die halverwege afbrak laat ONZE url achter. Die weer
+  // "terugzetten" bewaart precies de kapotte toestand die we wilden vermijden.
+  if (original && original.includes(`:${PORT}`)) {
+    console.log(`\n!! wat er stond was onze eigen probe-url (${original}) — niet teruggezet.`);
+    original = null;
+  }
   if (original) {
     const r = await setProxy(original);
     console.log(r.code === 0 ? `\nproxy.sandbox teruggezet op ${original}` : `\n!! proxy.sandbox NIET teruggezet — zet zelf: sbx settings set proxy.sandbox ${original}`);
@@ -233,8 +258,11 @@ function verdict() {
     return;
   }
   for (const h of hits) {
-    const tag = mine.has(h.host) ? '' : '  (achtergrond)';
-    console.log(`  +${h.at.padStart(5)}s ${h.kind.padEnd(8)} ${h.host.padEnd(18)} ${String(h.credential ?? '(geen)').padEnd(28)}${tag}`);
+    const tag = mine.has(h.host) ? '' : '(achtergrond)';
+    // De fase erbij, want bij achtergrondverkeer is "wanneer" de hele uitspraak:
+    // een doos die tijdens de create van de VOLGENDE doos nog zijn eigen
+    // credential toont, heeft hem ingebakken gekregen.
+    console.log(`  +${h.at.padStart(5)}s ${h.phase.padEnd(24)} ${h.host.padEnd(18)} ${String(h.credential ?? '(geen)').padEnd(28)}${tag}`);
   }
 
   // Toewijzing op bestemming, niet op tijd: de curl van doos A is het verzoek
