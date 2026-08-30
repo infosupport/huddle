@@ -40,7 +40,14 @@ export function bootGateway(): void {
   const client = createControlClient({
     baseUrl: runtimeEnv.nodeControlUrl,
     token,
-    onDevcontainers: (names) => syncSocketRelay(relay, names),
+    onDevcontainers: (names) => {
+      syncSocketRelay(relay, names);
+      // A devcontainer coming or going means Node attached this container to (or
+      // detached it from) that net, and Podman rewrote our resolv.conf for it.
+      // Node cannot repair that from where it runs — see connectNetwork() in
+      // docker.ts — so the feed change is how we learn to repair it ourselves.
+      scheduleSettlingSanitize();
+    },
   });
   setControlPlane(client.plane);
   client.start();
@@ -57,7 +64,7 @@ export function bootGateway(): void {
 
   // Rewrites /etc/resolv.conf of the container this runs in, which is why it is
   // gateway-only: on the host that would be Huddle Node editing the operator's
-  // DNS configuration. The settling re-runs are also how this process recovers
-  // from a devcontainer-network connect that Node performed in its own process.
+  // DNS configuration. This first run covers the networks we are attached to at
+  // boot; onDevcontainers above covers every change after it.
   scheduleSettlingSanitize();
 }
