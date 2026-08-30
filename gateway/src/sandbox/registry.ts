@@ -38,22 +38,18 @@ export function mintSandboxIdentity(name: string): SandboxIdentity {
 /**
  * Does this sandbox have an identity — i.e. did Huddle create it?
  *
- * Selects no columns, so asking the question cannot read the answer's secret.
- * Callers that only need existence (the reconciler, deciding which boxes are
- * Huddle's to widen) must use this rather than getSandboxIdentity: a module that
- * manages policy rules should not be a place a credential can be read from.
+ * Selects no columns, so asking the question cannot read the answer's secret —
+ * which is the whole reason this is the only reader here besides minting. The
+ * reconciler asks it to decide which boxes are Huddle's to widen, and a module
+ * that manages policy rules should not be a place a credential can be read from.
+ *
+ * There is deliberately no getSandboxIdentity beside it. The secret is spent
+ * once, at create, by whoever minted it; nothing reads it back, so no accessor
+ * that returns it exists to be called by something that later thinks it needs
+ * one.
  */
 export function hasSandboxIdentity(name: string): boolean {
   return db.prepare('SELECT 1 FROM sandbox_identity WHERE name = ?').get(name) !== undefined;
-}
-
-/** The stored identity for a sandbox, or null when it has none. Prefer
- * hasSandboxIdentity unless the SECRET itself is what you need. */
-export function getSandboxIdentity(name: string): SandboxIdentity | null {
-  const row = db.prepare('SELECT name, secret FROM sandbox_identity WHERE name = ?').get(name) as
-    | SandboxIdentity
-    | undefined;
-  return row ?? null;
 }
 
 /**
