@@ -174,7 +174,6 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                         <button type="button" class="grp__pm-toggle" (click)="toggleExpand(r.id)">
                           <app-icon [name]="expanded() === r.id ? 'chevron-down' : 'chevron-right'" [size]="14" />
                         </button>
-                        <span class="grp__pm-fleet" title="Path mode is fleet-wide for sandboxes: sbx can't filter paths, so the domain is allowed in every sandbox and Huddle enforces the paths at its proxy.">all sandboxes</span>
                       } @else {
                         <span class="pill" [class.pill--allow]="r.status === 'allow'" [class.pill--deny]="r.status === 'deny'">{{ r.status === 'allow' ? 'Allowed' : 'Denied' }}</span>
                       }
