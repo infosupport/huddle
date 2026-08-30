@@ -136,9 +136,7 @@
         @for (a of rep.actions; track a.target + (a.scope.name || '')) {
           <div class="rrow" [class.fail]="!a.ok"><span class="op">{{ a.op === 'create' ? '+' : '−' }}</span> {{ a.action }} {{ a.target }} <span class="muted">@ {{ scopeLabel(a.scope) }}</span>@if (a.error) { <span style="color:var(--danger)"> — {{ a.error }}</span> }</div>
         }
-        @if (rep.notProjected.length) {
-          <p class="muted note">{{ rep.notProjected.length }} path rule(s) not projected to sbx — enforced fleet-wide at Huddle's proxy (sbx policy is domain-level only).</p>
-        }
+        <p class="muted note">Sandboxes are allow-all in sbx; every rule, paths included, is enforced at Huddle's proxy.</p>
       </div>
     }
   </div>

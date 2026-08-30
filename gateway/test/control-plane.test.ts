@@ -10,10 +10,9 @@ import type { ControlPlane } from '../src/control/plane';
 function recordingPlane(calls: string[]): ControlPlane {
   return {
     checkRule: (d, c, p) => { calls.push(`checkRule:${d}:${c}:${p}`); return { status: 'allow', ruleId: 1 }; },
-    checkFleetRule: (d, n, p) => { calls.push(`checkFleetRule:${d}:${[...n].join(',')}:${p}`); return { status: 'deny', ruleId: 2 }; },
     isPathMode: (d, c) => { calls.push(`isPathMode:${d}:${c}`); return true; },
-    knownSandboxNames: () => { calls.push('knownSandboxNames'); return new Set(['box']); },
     resolveContainerByIp: async (ip) => { calls.push(`resolveContainerByIp:${ip}`); return 'dc-1'; },
+    resolveSandboxBySecret: (s) => { calls.push(`resolveSandboxBySecret:${s}`); return 'box'; },
     logAudit: () => { calls.push('logAudit'); return 42; },
     updateAuditResponse: (ref) => { calls.push(`updateAuditResponse:${ref}`); },
     reportSudoAudit: (c, e) => { calls.push(`reportSudoAudit:${c}:${e}`); },
@@ -28,20 +27,18 @@ describe('control-plane facade', () => {
     plane.setControlPlane(recordingPlane(calls));
 
     expect(plane.controlPlane.checkRule('example.com', 'dc-1', '/a')).toEqual({ status: 'allow', ruleId: 1 });
-    expect(plane.controlPlane.checkFleetRule('example.com', new Set(['box']), null)).toEqual({ status: 'deny', ruleId: 2 });
     expect(plane.controlPlane.isPathMode('example.com', null)).toBe(true);
-    expect(plane.controlPlane.knownSandboxNames()).toEqual(new Set(['box']));
     await expect(plane.controlPlane.resolveContainerByIp('10.0.0.2')).resolves.toBe('dc-1');
+    expect(plane.controlPlane.resolveSandboxBySecret('s3cret')).toBe('box');
     expect(plane.controlPlane.logAudit({ containerId: null, domain: 'example.com', action: 'allow' })).toBe(42);
     plane.controlPlane.updateAuditResponse(42, { resStatus: 200 });
     plane.controlPlane.reportSudoAudit('dc-1', 'COMMAND=/usr/bin/id');
 
     expect(calls).toEqual([
       'checkRule:example.com:dc-1:/a',
-      'checkFleetRule:example.com:box:null',
       'isPathMode:example.com:null',
-      'knownSandboxNames',
       'resolveContainerByIp:10.0.0.2',
+      'resolveSandboxBySecret:s3cret',
       'logAudit',
       'updateAuditResponse:42',
       'reportSudoAudit:dc-1:COMMAND=/usr/bin/id',
@@ -67,9 +64,10 @@ describe('control-plane facade', () => {
   // holds no policy at all.
   it('denies everything while nothing is bound', () => {
     expect(plane.controlPlane.checkRule('unseen.example.com', null, null)).toEqual({ status: 'deny', ruleId: null });
-    expect(plane.controlPlane.checkFleetRule('unseen.example.com', new Set(['box']), null)).toEqual({ status: 'deny', ruleId: null });
     expect(plane.controlPlane.isPathMode('unseen.example.com', null)).toBe(false);
-    expect(plane.controlPlane.knownSandboxNames().size).toBe(0);
+    // Same reason: with nothing bound the gateway recognises no sandbox, so
+    // every box on the sbx listener is denied rather than assumed.
+    expect(plane.controlPlane.resolveSandboxBySecret('s3cret')).toBe(null);
     expect(plane.controlPlane.logAudit({ containerId: null, domain: 'x.test', action: 'deny' })).toBe(null);
     // A sudo line that arrives before the plane is bound is dropped, not
     // buffered: it is an audit record, not a decision, and there is nowhere to

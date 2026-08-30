@@ -115,6 +115,18 @@ export function initDb(): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_groups_name
       ON firewall_groups (name COLLATE NOCASE);
+    -- Per-sandbox identity (docs/ADR-sbx-identity.md). A sandbox cannot be
+    -- recognised by its source address the way a devcontainer is, so Huddle Node
+    -- mints a secret per box and puts it in the upstream-proxy URL sbx bakes in
+    -- at create. Node keeps the secret because it writes that URL; the control
+    -- feed hands the gateway only the name and the hash, which is all it needs
+    -- to recognise an identity without possessing one.
+    CREATE TABLE IF NOT EXISTS sandbox_identity (
+      name TEXT PRIMARY KEY,
+      secret TEXT NOT NULL,
+      secret_hash TEXT NOT NULL,
+      created INTEGER NOT NULL
+    );
   `);
 
   // The folder index (#69) is gone: the portal browses the host live now that

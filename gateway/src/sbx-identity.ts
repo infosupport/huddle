@@ -24,9 +24,24 @@ import crypto from 'crypto';
  */
 export const UNCLAIMED_SANDBOX = 'huddle-unclaimed';
 
-/** How a sandbox appears to the rule engine, alongside a devcontainer's id. */
+/**
+ * How a sandbox appears to the rule engine, alongside a devcontainer's id.
+ *
+ * The name itself, unprefixed — because that is already the key everything else
+ * uses: the discovery loop files a blocked host as `rules.container_id = <name>`
+ * (sandbox/auto-sync.ts), reconcile reads Huddle's ruleset back by that column,
+ * and the portal counts a box' pending rows with `container_id === name`. A
+ * prefix here would make the proxy file rows under a second, parallel key that
+ * none of them look at, so a sandbox' own rules would never match and every box
+ * would be denied everything.
+ *
+ * It is a function rather than the bare string at the call site so there is one
+ * place to state that, and one place to change if sandboxes ever need a scope of
+ * their own. Collision with a devcontainer is not a concern: those ids are
+ * 32-char UUID hex (docker.ts), which is not a name anyone types.
+ */
 export function sandboxContainerId(name: string): string {
-  return `sbx:${name}`;
+  return name;
 }
 
 /**

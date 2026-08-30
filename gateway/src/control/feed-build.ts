@@ -10,7 +10,6 @@
 
 import { db } from '../db';
 import { containerSnapshot } from '../docker';
-import { knownSandboxNames } from '../sandbox/registry';
 import type { RuleRow } from '../rule-match';
 import type { ContainerFeed, PolicyFeed } from './feed';
 import { feedVersion } from './http';
@@ -27,10 +26,9 @@ export function buildPolicyFeed(): PolicyFeed {
   const airlocked = (db
     .prepare(`SELECT name FROM containers WHERE airlocked = 1 ORDER BY name`)
     .all() as { name: string }[]).map((r) => r.name);
-  const sandboxes = [...knownSandboxNames()].sort();
 
-  const feed: PolicyFeed = { version: '', rules, airlocked, sandboxes };
-  feed.version = feedVersion(JSON.stringify({ rules, airlocked, sandboxes }));
+  const feed: PolicyFeed = { version: '', rules, airlocked };
+  feed.version = feedVersion(JSON.stringify({ rules, airlocked }));
   return feed;
 }
 
@@ -38,5 +36,16 @@ export async function buildContainerFeed(): Promise<ContainerFeed> {
   const { byIp: map, devcontainers } = await containerSnapshot();
   const byIp: Record<string, string> = {};
   for (const ip of [...map.keys()].sort()) byIp[ip] = map.get(ip)!;
-  return { version: feedVersion(JSON.stringify({ byIp, devcontainers })), byIp, devcontainers };
+  // Only the hash leaves this process. Node mints and spends the secret (it
+  // writes the sandbox' upstream-proxy URL); the gateway is handed just enough
+  // to recognise one. See ./feed and docs/ADR-sbx-identity.md §5.
+  const sandboxAuth: Record<string, string> = {};
+  const identities = db
+    .prepare(`SELECT name, secret_hash FROM sandbox_identity ORDER BY name`)
+    .all() as { name: string; secret_hash: string }[];
+  for (const row of identities) sandboxAuth[row.secret_hash] = row.name;
+  // sandboxAuth is part of the version: a sandbox created or removed has to
+  // reach the gateway on the next poll, or the box is denied by a stale feed.
+  const version = feedVersion(JSON.stringify({ byIp, devcontainers, sandboxAuth }));
+  return { version, byIp, sandboxAuth, devcontainers };
 }

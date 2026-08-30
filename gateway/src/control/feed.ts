@@ -1,8 +1,8 @@
 // The shapes that cross the control channel.
 //
-// The gateway needs three things from the control plane to filter traffic:
-// the firewall policy, the set of sandboxes a fleet decision merges across, and
-// the IP→container mapping that attributes a connection to a devcontainer. It
+// The gateway needs two things from the control plane to filter traffic: the
+// firewall policy, and the callers it can be asked about — the IP→container
+// mapping for devcontainers and the secret→sandbox mapping for sandboxes. It
 // has none of them locally after the split — no database, no Docker socket — so
 // Huddle Node serves them here and the gateway reports back what it decided.
 //
@@ -25,14 +25,25 @@ export interface PolicyFeed {
   rules: RuleRow[];
   /** Containers with no global-rule fallback; their snapshots carry no globals. */
   airlocked: string[];
-  /** The sandboxes a fleet decision merges rules across. */
-  sandboxes: string[];
 }
 
-/** Which devcontainer a source address belongs to. */
+/** Who is calling: a devcontainer by its address, a sandbox by its credential. */
 export interface ContainerFeed {
   version: string;
   byIp: Record<string, string>;
+  /**
+   * SHA-256 of a sandbox' proxy secret, hex → the sandbox' name.
+   *
+   * A sandbox has no address of its own to be recognised by — every box reaches
+   * the gateway as the same host-side sbx daemon — so it is recognised by the
+   * credential that daemon presents (../sbx-identity.ts, docs/ADR-sbx-identity.md).
+   *
+   * The HASH, never the secret. The gateway has to RECOGNISE an identity, not
+   * possess one, and it is deliberately the less-trusted half of the split: it
+   * is the process exposed to the network, and it can be made to hand out
+   * nothing it does not hold. Minting stays with Node.
+   */
+  sandboxAuth: Record<string, string>;
   /**
    * Running devcontainers, by name.
    *
