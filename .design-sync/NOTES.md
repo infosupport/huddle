@@ -52,3 +52,33 @@ This repo is developed inside a Huddle-firewalled devcontainer. Domains needed:
   sync.
 - If the portal ever gains a React component package, this whole shape changes — drop the entry
   stub, drop tokens-only, and re-detect.
+
+## Blocked: the upload never ran (2026-08-31)
+
+The bundle is complete and verified, but nothing was uploaded — there is no Claude Design project
+for Huddle yet, and `.design-sync/config.json` therefore holds no `projectId`. A future sync starts
+as a first-time import, not a re-sync.
+
+`DesignSync` fails every call with *"needs design-system authorization. Run /design-login …"*, and
+`/design-login` reports success each time. Neither is the real cause. Diagnosis, in order:
+
+1. `claude.ai`, `api.claude.ai` and `console.anthropic.com` were blocked by the firewall
+   (`x-huddle-blocked: 1`). The user allowlisted them — `claude.ai` now answers 302. The error
+   did not change.
+2. The actual cause is Huddle's own token management. A devcontainer never holds the real OAuth
+   token: `token-exchange.ts` hands it a `huddle_tok_<hex>` placeholder and the gateway swaps in
+   the real token on the way out. That swap is gated on a single hostname in `proxy.ts`
+   (`hostname === 'api.anthropic.com'`). `DesignSync` talks to `claude.ai`, which falls outside the
+   gate, so the placeholder reaches claude.ai unrewritten and is rejected.
+
+Widening that gate to an allowlist would make this work and would not weaken the security property
+(the real token still never enters the container). It was deliberately NOT done: the owner considers
+credential handling a separate design that needs generalizing rather than a per-host patch. Until
+that lands, **this design system can only be uploaded from outside a Huddle devcontainer**, where a
+real claude.ai credential exists. Everything up to the upload is reproducible from this repo:
+
+    node .ds-sync/resync.mjs --config .design-sync/config.json \
+      --node-modules .ds-sync/node_modules --out ./ds-bundle --no-render-check
+
+Unverified: that claude.ai's design endpoints accept the same OAuth access token as
+`api.anthropic.com`. Likely (one credential file), but only a working upload proves it.
