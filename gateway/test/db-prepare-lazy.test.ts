@@ -13,8 +13,8 @@ import path from 'path';
 // The failure is invisible in normal use — the gateway's database lived in a
 // long-lived volume that already had the schema — and fatal on exactly the boot
 // that matters: the first one, on a user's host, after the Node split moved the
-// database to ~/.huddle. sandbox/auto-sync.ts shipped this bug; prepare lazily
-// (see its insertRequested()) and it cannot come back.
+// database to ~/.huddle. sandbox/auto-sync.ts shipped this bug, in an ingest
+// that has since been removed; prepare lazily and it cannot come back.
 //
 // Static, like boot-graph.test.ts: reads sources rather than importing them, so it
 // also runs where the native binding cannot be built.
