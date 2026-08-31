@@ -1,0 +1,163 @@
+@if (open) {
+  <!-- Closes on mousedown, not click: releasing a text selection that started
+       inside the box must not count as "clicked outside". Same rule as
+       confirm-modal — see the note there. -->
+  <div class="modal" (mousedown)="close()">
+    <div class="modal-box update" (mousedown)="$event.stopPropagation()">
+
+      <button class="update__close" (click)="close()" aria-label="Close">✕</button>
+
+      <div class="update__header">
+        <span class="update__badge">{{ release }}</span>
+        <h1>Huddle now supports Docker sandboxes (SBX)</h1>
+        <p>To support sbx sandboxes, Huddle split into a <strong>host node</strong> and a
+           <strong>gateway container</strong>. Your dev environments keep working exactly as before.</p>
+      </div>
+
+      <div class="update__rule"></div>
+
+      <!-- SECTION: ARCHITECTURE -->
+      <div class="update__section">
+        <div class="update__section-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg>
+        </div>
+        <div>
+          <div class="update__section-title">New architecture</div>
+          <div class="update__section-sub">Two processes, one traffic path.</div>
+        </div>
+      </div>
+
+      <div class="update__block">
+        <div class="update__note">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.9"/></svg>
+          <div>Both devcontainers and sbx route through the gateway's proxy layer, so your global
+               firewall rules keep applying to everything.</div>
+        </div>
+
+        <div class="update__flow">
+          <div class="update__zone">
+            <div class="update__zone-label">Host OS</div>
+            <div class="update__part">
+              <div class="update__part-name">Huddle Node</div>
+              <div class="update__part-sub">The brain. Runs on your machine</div>
+              <div class="update__tags">
+                <span>Database</span><span>Docker</span><span>Sandbox registry</span>
+              </div>
+            </div>
+          </div>
+          <div class="update__arrow">→</div>
+          <div class="update__zone">
+            <div class="update__zone-label">Container</div>
+            <div class="update__part">
+              <div class="update__part-name">huddle-gateway</div>
+              <div class="update__part-sub">The gate. All traffic passes here</div>
+              <div class="update__tags">
+                <span>Filtering proxies</span><span>No database</span><span>Serves the portal</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="update__arrow update__arrow--down">↓</div>
+
+        <div class="update__kinds">
+          <div class="update__kind update__kind--dev">
+            <div class="update__kind-head">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 10h16"/></svg>
+              <span>Devcontainer</span>
+            </div>
+            <p>A container on the host Docker engine. Classic support, unchanged.</p>
+          </div>
+          <div class="update__kind update__kind--sbx">
+            <div class="update__kind-head">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3"/></svg>
+              <span>sbx microVM</span>
+            </div>
+            <p>A small VM of its own. Docker runs inside it, so no host Docker socket is needed.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECTION: DIFFERENCE -->
+      <div class="update__section update__section--spaced">
+        <div class="update__section-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3l7 3.5v5c0 4-3 7.5-7 9.5-4-2-7-5.5-7-9.5v-5L12 3z"/></svg>
+        </div>
+        <div>
+          <div class="update__section-title">What's the difference?</div>
+          <div class="update__section-sub">Three things worth knowing before you pick.</div>
+        </div>
+      </div>
+
+      <div class="update__block update__cards">
+        <div class="update__card">
+          <div class="update__card-title">Why split it up?</div>
+          <p>The node needs host access for Docker and the database; the proxies don't. Separating
+             them keeps the privileged part small and the network part replaceable.</p>
+        </div>
+        <div class="update__card">
+          <div class="update__card-title">Devcontainer or sbx?</div>
+          <p>Both are safe. Devcontainers are the faster of the two; sbx is the more capable one,
+             because a full VM handles more than a container can.</p>
+        </div>
+        <div class="update__card update__card--warn">
+          <div class="update__card-title">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 4.5l8 14H4l8-14z"/><path d="M12 10.5v4M12 16.8v.2"/></svg>
+            One trade-off
+          </div>
+          <p>sbx uses Huddle's proxy instead of native sbx firewalling. That keeps one set of
+             firewall rules, but it makes sbx depend on Huddle.</p>
+        </div>
+      </div>
+
+      <!-- KEEP RUNNING -->
+      <div class="update__block update__keep">
+        <img src="/assets/penguin-sign.png" alt="" width="120" height="110">
+        <div>
+          <div class="update__keep-title">Keep Huddle running</div>
+          <p>Because everything routes through the gateway, an sbx won't start while Huddle is
+             stopped. If a sandbox refuses to boot, check Huddle first. It's almost always this.</p>
+        </div>
+      </div>
+
+      <!-- SECTION: PORT -->
+      <div class="update__block update__port">
+        <div class="update__port-left">
+          <div class="update__section-icon update__section-icon--lg">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18"/></svg>
+          </div>
+          <div>
+            <div class="update__port-label">The portal now lives on port</div>
+            <div class="update__port-value">24842</div>
+          </div>
+        </div>
+        <div class="update__port-sum">
+          <div class="update__digit">
+            <div class="update__digit-box"><img src="/assets/penguin-earth.png" alt="" width="112" height="112"></div>
+            <div class="update__digit-value">24</div>
+          </div>
+          <div class="update__plus">+</div>
+          <div class="update__digit">
+            <div class="update__digit-box update__digit-box--warn"><img src="/assets/penguin-h.png" alt="" width="83" height="112"></div>
+            <div class="update__digit-value update__digit-value--warn">8</div>
+          </div>
+          <div class="update__plus">+</div>
+          <div class="update__digit">
+            <div class="update__digit-box"><img src="/assets/penguin-box-42.png" alt="" width="112" height="112"></div>
+            <div class="update__digit-value">42</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FOOTER -->
+      <div class="update__footer">
+        <div class="update__links">
+          <a [href]="migrationNotesUrl" target="_blank" rel="noopener">Migration notes →</a>
+          <a [href]="repoUrl" target="_blank" rel="noopener" class="update__link--muted">GitHub repo →</a>
+        </div>
+        <button class="btn btn--accent" (click)="close()">Got it</button>
+      </div>
+
+    </div>
+  </div>
+}
