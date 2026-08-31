@@ -1,0 +1,11 @@
+{
+  "pkg": "frontend",
+  "shape": "package",
+  "globalName": "Huddle",
+  "entry": "gateway/frontend/.ds-entry.mjs",
+  "cssEntry": "src/styles.css",
+  "extraFonts": [
+    "../../.design-sync/fonts/fonts.css"
+  ],
+  "readmeHeader": ".design-sync/conventions.md"
+}
