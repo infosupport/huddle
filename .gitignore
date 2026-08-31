@@ -58,3 +58,11 @@ localhost_3000_*.png
 
 # native dev run: local DB, CA and operator token (dev-native.ps1)
 .huddle-native/
+
+# design-sync (claude.ai/design)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+gateway/frontend/.ds-entry.mjs
