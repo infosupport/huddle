@@ -57,7 +57,7 @@ import {
 import { grantSudo, revokeSudo } from './sudo-grant';
 import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan } from './sbx';
 import { isValidWorkspacePath } from './sandbox/protocol';
-import { scheduleReconcile, ingestPending } from './sandbox/auto-sync';
+import { scheduleReconcile } from './sandbox/auto-sync';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -1159,15 +1159,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) return reply.code(400).send({ error: 'invalid sandbox name' });
     try {
       return await policyLogFor(name);
-    } catch (err: any) {
-      return reply.code(502).send({ error: err.message });
-    }
-  });
-
-  // Run the sbx → Huddle pending ingest on demand (also runs on a poller).
-  app.post('/api/sbx/ingest', async (_req, reply) => {
-    try {
-      return { added: await ingestPending() };
     } catch (err: any) {
       return reply.code(502).send({ error: err.message });
     }
