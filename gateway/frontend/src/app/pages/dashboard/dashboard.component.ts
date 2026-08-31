@@ -9,13 +9,12 @@ import { Container } from '../../core/models/container.model';
 import { Rule } from '../../core/models/rule.model';
 import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
-import { SbxLauncherComponent } from './sbx-launcher.component';
 import { combineLatest, map } from 'rxjs';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [AsyncPipe, NgClass, RouterLink, RelTimePipe, PieMenuComponent, SbxLauncherComponent],
+  imports: [AsyncPipe, NgClass, RouterLink, RelTimePipe, PieMenuComponent],
   templateUrl: './dashboard.component.html',
   styles: [`:host { display: contents; }`]
 })
