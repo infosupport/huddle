@@ -8,12 +8,12 @@ import path from 'path';
 // it is that the database, the Docker client and the API are not in the process
 // at all. That is an import-graph property, and nothing else enforces it: adding
 // `import { db } from './db'` to a file the proxy already imports would compile,
-// pass every other test, and quietly put better-sqlite3 and dockerode back in
+// pass every other test, and quietly put the database and dockerode back in
 // the one process a devcontainer can reach.
 //
 // So this walks the graph statically from boot-gateway.ts. It reads files rather
-// than importing them, which also means it runs where the native binding cannot
-// be built.
+// than importing them, so it never opens a database or reaches for a Docker
+// daemon of its own.
 
 const SRC = path.join(__dirname, '..', 'src');
 

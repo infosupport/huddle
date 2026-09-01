@@ -9,8 +9,8 @@ import { describe, it, expect, vi } from 'vitest';
 // This suite covers the pure validation core: every PoC vector must be denied
 // regardless of the casing, and legitimate (canonical) traffic must keep passing.
 //
-// socket-proxy imports db.ts only for grant checks; mocking keeps the native
-// better-sqlite3 binding out of this test (see rules.test.ts / socket-proxy.test.ts).
+// socket-proxy imports db.ts only for grant checks; mocking keeps db.ts — which
+// opens a database at import — out of this test (see socket-proxy.test.ts).
 vi.mock('../src/db', () => ({
   getGrant: () => null,
   getActionPolicy: () => null,

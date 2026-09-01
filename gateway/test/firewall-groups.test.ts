@@ -8,27 +8,16 @@ import path from 'path';
 // merge vs replace, apply-to-scope, the team-folder loader (incl. removal of
 // stale startup-folder rules), and fail-closed envelope validation.
 
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(`[firewall-groups.test] SKIPPED — better-sqlite3 not usable: ${(e as Error).message}`);
-}
-
 let dbMod: typeof import('../src/db');
 let groups: typeof import('../src/firewall-groups');
 
 beforeAll(async () => {
-  if (!sqliteAvailable) return;
   dbMod = await import('../src/db');
   groups = await import('../src/firewall-groups');
   dbMod.initDb();
 });
 
 beforeEach(() => {
-  if (!sqliteAvailable) return;
   dbMod.db.exec('DELETE FROM rules; DELETE FROM firewall_groups;');
 });
 
@@ -42,7 +31,7 @@ const envOpenAI = () => ({
   ],
 });
 
-describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
+describe('firewall-groups module', () => {
   it('imports a group envelope: creates the group + its rules', () => {
     const res = groups.importGroupEnvelope(groups.validateGroupEnvelope(envOpenAI()));
     expect(res.imported).toBe(2);
