@@ -59,10 +59,38 @@ export function explicitNodeEntry(opts: NodeOptions, env: NodeJS.ProcessEnv = pr
 export function nodeEntryCandidates(cliDir: string): string[] {
   // A repo checkout: cli/dist/index.js → ../../gateway/dist/index.js, and the
   // same one level up for layouts that nest the build one deeper.
+  const exe = process.platform === 'win32' ? '.exe' : '';
   return [
     path.resolve(cliDir, '..', '..', 'gateway', 'dist', 'index.js'),
     path.resolve(cliDir, '..', '..', '..', 'gateway', 'dist', 'index.js'),
+    // A single executable, either beside the CLI or dropped in ~/.huddle by
+    // hand. Last, so a checkout keeps winning over a stale download when both
+    // exist — the layout of someone working ON Huddle, whose build is the one
+    // they mean.
+    path.resolve(cliDir, '..', '..', 'gateway', 'build', 'sea', `huddle-node${exe}`),
+    path.join(os.homedir(), '.huddle', `huddle-node${exe}`),
   ];
+}
+
+/**
+ * How to launch a resolved entry: `node build.js`, or the file on its own.
+ *
+ * Huddle Node ships two ways (gateway/scripts/build-sea.mjs). From a checkout
+ * it is gateway/dist/index.js, which needs a Node to run it. Downloaded, it IS
+ * a Node — a single executable with the whole app injected into the binary, and
+ * handing that to `node` makes it argv[1] and gets the REPL, or on Windows an
+ * ENOEXEC. The two are not distinguishable by asking the file politely, so the
+ * rule is the extension the build actually produces: .js means script, anything
+ * else means executable.
+ *
+ * Kept separate from resolveNodeEntry() because both spawn sites need it, and
+ * they are 150 lines apart — the foreground `huddle node` and the detached one
+ * `huddle init` uses.
+ */
+export function nodeLaunch(entry: string): { command: string; args: string[] } {
+  return entry.toLowerCase().endsWith('.js')
+    ? { command: process.execPath, args: [entry] }
+    : { command: entry, args: [] };
 }
 
 export class MissingNodeEntryError extends Error {
@@ -198,7 +226,8 @@ export async function runNode(opts: NodeOptions = {}): Promise<void> {
   // `huddle init` uses startNodeDetached() below. stdio inherit so Huddle Node's
   // own logging is what the operator sees.
   await new Promise<void>((resolve) => {
-    const child = spawn(process.execPath, [entry], { env, stdio: 'inherit' });
+    const launch = nodeLaunch(entry);
+    const child = spawn(launch.command, launch.args, { env, stdio: 'inherit' });
 
     // Forward the signals an operator actually sends, so Ctrl-C stops Huddle
     // Node rather than orphaning it behind a dead CLI.
@@ -361,7 +390,8 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   // Append, not truncate: the log of the run that just failed is usually the
   // thing you need after a restart.
   const log = fs.openSync(NODE_LOG_FILE, 'a');
-  const child = spawn(process.execPath, [entry], {
+  const launch = nodeLaunch(entry);
+  const child = spawn(launch.command, launch.args, {
     env,
     detached: true,
     stdio: ['ignore', log, log],

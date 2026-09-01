@@ -7,6 +7,7 @@ import {
   MissingNodeEntryError,
   explicitNodeEntry,
   nodeEntryCandidates,
+  nodeLaunch,
   nodeEnv,
   nodeProbeUrls,
   nodeUrl,
@@ -59,7 +60,48 @@ describe('nodeEntryCandidates', () => {
   it('looks for the gateway build next to the CLI in a checkout', () => {
     const candidates = nodeEntryCandidates('/repo/cli/dist');
     expect(candidates[0]).toBe(path.resolve('/repo/gateway/dist/index.js'));
-    expect(candidates).toHaveLength(2);
+  });
+
+  // Order is the assertion. Someone working ON Huddle has both a checkout build
+  // and, sooner or later, a downloaded executable; running the download when
+  // they just rebuilt is the confusing failure, not the other way round.
+  it('prefers a checkout build over a downloaded single executable', () => {
+    const candidates = nodeEntryCandidates('/repo/cli/dist');
+    const script = candidates.findIndex((c) => c.endsWith(`dist${path.sep}index.js`));
+    const sea = candidates.findIndex((c) => c.includes(`build${path.sep}sea`));
+    expect(script).toBeGreaterThanOrEqual(0);
+    expect(sea).toBeGreaterThan(script);
+  });
+
+  it('looks for a single executable in ~/.huddle', () => {
+    const candidates = nodeEntryCandidates('/repo/cli/dist');
+    expect(candidates.some((c) => c.startsWith(path.join(os.homedir(), '.huddle')))).toBe(true);
+  });
+});
+
+describe('nodeLaunch', () => {
+  it('runs a .js build under this Node', () => {
+    expect(nodeLaunch('/repo/gateway/dist/index.js')).toEqual({
+      command: process.execPath,
+      args: ['/repo/gateway/dist/index.js'],
+    });
+  });
+
+  // A single executable IS a Node with the app injected. Passing it to `node`
+  // would make it argv[1] — a REPL on POSIX, ENOEXEC on Windows.
+  it('runs a single executable on its own, with no interpreter', () => {
+    expect(nodeLaunch('/downloads/huddle-node')).toEqual({
+      command: '/downloads/huddle-node',
+      args: [],
+    });
+    expect(nodeLaunch('C:\\tools\\huddle-node.exe')).toEqual({
+      command: 'C:\\tools\\huddle-node.exe',
+      args: [],
+    });
+  });
+
+  it('decides on the extension, not on the case it was written in', () => {
+    expect(nodeLaunch('/repo/gateway/dist/INDEX.JS').command).toBe(process.execPath);
   });
 });
 

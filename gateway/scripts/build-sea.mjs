@@ -41,8 +41,14 @@ const flagValue = (f, dflt) => {
 const OUT = path.resolve(flagValue('--out', path.join(GATEWAY, 'build', 'sea')));
 const BUNDLE = path.join(OUT, 'huddle-node.cjs');
 const BLOB = path.join(OUT, 'huddle-node.blob');
-const STAGED = path.join(OUT, 'huddle-node.staged');
-const FINAL = path.join(OUT, 'huddle-node');
+/**
+ * Windows runs a file because of its extension, not its content: an
+ * extensionless copy of node.exe is inert there, however correctly injected.
+ * The staged name keeps it too, because step 8 EXECUTES the staged copy.
+ */
+const EXE = process.platform === 'win32' ? '.exe' : '';
+const STAGED = path.join(OUT, `huddle-node.staged${EXE}`);
+const FINAL = path.join(OUT, `huddle-node${EXE}`);
 const UI_DIR = path.join(GATEWAY, 'dist', 'ui', 'browser');
 
 /** Node ships the reader, not the injector; postject does the writing. */
@@ -51,6 +57,15 @@ const SENTINEL = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const step = (n, msg) => console.log(`\n[${n}] ${msg}`);
 const ok = (msg) => console.log(`    ✓ ${msg}`);
 const mb = (b) => `${(b / 1024 / 1024).toFixed(1)} MB`;
+
+/**
+ * Blocks the thread. Not `execFileSync('sleep')`: there is no sleep on Windows,
+ * and the one caller is a retry loop that must not turn into a hard failure on
+ * the platform it cannot run on.
+ */
+const sleepSync = (ms) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
 
 function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { stdio: 'inherit', cwd: GATEWAY, ...opts });
@@ -276,7 +291,7 @@ fs.mkdirSync(path.join(smokeHome, '.huddle'), { recursive: true, mode: 0o700 });
  * still passes, and only fails once a user runs it somewhere else. Anywhere
  * inside the tree is exactly the one location where that bug is invisible.
  */
-const smokeBin = path.join(smokeHome, 'huddle-node');
+const smokeBin = path.join(smokeHome, `huddle-node${EXE}`);
 fs.copyFileSync(STAGED, smokeBin);
 fs.chmodSync(smokeBin, 0o755);
 
@@ -328,7 +343,7 @@ fs.renameSync(STAGED, FINAL);
 // returned, so wait for the entry rather than failing a build that succeeded.
 let finalSize = 0;
 for (let attempt = 0; attempt < 50; attempt++) {
-  try { finalSize = fs.statSync(FINAL).size; break; } catch { execFileSync('sleep', ['0.1']); }
+  try { finalSize = fs.statSync(FINAL).size; break; } catch { sleepSync(100); }
 }
 if (!finalSize) throw new Error(`renamed to ${FINAL} but it never became visible`);
 try { fs.chmodSync(FINAL, 0o755); } catch { /* already 0755 from STAGED */ }
