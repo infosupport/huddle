@@ -30,6 +30,8 @@ github.txt
 
 # Dependencies
 node_modules/
+# left behind by dev-install.sh when Windows still has a file in there mapped
+node_modules.old-*/
 
 # Build output
 dist/

@@ -1,5 +1,9 @@
 node_modules
 frontend/node_modules
+# dev-install.sh renames a locked tree aside instead of deleting it; the
+# leftovers are node_modules by another name and must not enter the context.
+node_modules.old-*
+frontend/node_modules.old-*
 dist
 frontend/dist
 .huddle-dev
