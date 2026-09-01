@@ -12,18 +12,6 @@ import type { FastifyInstance } from 'fastify';
 // rules-api.test.ts — we mount the REAL guard and the REAL registerControlRoutes
 // on a bare Fastify. Only the four lines of hook wiring are restated here; the
 // predicate, the auth check and the handlers are the shipping ones.
-//
-// better-sqlite3 is a native module; without a usable binding (nodejs.org
-// blocked → node-gyp cannot fetch headers) this suite skips, as the other
-// DB-backed suites do.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(`[control-routes.test] SKIPPED — better-sqlite3 unusable: ${(e as Error).message}`);
-}
 
 const GW_TOKEN = 'gateway-token-for-tests';
 const OP_TOKEN = 'operator-token-for-tests';
@@ -53,7 +41,7 @@ async function buildApp(): Promise<FastifyInstance> {
 
 const asGateway = { authorization: `Bearer ${GW_TOKEN}` };
 
-describe.skipIf(!sqliteAvailable)('control channel', () => {
+describe('control channel', () => {
   beforeAll(async () => {
     process.env.HUDDLE_GATEWAY_TOKEN = GW_TOKEN;
     process.env.HUDDLE_OPERATOR_TOKEN = OP_TOKEN;

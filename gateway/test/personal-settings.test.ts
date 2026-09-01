@@ -6,19 +6,8 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 //  2. De mount-keuze: eigen host-pad (bind) wint van het named volume (feature
 //     13); leeg pad valt terug op het volume; alles leeg = geen mount.
 //
-// better-sqlite3 is native; in een DMZ-devcontainer zonder gebouwde binding
-// skippen we de db-helpers (zelfde probe als grants.test.ts). De mount-logica
-// is puur en draait altijd.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[personal-settings.test] SKIPPED db — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
-  );
-}
+// De store draait tegen de in-memory database (DB_PATH=':memory:' uit
+// vitest.config.ts); de mount-logica is puur en heeft er niets van nodig.
 
 // Spiegelt buildProviderMount uit docker.ts (niet geëxporteerd om docker's
 // zware imports buiten de test te houden — zelfde patroon als validMinutes).
@@ -77,7 +66,7 @@ let getSetting: typeof import('../src/db').getSetting;
 let setSetting: typeof import('../src/db').setSetting;
 let db: typeof import('../src/db').db;
 
-describe.skipIf(!sqliteAvailable)('settings store', () => {
+describe('settings store', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     getSetting = dbMod.getSetting;

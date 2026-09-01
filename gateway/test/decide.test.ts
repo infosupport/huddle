@@ -5,8 +5,8 @@ import type { RuleRow } from '../src/rule-match';
 // ── The firewall decision, without a database ───────────────────────────────
 //
 // decide() is a total function of (snapshot, domain, path, now), so unlike the
-// rules.test.ts suite next door this one needs no SQLite binding and runs
-// everywhere — including a DMZ devcontainer where better-sqlite3 can't build.
+// rules.test.ts suite next door this one opens no database at all and runs
+// anywhere — no schema, no storage, no setup.
 // That is much of the point of having pulled the decision out of checkRule: the
 // branch that decides whether traffic leaves the machine is now checkable
 // without standing up the storage it used to be tangled with.

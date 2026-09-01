@@ -24,27 +24,10 @@ import {
 // property most worth pinning.
 //
 // The pure matchers moved to src/rule-match.ts and need no database at all, so
-// their tests are OUTSIDE the skip below and run everywhere.
+// their tests sit at the bottom of this file, outside the round-trip half.
 //
-// better-sqlite3 is a native module. In a DMZ devcontainer without a built
-// binding (nodejs.org blocked → node-gyp can't fetch headers) the round-trip
-// half skips; in the huddle image / CI the binding is present and it runs fully.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  // Don't skip silently — otherwise a wrong/missing native binding
-  // (e.g. node_modules from another platform) hides that this suite isn't running.
-  console.warn(
-    `[rules.test] SKIPPED (round-trip half) — better-sqlite3 binding not usable: ${(e as Error).message}\n` +
-    `  Fix on your host: \`npm rebuild better-sqlite3\` (or remove node_modules and \`npm install\`).`
-  );
-}
-
-// Dynamically imported (only after the probe) so that a missing binding does not
-// crash the entire test file.
+// db.ts and the plane helper are pulled in from beforeAll rather than the top
+// of the file, so the database is opened as part of setting the suite up.
 let db: typeof import('../src/db').db;
 let setAirlocked: typeof import('../src/db').setAirlocked;
 let ensurePathModeMarker: typeof import('../src/rules').ensurePathModeMarker;
@@ -86,7 +69,7 @@ async function isPathMode(domain: string, containerId: string | null): Promise<b
   return control.plane.isPathMode(domain, containerId);
 }
 
-describe.skipIf(!sqliteAvailable)('checkRule — policy feed → decision → writes', () => {
+describe('checkRule — policy feed → decision → writes', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;
@@ -347,9 +330,9 @@ describe.skipIf(!sqliteAvailable)('checkRule — policy feed → decision → wr
 
 // ── The pure matchers ───────────────────────────────────────────────────────
 //
-// src/rule-match.ts imports nothing. These run in every environment, including
-// one where better-sqlite3 cannot be built — which matters, because they are the
-// part an attacker probes.
+// src/rule-match.ts imports nothing — no database, no config, no clock. These
+// run in every environment, which matters, because they are the part an
+// attacker probes.
 
 describe('matchDomain (pure helper)', () => {
   it('matches exact host', () => {

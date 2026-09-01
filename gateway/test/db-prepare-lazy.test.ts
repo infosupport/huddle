@@ -4,7 +4,7 @@ import path from 'path';
 
 // No prepared statement may be built at module scope.
 //
-// better-sqlite3 validates SQL against the LIVE schema inside .prepare(), and the
+// SQLite validates SQL against the LIVE schema inside .prepare(), and the
 // schema is created by initDb() — an explicit call, made at the top of bootNode().
 // Imports are hoisted, so every module in the boot graph runs its top level BEFORE
 // that call: a module-scope `db.prepare(...)` therefore throws

@@ -4,7 +4,7 @@ import fs from 'fs';
 import net from 'net';
 import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
-import type { Database } from 'better-sqlite3';
+import type { HuddleDatabase as Database } from '../sqlite';
 import { stateEvents } from '../events';
 import { runtimeEnv } from '../runtime-env';
 import { readHostConfig } from '../host-config';

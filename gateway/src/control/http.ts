@@ -3,7 +3,7 @@
 //
 // Separate from ./routes and ./feed for the same reason ../rule-match is
 // separate from ../rules — these import nothing, so they can be tested anywhere,
-// including a devcontainer where better-sqlite3 has no binding. The path
+// including a devcontainer, where there is no database to open. The path
 // predicate in particular decides whether a request is authenticated as the
 // gateway or waved through, and that is not something to leave resting on a
 // suite that only runs in CI.

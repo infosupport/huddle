@@ -18,8 +18,8 @@
 //   nothing lands in the rules table or the audit log until `await flush()`.
 //
 // Everything is imported dynamically: feed-build and apply reach the database,
-// and a suite without a usable better-sqlite3 binding has to be able to import
-// this module in order to decide to skip.
+// and importing this helper must not open one as a side effect — the suite
+// decides when db.ts loads, not the helper it borrows.
 
 import type { ControlPlane } from '../../src/control/plane';
 

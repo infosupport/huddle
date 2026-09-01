@@ -54,22 +54,12 @@ vi.mock('../src/tls-ca', () => ({ getCaCertPem: () => '-----BEGIN CERTIFICATE---
 // settings-folders houdt de steplijst kort.
 vi.mock('../src/host-config', () => ({ listFolderMappings: () => [] }));
 
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(`[sbx-identity-node.test] SKIPPED — better-sqlite3 not usable: ${(e as Error).message}`);
-}
-
 let dbMod: typeof import('../src/db');
 let sbx: typeof import('../src/sbx');
 let identity: typeof import('../src/sbx-identity');
 let registry: typeof import('../src/sandbox/registry');
 
 beforeAll(async () => {
-  if (!sqliteAvailable) return;
   dbMod = await import('../src/db');
   dbMod.initDb();
   sbx = await import('../src/sbx');
@@ -78,7 +68,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  if (!sqliteAvailable) return;
   calls.length = 0;
   createCode = 0;
   createDelayMs = 0;
@@ -103,9 +92,8 @@ function proxyUrls(): string[] {
   return calls.filter((c) => c.fn === 'setProxy').map((c) => c.url!);
 }
 
-const d = sqliteAvailable ? describe : describe.skip;
 
-d('startSandbox mints and spends a per-sandbox secret', () => {
+describe('startSandbox mints and spends a per-sandbox secret', () => {
   it('gives every sandbox its own 256-bit secret, and stores its SHA-256', async () => {
     await sbx.startSandbox({ name: 'box-a', workspace: '/w/a' });
     await sbx.startSandbox({ name: 'box-b', workspace: '/w/b' });
@@ -136,7 +124,7 @@ d('startSandbox mints and spends a per-sandbox secret', () => {
   });
 });
 
-d('nothing that is displayed carries the secret', () => {
+describe('nothing that is displayed carries the secret', () => {
   it('keeps it out of every step command and out of upstreamUrl', async () => {
     const res = await sbx.startSandbox({ name: 'box-a', workspace: '/w/a' });
     const secret = rows()['box-a'].secret;
@@ -163,7 +151,7 @@ d('nothing that is displayed carries the secret', () => {
   });
 });
 
-d('the global setting is parked after a create', () => {
+describe('the global setting is parked after a create', () => {
   it('leaves it on a credential that maps to no sandbox', async () => {
     await sbx.startSandbox({ name: 'box-a', workspace: '/w/a' });
 
@@ -200,7 +188,7 @@ d('the global setting is parked after a create', () => {
   });
 });
 
-d('concurrent creates are serialised', () => {
+describe('concurrent creates are serialised', () => {
   it('never interleaves one box’s settings set with another’s create', async () => {
     // Zonder slot zet B de globale sleutel terwijl A nog aan het aanmaken is:
     // beide boxen krijgen dan dezelfde identiteit, of ze wisselen om.
@@ -241,7 +229,7 @@ d('concurrent creates are serialised', () => {
   });
 });
 
-d('hasSandboxIdentity', () => {
+describe('hasSandboxIdentity', () => {
   it('answers existence without reading the secret — the reconciler asks this one', async () => {
     await sbx.startSandbox({ name: 'box-a', workspace: '/w/a' });
     expect(registry.hasSandboxIdentity('box-a')).toBe(true);
@@ -257,7 +245,7 @@ d('hasSandboxIdentity', () => {
   });
 });
 
-d('removeSandbox', () => {
+describe('removeSandbox', () => {
   it('drops the identity — a sandbox does not outlive its credential', async () => {
     await sbx.startSandbox({ name: 'box-a', workspace: '/w/a' });
     expect(Object.keys(rows())).toEqual(['box-a']);

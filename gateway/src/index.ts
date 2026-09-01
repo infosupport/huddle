@@ -4,11 +4,10 @@
 // the control plane on the host, and huddle-gateway, the network enforcement
 // point in Docker. This file picks one and does nothing else.
 //
-// The imports are dynamic on purpose. A static import graph would load
-// better-sqlite3 and dockerode into the gateway even though it never calls
-// them — a native database binding and a Docker client in the one process a
-// devcontainer can reach. Deciding first and importing after is what keeps them
-// out.
+// The imports are dynamic on purpose. db.ts opens the database at import time
+// and docker.ts a Docker client, so a static import graph would do both in the
+// gateway even though it never calls them — in the one process a devcontainer
+// can reach. Deciding first and importing after is what keeps them out.
 
 import { runtimeEnv } from './runtime-env';
 

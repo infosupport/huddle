@@ -7,8 +7,8 @@
 // is reachable from a devcontainer should be able to do as little as possible.
 //
 // The import graph is the enforcement of that, not just the intent: nothing
-// reachable from this file imports ./db, ./docker or ./api, so better-sqlite3
-// and dockerode are not in this process at all. index.ts dispatches to it with a
+// reachable from this file imports ./db, ./docker or ./api, so this process
+// never opens the database or a Docker client. index.ts dispatches to it with a
 // dynamic import for exactly that reason.
 
 import { createProxyServer } from './proxy';

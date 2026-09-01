@@ -7,16 +7,6 @@ import type { FastifyInstance } from 'fastify';
 // export/import handlers from api.ts against the in-memory DB. Tested: the export
 // envelope, the merge round-trip (export → wipe → import), replace scope, and
 // fail-closed validation (400) on invalid payloads.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[rules-export-import.test] SKIPPED — better-sqlite3 binding not usable: ${(e as Error).message}`
-  );
-}
 
 let db: typeof import('../src/db').db;
 let app: FastifyInstance;
@@ -134,7 +124,7 @@ async function buildApp(): Promise<FastifyInstance> {
   return a;
 }
 
-describe.skipIf(!sqliteAvailable)('rules export/import', () => {
+describe('rules export/import', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;

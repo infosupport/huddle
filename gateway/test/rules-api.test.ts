@@ -9,16 +9,6 @@ import type { FastifyInstance } from 'fastify';
 // Geteste gedrag: status-validatie (400), 404 op onbekende id, en de side-effect
 // waarbij een globale allow/deny de openstaande 'requested'-rij voor dat domein
 // opruimt.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[rules-api.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
-  );
-}
 
 let db: typeof import('../src/db').db;
 let app: FastifyInstance;
@@ -87,7 +77,7 @@ async function buildApp(): Promise<FastifyInstance> {
   return a;
 }
 
-describe.skipIf(!sqliteAvailable)('rules API mutaties', () => {
+describe('rules API mutaties', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;

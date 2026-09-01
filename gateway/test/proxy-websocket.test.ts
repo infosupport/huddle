@@ -13,19 +13,6 @@ import type { AddressInfo } from 'net';
 // a real local ws echo server upstream, a real ws client that connects via the proxy
 // as a forward-proxy client. The MITM path (`wss://`) shares exactly
 // the same forwardUpgrade helper and path enforcement.
-//
-// better-sqlite3 is a native module; without a built binding we skip the suite
-// (see rules.test.ts / proxy-forward-path.test.ts). Probe before the db import.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[proxy-websocket.test] SKIPPED — better-sqlite3 binding not usable: ${(e as Error).message}`
-  );
-}
 
 // Niet 127.0.0.1: de proxy weigert alles wat aan Huddle zelf gericht is, en dat
 // is het hele 127.0.0.0/8-blok (src/proxy-self.ts). Een upstream op loopback
@@ -116,7 +103,7 @@ let stallPort = 0;
 let stallAccepted = 0;
 const stallSockets: net.Socket[] = [];
 
-describe.skipIf(!sqliteAvailable || !upstreamHost)('proxy forwards WebSocket upgrades', () => {
+describe.skipIf(!upstreamHost)('proxy forwards WebSocket upgrades', () => {
   beforeAll(async () => {
     // Short handshake timeout so the leak regression test is fast; production
     // falls back to the 30s default.

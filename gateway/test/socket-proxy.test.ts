@@ -5,9 +5,9 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 // moet op de ENGINE-host staan en Huddle Node draait daar niet altijd. Wat hier
 // overblijft is het filter zelf — welke Docker-calls een devcontainer mag doen.
 
-// socket-proxy importeert db.ts alleen voor de grant-checks; mocken houdt de
-// native better-sqlite3-binding buiten deze test (die ontbreekt in een verse
-// DMZ-devcontainer, zie rules.test.ts / grants.test.ts).
+// socket-proxy importeert db.ts alleen voor de grant-checks; mocken houdt db.ts
+// — dat bij import een database opent — buiten deze test (zie
+// socket-proxy-parser-hardening.test.ts).
 vi.mock('../src/db', () => ({
   getGrant: () => null,
   getActionPolicy: () => null,
