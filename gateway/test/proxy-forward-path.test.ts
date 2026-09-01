@@ -11,19 +11,6 @@ import { forwardableHost } from './helpers/upstream-host';
 // gateway-proces neerhaalde. Deze suite pint het contract vast zónder Docker of
 // een live container: een echte lokale upstream noteert de request-target die
 // hij daadwerkelijk terugkrijgt.
-//
-// better-sqlite3 is een native module; in een DMZ-devcontainer zonder gebouwde
-// binding slaan we de suite over (zie rules.test.ts). Probe vóór de db-import.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[proxy-forward-path.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
-  );
-}
 
 let db: typeof import('../src/db').db;
 // The proxy denies everything until a control plane is bound — it holds no
@@ -67,7 +54,7 @@ function proxyGet(pathAndQuery: string): Promise<number> {
   });
 }
 
-describe.skipIf(!sqliteAvailable || !upstreamHost)('proxy forwards the original encoded request-path', () => {
+describe.skipIf(!upstreamHost)('proxy forwards the original encoded request-path', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;

@@ -1,11 +1,11 @@
 import type { AuditEntry, AuditResponse } from './db-types';
-import Database from 'better-sqlite3';
+import { HuddleDatabase } from './sqlite';
 import { runtimeEnv } from './runtime-env';
 
 const DB_PATH = runtimeEnv.dbPath;
 
-export const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+export const db = new HuddleDatabase(DB_PATH);
+db.exec('PRAGMA journal_mode = WAL');
 
 export function initDb(): void {
   db.exec(`

@@ -7,9 +7,9 @@ import { describe, it, expect, vi } from 'vitest';
 // shQuote is the second, independent layer, so a caller that reaches the script
 // builders without that validation still cannot inject a command.
 //
-// docker.ts imports ./db (native better-sqlite3 binding, absent in a fresh
-// devcontainer) transitively, so it is mocked here purely to let the module load —
-// same as windows-mount-path.test.ts.
+// docker.ts imports ./db (which opens a database at import) transitively, so it
+// is mocked here purely to let the module load — same as
+// windows-mount-path.test.ts.
 vi.mock('../src/db', () => ({
   getSetting: () => null,
   isHostPortApproved: () => false,
