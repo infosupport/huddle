@@ -6,7 +6,7 @@ import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import { runtimeEnv } from './runtime-env';
 import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
-import fastifyStatic from '@fastify/static';
+import { registerPortal } from './portal';
 import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
 import {
   exportGroup,
@@ -264,11 +264,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
-  app.register(fastifyStatic, {
-    root: UI_DIR,
-    prefix: '/',
-    wildcard: false,
-  });
+  // Directory or blob, depending on how this build was packaged. Registers the
+  // not-found handler too, because serving index.html for a client-side route
+  // is the same decision (src/portal.ts).
+  registerPortal(app, UI_DIR);
 
   app.register(import('@fastify/multipart'), { limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -1507,10 +1506,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return reply.send(fs.createReadStream(filePath));
   });
 
-  // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
-  app.setNotFoundHandler(async (_req, reply) => {
-    return reply.sendFile('index.html');
-  });
 
   // ── Settings ──────────────────────────────────────────────────────────────
   app.get('/api/settings', async () => {
