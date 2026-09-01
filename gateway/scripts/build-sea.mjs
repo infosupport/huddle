@@ -72,6 +72,20 @@ function run(cmd, args, opts = {}) {
 }
 
 /**
+ * Resolves a build tool to the JS file its package declares as `bin`, to be run
+ * as `node <entry>` — never to the shim in node_modules/.bin.
+ *
+ * The shim is the wrong thing to execute, for two independent reasons:
+ *
+ * 1. On Windows the extensionless entry in .bin is a POSIX sh script, which
+ *    CreateProcess cannot run at all: `spawnSync … ENOENT`, and existsSync()
+ *    happily reports it as present. Its `.cmd` sibling needs a shell, which
+ *    execFileSync deliberately does not provide. Both failure modes point at a
+ *    file that is right there on disk, so they read as a broken install.
+ * 2. A shim runs whichever node is first on PATH. The blob in step 6 and the
+ *    injection in step 7 must come from THIS node — a SEA blob carries a code
+ *    cache bound to the V8 that wrote it.
+ *
  * GATEWAY first, always. esbuild and postject are devDependencies of
  * gateway/package.json — deliberately not of the monorepo root, whose
  * package.json carries an `install` LIFECYCLE script that re-invokes npm in
@@ -79,14 +93,42 @@ function run(cmd, args, opts = {}) {
  * normal workflow re-enters that script, so nothing here should need it.
  * The other two are searched only as a fallback for a pre-existing checkout.
  */
-function resolveBin(name) {
+function resolveCli(pkg, binName = pkg) {
   for (const base of [GATEWAY, ROOT, path.join(GATEWAY, 'frontend')]) {
-    const p = path.join(base, 'node_modules', '.bin', name);
-    if (fs.existsSync(p)) return p;
+    const dir = path.join(base, 'node_modules', pkg);
+    const manifest = path.join(dir, 'package.json');
+    if (!fs.existsSync(manifest)) continue;
+    const { bin } = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    const rel = typeof bin === 'string' ? bin : bin?.[binName];
+    if (!rel) throw new Error(`${pkg} declares no "${binName}" bin`);
+    return path.join(dir, rel);
   }
   throw new Error(
-    `${name} not found — run \`npm install\` in gateway/ (NOT in the repo root)`,
+    `${pkg} not found — run \`npm install\` in gateway/ (NOT in the repo root)`,
   );
+}
+
+/**
+ * Runs a package's declared bin, without assuming what kind of file it is.
+ *
+ * A `bin` entry is not necessarily a script: esbuild's installer overwrites its
+ * own bin/esbuild with the platform executable to save a process on every call,
+ * so the same path is an ELF/Mach-O binary on some machines and a
+ * `#!/usr/bin/env node` shim on others (Windows, where an extensionless
+ * executable cannot be run, keeps the shim). Two bytes settle it, and nothing
+ * here has to track which package does what on which platform.
+ *
+ * Scripts run under process.execPath rather than their shebang: postject in
+ * particular must run under the SAME node that produced the blob, because a SEA
+ * blob carries a code cache bound to the V8 that wrote it.
+ */
+function runCli(pkg, binName, args, opts) {
+  const entry = resolveCli(pkg, binName);
+  const head = Buffer.alloc(2);
+  const fd = fs.openSync(entry, 'r');
+  try { fs.readSync(fd, head, 0, 2, 0); } finally { fs.closeSync(fd); }
+  const isScript = head.toString('latin1') === '#!';
+  return run(...(isScript ? [process.execPath, [entry, ...args]] : [entry, args]), opts);
 }
 
 // ---------------------------------------------------------------- 1. compile
@@ -102,7 +144,7 @@ if (!has('--skip-ui')) {
 
 if (!has('--skip-tsc')) {
   step(2, 'Type-checking');
-  run(resolveBin('tsc'), []);
+  runCli('typescript', 'tsc', []);
   ok('tsc clean');
 } else {
   step(2, 'Skipping tsc (--skip-tsc)');
@@ -138,7 +180,7 @@ const BANNER = [
   'var __HUDDLE_ROOT = require("node:path").dirname(process.execPath);',
 ].join(' ');
 
-run(resolveBin('esbuild'), [
+runCli('esbuild', 'esbuild', [
   'src/index.ts',
   '--bundle',
   '--platform=node',
@@ -249,17 +291,8 @@ fs.rmSync(FINAL, { force: true });
 fs.copyFileSync(process.execPath, STAGED);
 fs.chmodSync(STAGED, 0o755);
 
-// Not resolveBin(): postject's bin is a shell shim, and it has to run under the
-// SAME node that produced the blob. Point at the CLI entry directly.
-const postjectCli = [GATEWAY, ROOT]
-  .map((base) => path.join(base, 'node_modules', 'postject', 'dist', 'cli.js'))
-  .find((p) => fs.existsSync(p));
-if (!postjectCli) {
-  throw new Error('postject not found — run `npm install` in gateway/ (NOT in the repo root)');
-}
-
-run(process.execPath, [
-  postjectCli, STAGED, 'NODE_SEA_BLOB', BLOB,
+runCli('postject', 'postject', [
+  STAGED, 'NODE_SEA_BLOB', BLOB,
   '--sentinel-fuse', SENTINEL,
   ...(process.platform === 'darwin' ? ['--macho-segment-name', 'NODE_SEA'] : []),
 ], { stdio: ['ignore', 'ignore', 'inherit'] });
