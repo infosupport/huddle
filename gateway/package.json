@@ -12,6 +12,7 @@
     "build:ts": "tsc",
     "build:ui": "npm run build --prefix frontend",
     "build": "npm run build:ui && npm run build:ts",
+    "build:sea": "node scripts/build-sea.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -32,6 +33,8 @@
     "@types/node-forge": "^1.3.11",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.8",
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6",
     "typescript": "^5.4.5",
     "vitest": "^4.1.8"
   }
