@@ -328,12 +328,14 @@ const smokeBin = path.join(smokeHome, `huddle-node${EXE}`);
 fs.copyFileSync(STAGED, smokeBin);
 fs.chmodSync(smokeBin, 0o755);
 
+let exited;
 const smoke = await new Promise((resolve) => {
   const child = spawn(smokeBin, [], {
     cwd: smokeHome,
     env: { ...process.env, HOME: smokeHome, HUDDLE_ROLE: 'node' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  exited = new Promise((r) => child.on('exit', r));
 
   let out = '';
   const done = (verdict) => {
@@ -355,7 +357,23 @@ const smoke = await new Promise((resolve) => {
   const timer = setTimeout(() => done({ pass: false, why: 'no output within 30s' }), 30_000);
 });
 
-fs.rmSync(smokeHome, { recursive: true, force: true });
+/**
+ * Wait for the process to be GONE, not merely signalled. process.kill() only
+ * asks; on Windows the image stays mapped until the kernel is done with it, and
+ * a mapped .exe cannot be deleted — the copy being removed here is the very
+ * binary that was running. The retries cover the rest: a fresh 96 MB executable
+ * is exactly what an antivirus wants to open for a few hundred milliseconds.
+ *
+ * And never fatal. This is a temp directory in os.tmpdir(); losing a build that
+ * has already proven itself, over a file the OS will clean up anyway, would be
+ * the worst possible trade.
+ */
+await Promise.race([exited, new Promise((r) => { setTimeout(r, 5_000).unref(); })]);
+try {
+  fs.rmSync(smokeHome, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+} catch (e) {
+  console.log(`    (!) left ${smokeHome} behind (${e.code}) — safe to delete`);
+}
 
 if (!smoke.pass) {
   console.error('\n✗ smoke test failed — NOT naming the artefact huddle-node.');
