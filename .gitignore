@@ -34,6 +34,9 @@ node_modules/
 # Build output
 dist/
 
+# SEA build output: a ~130 MB binary plus its blob and sourcemap.
+gateway/build/
+
 # Stray/self-referential nested CLI package (accidental) — never commit
 cli/cli/
 
