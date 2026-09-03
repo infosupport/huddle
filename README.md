@@ -23,10 +23,10 @@ Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a s
 
 > **Requirements:** Docker or Podman, plus Node.js 18+ for the CLI. The installed Huddle Node is a self-contained executable; running Huddle Node from a source checkout requires Node.js 24+. Huddle's packages are public — no GitHub token or registry login needed.
 
-The release CLI automatically installs the matching Windows x64 Huddle Node
-executable alongside itself. macOS Intel and Apple Silicon builds follow the
-same package layout and are verified in CI; Windows signing and macOS signing /
-notarisation are still pending.
+The release CLI automatically installs the matching Huddle Node executable for
+Windows x64, macOS Intel, or Apple Silicon alongside itself. Native builds are
+published before the CLI; Windows signing and macOS signing/notarisation remain
+separate operational work.
 
 ```bash
 # 1 — install the CLI

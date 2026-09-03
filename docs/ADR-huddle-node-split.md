@@ -375,9 +375,9 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
    resolves `bin/huddle-node[.exe]` there. This keeps install free of a
    postinstall download and makes the executable available offline once npm has
    it cached. `verify-sea.yml` builds and smoke-tests each target natively and
-   stages the package as an artifact. `publish-npm.yml` builds and publishes the
-   Windows x64 package before the CLI; macOS publishing waits for signing and
-   notarisation ownership.
+   stages the package as an artifact. `publish-npm.yml` builds and publishes all
+   three native packages before the CLI. Windows signing and macOS
+   signing/notarisation remain separate operational work.
 7. **The resolv.conf seam.** `initContainerNetworks()` is a Docker call (Node),
    but the `/etc/resolv.conf` it corrupts belongs to the *gateway* container
    (`dns-egress.ts`). In one process those chain directly. Split, Node performs
