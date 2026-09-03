@@ -21,7 +21,12 @@ Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a s
 
 ## 🚀 Quick start
 
-> **Requirements:** Docker or Podman and Node.js 18+. Huddle's packages are public — no GitHub token or registry login needed.
+> **Requirements:** Docker or Podman, plus Node.js 18+ for the CLI. The installed Huddle Node is a self-contained executable; running Huddle Node from a source checkout requires Node.js 24+. Huddle's packages are public — no GitHub token or registry login needed.
+
+The release CLI automatically installs the matching Windows x64 Huddle Node
+executable alongside itself. macOS Intel and Apple Silicon builds follow the
+same package layout and are verified in CI; Windows signing and macOS signing /
+notarisation are still pending.
 
 ```bash
 # 1 — install the CLI
@@ -171,7 +176,7 @@ This closes security-review finding **#10** (plaintext admin credentials retriev
 |-------|------------|
 | Runtime | Node.js 24 LTS (Alpine) |
 | Backend | Fastify 5, TypeScript 5 |
-| Database | SQLite via better-sqlite3 (WAL mode) |
+| Database | SQLite via built-in `node:sqlite` (WAL mode) |
 | WebSocket | ws |
 | Frontend | Angular 21 (standalone components, signals) |
 | Build | Angular CLI, esbuild |
@@ -181,7 +186,8 @@ This closes security-review finding **#10** (plaintext admin credentials retriev
 
 ## Getting Started
 
-**Requirements:** Docker or Podman, Node.js 18+
+**Requirements:** Docker or Podman, plus Node.js 18+ for the CLI. The installed
+Huddle Node includes its own runtime; a source checkout needs Node.js 24+.
 
 Huddle's packages are public, so no GitHub token or registry login is needed.
 
@@ -585,7 +591,7 @@ All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to conn
 Want to work on Huddle itself? Huddle is a monorepo with two parts: the
 **gateway** (Fastify API + Angular UI + proxy) and the **CLI**.
 
-**Requirements:** Node.js 20+ (24 LTS recommended), Docker or Podman, Git.
+**Requirements:** Node.js 24+ (the Huddle Node source uses `node:sqlite`), Docker or Podman, Git.
 
 ```bash
 git clone https://github.com/infosupport/huddle.git

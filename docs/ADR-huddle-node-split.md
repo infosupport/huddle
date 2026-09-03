@@ -362,32 +362,22 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
 
 6. **Huddle Node has no delivery mechanism.** `huddle node` can *run* a build but
    nothing *ships* one. The published CLI is `files: ["dist"]` with zero runtime
-   dependencies; Huddle Node needs fastify, dockerode and `better-sqlite3` — a
-   native module requiring per-platform prebuilds (win32/darwin/linux × x64/arm64).
-   **Decided: bundle the gateway build into the CLI package.** One package, one
-   version, no version skew between the CLI and the Huddle Node it starts, and
-   npm resolves the right `better-sqlite3` prebuild for the host platform at
-   install time. The CLI package gets substantially larger, which is the price.
+   dependencies, while Huddle Node is now a platform-specific, self-contained
+   SEA executable. The earlier decision to bundle the gateway JavaScript build
+   into the CLI is invalid: it was based on `better-sqlite3` native prebuilds,
+   which were removed when the store moved to `node:sqlite`.
 
-   The two rejected alternatives, and why:
-   - *A second `@infosupport/huddle-node` package* — thinner CLI, but two
-     packages that can drift out of sync. Real operational cost for no gain
-     while everyone who runs Huddle needs both halves anyway.
-   - *`docker cp` the build out of the gateway image* — **not viable.** The
-     image is Linux/amd64; copying its `node_modules` onto a Windows or macOS
-     host yields a `better-sqlite3` binary that cannot load. This is not
-     hypothetical: the gateway `node_modules` in the dev container already fails
-     with `invalid ELF header` for exactly this reason, which is why 10 test
-     files skip. Only npm (or a per-host rebuild) gets the native module right.
-
-   **Still open, and it is now the one thing between this branch and a release.**
-   Step 6 shipped without it: `huddle init` starts Huddle Node from a repo
-   checkout (or `HUDDLE_NODE_ENTRY`), and prints how to build one when it finds
-   none. That is right for developing on Huddle and not enough for installing it
-   — `npm i -g @infosupport/huddle-cli` still gets a CLI with `files: ["dist"]`
-   and no Node to start. Bundling is a packaging change (add the gateway build
-   to `files`, add its runtime dependencies), not an architectural one, which is
-   why it is recorded here rather than fixed halfway.
+   **Resolved: platform-specific optional npm packages.** The CLI declares
+   `@infosupport/huddle-node-win32-x64`,
+   `@infosupport/huddle-node-darwin-x64`, and
+   `@infosupport/huddle-node-darwin-arm64` as exact optional dependencies.
+   npm selects the matching package from its `os`/`cpu` metadata, and the CLI
+   resolves `bin/huddle-node[.exe]` there. This keeps install free of a
+   postinstall download and makes the executable available offline once npm has
+   it cached. `verify-sea.yml` builds and smoke-tests each target natively and
+   stages the package as an artifact. `publish-npm.yml` builds and publishes the
+   Windows x64 package before the CLI; macOS publishing waits for signing and
+   notarisation ownership.
 7. **The resolv.conf seam.** `initContainerNetworks()` is a Docker call (Node),
    but the `/etc/resolv.conf` it corrupts belongs to the *gateway* container
    (`dns-egress.ts`). In one process those chain directly. Split, Node performs

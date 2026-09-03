@@ -5,6 +5,7 @@ name: Publish npm
 # bestand) per package toe; daarom leven alle publish-jobs hier en niet in
 # publish-image.yml / publish-experiment.yml. Op npmjs.com configureer je als
 # trusted publisher: org infosupport, repo huddle, workflow publish-npm.yml.
+# The same trusted-publisher entry is required for every platform package too.
 #
 # BELANGRIJK: npm matcht het OIDC-token op de ENTRY-workflow (workflow_ref),
 # niet op de workflow die het `npm publish`-commando bevat (job_workflow_ref).
@@ -28,8 +29,53 @@ on:
         type: string
 
 jobs:
+  node_windows:
+    # The CLI names this package as an exact optional dependency. Publish it
+    # first, so a newly published CLI can never point npm at an absent binary.
+    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+        with:
+          versionSpec: '5.x'
+
+      - name: Determine version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+
+      - name: Build and stage Windows Huddle Node
+        shell: pwsh
+        run: |
+          $patch = ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
+          $version = "${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.$patch"
+          npm ci --prefix gateway
+          npm ci --prefix gateway/frontend
+          npm --prefix gateway run build:sea
+          node scripts/stage-node-package.mjs --platform win32 --arch x64 --version $version
+
+      - name: Publish Windows Huddle Node
+        run: npm publish --provenance --access public
+        working-directory: packages/huddle-node-win32-x64
+
   stable:
     if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
+    needs: node_windows
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -69,7 +115,7 @@ jobs:
           PATCH=$(( ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }} ))
           VERSION="${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.${PATCH}"
           echo "Berekende versie: $VERSION (patch ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }} commits)"
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          node ../scripts/set-cli-release-version.mjs "$VERSION"
 
       - name: Install & build
         run: cd cli && npm install && npm run build

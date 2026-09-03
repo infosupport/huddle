@@ -10,6 +10,7 @@ import {
   nodeLaunch,
   nodeEnv,
   nodeProbeUrls,
+  platformNodePackageName,
   nodeUrl,
   resolveNodeEntry,
 } from '../src/node';
@@ -76,6 +77,25 @@ describe('nodeEntryCandidates', () => {
   it('looks for a single executable in ~/.huddle', () => {
     const candidates = nodeEntryCandidates('/repo/cli/dist');
     expect(candidates.some((c) => c.startsWith(path.join(os.homedir(), '.huddle')))).toBe(true);
+  });
+
+  it('uses the optional package selected for this host', () => {
+    const cliDir = path.join(tmp, 'installed-cli', 'dist');
+    const pkg = platformNodePackageName();
+    expect(pkg).not.toBeNull();
+    const executable = process.platform === 'win32' ? 'huddle-node.exe' : 'huddle-node';
+    const entry = path.join(tmp, 'installed-cli', 'node_modules', ...pkg!.split('/'), 'bin', executable);
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(entry), '..', 'package.json'), JSON.stringify({ name: pkg }));
+    fs.writeFileSync(entry, 'SEA');
+    expect(nodeEntryCandidates(cliDir)).toContain(entry);
+    expect(resolveNodeEntry({}, cliDir, {})).toBe(entry);
+  });
+
+  it('names only supported release targets', () => {
+    expect(platformNodePackageName('win32', 'x64')).toBe('@infosupport/huddle-node-win32-x64');
+    expect(platformNodePackageName('darwin', 'arm64')).toBe('@infosupport/huddle-node-darwin-arm64');
+    expect(platformNodePackageName('linux', 'x64')).toBeNull();
   });
 });
 

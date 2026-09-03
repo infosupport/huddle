@@ -72,6 +72,29 @@ function run(cmd, args, opts = {}) {
 }
 
 /**
+ * npm's public command on Windows is a .cmd batch file. execFileSync() does
+ * not run batch files (and must not grow a shell just for this one command),
+ * so invoke npm's JavaScript entrypoint with the Node that is building the
+ * blob. npm_execpath is present when this script was started by npm; the
+ * sibling lookup also makes `node scripts/build-sea.mjs` work.
+ */
+function npmCliEntry() {
+  const candidates = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ].filter(Boolean);
+  const entry = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!entry) {
+    throw new Error('npm CLI entrypoint not found; run this script through npm or install npm beside Node');
+  }
+  return entry;
+}
+
+function runNpm(args, opts) {
+  return run(process.execPath, [npmCliEntry(), ...args], opts);
+}
+
+/**
  * Resolves a build tool to the JS file its package declares as `bin`, to be run
  * as `node <entry>` — never to the shim in node_modules/.bin.
  *
@@ -137,7 +160,7 @@ fs.mkdirSync(OUT, { recursive: true });
 
 if (!has('--skip-ui')) {
   step(1, 'Building the portal');
-  run('npm', ['run', 'build:ui']);
+  runNpm(['run', 'build:ui']);
 } else {
   step(1, 'Skipping portal build (--skip-ui)');
 }

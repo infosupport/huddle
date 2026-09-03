@@ -39,6 +39,9 @@ dist/
 # SEA build output: a ~130 MB binary plus its blob and sourcemap.
 gateway/build/
 
+# Native SEA executables are staged into platform npm packages only in CI.
+packages/*/bin/huddle-node*
+
 # Stray/self-referential nested CLI package (accidental) — never commit
 cli/cli/
 
