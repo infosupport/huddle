@@ -29,14 +29,35 @@ on:
         type: string
 
 jobs:
-  node_windows:
-    # The CLI names this package as an exact optional dependency. Publish it
-    # first, so a newly published CLI can never point npm at an absent binary.
+  node_platforms:
+    # The CLI names these packages as exact optional dependencies. Publish every
+    # native target first, so a newly published CLI cannot point npm at an absent
+    # executable for one of its supported platforms.
     if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
-    runs-on: windows-latest
+    name: Huddle Node (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+            platform: win32
+            arch: x64
+            package: huddle-node-win32-x64
+          - target: darwin-x64
+            runner: macos-13
+            platform: darwin
+            arch: x64
+            package: huddle-node-darwin-x64
+          - target: darwin-arm64
+            runner: macos-14
+            platform: darwin
+            arch: arm64
+            package: huddle-node-darwin-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -59,23 +80,27 @@ jobs:
         id: gitversion
         uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
 
-      - name: Build and stage Windows Huddle Node
+      - name: Determine release version
         shell: pwsh
         run: |
-          $patch = ${{ steps.gitversion.outputs.patch }} + ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
-          $version = "${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.$patch"
+          $patch = [int]${{ steps.gitversion.outputs.patch }} + [int]${{ steps.gitversion.outputs.commitsSinceVersionSource }}
+          "VERSION=${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.$patch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and stage Huddle Node
+        shell: pwsh
+        run: |
           npm ci --prefix gateway
           npm ci --prefix gateway/frontend
           npm --prefix gateway run build:sea
-          node scripts/stage-node-package.mjs --platform win32 --arch x64 --version $version
+          node scripts/stage-node-package.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version $env:VERSION
 
-      - name: Publish Windows Huddle Node
+      - name: Publish Huddle Node package
         run: npm publish --provenance --access public
-        working-directory: packages/huddle-node-win32-x64
+        working-directory: packages/${{ matrix.package }}
 
   stable:
     if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
-    needs: node_windows
+    needs: node_platforms
     runs-on: ubuntu-latest
     permissions:
       contents: read
