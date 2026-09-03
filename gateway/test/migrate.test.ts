@@ -221,10 +221,25 @@ describe('buildOverride', () => {
       services: { app: { networks: ['dev'] } },
       networks: { dev: { internal: true, labels: { [HUDDLE_NETWORK_LABEL]: 'true' } } },
     };
-    const { override, warnings } = buildOverride(doc, { dockerSocket: true, hostCaPath: '/host/ca.crt' });
+    const { override, warnings, socketContainers } = buildOverride(doc, { dockerSocket: true, hostCaPath: '/host/ca.crt' });
     // The CA still mounts; only the socket mount is skipped.
     expect(override.services?.app.volumes).toEqual([`/host/ca.crt:${DEFAULT_CA_PATH}:ro`]);
     expect(warnings.some((w) => w.includes('container_name'))).toBe(true);
+    // Nothing to register with Node for a service that got no socket mount.
+    expect(socketContainers).toEqual([]);
+  });
+
+  // blocker 15 (docs/ADR-huddle-node-split.md): runMigrate registers exactly
+  // this list with Node so the socket exists before `docker compose up` starts
+  // the container — it must name only services that actually got the mount.
+  it('reports the container_names that got the socket mount, for runMigrate to register', () => {
+    const { socketContainers } = buildOverride(parseYaml(COMPOSE), { dockerSocket: true, hostCaPath: '/host/ca.crt' });
+    expect(socketContainers).toEqual(['my-project-devcontainer']);
+  });
+
+  it('reports no socketContainers when dockerSocket is not set', () => {
+    const { socketContainers } = buildOverride(parseYaml(COMPOSE), { hostCaPath: '/host/ca.crt' });
+    expect(socketContainers).toEqual([]);
   });
 
   it('blocks (fail-closed) when the marked network is not internal', () => {

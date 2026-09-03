@@ -5,6 +5,7 @@ import { bold, green, cyan, dim, yellow, red } from './utils';
 import { resolveRuntime } from './runtime';
 import { INTERNAL_NET, HOST_SOCKET_DIR } from './init';
 import { nodeCaDir } from './node';
+import { post, ApiError } from './api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Conventions
@@ -57,6 +58,14 @@ export interface AnalysisResult {
   override: ComposeDoc;
   /** Non-fatal advisories (e.g. a service without container_name). */
   warnings: string[];
+  /**
+   * `container_name`s that got the filtered-socket mount (only set with
+   * --docker-socket, and only for services that actually have a
+   * container_name — see the warning buildInjectedService raises otherwise).
+   * `runMigrate` registers these with Node so the socket exists by the time
+   * `docker compose up` starts them; see /api/docker/register-socket.
+   */
+  socketContainers: string[];
   /**
    * Security-critical problems that leave the service with a direct internet
    * path (marked network not internal, or a second non-internal network). The
@@ -217,6 +226,7 @@ function buildInjectedService(
   ctx: InjectContext,
   warnings: string[],
   blockers: string[],
+  socketContainers: string[],
 ): ComposeService {
   for (const netKey of serviceNetworkKeys(svc)) {
     if (netKey === ctx.markedNetwork) continue;
@@ -253,6 +263,7 @@ function buildInjectedService(
       );
     } else {
       volumes.push(`${ctx.socketDir}/${cn}:/var/run/huddle`);
+      socketContainers.push(cn);
     }
   }
 
@@ -297,9 +308,10 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
     dockerSocket: !!opts.dockerSocket,
   };
   const overrideServices: Record<string, ComposeService> = {};
+  const socketContainers: string[] = [];
   for (const name of services) {
     const svc = (compose.services?.[name] ?? {}) as ComposeService;
-    overrideServices[name] = buildInjectedService(svc, name, compose, ctx, warnings, blockers);
+    overrideServices[name] = buildInjectedService(svc, name, compose, ctx, warnings, blockers, socketContainers);
   }
 
   const override: ComposeDoc = {
@@ -311,7 +323,7 @@ export function buildOverride(compose: ComposeDoc, opts: OverrideOptions = {}): 
     },
   };
 
-  return { markedNetwork, services, override, warnings, blockers };
+  return { markedNetwork, services, override, warnings, blockers, socketContainers };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -757,7 +769,26 @@ export async function runMigrate(opts: MigrateOptions): Promise<void> {
     console.log();
   }
 
-  printNextSteps(composeFile, outPath, caPath, hostCaPath, !!opts.dockerSocket);
+  // Register the socket-mounted container_names with Node NOW, before `docker
+  // compose up` ever runs them: the socket has to already exist inside the
+  // bind-mounted directory by the time the container starts, or it mounts an
+  // empty directory instead (see /api/docker/register-socket, api.ts). This is
+  // the only way Node learns about these containers at all — they carry none
+  // of the labels a Huddle-created devcontainer does.
+  if (result.socketContainers.length > 0) {
+    try {
+      await post('/api/docker/register-socket', { names: result.socketContainers });
+      console.log(green(`[OK] Registered filtered socket(s) for: ${result.socketContainers.join(', ')}`));
+    } catch (err) {
+      const detail = err instanceof ApiError ? err.message : String(err);
+      console.log(yellow(`[!] Could not register the filtered socket with Huddle Node: ${detail}`));
+      console.log(dim('     Run `huddle init` (or re-run `huddle migrate --docker-socket`) once it is reachable —'));
+      console.log(dim('     until then the socket mount will not exist and DOCKER_HOST will point at nothing.'));
+    }
+    console.log();
+  }
+
+  printNextSteps(composeFile, outPath, caPath, hostCaPath);
 }
 
 function printNextSteps(
@@ -765,7 +796,6 @@ function printNextSteps(
   outPath: string,
   caPath: string,
   hostCaPath: string,
-  dockerSocket: boolean,
 ): void {
   const composeBase = path.basename(composeFile);
   const overrideBase = path.basename(outPath);
@@ -784,16 +814,5 @@ function printNextSteps(
   console.log(dim('     Or start it yourself:'));
   console.log(cyan(`       docker compose -f ${composeBase} -f ${overrideBase} up -d`));
   console.log();
-  if (dockerSocket) {
-    console.log(yellow('  Note (--docker-socket): the socket mount is GENERATED but NOT yet served.'));
-    console.log(
-      dim(
-        '     Huddle does not yet pre-provision the per-container filtered socket for IDE-started\n' +
-          '     containers (issue #66 follow-up). Until it does, the mount source will not exist and\n' +
-          '     DOCKER_HOST will point at a missing socket. Only enable this once that lands.',
-      ),
-    );
-    console.log();
-  }
   console.log(dim('See docs/migrate-devcontainers.md for the full guide and the marked-network convention.'));
 }
