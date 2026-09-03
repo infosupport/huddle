@@ -26,9 +26,9 @@ jobs:
             platform: win32
             arch: x64
             package: huddle-node-win32-x64
-          # These run natively: macos-13 is Intel and macos-14 is Apple Silicon.
+          # These run natively: macos-15-intel is Intel and macos-14 is Apple Silicon.
           # Signing/notarisation is separate from SEA build verification.
-          - runner: macos-13
+          - runner: macos-15-intel
             target: darwin-x64
             platform: darwin
             arch: x64
