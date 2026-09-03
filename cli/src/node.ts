@@ -11,15 +11,11 @@
 // init that only survives as long as the terminal it was typed in is not an
 // init at all.
 //
-// PACKAGING GAP (deliberately not solved here)
-//   This command runs an EXISTING Huddle Node build; it cannot produce one. The
-//   published CLI ships only its own dist and has zero dependencies, while
-//   Huddle Node needs fastify, dockerode and better-sqlite3 — the last a native
-//   module needing prebuilds per platform. Deciding how a released Huddle Node
-//   reaches the host (bundled in the CLI package, a separate npm package, or
-//   extracted from the gateway image) is its own step. Until then this resolves
-//   a local build, which is what a repo checkout and `huddle init` in dev mode
-//   both already have.
+// DELIVERY
+//   Published CLI packages declare one optional Huddle Node package per supported
+//   os/cpu. npm installs only its matching package; this file resolves its SEA
+//   executable without a postinstall download or a host Node runtime dependency.
+//   A checkout still wins, deliberately, so contributors run what they built.
 
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -45,6 +41,34 @@ export interface NodeOptions {
 
 export const DEFAULT_NODE_PORT = 24842;
 
+/**
+ * The executable is an optional dependency rather than a postinstall download:
+ * npm selects the one package whose os/cpu fields match the host. Keep this
+ * mapping here, beside resolution, so adding an architecture is a deliberate
+ * CLI change with a test rather than an implicit package-name convention.
+ */
+export function platformNodePackageName(platform = process.platform, arch = process.arch): string | null {
+  const supported = new Set(['win32-x64', 'darwin-x64', 'darwin-arm64']);
+  const target = `${platform}-${arch}`;
+  return supported.has(target) ? `@infosupport/huddle-node-${target}` : null;
+}
+
+export function installedNodeEntry(cliDir: string, platform = process.platform, arch = process.arch): string | null {
+  const pkg = platformNodePackageName(platform, arch);
+  if (!pkg) return null;
+  const executable = platform === 'win32' ? 'huddle-node.exe' : 'huddle-node';
+  try {
+    // `npm install -g` may hoist optional dependencies beside the CLI package,
+    // while a regular install commonly nests them below it. Node's resolver
+    // knows both layouts; a hard-coded `cli/node_modules` path does not.
+    const manifest = require.resolve(`${pkg}/package.json`, { paths: [path.resolve(cliDir, '..')] });
+    const entry = path.join(path.dirname(manifest), 'bin', executable);
+    return fs.existsSync(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
 // An explicitly named entry, if there is one. Resolved separately from the
 // search path on purpose: naming a build is a claim about which one to run, so
 // a missing file has to fail loudly rather than quietly starting a different
@@ -60,7 +84,7 @@ export function nodeEntryCandidates(cliDir: string): string[] {
   // A repo checkout: cli/dist/index.js → ../../gateway/dist/index.js, and the
   // same one level up for layouts that nest the build one deeper.
   const exe = process.platform === 'win32' ? '.exe' : '';
-  return [
+  const candidates = [
     path.resolve(cliDir, '..', '..', 'gateway', 'dist', 'index.js'),
     path.resolve(cliDir, '..', '..', '..', 'gateway', 'dist', 'index.js'),
     // A single executable, either beside the CLI or dropped in ~/.huddle by
@@ -68,8 +92,13 @@ export function nodeEntryCandidates(cliDir: string): string[] {
     // exist — the layout of someone working ON Huddle, whose build is the one
     // they mean.
     path.resolve(cliDir, '..', '..', 'gateway', 'build', 'sea', `huddle-node${exe}`),
-    path.join(os.homedir(), '.huddle', `huddle-node${exe}`),
   ];
+  // A checkout takes precedence so contributors always run the code they just
+  // built. Installed CLI packages have no checkout sibling and take this path.
+  const installed = installedNodeEntry(cliDir);
+  if (installed) candidates.push(installed);
+  candidates.push(path.join(os.homedir(), '.huddle', `huddle-node${exe}`));
+  return candidates;
 }
 
 /**
@@ -198,10 +227,13 @@ export async function runNode(opts: NodeOptions = {}): Promise<void> {
     process.exit(1);
   }
   if (!entry) {
-    console.error(red('No Huddle Node build found.'));
+    console.error(red('No Huddle Node executable found.'));
     console.error('');
-    console.error('  `huddle node` runs an existing build; it does not create one.');
-    console.error('  In a repo checkout, build it first:');
+    console.error('  A normal npm installation includes a platform-specific Huddle Node package.');
+    console.error('  Reinstall the CLI to fetch its optional dependency:');
+    console.error(cyan('    npm install -g @infosupport/huddle-cli'));
+    console.error('');
+    console.error('  In a repo checkout, build Huddle Node first:');
     console.error(cyan('    npm --prefix gateway install && npm --prefix gateway run build'));
     console.error('');
     console.error('  Or point at a build explicitly:');
@@ -210,6 +242,9 @@ export async function runNode(opts: NodeOptions = {}): Promise<void> {
     process.exit(1);
   }
 
+  // The SEA opens SQLite during boot. A source checkout often has ~/.huddle
+  // already, but `huddle node --data-dir <new path>` must work on its own too.
+  fs.mkdirSync(nodeDataDir(opts), { recursive: true, mode: 0o700 });
   const env = nodeEnv(opts);
   const port = env.HUDDLE_API_PORT ?? String(DEFAULT_NODE_PORT);
 
@@ -387,6 +422,7 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   if (!entry) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
 
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(nodeDataDir(opts), { recursive: true, mode: 0o700 });
   // Append, not truncate: the log of the run that just failed is usually the
   // thing you need after a restart.
   const log = fs.openSync(NODE_LOG_FILE, 'a');
