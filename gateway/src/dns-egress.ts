@@ -151,11 +151,21 @@ async function doSanitize(): Promise<void> {
 // geen timers op.
 const SETTLING_DELAYS_MS = [1000, 3000, 6000, 10000, 15000];
 let settling: NodeJS.Timeout[] = [];
-export function scheduleSettlingSanitize(): void {
+export function scheduleSettlingSanitize(run: () => void = () => { void sanitizeResolvConf(); }): void {
   for (const t of settling) clearTimeout(t);
   settling = SETTLING_DELAYS_MS.map((ms) => {
-    const t = setTimeout(() => { void sanitizeResolvConf(); }, ms);
+    const t = setTimeout(run, ms);
     t.unref();
     return t;
   });
+}
+
+/**
+ * A control-feed notification means Node has successfully changed one of this
+ * container's networks.  Run once straight away, then retain the delayed runs:
+ * Docker/Podman can finish rewriting resolv.conf after the connect returned.
+ */
+export function sanitizeAfterNetworkChange(run: () => void = () => { void sanitizeResolvConf(); }): void {
+  run();
+  scheduleSettlingSanitize(run);
 }

@@ -8,6 +8,7 @@ import { runtimeEnv } from './runtime-env';
 import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
 import { registerPortal } from './portal';
 import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
+import { registerSocketRegistrationRoute } from './socket-registration';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -16,6 +17,7 @@ import {
   reloadFirewallRulesFolder,
   syncGroupsToFolder,
 } from './firewall-groups';
+
 import {
   readHostConfig,
   setHostFolder,
@@ -863,6 +865,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     notifyStateChanged();
     return report;
   });
+
+  registerSocketRegistrationRoute(app);
 
   // Reconnect huddle to a devcontainer's dc-net-<name> network.
   // Needed when a container recreates its network after a restart cycle;

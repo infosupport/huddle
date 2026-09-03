@@ -218,8 +218,9 @@ Start options:
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
                                      (NODE_EXTRA_CA_CERTS; default /home/vscode/.huddle-ca.crt)
-  --docker-socket                    Also wire the filtered Docker socket + DOCKER_HOST
-                                     (requires gateway socket pre-provisioning; see docs)
+  --docker-socket                    Also wire the filtered Docker socket + DOCKER_HOST;
+                                     registers the container(s) with Huddle Node so the
+                                     socket exists before "docker compose up" starts them
   --output <path>                    Override file to write
                                      (default: docker-compose.huddle.yml next to the source)
   --force                            Overwrite an existing override file

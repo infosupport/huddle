@@ -59,6 +59,8 @@ export interface ControlClientOptions {
    * comes back 304 and never reaches here.
    */
   onDevcontainers?: (names: string[]) => void;
+  /** Full changed container feed; used for socket-ready acknowledgements. */
+  onContainers?: (feed: ContainerFeed) => void;
 }
 
 interface Batch {
@@ -105,6 +107,8 @@ export interface ControlClient {
   flush(): Promise<void>;
   start(): void;
   stop(): void;
+  /** Tell Node that a pre-registered Unix socket is actually listening. */
+  socketReady(name: string): Promise<void>;
 }
 
 // What actually went wrong, not `fetch failed`.
@@ -237,6 +241,7 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     sandboxAuth = feed.sandboxAuth ?? {};
     containerVersion = feed.version;
     opts.onDevcontainers?.(feed.devcontainers ?? []);
+    opts.onContainers?.(feed);
   }
 
   async function refresh(): Promise<void> {
@@ -416,6 +421,12 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
       if (reportTimer) clearInterval(reportTimer);
       pollTimer = null;
       reportTimer = null;
+    },
+    async socketReady(name: string): Promise<void> {
+      const res = await call('/control/socket-ready', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error(`/control/socket-ready → ${res.status}`);
     },
   };
 }

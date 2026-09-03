@@ -593,11 +593,28 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
 // `/etc/resolv.conf` there is the operator's own DNS configuration — a file we
 // would be reading, probing and rewriting on their behalf.
 //
-// The gateway repairs its own copy instead. It sees the same event we do: a
-// devcontainer network appears or goes away exactly when the container feed
-// changes, and boot-gateway.ts sanitizes on that.
+// The gateway repairs its own copy instead, but it has to first LEARN that a
+// connect happened. Most of the time it does: a devcontainer network appears
+// or goes away exactly when the container feed's device list changes, and
+// boot-gateway.ts sanitizes on that. But rewireGatewayIntoDevcontainers()
+// reconnects the gateway to networks whose devcontainers already existed
+// (e.g. on a Node restart) — the device list is unchanged, so that path alone
+// would never bump the feed's version and the gateway would keep enforcing a
+// resolv.conf that connectNetwork just repolluted.
+//
+// So every successful connect also bumps this counter, which feed-build.ts
+// folds into the container feed's version hash. That turns "the polling
+// gateway happens to notice a device list change" into "the feed changes
+// exactly when a connect happens", still over the same pull-based poll — no
+// second channel, no push.
+let networkGeneration = 0;
+export function currentNetworkGeneration(): number {
+  return networkGeneration;
+}
+
 export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
   await dockerRequest('POST', `/networks/${encodeURIComponent(networkName)}/connect`, { Container: containerName });
+  networkGeneration++;
 }
 
 export async function disconnectNetwork(networkName: string, containerName: string): Promise<void> {

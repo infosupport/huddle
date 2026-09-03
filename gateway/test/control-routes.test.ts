@@ -54,7 +54,7 @@ describe('control channel', () => {
     delete process.env.HUDDLE_GATEWAY_TOKEN;
     delete process.env.HUDDLE_OPERATOR_TOKEN;
   });
-  beforeEach(() => { db.exec('DELETE FROM rules'); db.exec('DELETE FROM containers'); });
+  beforeEach(() => { db.exec('DELETE FROM rules'); db.exec('DELETE FROM containers'); db.exec('DELETE FROM socket_registrations'); });
 
   describe('authentication', () => {
     it.each(['/control/health', '/control/policy', '/control/containers'])(
@@ -147,6 +147,16 @@ describe('control channel', () => {
       const a = (await app.inject({ method: 'GET', url: '/control/policy', headers: asGateway })).json().version;
       const b = (await app.inject({ method: 'GET', url: '/control/policy', headers: asGateway })).json().version;
       expect(a).toBe(b);
+    });
+  });
+
+  describe('POST /control/socket-ready', () => {
+    it('records readiness only for a registered name and requires the gateway token', async () => {
+      db.prepare(`INSERT INTO socket_registrations (name, revision) VALUES ('compose-api', 'test')`).run();
+      expect((await app.inject({ method: 'POST', url: '/control/socket-ready', payload: { name: 'compose-api' } })).statusCode).toBe(401);
+      const ok = await app.inject({ method: 'POST', url: '/control/socket-ready', headers: asGateway, payload: { name: 'compose-api' } });
+      expect(ok.statusCode).toBe(200);
+      expect((db.prepare(`SELECT ready_at FROM socket_registrations WHERE name = 'compose-api'`).get() as { ready_at: number }).ready_at).toBeTypeOf('number');
     });
   });
 });

@@ -13,7 +13,7 @@
 
 import { createProxyServer } from './proxy';
 import { initCa } from './tls-ca';
-import { scheduleSettlingSanitize } from './dns-egress';
+import { scheduleSettlingSanitize, sanitizeAfterNetworkChange } from './dns-egress';
 import { SBX_PROXY_PORT, sbxUpstreamUrl } from './sbx-upstream';
 import { getGatewayToken } from './auth';
 import { runtimeEnv } from './runtime-env';
@@ -40,13 +40,17 @@ export function bootGateway(): void {
   const client = createControlClient({
     baseUrl: runtimeEnv.nodeControlUrl,
     token,
-    onDevcontainers: (names) => {
-      syncSocketRelay(relay, names);
+    onContainers: (feed) => {
+      const registrations = new Set(feed.socketRegistrations ?? []);
+      syncSocketRelay(relay, feed.devcontainers ?? [], (name) => {
+        if (!registrations.has(name)) return;
+        void client.socketReady(name).catch((err) => console.warn(`[socket-relay] ${name}: ready acknowledgement failed: ${err.message}`));
+      });
       // A devcontainer coming or going means Node attached this container to (or
       // detached it from) that net, and Podman rewrote our resolv.conf for it.
       // Node cannot repair that from where it runs — see connectNetwork() in
       // docker.ts — so the feed change is how we learn to repair it ourselves.
-      scheduleSettlingSanitize();
+      sanitizeAfterNetworkChange();
     },
   });
   setControlPlane(client.plane);

@@ -204,7 +204,7 @@ Only once both exist does moving files become a mechanical, reversible step.
 | 4c | **Control channel, read half** — `/control/health`, `/control/policy`, `/control/containers` on Node, behind a token of the gateway's own | `auth.ts` (second token), `api.ts` (guard), new `control/{http,feed,routes}.ts` | none — nothing consumes it yet | `control-http.test.ts` (pure, 15); `control-routes.test.ts` (12, DB-gated) | additive; no existing route changes |
 | 4d | **Control channel, write half** — the effect list and audit entries the gateway produces flow back to Node | `control/routes.ts`, proxy-side queue | audit sink | contract tests both sides | additive |
 | 4e | **Remote binding** (done) — the facade reads the polled feeds instead of SQLite/Docker; the in-process binding is gone | `control/plane.ts`, `control/client.ts`, `control/select.ts`, `control/apply.ts` | rule evaluation input | `test/helpers/local-plane.ts` drives the real client against an in-process Node, so `rules.test.ts` still tests feed → decide → apply end to end | not a flag — the gateway has no database to fall back to |
-| 4e′ | **Self-traffic guard** — one tested predicate instead of the `'huddle'` literal at three proxy sites; loopback refused regardless of policy | new `proxy-self.ts`, `proxy.ts` | none — the sudo-audit exception is preserved | `proxy-self.test.ts` (14, pure) | self-addressed hosts stop appearing as `requested` rules (blocker 14) |
+| 4e′ | **Self-traffic guard** — one tested predicate instead of the `'huddle'` literal at three proxy sites; loopback refused regardless of policy | new `proxy-self.ts`, `proxy.ts` | none — the sudo-audit exception is preserved | `proxy-self.test.ts` (14, pure) | self-addressed hosts stop appearing as `requested` rules (blocker 13) |
 | 5 | **SBX direct exec** (done) — mailbox dropped; `sandbox/ops.ts` execs `sbx` on the host | deleted `bridge/`, `cli/src/sbx-bridge.ts`, `gateway/sbx.sh`, `run-sandbox-mode.sh`, the `/sbx-bridge` mount; new `cli/src/sbx-host.ts` | container→host hop removed | `sbx-host-only.test.ts` (4); existing sbx tests unchanged | sbx now needs `huddle node` — see the gap below |
 | 6 | **`huddle init` starts both** (done) — Huddle Node detached on the host first, then the gateway container pointed at it | `cli/src/init.ts`, `cli/src/node.ts`, `cli/src/control-address.ts` | container startup responsibilities → CLI | `cli/test/node.test.ts` (not runnable in this devcontainer — blocker 9) | no escape hatch: a gateway without Node denies everything, which is the correct failure |
 | 7 | **Slim the gateway** (partial) — the *mounts* are gone (no Docker socket, no data volume, no `~/.huddle`, no published portal) and `boot-gateway.ts` keeps `db`/`docker`/`api` out of the process via a dynamic import in `index.ts`; the image still compiles and ships every source file | `cli/src/init.ts`, `gateway/src/index.ts`, new `gateway/src/boot-gateway.ts`, `gateway/src/boot-node.ts` | — | an import-graph test pinning that nothing reachable from `boot-gateway.ts` imports `db`/`docker`/`api` | dropping files from the image is a build change only; the runtime guarantee already holds |
@@ -336,7 +336,7 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
 * **Where the gateway finds Node** — `cli/src/control-address.ts`, because it is
   a per-platform decision and a security one: an engine in a VM reaches the host
   as `host.docker.internal`, native Linux as the bridge gateway address, and the
-  bind address Node uses has to be the matching one. See blocker 13.
+  bind address Node uses has to be the matching one. See blocker 12.
 
 ---
 
@@ -357,6 +357,11 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
    gets false negatives on the largest file. Use `rg` or `grep --text`.
 5. **`API_PORT` is hardcoded** to 3000 while `feat/port-24842` already moved the
    whole tree to 24842 — those must be reconciled when that branch merges.
+
+   **Resolved.** `runtime-env.ts` (step 1) resolves it per role instead of a
+   single literal: `hostMode ? 24842 : 3000`, overridable via `HUDDLE_API_PORT`.
+   The container default stays 3000 (no publish step changes); Huddle Node
+   defaults to 24842, which is what sections 2, 5 and 6 already assume.
 
 ### Found while implementing steps 1–3
 
@@ -381,25 +386,43 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
 7. **The resolv.conf seam.** `initContainerNetworks()` is a Docker call (Node),
    but the `/etc/resolv.conf` it corrupts belongs to the *gateway* container
    (`dns-egress.ts`). In one process those chain directly. Split, Node performs
-   the connect and the gateway has to notice by itself — currently via the
-   settling re-runs `scheduleSettlingSanitize()` already schedules. That works,
-   but it is timing-based, not event-driven; `/control/events` (step 4) is the
-   place to make it explicit.
-8. **`initDb()` and `initCa()` run in both roles.** Neither is cleanly one-sided
-   yet: the proxy still reads rules and writes audit rows from SQLite, and the CA
-   is signed by the gateway but distributed by Node. A split deployment must
-   therefore share `DB_PATH` and `CA_DIR` today. Step 4 removes the DB half; the
-   CA half stays and needs the read-only mount from blocker 3.
+   the connect and the gateway has to notice by itself.
+
+   **Resolved.** Most connects already changed the container feed (a
+   devcontainer starting or stopping), which the gateway was already reacting
+   to (`scheduleSettlingSanitize()` in `boot-gateway.ts`'s `onDevcontainers`).
+   The gap was the connects that don't: `rewireGatewayIntoDevcontainers()`
+   reattaching the gateway to networks whose devcontainers already existed
+   (a Node restart), which repollutes resolv.conf without changing `byIp` or
+   `devcontainers`. `docker.ts` now bumps a `networkGeneration` counter on
+   every successful `connectNetwork()`, and `feed-build.ts` folds it into the
+   container feed's version — so the existing poll-and-react path fires on a
+   bare reconnect too, still pull-based, no second channel. On a changed feed
+   the gateway runs one sanitize pass immediately (within that poll cycle),
+   then retains the settling spread (`SETTLING_DELAYS_MS`) to cover Podman
+   finishing a delayed rewrite after the connect returned.
+8. **`initDb()` and `initCa()` run in both roles.** Neither was cleanly
+   one-sided at the time this was written: the proxy read rules and wrote audit
+   rows from SQLite directly, and the CA was signed by the gateway but
+   distributed by Node. A split deployment had to share `DB_PATH` and `CA_DIR`.
+
+   **Resolved, DB half.** `boot-node.ts` calls `initDb()`; `boot-gateway.ts`
+   does not — the proxy now reaches rules and audit through the `controlPlane`
+   facade (blockers 1–2) instead of SQLite directly. **CA half stays, by
+   design**: the gateway still signs leaves with the CA Node generates, mounted
+   read-only per blocker 3.
 9. **The CLI had no test harness.** `cli/package.json` now has a `test` script,
-   a vitest devDependency, `vitest.config.ts` and two suites (`node.test.ts`,
-   `control-address.test.ts`, 33 tests). What is still blocked is *installing*
-   them here: `npm install` in `cli/` needs `registry.npmjs.org`, which this
-   devcontainer's own firewall denies, so `cli/package-lock.json` has no vitest
-   entry yet and `npx vitest` in `cli/` fails. The suites were run against the
-   gateway's copy of vitest to verify them (`node
-   ../gateway/node_modules/vitest/vitest.mjs run` from `cli/`). Regenerating the
-   lockfile needs an operator to allow that domain once.
-11. **`checkRule` is not a read — it writes, and it mints ids.** This is the
+   a vitest devDependency and `vitest.config.ts`. The first two suites
+   (`node.test.ts`, `control-address.test.ts`, 33 tests) had to be verified
+   against the gateway's copy of vitest (`node
+   ../gateway/node_modules/vitest/vitest.mjs run` from `cli/`), because
+   `cli/package-lock.json` had no vitest entry and this devcontainer's own
+   firewall denies `registry.npmjs.org`.
+
+   **Resolved.** `cli/package-lock.json` now carries the vitest entry and
+   `npx vitest run` passes standalone in `cli/` — 5 suites, 80 tests
+   (`api-base-url`, `control-address`, `control-probe`, `logs`, `node`).
+10. **`checkRule` is not a read — it writes, and it mints ids.** This is the
     blocker that reshaped step 4 into 4a/4b/4c. On a miss it `INSERT`s a
     `requested` rule so the operator sees the blocked host in the portal; it also
     refreshes last-seen metadata (`touchRule`, `setLastPath`), expires timed-out
@@ -423,14 +446,14 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
     effect instead of from inside the evaluation, which is what lets step 4c move
     the applier without touching the decision.
 
-12. **`index.ts` and `proxy.ts` are the only CRLF files in the repo** (also on
+11. **`index.ts` and `proxy.ts` are the only CRLF files in the repo** (also on
     `main`). With `core.autocrlf=input` — the setting in this devcontainer — any
     edit normalizes them and turns a two-line change into a ~2000-line diff that
     conflicts with every concurrent branch. Steps 1–2 preserved CRLF via
     `git -c core.autocrlf=false add`. Normalizing both files to LF is worth doing,
     but as its own commit, on a quiet branch point.
 
-13. **The two halves cannot reach each other without widening a bind address.**
+12. **The two halves cannot reach each other without widening a bind address.**
     `api.ts` listened on `0.0.0.0`. In the container that is the only sensible
     choice — Docker reaches the API on the container's veth address and `-p
     3000:3000` decides what the outside world sees. On the host there is no
@@ -460,10 +483,10 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
     address widens `/control/*` and nothing else — the operator-token API stays on
     loopback:24842. `devcontainer-net` is `--internal` and has no route to either
     address, and the proxy refuses self-addressed traffic regardless of policy
-    (blocker 14), so a devcontainer has no path to the control channel: not by
+    (blocker 13), so a devcontainer has no path to the control channel: not by
     name, not by address, not through the proxy.
 
-14. **Devcontainers are allowed to reach Huddle's own API — through the proxy.**
+13. **Devcontainers are allowed to reach Huddle's own API — through the proxy.**
     The proxy refuses self-addressed traffic at all three entry points (plain
     HTTP, WebSocket upgrade, CONNECT), but the plain-HTTP site carries one
     deliberate exception: `POST :3000/api/audit/sudo`, the ingest devcontainers
@@ -473,7 +496,7 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
     That is a data-plane→control-plane dependency the split has to carry across:
     after the move, the endpoint no longer lives in the gateway's own process. The
     gateway will have to forward that one request to Node on the host, over
-    whatever transport blocker 13 settles on — which makes it the same listener
+    whatever transport blocker 12 settles on — which makes it the same listener
     the control channel uses, reached by devcontainer traffic on purpose. So the
     guard cannot be "never forward to Node"; it has to be "forward exactly this
     one method+path, and nothing else."
@@ -508,7 +531,7 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
     `/api/*` route is operator-only, and the API is on loopback where no container
     can reach it.
 
-15. **`huddle migrate` told people to download the CA from an endpoint that no
+14. **`huddle migrate` told people to download the CA from an endpoint that no
     longer exists** — `curl -fsS http://huddle:3000/api/tls/ca.crt`. Found while
     wiring the sudo relay, and it was already dead code before the split: there is
     no `/api/tls/ca.crt` route anywhere in the gateway. Huddle-created containers
@@ -524,15 +547,37 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
     does not exist yet, because Docker would otherwise silently create a directory
     there.
 
-16. **`--docker-socket` in `huddle migrate` is still generated-but-not-served.**
-    The per-container filtered socket is provisioned by Huddle when *Huddle*
-    creates a container; for an IDE-started compose service nothing pre-creates
-    `<HOST_SOCKET_DIR>/<container_name>`. That predates the split and the split
-    does not fix it — `socket-proxy.ts` is Huddle Node's, and it now genuinely
-    runs on the host, which is the right side, but nothing calls it for containers
-    Huddle did not start. The flag stays opt-in and prints a warning.
+15. **`--docker-socket` in `huddle migrate` was generated-but-not-served.**
+    The per-container filtered socket used to be provisioned only when *Huddle*
+    created a container; for an IDE-started compose service nothing pre-created
+    `<HOST_SOCKET_DIR>/<container_name>`.
 
-17. **The Docker socket a devcontainer mounts is created by the gateway.**
+    **Resolved**, by extending the same relay blocker 16 already built rather
+    than adding a second mechanism. `containerSnapshot()`'s device list can
+    only ever name containers Docker currently reports, which is no good here:
+    the whole problem is that the socket has to exist *before* `docker compose
+    up` ever starts the container, or the bind mount sees an empty directory
+    instead of a live socket. So registration happens at `huddle migrate
+    --docker-socket` time, not lazily on first connection like a
+    Huddle-created devcontainer's registration in `docker.ts` — there is no
+    connection to be lazy about yet. `huddle migrate` now calls
+    `POST /api/docker/register-socket` (operator-token, `/api/*`, since this is
+    the developer telling Huddle about containers *they* are about to start)
+    with every `container_name` that got the socket mount; Node remembers them
+    in `socket_registrations` and `buildContainerFeed()` unions them into
+    `ContainerFeed.devcontainers` unconditionally — not gated on the container
+    running, or existing at all yet. The gateway's `syncSocketRelay()` already
+    treats that list as "sockets to serve" with no other precondition, so it
+    pre-creates the socket the same poll cycle the registration reaches it. The
+    API call does not report success merely after writing that row: it waits for
+    the gateway's authenticated `/control/socket-ready` acknowledgement, which
+    is sent only after the Unix listener has bound. Therefore a successful
+    `huddle migrate` means `docker compose up` finds a live socket instead of an
+    empty directory. The flag no longer needs a warning; a registration call
+    that fails (Huddle unreachable or gateway not ready) is reported and the
+    operator re-runs the command instead.
+
+16. **The Docker socket a devcontainer mounts is created by the gateway.**
     Resolved; recorded here because the first cut of the split got it wrong and
     the reason it was wrong is not obvious.
 
