@@ -27,8 +27,7 @@ jobs:
             arch: x64
             package: huddle-node-win32-x64
           # These run natively: macos-13 is Intel and macos-14 is Apple Silicon.
-          # Signing/notarisation belongs in the publishing workflow once the
-          # macOS signing identity is available.
+          # Signing/notarisation is separate from SEA build verification.
           - runner: macos-13
             target: darwin-x64
             platform: darwin
