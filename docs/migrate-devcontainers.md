@@ -142,11 +142,11 @@ extra Compose file the Dev Containers extension merges.
 | Flag | Purpose |
 | --- | --- |
 | `--ca-path <path>` | Where the CA lands in the container (`NODE_EXTRA_CA_CERTS`). Default `/home/vscode/.huddle-ca.crt`. |
-| `--docker-socket` | Also wire Huddle's filtered Docker socket + `DOCKER_HOST` (see caveat below). |
+| `--docker-socket` | Also wire Huddle's filtered Docker socket + `DOCKER_HOST` (see below). |
 | `--output <path>` | Write the override somewhere other than `docker-compose.huddle.yml`. |
 | `--force` | Overwrite an existing override file. |
 
-## Docker-in-Docker (`--docker-socket`) — not complete yet
+## Docker-in-Docker (`--docker-socket`)
 
 If your outer devcontainer itself runs Docker (`docker compose up`, Testcontainers, …) it
 must talk to Huddle's **filtered** socket, never the raw engine. `--docker-socket` generates
@@ -154,17 +154,17 @@ the mount (`/tmp/dc-sockets/<container_name>:/var/run/huddle`) and
 `DOCKER_HOST=unix:///var/run/huddle/docker.sock` for each service that has a fixed
 `container_name`.
 
-**This part is generated but not yet served.** When the IDE starts the container against the
-real engine, Huddle is not in the create path and cannot inject the socket at create time.
-Huddle would need to *pre-provision* the per-container filtered socket at a name-keyed path
-before the container exists (tracked as a follow-up on issue #66). Until that lands, the
-mount source will not exist and `DOCKER_HOST` will point at a missing socket — so only enable
-`--docker-socket` once that gateway support is available. `huddle migrate` prints the same
-warning.
+Huddle is not in the IDE's create path for these containers, so `huddle migrate` also
+registers each `container_name` with Huddle Node right away (`POST
+/api/docker/register-socket`), before the container ever exists. The command waits for the
+gateway to confirm it has bound the filtered socket at that name-keyed path; only then does
+it report success, so `docker compose up` sees a live socket instead of an empty directory.
+Requires Huddle to be running (`huddle init`) when you run `huddle migrate --docker-socket`;
+if Node or the gateway cannot confirm readiness, the command still writes the override but
+warns, and you should re-run `huddle migrate --docker-socket --force` once it is healthy.
 
-The proxy/CA/network wiring (the default, without `--docker-socket`) is fully functional
-today; it is the same pattern the Huddle repository's own [`.devcontainer/`](../.devcontainer)
-uses.
+The proxy/CA/network wiring (the default, without `--docker-socket`) works the same way; it
+is the same pattern the Huddle repository's own [`.devcontainer/`](../.devcontainer) uses.
 
 ## Security requirements
 

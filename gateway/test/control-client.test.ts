@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { createControlClient, describeControlError, type ControlClient } from '../src/control/client';
-import type { PolicyFeed, ReportBody } from '../src/control/feed';
+import type { ContainerFeed, PolicyFeed, ReportBody } from '../src/control/feed';
 import type { RuleRow } from '../src/rule-match';
 
 // The gateway's whole binding to Huddle Node, driven against a scripted fetch.
@@ -31,12 +31,15 @@ interface Harness {
   calls: { path: string; ifNoneMatch: string | undefined }[];
   /** Replace what /control/policy answers with. */
   setPolicy(feed: PolicyFeed | null): void;
+  /** Replace what /control/containers answers with. */
+  setContainers(feed: ContainerFeed): void;
   /** Make every control call fail, as an unreachable Node does. */
   setDown(down: boolean): void;
 }
 
 function harness(opts: { reportFails?: boolean } = {}): Harness {
   let feed: PolicyFeed | null = policy([]);
+  let containers: ContainerFeed = { version: 'c1', byIp: { '172.20.0.5': 'dc-alpha' }, sandboxAuth: {} };
   let down = false;
   const posts: ReportBody[] = [];
   const calls: { path: string; ifNoneMatch: string | undefined }[] = [];
@@ -58,7 +61,8 @@ function harness(opts: { reportFails?: boolean } = {}): Harness {
       return Response.json(feed);
     }
     if (url.endsWith('/control/containers')) {
-      return Response.json({ version: 'c1', byIp: { '172.20.0.5': 'dc-alpha' } });
+      if (headers['if-none-match'] === `"${containers.version}"`) return new Response(null, { status: 304 });
+      return Response.json(containers);
     }
     if (url.endsWith('/control/report')) {
       if (opts.reportFails) return new Response('nope', { status: 503 });
@@ -81,6 +85,7 @@ function harness(opts: { reportFails?: boolean } = {}): Harness {
     posts,
     calls,
     setPolicy: (f) => { feed = f; },
+    setContainers: (f) => { containers = f; },
     setDown: (d) => { down = d; },
   };
 }
@@ -154,6 +159,52 @@ describe('control client — feed polling', () => {
     await h.client.refresh();
     await expect(h.client.plane.resolveContainerByIp('172.20.0.5')).resolves.toBe('dc-alpha');
     await expect(h.client.plane.resolveContainerByIp('172.20.0.9')).resolves.toBeNull();
+  });
+});
+
+describe('control client — reacting to a network reconnect the container list cannot show', () => {
+  // rewireGatewayIntoDevcontainers() reconnects the gateway to networks whose
+  // devcontainers are already listed in the feed — the reconnect repollutes the
+  // gateway's own resolv.conf (dns-egress.ts) but does not change `byIp` or
+  // `devcontainers`. Node folds a network-generation counter into the feed
+  // version for exactly this case (feed-build.ts); this pins that the client
+  // still notices and still calls back, on that counter alone.
+  it('fires onDevcontainers again when only networkGeneration changed', async () => {
+    const seen: string[][] = [];
+    let containers: ContainerFeed = {
+      version: 'c1', byIp: { '172.20.0.5': 'dc-alpha' }, sandboxAuth: {},
+      devcontainers: ['dc-alpha'], networkGeneration: 1,
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      if (url.endsWith('/control/policy')) return Response.json(policy([]));
+      if (url.endsWith('/control/containers')) {
+        if (headers['if-none-match'] === `"${containers.version}"`) return new Response(null, { status: 304 });
+        return Response.json(containers);
+      }
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+
+    const client = createControlClient({
+      baseUrl: 'http://node.test',
+      token: 'gw-token',
+      fetchImpl,
+      onDevcontainers: (names) => seen.push(names),
+    });
+
+    await client.refresh();
+    expect(seen).toEqual([['dc-alpha']]);
+
+    // Same devcontainers, same byIp — only the generation bumped by a
+    // reconnect. The version therefore changes and a second call must land.
+    containers = { ...containers, version: 'c2', networkGeneration: 2 };
+    await client.refresh();
+    expect(seen).toEqual([['dc-alpha'], ['dc-alpha']]);
+
+    // And a real 304 (nothing changed at all) must NOT call back again.
+    await client.refresh();
+    expect(seen).toEqual([['dc-alpha'], ['dc-alpha']]);
   });
 });
 

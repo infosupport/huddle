@@ -45,7 +45,11 @@ export interface ContainerFeed {
    */
   sandboxAuth: Record<string, string>;
   /**
-   * Running devcontainers, by name.
+   * Running devcontainers, by name — PLUS any name `huddle migrate
+   * --docker-socket` has registered (POST /api/docker/register-socket), which
+   * is not filtered on "running": that container is not Huddle's, it does not
+   * exist yet, and the whole point is to have the socket ready before `docker
+   * compose up` starts it. See socket_registrations' comment in db.ts.
    *
    * Not for filtering — for the Docker-socket relay. The socket a devcontainer
    * mounts has to exist on the ENGINE host, which is Huddle Node's machine only
@@ -54,6 +58,25 @@ export interface ContainerFeed {
    * and it has no Docker socket of its own to ask.
    */
   devcontainers?: string[];
+  /** Names explicitly pre-registered by `huddle migrate --docker-socket`. */
+  socketRegistrations?: string[];
+  /** Opaque registration revisions; forces a gateway refresh on re-registration. */
+  socketRegistrationRevisions?: Record<string, string>;
+  /**
+   * Bumped every time Node successfully attaches the gateway to a devcontainer
+   * network (docker.ts's `connectNetwork`). Folded into `version` so a connect
+   * that does not change `byIp`/`devcontainers` — e.g. `huddle
+   * rewire-gateway` reconnecting the gateway to networks whose devcontainers
+   * were already listed — still changes the feed.
+   *
+   * That matters because a connect is also what repollutes the GATEWAY
+   * container's own /etc/resolv.conf (see ../dns-egress.ts): Podman puts the
+   * network's internal-only DNS at the front of it on every connect. Without
+   * this the gateway would only ever notice through `devcontainers` changing,
+   * which a bare reconnect does not do — it would keep enforcing a resolv.conf
+   * that the connect just broke, until something unrelated changed the feed.
+   */
+  networkGeneration?: number;
 }
 
 // ── The write half ───────────────────────────────────────────────────────────

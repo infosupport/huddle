@@ -20,6 +20,8 @@ import { applyReport } from './apply';
 import { buildContainerFeed, buildPolicyFeed } from './feed-build';
 import type { ReportBody } from './feed';
 import { presentedVersion } from './http';
+import { markSocketReady } from '../db';
+import { notifyStateChanged } from '../events';
 
 // Serve a versioned feed with ETag semantics. In one place so both feeds answer
 // a conditional request identically.
@@ -51,6 +53,18 @@ export function registerControlRoutes(app: FastifyInstance): void {
   // from the policy feed because it changes on a completely different clock:
   // containers come and go far more often than rules do.
   app.get('/control/containers', async (req, reply) => serveFeed(req, reply, buildContainerFeed));
+
+  // Gateway-only acknowledgement: a registered name is not ready merely
+  // because it appeared in a feed; its Unix listener must have bound first.
+  app.post<{ Body: { name?: unknown } }>('/control/socket-ready', async (req, reply) => {
+    const name = req.body?.name;
+    if (typeof name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid container name' });
+    }
+    if (!markSocketReady(name)) return reply.code(404).send({ error: 'not registered' });
+    notifyStateChanged();
+    return { ok: true };
+  });
 
   // The write half: what the gateway decided, batched. The requests these
   // describe have already been answered — this is the operator's record of them

@@ -75,7 +75,7 @@ function dial(opts: RelayOptions, containerName: string, client: net.Socket): vo
   req.end();
 }
 
-function serve(opts: RelayOptions, containerName: string): void {
+function serve(opts: RelayOptions, containerName: string, onReady?: (name: string) => void): void {
   // A directory per container, mounted as a DIRECTORY into the devcontainer: a
   // bind of the socket file itself pins the inode, so after a restart (unlink +
   // new listen) the container would hold a mount of the dead old socket forever.
@@ -105,6 +105,7 @@ function serve(opts: RelayOptions, containerName: string): void {
     try { fs.unlinkSync(legacyPath); } catch {}
     try { fs.symlinkSync(socketPath, legacyPath); } catch {}
     console.log(`[socket-relay] ${containerName} → ${socketPath}`);
+    onReady?.(containerName);
   });
   servers.set(containerName, server);
 }
@@ -118,7 +119,7 @@ function serve(opts: RelayOptions, containerName: string): void {
  * devcontainer that starts again still has the old mount, and the next feed
  * re-listens on the same path.
  */
-export function syncSocketRelay(opts: RelayOptions, containerNames: string[]): void {
+export function syncSocketRelay(opts: RelayOptions, containerNames: string[], onReady?: (name: string) => void): void {
   const wanted = new Set(containerNames.filter((name) => {
     if (CONTAINER_NAME_RE.test(name)) return true;
     console.error(`[socket-relay] refusing unsafe container name ${JSON.stringify(name)}`);
@@ -131,7 +132,8 @@ export function syncSocketRelay(opts: RelayOptions, containerNames: string[]): v
     }
   }
   for (const name of wanted) {
-    if (!servers.has(name)) serve(opts, name);
+    if (!servers.has(name)) serve(opts, name, onReady);
+    else onReady?.(name);
   }
 }
 

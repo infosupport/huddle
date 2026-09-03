@@ -127,6 +127,22 @@ export function initDb(): void {
       secret_hash TEXT NOT NULL,
       created INTEGER NOT NULL
     );
+    -- Container names \`huddle migrate --docker-socket\` asked Node to serve a
+    -- filtered Docker socket for, ahead of the container ever existing (blocker
+    -- 15, docs/ADR-huddle-node-split.md). Node did not create these
+    -- containers, so it has no other way to learn their names before they
+    -- start — unlike a Huddle-created devcontainer, which the IDE label in
+    -- containerSnapshot() already covers. buildContainerFeed() unions this
+    -- table into ContainerFeed.devcontainers so the gateway's socket relay
+    -- (../socket-relay.ts) creates the socket regardless of whether the
+    -- container is running yet, which it has to be for the compose bind mount
+    -- to see a live socket instead of an empty directory.
+    CREATE TABLE IF NOT EXISTS socket_registrations (
+      name TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      revision TEXT NOT NULL DEFAULT '',
+      ready_at INTEGER
+    );
   `);
 
   // The folder index (#69) is gone: the portal browses the host live now that
@@ -141,6 +157,16 @@ export function initDb(): void {
   }
   if (!cols.some(c => c.name === 'path_pattern')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_pattern TEXT');
+  }
+  // The first implementation of socket registrations only stored a name.
+  // Upgrade it in place if a development build created that short-lived schema
+  // before readiness acknowledgements were added.
+  const socketCols = db.prepare("PRAGMA table_info(socket_registrations)").all() as {name:string}[];
+  if (!socketCols.some(c => c.name === 'revision')) {
+    db.exec("ALTER TABLE socket_registrations ADD COLUMN revision TEXT NOT NULL DEFAULT ''");
+  }
+  if (!socketCols.some(c => c.name === 'ready_at')) {
+    db.exec('ALTER TABLE socket_registrations ADD COLUMN ready_at INTEGER');
   }
   // path_mode marks a host-only rule as a "path allowlist": the bare domain is
   // then closed (status deny), but unknown subpaths are raised as 'requested' so
@@ -661,4 +687,40 @@ export function isHostPortApproved(containerId: string, hostPort: number, protoc
   return !!db.prepare(
     'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
   ).get(containerId, hostPort, protocol);
+}
+
+// ── Docker-socket registrations (blocker 15) ─────────────────────────────────
+// See socket_registrations' CREATE TABLE comment above for why this exists.
+
+export function registerSocketName(name: string): void {
+  // Reset readiness for every explicit request.  The gateway must acknowledge
+  // this registration again before the CLI tells the user it is safe to start
+  // Compose; an old acknowledgement cannot prove a restarted gateway listens.
+  db.prepare(`INSERT INTO socket_registrations (name, revision, ready_at)
+              VALUES (?, lower(hex(randomblob(16))), NULL)
+              ON CONFLICT(name) DO UPDATE SET revision = lower(hex(randomblob(16))), ready_at = NULL`)
+    .run(name);
+}
+
+export function listRegisteredSocketNames(): string[] {
+  return (db.prepare('SELECT name FROM socket_registrations ORDER BY name').all() as { name: string }[])
+    .map((r) => r.name);
+}
+
+/** Included in the feed hash so re-registering an existing name repolls it. */
+export function socketRegistrationRevisions(): Record<string, string> {
+  const rows = db.prepare('SELECT name, revision FROM socket_registrations ORDER BY name').all() as { name: string; revision: string }[];
+  return Object.fromEntries(rows.map((r) => [r.name, r.revision]));
+}
+
+export function markSocketReady(name: string): boolean {
+  return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ?').run(name).changes > 0;
+}
+
+export function socketNamesReady(names: string[]): boolean {
+  if (names.length === 0) return true;
+  const placeholders = names.map(() => '?').join(',');
+  const row = db.prepare(`SELECT count(*) AS total, sum(ready_at IS NOT NULL) AS ready
+                          FROM socket_registrations WHERE name IN (${placeholders})`).get(...names) as { total: number; ready: number };
+  return row.total === names.length && row.ready === names.length;
 }
