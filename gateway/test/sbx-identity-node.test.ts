@@ -253,10 +253,10 @@ describe('removeSandbox', () => {
     expect(rows()).toEqual({});
   });
 
-  it('keeps the identity when sbx rm fails — the box is still there', async () => {
+  it('drops the identity even when sbx rm fails — a stale credential is a door left open', async () => {
     await sbx.startSandbox({ name: 'box-a', workspace: '/w/a' });
     removeCode = 1;
     await sbx.removeSandbox('box-a');
-    expect(Object.keys(rows())).toEqual(['box-a']);
+    expect(rows()).toEqual({});
   });
 });

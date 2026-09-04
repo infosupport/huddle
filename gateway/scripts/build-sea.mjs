@@ -310,7 +310,6 @@ ok(`${path.relative(GATEWAY, BLOB)} — ${mb(fs.statSync(BLOB).size)}`);
 step(7, 'Injecting');
 
 fs.rmSync(STAGED, { force: true });
-fs.rmSync(FINAL, { force: true });
 fs.copyFileSync(process.execPath, STAGED);
 fs.chmodSync(STAGED, 0o755);
 
@@ -422,6 +421,14 @@ ok('booted as role=node past the database');
 // ----------------------------------------------------------------- 9. rename
 
 step(9, 'Naming the artefact');
+// Only now — after injection AND a passing smoke test — is it safe to give up
+// the last known-good binary. Removing FINAL any earlier (e.g. up front in step
+// 7) would leave zero working binaries the moment a rebuild fails partway
+// through, which is exactly the failure this ordering exists to prevent.
+// fs.renameSync() overwrites an existing destination file on POSIX on its own,
+// but throws EEXIST on Windows if FINAL is already present, so it is removed
+// explicitly here, one line before the rename that replaces it.
+fs.rmSync(FINAL, { force: true });
 fs.renameSync(STAGED, FINAL);
 
 // Renaming ~130 MB can leave the new name briefly invisible to stat() on

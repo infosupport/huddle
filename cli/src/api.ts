@@ -12,9 +12,16 @@ import { DEFAULT_NODE_PORT, nodeProbeUrls } from './node';
 //
 // An explicit --url or HUDDLE_URL replaces the list entirely — the operator named
 // an address, and silently talking to a different one would be worse than failing.
+//
+// HUDDLE_PORT, when set, still has to flow through here: it is the same env var
+// `huddle init`/`huddle node` read for a custom port (init.ts's HOST_PORT), so a
+// custom port that stuck for the command that started Huddle Node must also
+// stick for every command that talks to it afterwards — otherwise every command
+// after `HUDDLE_PORT=<n> huddle init` probes the default port and never finds it.
+const port = process.env.HUDDLE_PORT?.trim() || DEFAULT_NODE_PORT;
 let candidates: string[] = (process.env.HUDDLE_URL
   ? [process.env.HUDDLE_URL]
-  : nodeProbeUrls(DEFAULT_NODE_PORT)
+  : nodeProbeUrls(port)
 ).map(normalizeBaseUrl);
 let baseUrl = candidates[0];
 

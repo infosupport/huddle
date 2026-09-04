@@ -376,6 +376,31 @@ export function isNodePidAlive(): boolean {
 }
 
 /**
+ * Best-effort check that `pid` still names a Huddle Node process, not a pid the
+ * OS has since recycled for something unrelated. A pid file's only real
+ * guarantee is "this was Huddle Node's pid at the moment we wrote it" — pids
+ * wrap around, and once they do, isNodePidAlive() alone would say "yes, alive"
+ * about a completely different process. That matters twice here: stopNode()
+ * must not SIGTERM whatever now holds that pid, and startNodeDetached() must
+ * not treat an arbitrary process answering on the port as Huddle Node just
+ * because a stale pid file also happens to resolve to a live process.
+ *
+ * /proc/<pid>/cmdline is Linux-only. Elsewhere (macOS, Windows) this degrades
+ * to "assume yes" — the behavior every caller already had before this check
+ * existed — rather than blocking a platform that cannot answer the question.
+ */
+export function pidLooksLikeHuddleNode(pid: number): boolean {
+  try {
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+    return cmdline.includes('huddle-node') || cmdline.includes(path.join('gateway', 'dist', 'index.js'));
+  } catch {
+    // ENOENT means either "no /proc" (not Linux) or "pid is already gone" —
+    // neither is this function's to decide, so don't block the caller on it.
+    return true;
+  }
+}
+
+/**
  * Is Huddle Node answering? /api/auth/status is the probe: it needs no operator
  * token (api.ts keeps it public so the portal can find out whether login is
  * needed), so a 200 here means the API is up, not merely that a port is open.
@@ -418,10 +443,16 @@ export interface StartedNode {
 export async function stopNode(): Promise<boolean> {
   const pid = readNodePid();
   if (pid === null) return false;
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {
-    // Already gone. Clearing the pid file below is still the right cleanup.
+  // Guard against a stale pid file: if the OS has recycled this pid for an
+  // unrelated process since Huddle Node last wrote it, signaling it would kill
+  // that unrelated process instead of cleaning up Huddle Node. Skip straight to
+  // clearing the stale record rather than sending SIGTERM blind.
+  if (pidLooksLikeHuddleNode(pid)) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Already gone. Clearing the pid file below is still the right cleanup.
+    }
   }
   try { fs.unlinkSync(NODE_PID_FILE); } catch { /* nothing to clean up */ }
   try { fs.unlinkSync(NODE_CONTROL_HOST_FILE); } catch { /* nothing to clean up */ }
@@ -474,6 +505,24 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   if (!entry) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
 
   if (await pingNode(port)) {
+    // A 200 on the port alone is not proof it's Huddle Node: /api/auth/status
+    // is deliberately unauthenticated (so the portal can ask "do I need to log
+    // in?"), which means any local process squatting the port before Huddle
+    // Node started would satisfy pingNode() too. init.ts hands the operator
+    // token to whatever this function says is "already running", so trusting
+    // that alone would let a squatter collect it. Require the pid THIS CLI
+    // itself recorded — only it can write NODE_PID_FILE, so a squatter cannot
+    // forge an entry there — to still look like Huddle Node before treating
+    // the port as genuinely owned.
+    const recordedPid = readNodePid();
+    if (recordedPid === null || !pidLooksLikeHuddleNode(recordedPid)) {
+      throw new Error(
+        `Something is already answering on port ${port}, but it does not match the Huddle Node this CLI ` +
+        `started (no matching pid in ${NODE_PID_FILE}).\n` +
+        `  Refusing to treat it as Huddle Node and hand it credentials. Stop whatever is bound to that port ` +
+        `and re-run, or use a different port with --port.`,
+      );
+    }
     const runningControlHost = normalizeControlHost(readNodeControlHost() ?? undefined);
     if (runningControlHost === requestedControlHost) {
       return { pid: readNodePid() ?? 0, entry: '(already running)', port, reused: true };
@@ -490,11 +539,19 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
     }
   }
 
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   fs.mkdirSync(nodeDataDir(opts), { recursive: true, mode: 0o700 });
   // Append, not truncate: the log of the run that just failed is usually the
   // thing you need after a restart.
-  const log = fs.openSync(NODE_LOG_FILE, 'a');
+  //
+  // 0o600: this file is Huddle Node's own stdout/stderr, which can include the
+  // operator token (auth.ts prints it on first boot so the operator can log
+  // in). The mode only applies at creation, so an already-existing log from
+  // before this fix is re-tightened with chmod too — belt-and-suspenders
+  // against a background process's output otherwise landing in a
+  // world-readable file other local users can read the token out of.
+  const log = fs.openSync(NODE_LOG_FILE, 'a', 0o600);
+  try { fs.chmodSync(NODE_LOG_FILE, 0o600); } catch { /* best effort, e.g. unsupported on this platform */ }
   const launch = nodeLaunch(entry);
   const child = spawn(launch.command, launch.args, {
     env,

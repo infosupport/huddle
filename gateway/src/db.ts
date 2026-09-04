@@ -771,16 +771,35 @@ export function unregisterSocketNameIfCurrent(name: string, revision: string): v
  *
  * Called from buildContainerFeed(), which runs on every gateway poll (~1s,
  * see boot-gateway.ts) — kept to one indexed DELETE so that stays cheap.
+ *
+ * A `ready_at IS NULL` row is left alone above so a registration is not
+ * pruned before its container has had a chance to start — but nothing else
+ * ever clears one of these if that start never happens: `huddle migrate
+ * --docker-socket` registers ahead of a `docker compose up` the operator may
+ * never run, and a devcontainer create that fails before this poll ever sees
+ * it (or whose rollback is otherwise bypassed) leaves the same shape behind.
+ * Left unbounded, such a row is a permanent phantom registration — the relay
+ * keeps a socket directory open for a name nothing will ever use.
+ * PENDING_REGISTRATION_MAX_AGE_SEC is the line between "early" and "stale":
+ * once a still-pending registration is older than that AND its name is not
+ * currently live, it self-heals on the next poll regardless of whether the
+ * caller that created it ever explicitly unregisters.
  */
+const PENDING_REGISTRATION_MAX_AGE_SEC = 60 * 60;
+
 export function pruneDeadSocketRegistrations(liveNames: string[]): void {
   if (liveNames.length === 0) {
-    db.prepare('DELETE FROM socket_registrations WHERE ready_at IS NOT NULL').run();
+    db.prepare(
+      `DELETE FROM socket_registrations WHERE ready_at IS NOT NULL OR created_at < unixepoch() - ?`
+    ).run(PENDING_REGISTRATION_MAX_AGE_SEC);
     return;
   }
   const placeholders = liveNames.map(() => '?').join(',');
   db.prepare(
-    `DELETE FROM socket_registrations WHERE ready_at IS NOT NULL AND name NOT IN (${placeholders})`
-  ).run(...liveNames);
+    `DELETE FROM socket_registrations
+      WHERE (ready_at IS NOT NULL OR created_at < unixepoch() - ?)
+        AND name NOT IN (${placeholders})`
+  ).run(PENDING_REGISTRATION_MAX_AGE_SEC, ...liveNames);
 }
 
 export function listRegisteredSocketNames(): string[] {
@@ -794,7 +813,23 @@ export function socketRegistrationRevisions(): Record<string, string> {
   return Object.fromEntries(rows.map((r) => [r.name, r.revision]));
 }
 
-export function markSocketReady(name: string): boolean {
+/**
+ * Acknowledge that a name's Unix listener is bound and serving.
+ *
+ * `revision`, when given, scopes the ack the same way
+ * `unregisterSocketNameIfCurrent` scopes a rollback: a late "ready" ack
+ * answering an OLD registration must not mark a NEWER one (of the same name,
+ * a fresh revision from a `registerSocketName` call that raced ahead of this
+ * ack) ready — nothing has verified that newer registration's socket yet,
+ * only the one this ack was actually issued for. Optional so callers that
+ * predate this parameter keep working unscoped; passing it is what actually
+ * closes the staleness window described above.
+ */
+export function markSocketReady(name: string, revision?: string): boolean {
+  if (revision !== undefined) {
+    return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ? AND revision = ?')
+      .run(name, revision).changes > 0;
+  }
   return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ?').run(name).changes > 0;
 }
 

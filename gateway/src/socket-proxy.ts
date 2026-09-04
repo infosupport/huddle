@@ -1138,6 +1138,18 @@ export function containerProxyHandler(containerName: string): (client: net.Socke
  * registry, so a container has to be in it before its socket serves anything.
  * Split from serving the socket: on a VM engine the socket is served by the
  * gateway container and this is all Node does for it.
+ *
+ * Deliberately does not reject when lookupContainerId can't find the
+ * container: `createAndStartContainer` (docker.ts) calls this to claim the
+ * name BEFORE `containers/create`, so the gateway's socket directory exists
+ * by the time the container's bind mount needs it — Docker legitimately has
+ * no such container yet at that point. Rejecting here would break that path.
+ * This is not the place callers outside this file get name authorization from
+ * anyway: the socket relay (control/socket-relay-server.ts) gates entry to
+ * this function by feed-authorized name BEFORE ever calling it, so a caller
+ * reaching here over the relay is already known-authorized, and the two
+ * in-process callers (docker.ts, boot-node.ts) only ever pass names Node
+ * itself is creating or already knows are its own devcontainers.
  */
 export async function registerContainerProxy(containerName: string): Promise<void> {
   assertSafeContainerName(containerName);

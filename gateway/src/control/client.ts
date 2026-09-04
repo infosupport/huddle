@@ -44,6 +44,16 @@ export interface ControlClientOptions {
   reportMs?: number;
   /** Per-request timeout for every control call. */
   timeoutMs?: number;
+  /**
+   * How long a sandbox credential stays honoured after the container feed was
+   * last confirmed fresh. Unlike policy — which keeps enforcing its last known
+   * shape for as long as Node is away, on purpose — a credential is a claim of
+   * IDENTITY, and `sbx rm` has to actually stop working within a bounded time
+   * even if Node then goes dark. Past this age `resolveSandboxBySecret` treats
+   * the cached map as empty rather than as the last-known set: fail closed, not
+   * fail static, for revocation.
+   */
+  credentialMaxAgeMs?: number;
   /** Injected in tests. */
   fetchImpl?: typeof fetch;
   /** Injected in tests; unix seconds. */
@@ -78,6 +88,13 @@ const emptyBatch = (): Batch => ({ effects: [], audits: [], auditUpdates: [], su
 // fields (CAP in proxy.ts), so a few thousand of them is not a small number.
 const MAX_QUEUED = 20_000;
 const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
+
+// Generous enough that a Node restart or a brief network hiccup — the normal
+// case `pollMs` already rides out — never locks a live sandbox out mid-poll,
+// tight enough that `sbx rm` is not undone by an outage lasting minutes. This
+// is deliberately much shorter than policy's fail-static leash: a removed
+// sandbox is gone, not merely a rule the operator has not updated.
+const DEFAULT_CREDENTIAL_MAX_AGE_MS = 30_000;
 
 // Cheap enough to run per request. The exact number does not matter — it decides
 // when to give up on a control plane that has been gone for a long time.
@@ -159,6 +176,7 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
   const pollMs = opts.pollMs ?? 1000;
   const reportMs = opts.reportMs ?? 250;
   const timeoutMs = opts.timeoutMs ?? 5000;
+  const credentialMaxAgeMs = opts.credentialMaxAgeMs ?? DEFAULT_CREDENTIAL_MAX_AGE_MS;
   const session = opts.session ?? randomSession();
 
   let index: PolicyIndex = emptyPolicyIndex();
@@ -167,6 +185,11 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
   let sandboxAuth: Record<string, string> = {};
   let containerVersion = '';
   let havePolicy = false;
+  // Unix seconds the container feed was last confirmed fresh — a real update
+  // AND a 304 both count, since either means Node just vouched for `sandboxAuth`
+  // as it stands. Stays 0 until the first successful poll, which already denies
+  // every sandbox on its own (`sandboxAuth` starts empty).
+  let containerFeedAt = 0;
 
   let pending: Batch = emptyBatch();
   let pendingBytes = 0;
@@ -231,7 +254,10 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     const res = await call('/control/containers', {
       headers: containerVersion ? { 'if-none-match': `"${containerVersion}"` } : {},
     });
-    if (res.status === 304) return;
+    if (res.status === 304) {
+      containerFeedAt = nowSeconds();
+      return;
+    }
     if (!res.ok) throw new Error(`/control/containers → ${res.status}`);
     const feed = (await res.json()) as ContainerFeed;
     containersByIp = feed.byIp ?? {};
@@ -240,6 +266,7 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     // half of the mismatch, and the one an operator can see in the log.
     sandboxAuth = feed.sandboxAuth ?? {};
     containerVersion = feed.version;
+    containerFeedAt = nowSeconds();
     opts.onDevcontainers?.(feed.devcontainers ?? []);
     opts.onContainers?.(feed);
   }
@@ -362,7 +389,14 @@ export function createControlClient(opts: ControlClientOptions): ControlClient {
     // no secret to leak, and a comparison that returns early on the first
     // differing byte tells a caller how much of a guess was right. A linear scan
     // is what constant time costs here — the map is one entry per sandbox.
+    //
+    // Fail CLOSED past `credentialMaxAgeMs`, unlike policy which fails static:
+    // `sbx rm` deletes the identity row Node builds `sandboxAuth` from, and an
+    // operator who removed a sandbox needs that to actually take effect even if
+    // Node then goes dark — a control plane that is down is a reason to stop
+    // trusting who it last vouched for, not to keep vouching for them forever.
     resolveSandboxBySecret(secret) {
+      if (containerFeedAt === 0 || nowSeconds() - containerFeedAt > credentialMaxAgeMs / 1000) return null;
       const presented = hashSandboxSecret(secret);
       for (const [hash, name] of Object.entries(sandboxAuth)) {
         if (sameHash(presented, hash)) return name;

@@ -56,12 +56,23 @@ export function registerControlRoutes(app: FastifyInstance): void {
 
   // Gateway-only acknowledgement: a registered name is not ready merely
   // because it appeared in a feed; its Unix listener must have bound first.
-  app.post<{ Body: { name?: unknown } }>('/control/socket-ready', async (req, reply) => {
+  //
+  // `revision` (optional, for callers that already have one off the container
+  // feed's socketRegistrationRevisions) ties the ack to the exact registration
+  // it answers — see markSocketReady's doc in db.ts. Without it a late ack for
+  // a registration that has since been replaced (a fresh registerSocketName()
+  // call minted a new revision, e.g. a restart racing this ack) would mark the
+  // NEW registration ready on the strength of the OLD one's socket.
+  app.post<{ Body: { name?: unknown; revision?: unknown } }>('/control/socket-ready', async (req, reply) => {
     const name = req.body?.name;
+    const revision = req.body?.revision;
     if (typeof name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
       return reply.code(400).send({ error: 'invalid container name' });
     }
-    if (!markSocketReady(name)) return reply.code(404).send({ error: 'not registered' });
+    if (revision !== undefined && typeof revision !== 'string') {
+      return reply.code(400).send({ error: 'invalid revision' });
+    }
+    if (!markSocketReady(name, revision)) return reply.code(404).send({ error: 'not registered' });
     notifyStateChanged();
     return { ok: true };
   });

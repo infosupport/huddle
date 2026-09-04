@@ -52,9 +52,11 @@ export class StartContainerModalComponent {
   private api = inject(ApiService);
   private state = inject(StateService);
 
-  // Which kind of dev environment to create. Always defaults to 'sandbox' on open
-  // (the primary box type); the user can switch to 'container' per-open.
-  kind: 'sandbox' | 'container' = 'sandbox';
+  // Which kind of dev environment to create. Defaults to 'container' on open —
+  // every entry point that opens this modal predates sandboxes and is still
+  // labeled "Start devcontainer", so that must stay the default behavior.
+  // Creating a sandbox is an explicit choice the user makes inside the modal.
+  kind: 'sandbox' | 'container' = 'container';
 
   // sandbox fields. A sandbox can hold several folders: the FIRST is the one the
   // agent starts in, the rest ride along. Unlike a devcontainer mount there is no
@@ -106,7 +108,7 @@ export class StartContainerModalComponent {
     this.sbxFolders = [{ path: '', readOnly: false }];
     this.sbxAgent = 'claude';
     this.sbxSettings = null;
-    this.kind = 'sandbox'; // always default to Sandbox on open (the primary box type)
+    this.kind = 'container'; // legacy "Start devcontainer" entry points must default to a devcontainer
     this.restoreRemembered();
     this.loadImagesForIde();
     // Show which settings folders (folder mappings) the sandbox will get, and

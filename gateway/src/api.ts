@@ -58,6 +58,7 @@ import {
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
 import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan } from './sbx';
+import { hasSandboxIdentity } from './sandbox/registry';
 import { isValidWorkspacePath } from './sandbox/protocol';
 import { scheduleReconcile } from './sandbox/auto-sync';
 import {
@@ -1144,6 +1145,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
         return reply.code(400).send({ error: 'invalid sandbox name' });
       }
+      // Only act on sandboxes Huddle actually created (docs/ADR-sbx-identity.md) —
+      // a matching name on the host is not enough (finding: sandbox endpoints
+      // operating on boxes Huddle didn't create).
+      if (!hasSandboxIdentity(name)) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
       const force = req.query?.force === '1' || req.query?.force === 'true';
       try {
         const exitCode = await removeSandbox(name, force);
@@ -1160,6 +1167,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.get<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/log', async (req, reply) => {
     const name = req.params.name;
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) return reply.code(400).send({ error: 'invalid sandbox name' });
+    // Only Huddle-created sandboxes (see removeSandbox above for rationale).
+    if (!hasSandboxIdentity(name)) return reply.code(404).send({ error: 'not_found' });
     try {
       return await policyLogFor(name);
     } catch (err: any) {
@@ -1173,6 +1182,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const name = req.params.name;
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
       return reply.code(400).send({ error: 'invalid sandbox name' });
+    }
+    // Only Huddle-created sandboxes (see removeSandbox above for rationale).
+    if (!hasSandboxIdentity(name)) {
+      return reply.code(404).send({ error: 'not_found' });
     }
     try {
       const step = await trustCa(name);

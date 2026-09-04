@@ -1,9 +1,8 @@
 import { Component, inject } from '@angular/core';
 import { ModalService } from '../../../core/services/modal.service';
 
-// TODO(links): placeholders until the real URLs land. Both are one-line edits.
-const REPO_URL = 'https://github.com';
-const MIGRATION_NOTES_URL = 'https://github.com';
+const REPO_URL = 'https://github.com/infosupport/huddle';
+const MIGRATION_NOTES_URL = 'https://github.com/infosupport/huddle/blob/main/docs/migrate-devcontainers.md';
 
 // The release this notice belongs to, shown in the badge. Hardcoded on purpose:
 // nothing in the app knows its own version — there is no build-time define and
