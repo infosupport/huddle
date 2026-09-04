@@ -69,38 +69,49 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install gateway dependencies
+        run: |
+          npm install
+          npm install --prefix frontend
         working-directory: gateway
+
+      - name: Build Huddle Node (host)
+        # Huddle Node runs from this checkout (cli/src/node.ts resolves
+        # ../../gateway/dist/index.js next to the built CLI), and it serves the
+        # portal from dist/ui/browser when it is not a SEA build (portal.ts) — so
+        # both halves of `npm run build` are needed, not just build:ts.
+        run: npm run build
+        working-directory: gateway
+
+      - name: Install and build the CLI
+        run: |
+          npm install
+          npm run build
+        working-directory: cli
 
       - name: Build Huddle image
         run: docker build -t huddle ./gateway
 
       - name: Start Huddle
+        # Huddle is two processes now (docs/ADR-huddle-node-split.md): Huddle Node
+        # on the HOST (portal/API/database) and huddle-gateway in a CONTAINER (the
+        # filtering proxies only — no API, no :3000, no /data volume any more).
+        # `huddle init` is the one supported way to bring both up; hand-rolling a
+        # single `docker run` here built the pre-split container, which has
+        # nothing listening on :3000 at all and left the old "Wait for Huddle"
+        # step polling a port nobody was serving.
+        #
         # Het operator-token is per run random (alleen deze wegwerp-gateway kent
-        # het); via GITHUB_ENV is het beschikbaar voor de wait- en e2e-stappen.
+        # het); via GITHUB_ENV is het beschikbaar voor de e2e-stap.
         run: |
           HUDDLE_OPERATOR_TOKEN=$(openssl rand -hex 24)
           echo "HUDDLE_OPERATOR_TOKEN=$HUDDLE_OPERATOR_TOKEN" >> "$GITHUB_ENV"
-          docker network create --internal devcontainer-net
-          mkdir -p /tmp/dc-sockets
-          docker run -d \
-            --name huddle \
-            --network devcontainer-net \
-            -p 3000:3000 \
-            -e HUDDLE_OPERATOR_TOKEN="$HUDDLE_OPERATOR_TOKEN" \
-            -v huddle-data:/data \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v /tmp/dc-sockets:/tmp/dc-sockets \
-            huddle
-          docker network connect bridge huddle
-
-      - name: Wait for Huddle
-        run: |
-          for i in $(seq 1 20); do
-            curl -sf -H "Authorization: Bearer $HUDDLE_OPERATOR_TOKEN" http://localhost:3000/api/rules && break
-            sleep 2
-          done
+          HUDDLE_IMAGE=huddle \
+          HUDDLE_NO_PULL=1 \
+          HUDDLE_PORT=3000 \
+          HUDDLE_SKIP_CLI_SWITCH=1 \
+          HUDDLE_OPERATOR_TOKEN="$HUDDLE_OPERATOR_TOKEN" \
+            node cli/dist/index.js init
 
       - name: Login ghcr.io
         uses: docker/login-action@v3
@@ -144,4 +155,16 @@ jobs:
         working-directory: gateway
         env:
           HUDDLE_E2E: "1"
+          # 'localhost' resolves ::1 first on some runners, where nothing listens
+          # (Huddle Node binds the IPv4 loopback only — see nodeProbeUrls() in
+          # cli/src/node.ts) — name the literal Node actually bound to instead.
+          HUDDLE_URL: http://127.0.0.1:3000
           HUDDLE_OPERATOR_TOKEN: ${{ env.HUDDLE_OPERATOR_TOKEN }}
+
+      - name: Dump Huddle logs
+        if: failure()
+        run: |
+          echo "── ~/.huddle/node.log ──"
+          cat ~/.huddle/node.log 2>/dev/null || echo "(no node.log)"
+          echo "── docker logs huddle ──"
+          docker logs huddle 2>&1 || echo "(no huddle container)"
