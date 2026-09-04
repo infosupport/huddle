@@ -16,12 +16,14 @@ vi.mock('../src/docker', () => ({
 
 let db: typeof import('../src/db').db;
 let registerSocketName: typeof import('../src/db').registerSocketName;
+let listRegisteredSocketNames: typeof import('../src/db').listRegisteredSocketNames;
 let buildContainerFeed: typeof import('../src/control/feed-build').buildContainerFeed;
 
 beforeAll(async () => {
   const dbMod = await import('../src/db');
   db = dbMod.db;
   registerSocketName = dbMod.registerSocketName;
+  listRegisteredSocketNames = dbMod.listRegisteredSocketNames;
   dbMod.initDb();
   ({ buildContainerFeed } = await import('../src/control/feed-build'));
 });
@@ -60,5 +62,39 @@ describe('buildContainerFeed — socket registrations', () => {
     registerSocketName('compose-api');
     const after = await buildContainerFeed();
     expect(after.version).not.toBe(before.version);
+  });
+
+  // Part B of the fix: a registration that was actually served (ready_at set)
+  // and then drops off Docker's running list is a container that is gone —
+  // removed outside Huddle's control, since there is no devcontainer delete
+  // route to have unregistered it. That row must not linger forever.
+  it('prunes a ready registration whose container is no longer running', async () => {
+    registerSocketName('dc-gone');
+    db.prepare(`UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = 'dc-gone'`).run();
+    running = []; // Docker no longer reports it
+    const feed = await buildContainerFeed();
+    expect(feed.devcontainers).not.toContain('dc-gone');
+    expect(db.prepare('SELECT name FROM socket_registrations').all()).toEqual([]);
+  });
+
+  // The `huddle migrate --docker-socket` (and createAndStartContainer) use
+  // case: a name is registered ahead of its container ever running, and is
+  // not yet acknowledged ready. That is expected, not stale — pruning it
+  // just because it isn't in `running` yet would break the handshake.
+  it('does not prune a not-yet-ready registration even though its container is not running', async () => {
+    registerSocketName('dc-not-ready-yet');
+    running = [];
+    const feed = await buildContainerFeed();
+    expect(feed.devcontainers).toContain('dc-not-ready-yet');
+    expect(listRegisteredSocketNames()).toEqual(['dc-not-ready-yet']);
+  });
+
+  it('keeps a ready registration whose container is still running', async () => {
+    registerSocketName('dc-alpha');
+    db.prepare(`UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = 'dc-alpha'`).run();
+    running = ['dc-alpha'];
+    const feed = await buildContainerFeed();
+    expect(feed.devcontainers).toContain('dc-alpha');
+    expect(listRegisteredSocketNames()).toEqual(['dc-alpha']);
   });
 });
