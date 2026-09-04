@@ -172,7 +172,7 @@ function derive(input: ControlAddressInput): ControlAddress {
   if (input.gatewayIp) {
     return {
       bindHost: input.gatewayIp,
-      url: `http://${input.gatewayIp}:${port}`,
+      url: `http://${formatHost(input.gatewayIp)}:${port}`,
       runArgs: [],
       reason: `native engine — the container reaches this host at ${input.gatewayIp}`,
       reachable: true,
