@@ -36,8 +36,28 @@ export const UNCLAIMED_SANDBOX = 'huddle-unclaimed';
  *
  * It is a function rather than the bare string at the call site so there is one
  * place to state that, and one place to change if sandboxes ever need a scope of
- * their own. Collision with a devcontainer is not a concern: those ids are
- * 32-char UUID hex (docker.ts), which is not a name anyone types.
+ * their own.
+ *
+ * Collision with a devcontainer IS a real concern, and this function alone
+ * cannot close it. A devcontainer's id in this same keyspace is not a 32-char
+ * UUID — see feed-build.ts's `authorizedDevcontainerNames`, which is built from
+ * docker.ts's `containerSnapshot()` and holds the container's own NAME (its
+ * `.Names[0]`, e.g. what `docker ps` prints), plus whatever
+ * `huddle migrate --docker-socket` registered under. A sandbox's name
+ * (sandbox/protocol.ts's `SANDBOX_NAME_RE`) is drawn from essentially the same
+ * character class as Docker's own container-naming grammar, so nothing
+ * currently stops a sandbox and a devcontainer from sharing a name — and, once
+ * they do, from sharing a row in the `rules.container_id` keyspace this
+ * function's output is compared against. Closing that for real means giving
+ * sandboxes a keyspace Docker cannot produce (e.g. a prefix or character
+ * outside that grammar) — but that key is also read verbatim, unprefixed,
+ * by other holders of "the name" described above (reconcile.ts's stale-rule
+ * projection, the portal's pending-rule count), so changing what this function
+ * returns without updating those in lockstep would silently break rule
+ * matching for every existing sandbox instead of fixing the collision. That
+ * coordinated change is out of scope here; this function still returns the
+ * bare name, and the collision this doc used to wave away is now flagged
+ * instead of hidden.
  */
 export function sandboxContainerId(name: string): string {
   return name;
@@ -87,6 +107,15 @@ export function parseProxyAuthorization(header: string | undefined): ProxyIdenti
   if (!header) return null;
   const [scheme, value] = header.split(/\s+/, 2);
   if (!/^basic$/i.test(scheme) || !value) return null;
+  // Buffer.from(_, 'base64') never throws — invalid input decodes leniently
+  // (Node just skips the characters it cannot place) — so this try/catch
+  // guards nothing on its own. What DOES throw is decodeURIComponent below,
+  // on a malformed %-escape a sandbox has full control over (it is base64 of
+  // attacker-supplied bytes). Both are handled the same way here: this whole
+  // header is untrusted input arriving on every proxied request, so anything
+  // it can make throw has to become "no credential" rather than an uncaught
+  // exception on the gateway's request path — the latter takes the process
+  // down for every other sandbox and devcontainer currently being served.
   let decoded: string;
   try {
     decoded = Buffer.from(value, 'base64').toString('utf8');
@@ -96,7 +125,11 @@ export function parseProxyAuthorization(header: string | undefined): ProxyIdenti
   // The secret is base64url and carries no colon, so the FIRST colon splits.
   const at = decoded.indexOf(':');
   if (at < 0) return null;
-  return { name: decodeURIComponent(decoded.slice(0, at)), secret: decoded.slice(at + 1) };
+  try {
+    return { name: decodeURIComponent(decoded.slice(0, at)), secret: decoded.slice(at + 1) };
+  } catch {
+    return null;
+  }
 }
 
 /**
