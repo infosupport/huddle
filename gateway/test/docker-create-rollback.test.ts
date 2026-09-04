@@ -1,17 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
-// createAndStartContainer touches db.ts (registerSocketName/unregisterSocketName)
-// and, via socket-proxy.ts, more of db.ts's read-only surface — mocked out the
-// same way docker-network-generation.test.ts does, plus spies on the two
-// registration calls this test asserts on.
-const dbCalls = { registered: [] as string[], unregistered: [] as string[] };
+// createAndStartContainer touches db.ts (registerSocketName/
+// unregisterSocketNameIfCurrent) and, via socket-proxy.ts, more of db.ts's
+// read-only surface — mocked out the same way docker-network-generation.test.ts
+// does, plus spies on the two registration calls this test asserts on.
+//
+// registerSocketName now returns a per-call revision (Aikido: rollback must be
+// revision-scoped so it cannot delete a different request's later
+// registration) — the mock mints a fresh fake revision per call, same shape as
+// the real one, so createAndStartContainer's capture-then-pass-back-to-rollback
+// flow round-trips exactly like it does against the real db.ts.
+let nextRevision = 0;
+const dbCalls = { registered: [] as string[], unregistered: [] as { name: string; revision: string }[] };
 vi.mock('../src/db', () => ({
   isHostPortApproved: () => false,
   getActionPolicy: () => null,
   getGrant: () => null,
-  registerSocketName: (name: string) => { dbCalls.registered.push(name); },
-  unregisterSocketName: (name: string) => { dbCalls.unregistered.push(name); },
+  registerSocketName: (name: string) => {
+    dbCalls.registered.push(name);
+    return `rev-${++nextRevision}`;
+  },
+  unregisterSocketNameIfCurrent: (name: string, revision: string) => { dbCalls.unregistered.push({ name, revision }); },
 }));
 
 vi.mock('../src/events', () => ({ notifyStateChanged: () => {} }));
@@ -59,6 +69,7 @@ describe('createAndStartContainer — rollback on failure (Aikido: phantom socke
   beforeEach(() => {
     dbCalls.registered.length = 0;
     dbCalls.unregistered.length = 0;
+    nextRevision = 0;
     socketReady = true;
   });
 
@@ -74,10 +85,12 @@ describe('createAndStartContainer — rollback on failure (Aikido: phantom socke
     })).rejects.toThrow(/did not confirm the Docker socket/);
 
     expect(dbCalls.registered).toEqual(['dc-rollback-test']);
-    // The row registerSocketName just added must be undone — a failed create
-    // attempt must not leave a permanent phantom socket_registrations row
-    // (the Aikido finding this test guards against).
-    expect(dbCalls.unregistered).toEqual(['dc-rollback-test']);
+    // The row registerSocketName just added must be undone, scoped to the
+    // exact revision this call's own registerSocketName() returned — a
+    // failed create attempt must not leave a permanent phantom
+    // socket_registrations row (the Aikido finding this test guards
+    // against).
+    expect(dbCalls.unregistered).toEqual([{ name: 'dc-rollback-test', revision: 'rev-1' }]);
   });
 
   it('does not unregister when the readiness handshake succeeds and the container starts', async () => {

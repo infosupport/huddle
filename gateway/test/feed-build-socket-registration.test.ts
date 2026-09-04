@@ -8,9 +8,15 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 let byIp = new Map<string, string>();
 let running: string[] = [];
+// Every running container's name, IDE-labeled or not — see
+// ContainerSnapshot.allNames' doc in docker.ts. Defaults to mirroring
+// `running` so existing tests (which only care about `running`) keep working
+// unchanged; tests exercising the migrated-container case set this
+// independently of `running`.
+let allNames: string[] | undefined;
 
 vi.mock('../src/docker', () => ({
-  containerSnapshot: async () => ({ byIp, devcontainers: running }),
+  containerSnapshot: async () => ({ byIp, devcontainers: running, allNames: allNames ?? running }),
   currentNetworkGeneration: () => 0,
 }));
 
@@ -31,6 +37,7 @@ beforeAll(async () => {
 beforeEach(() => {
   byIp = new Map();
   running = [];
+  allNames = undefined;
   db.exec('DELETE FROM socket_registrations');
   db.exec('DELETE FROM sandbox_identity');
 });
@@ -96,5 +103,36 @@ describe('buildContainerFeed — socket registrations', () => {
     const feed = await buildContainerFeed();
     expect(feed.devcontainers).toContain('dc-alpha');
     expect(listRegisteredSocketNames()).toEqual(['dc-alpha']);
+  });
+
+  // Fix B (Aikido: pruning removes live migrated socket registrations): a
+  // `huddle migrate --docker-socket` Compose service is a real running
+  // container but carries none of the IDE labels `devcontainers`/`running`
+  // is filtered on, so it is absent from `running` even while genuinely
+  // alive. The prune must consult the unfiltered `allNames` list instead, or
+  // the registration — and its relay listener — is deleted as soon as the
+  // first readiness cycle completes.
+  it('keeps a ready registration for a migrated (non-IDE-labeled) container that is running but absent from the IDE-labeled list', async () => {
+    registerSocketName('compose-migrated');
+    db.prepare(`UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = 'compose-migrated'`).run();
+    running = []; // not IDE-labeled, so containerSnapshot()'s devcontainers list never includes it
+    allNames = ['compose-migrated']; // but Docker does report it as running
+    const feed = await buildContainerFeed();
+    expect(feed.devcontainers).toContain('compose-migrated');
+    expect(listRegisteredSocketNames()).toEqual(['compose-migrated']);
+  });
+
+  // Contrast with the existing "prunes a ready registration whose container
+  // is no longer running" test above: that one's name is genuinely absent
+  // from BOTH `running` and `allNames` (Docker has no record of it at all),
+  // so it must still be pruned.
+  it('prunes a ready registration absent from both the IDE-labeled and the full running-name lists', async () => {
+    registerSocketName('dc-really-gone');
+    db.prepare(`UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = 'dc-really-gone'`).run();
+    running = [];
+    allNames = [];
+    const feed = await buildContainerFeed();
+    expect(feed.devcontainers).not.toContain('dc-really-gone');
+    expect(listRegisteredSocketNames()).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import type { AuditEntry, AuditResponse } from './db-types';
 import { HuddleDatabase } from './sqlite';
 import { runtimeEnv } from './runtime-env';
@@ -692,31 +693,66 @@ export function isHostPortApproved(containerId: string, hostPort: number, protoc
 // ── Docker-socket registrations (blocker 15) ─────────────────────────────────
 // See socket_registrations' CREATE TABLE comment above for why this exists.
 
-export function registerSocketName(name: string): void {
+/**
+ * Register (or re-register) a name, and return the revision this call just
+ * wrote.
+ *
+ * The revision is generated here in JS, not in the SQL statement, so the
+ * caller can hang onto the exact value this call produced — see
+ * `unregisterSocketNameIfCurrent` below, which is what a caller needs that
+ * value for.
+ */
+export function registerSocketName(name: string): string {
   // Reset readiness for every explicit request.  The gateway must acknowledge
   // this registration again before the CLI tells the user it is safe to start
   // Compose; an old acknowledgement cannot prove a restarted gateway listens.
+  const revision = crypto.randomBytes(16).toString('hex');
   db.prepare(`INSERT INTO socket_registrations (name, revision, ready_at)
-              VALUES (?, lower(hex(randomblob(16))), NULL)
-              ON CONFLICT(name) DO UPDATE SET revision = lower(hex(randomblob(16))), ready_at = NULL`)
-    .run(name);
+              VALUES (?, ?, NULL)
+              ON CONFLICT(name) DO UPDATE SET revision = excluded.revision, ready_at = NULL`)
+    .run(name, revision);
+  return revision;
 }
 
 /**
- * Undo a registration — the counterpart `registerSocketName` never had.
+ * Undo a registration unconditionally — the counterpart `registerSocketName`
+ * never had.
  *
- * Two callers need this, both about not leaving a permanent phantom row
- * behind: `createAndStartContainer` (docker.ts), to roll back its own
- * registration when anything after it fails before the container is actually
- * up; and `pruneDeadSocketRegistrations` below, for a row whose container
- * existed and was served (ready_at set) but is no longer in Docker's live
- * list — e.g. removed by `docker rm` outside Huddle, since there is no
- * devcontainer "delete" route in this codebase to hook a cleanup into
- * instead. Safe to call for a name that was never registered (0 rows
- * affected, no error) so callers do not need to check first.
+ * `pruneDeadSocketRegistrations` below does the equivalent delete itself
+ * inline (it needs to match a whole set of dead names in one statement, not
+ * just one), rather than looping over this — but it is the same operation,
+ * and worth spelling out here why THAT delete gets away without
+ * revision-scoping despite this function existing: its own
+ * `ready_at IS NOT NULL` condition already keeps it from touching a row a
+ * fresh concurrent `registerSocketName` just reset to `ready_at = NULL` (a
+ * brand-new registration is never "ready" yet), so it can only ever hit a
+ * row nobody is mid-registration on. Kept as the general unconditional
+ * primitive for any future caller that has the same guarantee some other
+ * way and does not need `unregisterSocketNameIfCurrent`'s revision check.
+ * Safe to call for a name that was never registered (0 rows affected, no
+ * error) so callers do not need to check first.
  */
 export function unregisterSocketName(name: string): void {
   db.prepare('DELETE FROM socket_registrations WHERE name = ?').run(name);
+}
+
+/**
+ * Undo a registration, but only if it is still the exact one this call made.
+ *
+ * `createAndStartContainer` (docker.ts) uses this to roll back its own
+ * registration when anything after it fails before the container is
+ * actually up. Two requests can race on the same name (two authenticated
+ * starts, or a start racing `huddle migrate`): `registerSocketName` replaces
+ * the row and mints a new revision on every call, so if a second request
+ * re-registered this name while the first was still waiting or creating, the
+ * row now belongs to the second request. Scoping the delete to the revision
+ * the first call's own `registerSocketName` returned means that race turns
+ * this rollback into a safe no-op instead of deleting the second request's
+ * live registration out from under it (the regression this guards against —
+ * see the Aikido finding on this fix).
+ */
+export function unregisterSocketNameIfCurrent(name: string, revision: string): void {
+  db.prepare('DELETE FROM socket_registrations WHERE name = ? AND revision = ?').run(name, revision);
 }
 
 /**
