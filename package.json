@@ -13,7 +13,7 @@
     "url": "https://github.com/infosupport/huddle/issues"
   },
   "scripts": {
-    "install": "npm --prefix gateway install && npm --prefix cli install",
+    "install": "node scripts/install-subprojects.mjs",
     "build": "npm --prefix gateway run build",
     "start": "npm --prefix gateway start",
     "cli:build": "npm --prefix cli run build",

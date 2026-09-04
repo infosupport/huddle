@@ -30,9 +30,17 @@ github.txt
 
 # Dependencies
 node_modules/
+# left behind by dev-install.sh when Windows still has a file in there mapped
+node_modules.old-*/
 
 # Build output
 dist/
+
+# SEA build output: a ~130 MB binary plus its blob and sourcemap.
+gateway/build/
+
+# Native SEA executables are staged into platform npm packages only in CI.
+packages/*/bin/huddle-node*
 
 # Stray/self-referential nested CLI package (accidental) — never commit
 cli/cli/
@@ -44,3 +52,25 @@ cli/cli/
 
 # Interne presentatie/binaries — niet voor de publieke repo
 *.pptx
+
+# Local firewall-rule exports. `huddle firewall export --out rules.json` run from
+# the repo root drops a dump of the operator's own rules (container names,
+# internal IPs) here; the shareable examples live in examples/firewall-rules/.
+/rules.json
+
+# Ad-hoc portal screenshots saved straight from the browser
+localhost_3000_*.png
+
+# lokale Aikido API-credentials (niet committen)
+.aikido.env
+
+# native dev run: local DB, CA and operator token (dev-native.ps1)
+.huddle-native/
+
+# design-sync (claude.ai/design)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+gateway/frontend/.ds-entry.mjs

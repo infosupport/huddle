@@ -13,8 +13,35 @@ Huddle is a security gateway that shields devcontainers from the external networ
 Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a shielded environment. Execution is isolated; the portal stays in control of what goes in and out.
 
 <p align="center">
-  <img src="docs/images/huddle-portal.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-portal-dark.png">
+    <img src="docs/images/huddle-portal-light.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
+  </picture>
 </p>
+
+## 🚀 Quick start
+
+> **Requirements:** Docker or Podman, plus Node.js 18+ for the CLI. The installed Huddle Node is a self-contained executable; running Huddle Node from a source checkout requires Node.js 24+. Huddle's packages are public — no GitHub token or registry login needed.
+
+The release CLI automatically installs the matching Huddle Node executable for
+Windows x64, macOS Intel, or Apple Silicon alongside itself. Native builds are
+published before the CLI; Windows signing and macOS signing/notarisation remain
+separate operational work.
+
+```bash
+# 1 — install the CLI
+npm install -g @infosupport/huddle-cli
+
+# 2 — start Huddle (pulls the image, auto-detects Docker/Podman)
+huddle init            # portal → http://localhost:24842
+
+# 3 — launch a devcontainer from your project directory
+huddle                 # IntelliJ (default) · --ide vscode · --ide rider
+```
+
+Open **http://localhost:24842** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
+
+---
 
 ## Why Huddle?
 
@@ -24,32 +51,53 @@ Huddle addresses two major risks of modern, AI-assisted development:
 - **Developing safely *against* AI-amplified attacks** — supply-chain attacks are getting smarter, faster, and multi-stage. Huddle intercepts outbound traffic and blocks anything that isn't explicitly allowed.
 
 <p align="center">
-  <img src="docs/images/huddle-risks.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-risks-dark.png">
+    <img src="docs/images/huddle-risks-light.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
+  </picture>
 </p>
 
 ## Architecture
 
+Huddle runs as two processes: **Huddle Node** on your machine, and
+**huddle-gateway** in a container. The split is a control plane / data plane
+split — the half a devcontainer can reach is the half that can do the least.
+
 ```
 Devcontainer
-  └─ HTTP/HTTPS traffic → Huddle proxy (port 80)
-       └─ rules engine → allow / deny / request
-  └─ Docker socket → /tmp/dc-sockets/<name>/docker.sock (per-container proxy)
-       └─ label isolation + time-limited grant check
+  └─ HTTP/HTTPS traffic → huddle-gateway proxy (port 80, in Docker)
+       └─ locally held policy → allow / deny / request
+  └─ Docker socket → /tmp/dc-sockets/<name>/docker.sock (served by the gateway)
+       └─ tunnelled to Huddle Node's filter over the control channel
+            └─ label isolation + time-limited grant check
+
+huddle-gateway ──▶ Huddle Node control channel (port 24843, host)
+       policy + container feeds in, decisions and audit rows out
 
 Browser
-  └─ Angular SPA (port 3000) + WebSocket live push
+  └─ Angular SPA (port 24842, host) + WebSocket live push
        └─ Fastify REST API (/api/...)
 ```
 
-Two servers run in the same process:
+| Process | Port | Purpose |
+|---------|------|---------|
+| huddle-gateway (Docker) | 80 | Forward/intercept all outbound container traffic |
+| huddle-gateway (Docker) | 32768 | Egress for Docker Sandboxes (sbx), on host loopback |
+| Huddle Node (host) | 24842 | REST API, Angular frontend, WebSocket push — loopback only |
+| Huddle Node (host) | 24843 | Control channel the gateway follows — its own token |
 
-| Server | Port | Purpose |
-|--------|------|---------|
-| HTTP proxy | 80 | Forward/intercept all outbound container traffic |
-| API + UI | 3000 | REST API, Angular frontend, WebSocket push |
+The gateway has no database, no Docker socket, no API and no portal. It holds
+the firewall policy in memory, decides locally (so Node is never in the hot path
+of a request), and reports what it decided afterwards. If Node is down the
+gateway keeps enforcing the last policy it received; before the first policy
+arrives it denies everything. See
+[docs/ADR-huddle-node-split.md](docs/ADR-huddle-node-split.md).
 
 <p align="center">
-  <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/huddle-gateway-dark.png">
+    <img src="docs/images/huddle-gateway-light.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
+  </picture>
 </p>
 
 ### Three security principles
@@ -74,6 +122,7 @@ Two servers run in the same process:
 
 ### Docker Socket Proxy
 - Every devcontainer gets its own Unix socket at `/tmp/dc-sockets/<name>/docker.sock`; the per-container *directory* is mounted into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the socket. A file mount of the socket itself would keep seeing the dead old inode after a Huddle restart; a directory mount does not. The old flat path `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created before this change.
+- The socket file is created by the **gateway**, the filter behind it runs on **Huddle Node**. That path has to exist on the Docker *engine's* host, and Huddle Node is only on that host when the engine is native Linux — on Docker Desktop, Rancher and `podman machine` the engine lives in a VM. So the gateway (which is always on the engine) creates the socket and tunnels every connection to Node over the control channel as an HTTP Upgrade; the gateway forwards bytes and decides nothing.
 - Fine-grained permissions per devcontainer, in two classes:
   - **Temporary actions** (mutations: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — only effective while the time-bound grant (1–120 minutes) is active *and* the action toggle is enabled in the portal
   - **Always-allowed actions** (read-only: list/inspect/logs/stats, ping/version/events) — independent of the timer, enabled per action
@@ -113,7 +162,7 @@ This closes security-review finding **#10** (plaintext admin credentials retriev
 - Filterable by container, domain, and action prefix
 
 ### Live UI
-- Angular 21 SPA on port 3000
+- Angular 21 SPA on port 24842
 - WebSocket connection pushes a `reload` event on every state change
 - Unified icon system (`app-icon`) backed by a central SVG registry
 - Pie-action menus in the firewall and container views (approve / snooze / reject)
@@ -127,7 +176,7 @@ This closes security-review finding **#10** (plaintext admin credentials retriev
 |-------|------------|
 | Runtime | Node.js 24 LTS (Alpine) |
 | Backend | Fastify 5, TypeScript 5 |
-| Database | SQLite via better-sqlite3 (WAL mode) |
+| Database | SQLite via built-in `node:sqlite` (WAL mode) |
 | WebSocket | ws |
 | Frontend | Angular 21 (standalone components, signals) |
 | Build | Angular CLI, esbuild |
@@ -137,7 +186,8 @@ This closes security-review finding **#10** (plaintext admin credentials retriev
 
 ## Getting Started
 
-**Requirements:** Docker or Podman, Node.js 18+
+**Requirements:** Docker or Podman, plus Node.js 18+ for the CLI. The installed
+Huddle Node includes its own runtime; a source checkout needs Node.js 24+.
 
 Huddle's packages are public, so no GitHub token or registry login is needed.
 
@@ -153,7 +203,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pulls the latest Huddle image and starts the container. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
+`huddle init` starts Huddle Node on your machine, then pulls the latest Huddle image and starts the gateway container pointed at it. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:24842`.
 
 After that, you start devcontainers directly from a project directory:
 
@@ -180,9 +230,10 @@ If auto-detection ever fails, make sure the `rancher-desktop` context is active
 (`docker context use rancher-desktop`) and that `docker info` works, then re-run
 `huddle init --runtime docker`.
 
-> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used for
-> the per-container proxy sockets) into its VM. The defaults cover this, but if you
-> customized the VM's mounts you may need to add those paths back.
+> Note: Rancher Desktop must share the engine socket path into its VM. The defaults
+> cover this, but if you customized the VM's mounts you may need to add it back.
+> `/tmp/dc-sockets` does *not* need sharing: it lives inside the VM, where both the
+> gateway and the devcontainers see it.
 
 ---
 
@@ -200,7 +251,13 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 ## Starting containers
 
-You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
+You can start devcontainers via the CLI or via the web UI at `http://localhost:24842`.
+
+> **Selecting host folders in the web UI.** A browser cannot hand a server a folder path,
+> so Huddle brings its own folder dialog: the **Browse** button next to every host-path
+> field opens the folders on your host, read live by Huddle Node. Ctrl-click several
+> folders when starting a devcontainer and each one is mounted as its own worktree. See
+> [Selecting host folders](#selecting-host-folders).
 
 ### Via the CLI
 
@@ -238,6 +295,27 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 2. Open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 3. Choose **Dev Containers: Attach to Running Container**
 4. Select the container name the CLI printed
+
+---
+
+## Selecting host folders
+
+A browser cannot hand a server a folder path — a file input gives you file contents, never
+a location. So Huddle brings its own folder dialog: **Browse** next to any host-path field
+opens the folders on your host, and every input still accepts a typed or pasted path.
+
+What you see is the host as it is right now. Huddle Node runs there, so the dialog asks it
+for one folder at a time as you open them — nothing is scanned up front and nothing is
+cached, which is why a folder you created a minute ago is simply there. Hidden (dot)
+folders are listed too — if you can see it in your own file manager, you can pick it here.
+
+This is the same dialog everywhere a host path is needed: starting a devcontainer or a
+sandbox, the folder mappings, and the team-managed folders in Settings.
+
+Windows paths may be written either way (`T:\projects\app` or `T:/projects/app`): Huddle
+stores one canonical form and translates it to the mount prefix your engine uses
+(`/mnt/t/...` for a native dockerd in WSL2, `/run/desktop/mnt/host/t/...` for Docker
+Desktop).
 
 ---
 
@@ -304,6 +382,59 @@ huddle firewall add example.com --path "/admin/*" --deny --container devcontaine
 
 Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
 `/foo/..%2fsecret`) can never slip through a wildcard allow.
+
+### Export & import rules
+
+Rulesets can be shared between machines and teammates as a JSON document. The
+document is a versioned envelope containing only the shareable rule fields
+(`domain`, `container_id`, `status`, `path_pattern`, `path_mode`, `expires_at`) —
+volatile fields such as the row id, last-seen time and request count are never
+exported.
+
+```json
+{
+  "version": 1,
+  "exported_at": 1717430400,
+  "rules": [
+    { "domain": "github.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}
+```
+
+**Scope.** Both export and import accept an optional `container` scope. Use
+`__global__` for the global (container-less) rules, or a container name for that
+container's rules. Omitting it means "all rules" on export; on import it remaps
+every incoming rule into that scope.
+
+**Merge vs. replace.** Import runs in one of two modes:
+
+- `merge` (default) — upserts each rule. An incoming rule that matches an
+  existing one on `(domain, container, path)` updates its status/expiry/path-mode;
+  otherwise it is inserted.
+- `replace` — first deletes the existing rules in the scope(s) being imported,
+  then inserts. Only the imported scopes are wiped, never the whole table.
+
+Import validates every rule fail-closed: unknown fields, an empty domain or an
+invalid status reject the whole request with `400`. The response summarises the
+result as `{ imported, updated, skipped }` (`skipped` counts within-file
+duplicates).
+
+**CLI:**
+
+```bash
+huddle firewall export                       # print all rules as JSON to stdout
+huddle firewall export --container __global__ --out rules.json
+huddle firewall import rules.json            # merge (upsert)
+huddle firewall import rules.json --replace  # replace the imported scope(s)
+huddle firewall import rules.json --container devcontainer-app   # remap scope
+```
+
+**UI:** the Firewall page has **Export** and **Import** buttons. Export
+downloads a `.json` file; Import reads a selected `.json` file and merges it.
+
+**API:** `GET /api/rules/export[?container=<id|__global__>]` and
+`POST /api/rules/import[?container=<id|__global__>]` with body
+`{ "mode": "merge" | "replace", "rules": [ ... ] }`.
 
 ---
 
@@ -417,6 +548,7 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
 | GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
+| GET | `/api/host-folders` | Folders on the host, one level at a time (`?path=` — omit it for the roots). Huddle Node only |
 
 All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
 
@@ -430,7 +562,7 @@ All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to conn
 │   ├── src/
 │   │   ├── index.ts             # Init DB, start proxy + API, restore socket proxies
 │   │   ├── proxy.ts             # HTTP/HTTPS proxy (port 80), rule enforcement, audit
-│   │   ├── api.ts               # Fastify REST API + WebSocket push (port 3000)
+│   │   ├── api.ts               # Fastify REST API + WebSocket push (Huddle Node, port 24842)
 │   │   ├── docker.ts            # Docker API helpers, container lifecycle
 │   │   ├── socket-proxy.ts      # Per-container Docker socket proxy with label policy
 │   │   ├── rules.ts             # Rule lookup with per-container + global fallback
@@ -459,7 +591,7 @@ All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to conn
 Want to work on Huddle itself? Huddle is a monorepo with two parts: the
 **gateway** (Fastify API + Angular UI + proxy) and the **CLI**.
 
-**Requirements:** Node.js 20+ (24 LTS recommended), Docker or Podman, Git.
+**Requirements:** Node.js 24+ (the Huddle Node source uses `node:sqlite`), Docker or Podman, Git.
 
 ```bash
 git clone https://github.com/infosupport/huddle.git
@@ -470,7 +602,7 @@ npm run build          # builds the gateway (API + frontend)
 npm run cli:build      # builds the CLI
 npm run cli:typecheck  # type-checks the CLI
 
-npm start              # runs the gateway locally (UI at http://localhost:3000)
+npm start              # runs Huddle Node locally (UI at http://localhost:24842)
 ```
 
 Running tests:
@@ -520,8 +652,9 @@ There are two ways an `experiment-<nr>` build gets published:
 | `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)). |
 | `huddle init` finds no runtime | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`. |
 | Rancher Desktop not detected | Use **dockerd (moby)** mode (not `containerd`), activate the context with `docker context use rancher-desktop`, verify `docker info` works, then re-run `huddle init --runtime docker`. |
-| Web UI not reachable at `http://localhost:3000` | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host. |
+| Web UI not reachable at `http://localhost:24842` | The portal is Huddle Node, a host process — not the container. Check `~/.huddle/node.log` and re-run `huddle init`. It binds `127.0.0.1` by design: reach it locally, not from another host. |
 | Devcontainer can't reach a domain | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`. |
+| **Every** domain is blocked, including allowed ones | The gateway cannot reach Huddle Node, so it has no policy — and no policy means deny, never allow. `docker logs huddle` says so. `huddle init` prints the address it chose; if it warned that it could not work out how the container reaches your host, name it yourself: `HUDDLE_CONTROL_HOST=<address> huddle init`. |
 | JetBrains Gateway doesn't see the container right away | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready. |
 | `docker` inside the devcontainer gives *permission denied* | Docker access runs through a time-bound grant. Grant access via **Docker Access** in the UI (or `PUT /api/authz/grants/:container`). |
 | Port 80 already in use | Another proxy/web server is using port 80. Stop that service or adjust the port mapping when starting the Huddle container. |

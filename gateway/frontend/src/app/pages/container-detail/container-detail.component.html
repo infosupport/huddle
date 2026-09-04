@@ -1,4 +1,4 @@
-<a class="back-link" routerLink="/containers">← Containers</a>
+<a class="back-link" routerLink="/dev-environments">← Dev Environments</a>
 
 @if (error$ | async; as err) {
   <div class="card"><p style="padding:16px;color:var(--danger);margin:0">{{ err }}</p></div>
@@ -9,6 +9,7 @@
   @let net           = d.inspect.NetworkSettings?.Networks?.['dc-net-' + name] ?? d.inspect.NetworkSettings?.Networks?.['devcontainer-net'];
   @let ide           = cfg?.Labels?.['com.devcontainer.ide'] ?? '';
   @let workspace     = cfg?.Labels?.['com.intellij.devcontainer.workspace.path'] ?? '—';
+  @let mounts        = parseMounts(cfg?.Labels?.['com.intellij.devcontainer.mounts']);
   @let inNetwork     = !!net;
   @let huddleConn    = d.huddleInNetwork !== false;
   @let cRules        = excludePathMode(d.rules);
@@ -29,44 +30,62 @@
     <div class="cd-head__text">
       <h1>{{ shortName }}</h1>
       <div class="cd-head__badges">
-        @if (inNetwork) {
-          <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In network</span>
+        @if (isSandbox) {
+          <span class="cd-badge cd-badge--ok"><app-icon name="layers" [size]="11" /> Sandbox · microVM</span>
         } @else {
-          <span class="cd-badge cd-badge--warn">Rogue</span>
-        }
-        @if (huddleConn) {
-          <span class="cd-badge cd-badge--ok">Huddle connected</span>
-        } @else {
-          <span class="cd-badge cd-badge--warn">Huddle disconnected</span>
-        }
-        @if (d.airlocked) {
-          <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Airlock</span>
+          @if (inNetwork) {
+            <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> In network</span>
+          } @else {
+            <span class="cd-badge cd-badge--warn">Rogue</span>
+          }
+          @if (huddleConn) {
+            <span class="cd-badge cd-badge--ok">Huddle connected</span>
+          } @else {
+            <span class="cd-badge cd-badge--warn">Huddle disconnected</span>
+          }
+          @if (d.airlocked) {
+            <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Airlock</span>
+          }
         }
       </div>
     </div>
     <div class="cd-head__actions">
-      @if (ide === 'vscode') {
+      @if (isSandbox) {
+        <a class="btn btn-ghost btn-sm" [href]="vscodeLink" title="Open in VS Code (Remote-SSH)">VS Code</a>
+        <a class="btn btn-ghost btn-sm" [href]="jetbrainsLink" title="Open in JetBrains Gateway">JetBrains</a>
+        <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()" title="Install Huddle's CA (fixes editor backend TLS)">Trust CA</button>
+        @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
+      } @else if (ide === 'vscode') {
         <span style="font-size:12px;color:var(--text-muted)">VS Code: Attach to Running Container</span>
       } @else {
         <button class="btn btn-ghost btn-sm" (click)="openIde()">Connect IDE</button>
         @if (ideLinkStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ ideLinkStatus }}</span> }
       }
-      <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
-      <button
-        class="btn btn-sm"
-        [class.btn-ghost]="!d.airlocked"
-        [style.background]="d.airlocked ? '#7c3aed' : ''"
-        [style.color]="d.airlocked ? '#fff' : ''"
-        [style.borderColor]="d.airlocked ? '#7c3aed' : ''"
-        (click)="toggleAirlock(!!d.airlocked)"
-        [title]="d.airlocked ? 'Airlock active — global rules ignored.' : 'Lock container.'">
-        <app-icon [name]="d.airlocked ? 'shield-check' : 'anchor'" [size]="14" />
-        {{ d.airlocked ? 'Airlock on' : 'Airlock' }}
-      </button>
+      @if (!isSandbox) {
+        <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
+        <button
+          class="btn btn-sm"
+          [class.btn-ghost]="!d.airlocked"
+          [style.background]="d.airlocked ? '#7c3aed' : ''"
+          [style.color]="d.airlocked ? '#fff' : ''"
+          [style.borderColor]="d.airlocked ? '#7c3aed' : ''"
+          (click)="toggleAirlock(!!d.airlocked)"
+          [title]="d.airlocked ? 'Airlock active — global rules ignored.' : 'Lock container.'">
+          <app-icon [name]="d.airlocked ? 'shield-check' : 'anchor'" [size]="14" />
+          {{ d.airlocked ? 'Airlock on' : 'Airlock' }}
+        </button>
+      }
     </div>
   </section>
 
   <!-- ── Meta strip ── -->
+  @if (isSandbox) {
+    <div class="card cd-meta">
+      <div class="cd-meta__item"><span class="cd-meta__label">Type</span><span class="cd-meta__value">Docker Sandbox (microVM)</span></div>
+      <div class="cd-meta__item"><span class="cd-meta__label">SSH</span><span class="cd-meta__value">{{ sshHost }}</span></div>
+      <div class="cd-meta__item"><span class="cd-meta__label">Enforcement</span><span class="cd-meta__value">network egress · Huddle proxy + synced sbx policy</span></div>
+    </div>
+  } @else {
   <div class="card cd-meta">
     <div class="cd-meta__item">
       <span class="cd-meta__label">Image</span>
@@ -80,6 +99,16 @@
       <span class="cd-meta__label">Workspace</span>
       <span class="cd-meta__value" [title]="workspace">{{ workspace }}</span>
     </div>
+    @if (mounts.length) {
+      <div class="cd-meta__item">
+        <span class="cd-meta__label">Mounts</span>
+        <span class="cd-meta__value">
+          @for (m of mounts; track m.containerPath; let last = $last) {
+            <span [title]="m.hostPath">{{ m.containerPath }}</span>@if (!last) {<span>, </span>}
+          }
+        </span>
+      </div>
+    }
     <div class="cd-meta__item">
       <span class="cd-meta__label">Created</span>
       <span class="cd-meta__value">{{ d.inspect.Created | date:'dd-MM-yy HH:mm' }}</span>
@@ -95,6 +124,7 @@
       </div>
     }
   </div>
+  }
 
   <!-- ── Segmented tabs ── -->
   <div class="cd-tabs">
@@ -103,9 +133,11 @@
       Firewall
       @if (pendingCount > 0) { <i>{{ pendingCount }}</i> }
     </button>
-    <button [class.on]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
-    <button [class.on]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
-    <button [class.on]="activeTab === 'terminal'" (click)="setTab('terminal')">Terminal</button>
+    @if (!isSandbox) {
+      <button [class.on]="activeTab === 'docker'"   (click)="setTab('docker')">Docker</button>
+      <button [class.on]="activeTab === 'noot'"     (click)="setTab('noot')">Noot</button>
+    }
+    <button [class.on]="activeTab === 'terminal'" (click)="setTab('terminal')">{{ isSandbox ? 'Connect' : 'Terminal' }}</button>
   </div>
 
   <!-- ════════════════════════════════════════════ TAB: FIREWALL -->
@@ -116,7 +148,7 @@
     <section class="cd-sec">
       <div class="cd-sec__head">
         <h2 class="cd-sec__title">Pending <span class="em">requests</span></h2>
-        <p class="cd-sec__sub">— for this container</p>
+        <p class="cd-sec__sub">{{ isSandbox ? '— for this sandbox' : '— for this container' }}</p>
       </div>
       <div class="card req-card">
         @if (requested.length === 0 && pathReq.length === 0) {
@@ -125,152 +157,94 @@
             <span>No pending requests.</span>
           </div>
         } @else {
-          @for (r of requested; track r.id) {
-            <div class="req-row">
-              <div class="req-row__icon"><app-icon name="globe" [size]="17" /></div>
-              <div class="req-row__info">
-                <div class="req-row__domain">{{ r.domain }}</div>
-                <div class="req-row__meta">
-                  <span><b>{{ r.request_count }}</b> request{{ r.request_count !== 1 ? 's' : '' }}</span>
-                  <span class="sep">·</span>
-                  <span>{{ r.last_seen | relTime }}</span>
-                </div>
-              </div>
-              <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
-            </div>
-          }
-          <!-- Path sub-requests from path-mode domains -->
-          @for (row of pathReq; track row.rule.id) {
-            <div class="req-row">
-              <div class="req-row__icon req-row__icon--path"><app-icon name="file-text" [size]="17" /></div>
-              <div class="req-row__info">
-                <div class="req-row__domain">
-                  <span class="req-row__host">{{ row.domain }}</span>{{ row.path_pattern }}
-                </div>
-                <div class="req-row__meta">
-                  <span class="req-row__tag req-row__tag--path">path</span>
-                  <span><b>{{ row.rule.request_count }}</b> request{{ row.rule.request_count !== 1 ? 's' : '' }}</span>
-                  <span class="sep">·</span>
-                  <span>{{ row.rule.last_seen | relTime }}</span>
-                </div>
-                @if (row.last_path) {
-                  <div class="req-row__sample">{{ row.last_path }}</div>
+          <!-- ── Domain (normal) requests ── -->
+          @if (requested.length > 0) {
+            <div class="req-group">
+              <div class="req-group__head">
+                <label class="req-group__sel">
+                  <input type="checkbox" [checked]="domainAllChecked(requested)" (change)="toggleDomainAll(requested)" />
+                  <span class="req-group__title">Domain <span class="em">requests</span></span>
+                  <span class="req-group__n">{{ requested.length }}</span>
+                </label>
+                @if (domainSelectedCount(requested) > 0) {
+                  <div class="req-group__bulk">
+                    <span class="req-bulk__n">{{ domainSelectedCount(requested) }} selected</span>
+                    <app-pie-menu [config]="pieConfig" (action)="onBulkPie($event, requested)" />
+                  </div>
                 }
               </div>
-              <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+              @for (r of requested; track r.id) {
+                <div class="req-row" [class.is-selected]="pendingChecked(r.id)" [class.is-busy]="isRuleBusy(r.id)">
+                  <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(r.id)" (change)="togglePending(r.id)" [disabled]="isRuleBusy(r.id)" />
+                  <div class="req-row__icon"><app-icon name="globe" [size]="17" /></div>
+                  <div class="req-row__info">
+                    <div class="req-row__domain">{{ r.domain }}</div>
+                    <div class="req-row__meta">
+                      <span><b>{{ r.request_count }}</b> request{{ r.request_count !== 1 ? 's' : '' }}</span>
+                      <span class="sep">·</span>
+                      <span>{{ r.last_seen | relTime }}</span>
+                    </div>
+                  </div>
+                  @if (isRuleBusy(r.id)) {
+                    <span class="req-busy"><span class="spinner"></span> Applying…</span>
+                  } @else {
+                    <app-pie-menu [config]="pieConfig" (action)="onPieAction($event, r)" />
+                  }
+                </div>
+              }
+            </div>
+          }
+
+          <!-- ── Path requests ── -->
+          @if (pathReq.length > 0) {
+            <div class="req-group">
+              <div class="req-group__head">
+                <label class="req-group__sel">
+                  <input type="checkbox" [checked]="pathAllChecked(pathReq)" (change)="togglePathAll(pathReq)" />
+                  <span class="req-group__title">Path <span class="em">requests</span></span>
+                  <span class="req-group__n">{{ pathReq.length }}</span>
+                </label>
+                @if (pathSelectedCount(pathReq) > 0) {
+                  <div class="req-group__bulk">
+                    <span class="req-bulk__n">{{ pathSelectedCount(pathReq) }} selected</span>
+                    <app-pie-menu [config]="pieConfigPath" (action)="onBulkPathPie($event, pathReq)" />
+                  </div>
+                }
+              </div>
+              @for (row of pathReq; track row.rule.id) {
+                <div class="req-row" [class.is-selected]="pendingChecked(row.rule.id)" [class.is-busy]="isRuleBusy(row.rule.id)">
+                  <input type="checkbox" class="req-row__chk" [checked]="pendingChecked(row.rule.id)" (change)="togglePending(row.rule.id)" [disabled]="isRuleBusy(row.rule.id)" />
+                  <div class="req-row__icon req-row__icon--path"><app-icon name="file-text" [size]="17" /></div>
+                  <div class="req-row__info">
+                    <div class="req-row__domain">
+                      <span class="req-row__host">{{ row.domain }}</span>{{ row.path_pattern }}
+                    </div>
+                    <div class="req-row__meta">
+                      <span class="req-row__tag req-row__tag--path">path</span>
+                      <span><b>{{ row.rule.request_count }}</b> request{{ row.rule.request_count !== 1 ? 's' : '' }}</span>
+                      <span class="sep">·</span>
+                      <span>{{ row.rule.last_seen | relTime }}</span>
+                    </div>
+                    @if (row.last_path) {
+                      <div class="req-row__sample">{{ row.last_path }}</div>
+                    }
+                  </div>
+                  @if (isRuleBusy(row.rule.id)) {
+                    <span class="req-busy"><span class="spinner"></span> Applying…</span>
+                  } @else {
+                    <app-pie-menu [config]="pieConfigPath" (action)="onPathPieAction($event, row)" />
+                  }
+                </div>
+              }
             </div>
           }
         }
       </div>
     </section>
 
-    <!-- Container-specific rules -->
-    <div class="card">
-      <div class="card__head">
-        <h2 class="card__title">Container rules</h2>
-        <div class="cd-sub-tabs">
-          <button [class.on]="rulesTab === 'allow'" (click)="rulesTab = 'allow'">
-            Allowed <i>{{ allow.length + tempAllow.length }}</i>
-          </button>
-          <button [class.on]="rulesTab === 'deny'" (click)="rulesTab = 'deny'">
-            Blocked <i>{{ deny.length }}</i>
-          </button>
-          @if (cPathDomains.length + gPathDomains.length > 0) {
-            <button [class.on]="rulesTab === 'path'" (click)="rulesTab = 'path'">
-              Path mode <i>{{ cPathDomains.length + gPathDomains.length }}</i>
-            </button>
-          }
-        </div>
-      </div>
-
-      @if (rulesTab === 'allow') {
-        <div class="rule-list">
-          @if (tempAllow.length > 0) {
-            @for (r of tempAllow; track r.id) {
-              <div class="rule-row">
-                <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
-                <span class="rule-row__domain">{{ r.domain }}</span>
-                <span class="chip--temp"><app-icon name="timer" [size]="12" />{{ r.expires_at! | relTime }}</span>
-                <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-                <button class="rule-row__del" title="Delete rule" (click)="deleteRule(r)">
-                  <app-icon name="x" [size]="15" />
-                </button>
-              </div>
-            }
-          }
-          @for (r of allow; track r.id) {
-            <div class="rule-row">
-              <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
-              <span class="rule-row__domain">{{ r.domain }}</span>
-              <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-              <button class="rule-row__del" title="Delete rule" (click)="deleteRule(r)">
-                <app-icon name="x" [size]="15" />
-              </button>
-            </div>
-          }
-          @if (allow.length === 0 && tempAllow.length === 0) {
-            <div class="fw-empty"><span>No allowed domains.</span></div>
-          }
-        </div>
-        @if (gAllow.length > 0) {
-          <div class="cd-global-head"><app-icon name="globe" [size]="13" /> Global rules</div>
-          <div class="rule-list">
-            @for (r of gAllow; track r.id) {
-              <div class="rule-row rule-row--global">
-                <span class="rule-row__status rule-row__status--allow"><app-icon name="check" [size]="14" /></span>
-                <span class="rule-row__domain">{{ r.domain }}</span>
-                <span class="scope-chip scope-chip--global">Global</span>
-                <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-              </div>
-            }
-          </div>
-        }
-      }
-
-      @if (rulesTab === 'deny') {
-        <div class="rule-list">
-          @for (r of deny; track r.id) {
-            <div class="rule-row">
-              <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="14" /></span>
-              <span class="rule-row__domain">{{ r.domain }}</span>
-              <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-              <button class="rule-row__del" title="Delete rule" (click)="deleteRule(r)">
-                <app-icon name="x" [size]="15" />
-              </button>
-            </div>
-          }
-          @if (deny.length === 0) {
-            <div class="fw-empty"><span>No blocked domains.</span></div>
-          }
-        </div>
-        @if (gDeny.length > 0) {
-          <div class="cd-global-head"><app-icon name="globe" [size]="13" /> Global rules</div>
-          <div class="rule-list">
-            @for (r of gDeny; track r.id) {
-              <div class="rule-row rule-row--global">
-                <span class="rule-row__status rule-row__status--deny"><app-icon name="deny" [size]="14" /></span>
-                <span class="rule-row__domain">{{ r.domain }}</span>
-                <span class="scope-chip scope-chip--global">Global</span>
-                <span class="rule-row__last">{{ r.last_seen | relTime }}</span>
-              </div>
-            }
-          </div>
-        }
-      }
-
-      @if (rulesTab === 'path') {
-        @if (cPathDomains.length > 0) {
-          <app-path-allowlist [domains]="cPathDomains" [now]="nowTs" (changed)="reload()" />
-        }
-        @if (gPathDomains.length > 0) {
-          <div class="cd-global-head"><app-icon name="globe" [size]="13" /> Global rules</div>
-          <app-path-allowlist [domains]="gPathDomains" [now]="nowTs" (changed)="reload()" />
-        }
-        @if (cPathDomains.length === 0 && gPathDomains.length === 0) {
-          <div class="fw-empty"><span>No path-mode domains.</span></div>
-        }
-      }
-    </div>
+    <!-- All firewall rules for this environment + global, organised by group (#69).
+         For a sandbox these are its own per-sandbox rules (synced to sbx). -->
+    <app-firewall-groups-panel [container]="name" />
   }
 
   <!-- ════════════════════════════════════════════ TAB: DOCKER -->
@@ -398,11 +372,31 @@ sudo cat /tmp/sudo-audit.log</code></pre>
 
   <!-- ════════════════════════════════════════════ TAB: TERMINAL -->
   @if (activeTab === 'terminal') {
-    <div class="card">
-      <div class="card__head"><h2 class="card__title">Terminal</h2></div>
-      <div style="padding:0">
-        <app-container-terminal [container]="name"/>
+    @if (isSandbox) {
+      <div class="card" style="padding:18px">
+        <div class="card__head"><h2 class="card__title">Connect</h2></div>
+        <p style="font-size:13px;color:var(--text-muted);margin:.4rem 0 1rem">
+          Open this sandbox in your editor over SSH, or use a terminal. Click <b>Enable SSH</b> once, then use a link.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <a class="btn btn--accent btn-sm" [href]="vscodeLink">Open in VS Code</a>
+          <a class="btn btn--accent btn-sm" [href]="jetbrainsLink">Open in JetBrains</a>
+          <button class="btn btn-ghost btn-sm" (click)="sbxSshSetup()">Enable SSH</button>
+          <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()">Trust CA</button>
+          @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
+        </div>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:1rem 0 0">
+          Terminal from a shell: <code>ssh {{ sshHost }}</code>
+          &nbsp;·&nbsp; A browser terminal isn't available for sandboxes (they run on the host, not under Huddle's Docker orchestration) — connect over SSH instead.
+        </p>
       </div>
-    </div>
+    } @else {
+      <div class="card">
+        <div class="card__head"><h2 class="card__title">Terminal</h2></div>
+        <div style="padding:0">
+          <app-container-terminal [container]="name"/>
+        </div>
+      </div>
+    }
   }
 }

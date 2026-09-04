@@ -14,4 +14,7 @@ export interface Rule {
   path_pattern?: string | null;
   path_mode?: number;
   last_path?: string | null;
+  group_id?: number | null;
+  added_by?: string | null;
+  source?: string;
 }

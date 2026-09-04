@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { IncomingMessage } from 'http';
+import { runtimeEnv } from './runtime-env';
 
 // ── Operator-authenticatie voor de control plane ────────────────────────────
 // Root-cause van de "missing auth"-cluster (findings #4/#5/#9/#10/#11/#13): de
@@ -23,30 +24,25 @@ const SESSION_COOKIE = 'huddle_session';
 
 function tokenFilePath(): string {
   if (process.env.HUDDLE_OPERATOR_TOKEN_FILE) return process.env.HUDDLE_OPERATOR_TOKEN_FILE;
-  const dbPath = process.env.DB_PATH || '/data/huddle.db';
-  return path.join(path.dirname(dbPath), 'operator-token');
+  return path.join(path.dirname(runtimeEnv.dbPath), 'operator-token');
 }
 
-let cachedToken: string | null = null;
+// De bootstrap-volgorde hierboven, één keer. Beide tokens delen hem; wat ze niet
+// delen is wat er ná generatie gebeurt (zie `announce`), en dat is precies het
+// verschil tussen een token dat een mens moet overtypen en een token dat alleen
+// tussen twee processen leeft.
+function loadOrCreateToken(
+  envValue: string | undefined,
+  file: string,
+  label: string,
+  announce: (token: string) => void,
+): string {
+  const env = envValue?.trim();
+  if (env) return env;
 
-// Het canonieke operator-token. Gecached zodat we niet elke request van schijf
-// lezen; de eerste aanroep bepaalt (en persisteert/logt) de waarde.
-export function getOperatorToken(): string {
-  if (cachedToken) return cachedToken;
-
-  const env = process.env.HUDDLE_OPERATOR_TOKEN?.trim();
-  if (env) {
-    cachedToken = env;
-    return env;
-  }
-
-  const file = tokenFilePath();
   try {
     const stored = fs.readFileSync(file, 'utf8').trim();
-    if (stored) {
-      cachedToken = stored;
-      return stored;
-    }
+    if (stored) return stored;
   } catch {
     // nog geen file — genereren hieronder
   }
@@ -55,19 +51,84 @@ export function getOperatorToken(): string {
   try {
     fs.writeFileSync(file, generated, { mode: 0o600 });
   } catch (err) {
-    console.warn(`[auth] could not persist operator token to ${file}: ${(err as Error).message}`);
+    console.warn(`[auth] could not persist ${label} to ${file}: ${(err as Error).message}`);
   }
-  cachedToken = generated;
-  console.log(
-    `\n[auth] Operator token generated. Log in to the portal (http://localhost:3000) with:\n\n    ${generated}\n\n` +
-    `Set HUDDLE_OPERATOR_TOKEN to choose a fixed token.\n`
-  );
+  announce(generated);
   return generated;
+}
+
+let cachedToken: string | null = null;
+
+// Het canonieke operator-token. Gecached zodat we niet elke request van schijf
+// lezen; de eerste aanroep bepaalt (en persisteert/logt) de waarde.
+export function getOperatorToken(): string {
+  if (cachedToken) return cachedToken;
+  cachedToken = loadOrCreateToken(
+    process.env.HUDDLE_OPERATOR_TOKEN,
+    tokenFilePath(),
+    'operator token',
+    (generated) => console.log(
+      `\n[auth] Operator token generated. Log in to the portal (http://localhost:3000) with:\n\n    ${generated}\n\n` +
+      `Set HUDDLE_OPERATOR_TOKEN to choose a fixed token.\n`
+    ),
+  );
+  return cachedToken;
 }
 
 // Alleen voor tests: reset de module-cache zodat een nieuwe env/file gelezen wordt.
 export function __resetOperatorTokenCache(): void {
   cachedToken = null;
+}
+
+// ── Gateway authentication for the control channel ──────────────────────────
+//
+// A SECOND token, deliberately not the operator's.
+//
+// When the gateway moves out of the same process (docs/ADR-huddle-node-split.md)
+// it needs to ask Huddle Node for firewall policy and hand back what it
+// observed. That is a narrow, machine-to-machine conversation. The operator
+// token is not narrow at all: it opens container terminals, execs, grants sudo
+// and rewrites policy. Handing the network-exposed half of Huddle the key to all
+// of that would mean a gateway compromise is a total compromise.
+//
+// So the two are strictly separate in both directions. The gateway token is
+// accepted only on /control/*, and the operator token is not accepted there —
+// which keeps "who may do this" answerable by looking at the token alone.
+//
+// Never logged, unlike the operator token: no human ever types it. `huddle init`
+// reads it from the data dir and passes it to the container.
+
+function gatewayTokenFilePath(): string {
+  if (process.env.HUDDLE_GATEWAY_TOKEN_FILE) return process.env.HUDDLE_GATEWAY_TOKEN_FILE;
+  return path.join(path.dirname(runtimeEnv.dbPath), 'gateway-token');
+}
+
+let cachedGatewayToken: string | null = null;
+
+export function getGatewayToken(): string {
+  if (cachedGatewayToken) return cachedGatewayToken;
+  cachedGatewayToken = loadOrCreateToken(
+    process.env.HUDDLE_GATEWAY_TOKEN,
+    gatewayTokenFilePath(),
+    'gateway token',
+    () => { /* machine-to-machine: nothing to announce */ },
+  );
+  return cachedGatewayToken;
+}
+
+export function __resetGatewayTokenCache(): void {
+  cachedGatewayToken = null;
+}
+
+// Is this request the gateway talking to the control channel? Bearer only — a
+// cookie would mean a browser could be walked into making the call, and no
+// browser has any business on /control/*.
+export function isGatewayAuthenticated(headers: IncomingMessage['headers']): boolean {
+  const auth = headers['authorization'];
+  if (typeof auth !== 'string') return false;
+  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (!m) return false;
+  return timingSafeEqualStr(m[1].trim(), getGatewayToken());
 }
 
 // Constant-tijd stringvergelijking: hash beide naar een vaste lengte en

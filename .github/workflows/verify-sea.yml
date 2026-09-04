@@ -1,0 +1,81 @@
+name: Verify Huddle Node SEA
+
+on:
+  pull_request:
+    paths:
+      - gateway/**
+      - cli/**
+      - packages/**
+      - scripts/stage-node-package.mjs
+      - .github/workflows/verify-sea.yml
+  workflow_dispatch:
+
+jobs:
+  sea:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The Windows binary is a release target we verify ourselves.
+          - runner: windows-latest
+            target: win32-x64
+            platform: win32
+            arch: x64
+            package: huddle-node-win32-x64
+          # These run natively: macos-15-intel is Intel and macos-14 is Apple Silicon.
+          # Signing/notarisation is separate from SEA build verification.
+          - runner: macos-15-intel
+            target: darwin-x64
+            platform: darwin
+            arch: x64
+            package: huddle-node-darwin-x64
+          - runner: macos-14
+            target: darwin-arm64
+            platform: darwin
+            arch: arm64
+            package: huddle-node-darwin-arm64
+          - runner: ubuntu-latest
+            target: linux-x64
+            platform: linux
+            arch: x64
+            package: huddle-node-linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            gateway/package-lock.json
+            gateway/frontend/package-lock.json
+
+      - name: Install build dependencies
+        run: |
+          npm ci
+          npm ci --prefix frontend
+        working-directory: gateway
+
+      - name: Build and smoke-test Huddle Node
+        run: npm run build:sea
+        working-directory: gateway
+
+      - name: Stage platform npm package
+        run: node scripts/stage-node-package.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version 0.0.0-ci
+
+      - name: Verify package contents
+        run: npm pack --dry-run --ignore-scripts
+        working-directory: packages/${{ matrix.package }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: huddle-node-${{ matrix.target }}
+          path: packages/${{ matrix.package }}
+          if-no-files-found: error

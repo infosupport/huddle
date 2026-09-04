@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import forge from 'node-forge';
+import { runtimeEnv } from './runtime-env';
 
 // Persistente root-CA voor het MITM-intercepten van HTTPS-verkeer naar
 // devcontainers. Wordt eenmalig gegenereerd in /data (volume) en daarna
 // hergebruikt zodat clients de CA maar één keer hoeven te trusten.
 
-const CA_DIR = process.env.CA_DIR ?? '/data';
+const CA_DIR = runtimeEnv.caDir;
 const CA_KEY_PATH = path.join(CA_DIR, 'ca.key');
 const CA_CRT_PATH = path.join(CA_DIR, 'ca.crt');
 
@@ -58,7 +59,20 @@ function persist(ca: LoadedCa): void {
   fs.writeFileSync(CA_CRT_PATH, ca.caCertPem);
 }
 
-export function initCa(): void {
+export interface InitCaOptions {
+  /**
+   * May this process MINT the root CA when there is none on disk?
+   *
+   * Only Huddle Node may. The gateway signs leaf certs with the CA and gets the
+   * directory bind-mounted read-only; if it generated its own root on a missing
+   * mount it would keep working — and validate nothing, because no devcontainer
+   * and no host trust store would know that root. That failure is silent and
+   * looks exactly like success, so the gateway refuses instead.
+   */
+  generate: boolean;
+}
+
+export function initCa(opts: InitCaOptions = { generate: true }): void {
   if (loaded) return;
   if (fs.existsSync(CA_KEY_PATH) && fs.existsSync(CA_CRT_PATH)) {
     try {
@@ -72,8 +86,21 @@ export function initCa(): void {
       console.log('[tls-ca] loaded existing CA from disk');
       return;
     } catch (err: any) {
+      if (!opts.generate) {
+        throw new Error(
+          `[tls-ca] the CA at ${CA_CRT_PATH} is unreadable (${err.message}) and this process may not mint one. ` +
+          'Check the CA mount — Huddle Node owns the CA and the gateway only signs with it.'
+        );
+      }
       console.warn('[tls-ca] failed to load existing CA, regenerating:', err.message);
     }
+  }
+  if (!opts.generate) {
+    throw new Error(
+      `[tls-ca] no CA at ${CA_CRT_PATH} and this process may not mint one. ` +
+      'Huddle Node generates the CA; the gateway gets it bind-mounted read-only at /ca. ' +
+      'Start Huddle Node first, or check the mount.'
+    );
   }
   console.log('[tls-ca] generating new root CA (2048-bit RSA, valid 10 years)...');
   loaded = generateNewCa();

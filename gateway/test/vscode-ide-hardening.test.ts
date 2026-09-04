@@ -1,24 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
 // VS Code Remote IDE-kanaal hardening (finding #15). buildVscodeMachineSettings
-// leeft in docker.ts, dat bij import de native better-sqlite3-binding laadt
-// (listFolderMappings); die ontbreekt in een verse DMZ-devcontainer. Probe en
-// sla anders over — draait volledig in CI / de huddle-image.
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(`[vscode-ide-hardening.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`);
-}
+// leeft in docker.ts, dat via listFolderMappings db.ts meetrekt — en db.ts opent
+// bij import een database (in tests de in-memory variant uit vitest.config.ts).
+// De functie zelf is puur.
+const { buildVscodeMachineSettings } = await import('../src/docker');
 
-const d = sqliteAvailable ? describe : describe.skip;
-const { buildVscodeMachineSettings } = sqliteAvailable
-  ? await import('../src/docker')
-  : ({ buildVscodeMachineSettings: (() => ({})) as any });
-
-d('buildVscodeMachineSettings (#15)', () => {
+describe('buildVscodeMachineSettings (#15)', () => {
   const s = buildVscodeMachineSettings() as Record<string, any>;
 
   it('dwingt workspace trust af (blokkeert folderOpen auto-run)', () => {

@@ -187,7 +187,9 @@ describe('huddleProxyEnv', () => {
 
 describe('buildOverride', () => {
   it('wires every service on the marked network and attaches the huddle egress net', () => {
-    const { markedNetwork, services, override, warnings } = buildOverride(parseYaml(COMPOSE));
+    const { markedNetwork, services, override, warnings } = buildOverride(parseYaml(COMPOSE), {
+      hostCaPath: '/host/ca.crt',
+    });
     expect(markedNetwork).toBe('development');
     expect(services).toEqual(['app', 'db', 'dashboard']);
     expect(warnings).toEqual([]); // internal network, single net → clean
@@ -196,16 +198,19 @@ describe('buildOverride', () => {
     expect(app?.networks).toEqual({ development: null, [HUDDLE_NET_KEY]: null });
     expect((app?.environment as Record<string, string>).HTTPS_PROXY).toBe('http://huddle:80');
     expect((app?.environment as Record<string, string>).NODE_EXTRA_CA_CERTS).toBe(DEFAULT_CA_PATH);
-    // No socket mount unless opted in.
-    expect(app?.volumes).toBeUndefined();
+    // The CA is bind-mounted read-only; no socket mount unless opted in.
+    expect(app?.volumes).toEqual([`/host/ca.crt:${DEFAULT_CA_PATH}:ro`]);
 
     // Egress network reuses Huddle's existing internal network.
     expect(override.networks?.[HUDDLE_NET_KEY]).toEqual({ external: true, name: 'devcontainer-net' });
   });
 
   it('injects the filtered socket mount when dockerSocket is set', () => {
-    const { override } = buildOverride(parseYaml(COMPOSE), { dockerSocket: true });
-    expect(override.services?.app.volumes).toEqual(['/tmp/dc-sockets/my-project-devcontainer:/var/run/huddle']);
+    const { override } = buildOverride(parseYaml(COMPOSE), { dockerSocket: true, hostCaPath: '/host/ca.crt' });
+    expect(override.services?.app.volumes).toEqual([
+      `/host/ca.crt:${DEFAULT_CA_PATH}:ro`,
+      '/tmp/dc-sockets/my-project-devcontainer:/var/run/huddle',
+    ]);
     expect((override.services?.app.environment as Record<string, string>).DOCKER_HOST).toBe(
       'unix:///var/run/huddle/docker.sock',
     );
@@ -216,9 +221,25 @@ describe('buildOverride', () => {
       services: { app: { networks: ['dev'] } },
       networks: { dev: { internal: true, labels: { [HUDDLE_NETWORK_LABEL]: 'true' } } },
     };
-    const { override, warnings } = buildOverride(doc, { dockerSocket: true });
-    expect(override.services?.app.volumes).toBeUndefined();
+    const { override, warnings, socketContainers } = buildOverride(doc, { dockerSocket: true, hostCaPath: '/host/ca.crt' });
+    // The CA still mounts; only the socket mount is skipped.
+    expect(override.services?.app.volumes).toEqual([`/host/ca.crt:${DEFAULT_CA_PATH}:ro`]);
     expect(warnings.some((w) => w.includes('container_name'))).toBe(true);
+    // Nothing to register with Node for a service that got no socket mount.
+    expect(socketContainers).toEqual([]);
+  });
+
+  // blocker 15 (docs/ADR-huddle-node-split.md): runMigrate registers exactly
+  // this list with Node so the socket exists before `docker compose up` starts
+  // the container — it must name only services that actually got the mount.
+  it('reports the container_names that got the socket mount, for runMigrate to register', () => {
+    const { socketContainers } = buildOverride(parseYaml(COMPOSE), { dockerSocket: true, hostCaPath: '/host/ca.crt' });
+    expect(socketContainers).toEqual(['my-project-devcontainer']);
+  });
+
+  it('reports no socketContainers when dockerSocket is not set', () => {
+    const { socketContainers } = buildOverride(parseYaml(COMPOSE), { hostCaPath: '/host/ca.crt' });
+    expect(socketContainers).toEqual([]);
   });
 
   it('blocks (fail-closed) when the marked network is not internal', () => {

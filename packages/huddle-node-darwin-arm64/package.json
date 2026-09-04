@@ -1,0 +1,10 @@
+{
+  "name": "@infosupport/huddle-node-darwin-arm64",
+  "version": "1.3.0",
+  "description": "Huddle Node executable for macOS arm64",
+  "license": "GPL-3.0-or-later",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/huddle-node"],
+  "publishConfig": { "access": "public" }
+}

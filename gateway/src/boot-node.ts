@@ -1,0 +1,146 @@
+// Booting Huddle Node: the control plane, on the host.
+//
+// Everything Huddle does that is not packet filtering: the portal and REST/WS
+// API, the database, the CA, project and devcontainer orchestration through
+// Docker, extensions, sudo grants, and sbx. It runs directly on the user's
+// machine — outside the firewall it configures, which is the point
+// (docs/ADR-huddle-node-split.md).
+//
+// It also serves the control channel the gateway follows: the policy and
+// container feeds, and the endpoint the gateway reports its decisions to. That
+// listener is deliberately NOT the portal's — see control/server.ts.
+
+import { getGatewayToken } from './auth';
+import { initDb } from './db';
+import { runSettingsMigration } from './settings-migration';
+import { createApiServer } from './api';
+import { createControlServer } from './control/server';
+import { listDevcontainers, inspectContainer, execInContainer } from './docker';
+import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
+import { sweepExpiredSudoGrants } from './sudo-grant';
+import { registerContainerProxy } from './socket-proxy';
+import { initCa } from './tls-ca';
+import { startAutoSync } from './sandbox/auto-sync';
+
+// Learn the devcontainers that already exist (survives a restart).
+//
+// Registering, not listening. The socket a devcontainer mounts has to live on
+// the DOCKER ENGINE's host, and Huddle Node is only on that host when the engine
+// is native — so the gateway creates it and tunnels each connection back to the
+// filter here (control/socket-relay-protocol.ts). What Node still owes the
+// filter is the registry: which names and ids are devcontainers of ours.
+async function initContainerProxies(): Promise<void> {
+  try {
+    const containers = await listDevcontainers();
+    for (const c of containers) {
+      await registerContainerProxy(c.name).catch((err: Error) => {
+        console.warn(`[socket-proxy] ${c.name}: ${err.message}`);
+      });
+    }
+    if (containers.length) {
+      console.log(`[socket-proxy] registered ${containers.length} devcontainer(s)`);
+    }
+  } catch (err: any) {
+    console.error('[socket-proxy] init failed:', err.message);
+  }
+}
+
+// How long to wait for the gateway container before wiring devcontainers to it.
+//
+// `huddle init` starts Node and only THEN creates the gateway, so at this point
+// in Node's boot the container it has to attach usually does not exist yet.
+// Wiring anyway attaches nothing and refreshes iptables against an address that
+// is not there — silently, because the refresh script exits 0 when `huddle` does
+// not resolve. So wait for it. When Huddle Node is run on its own (`huddle
+// node`) no gateway is coming, and after this it gives up and says so.
+const GATEWAY_WAIT_MS = 90_000;
+const GATEWAY_POLL_MS = 1_000;
+
+async function gatewayContainerExists(): Promise<boolean> {
+  try {
+    await inspectContainer('huddle');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function wireGatewayWhenItAppears(): Promise<void> {
+  const deadline = Date.now() + GATEWAY_WAIT_MS;
+  while (!(await gatewayContainerExists())) {
+    if (Date.now() >= deadline) {
+      console.warn('[wiring] no gateway container after 90s — devcontainers are not wired to one');
+      return;
+    }
+    await new Promise((r) => setTimeout(r, GATEWAY_POLL_MS));
+  }
+  const rep = await rewireGatewayIntoDevcontainers();
+  console.log(
+    `[wiring] ${rep.attached.length} network(s), ${rep.refreshed.length} devcontainer(s) refreshed` +
+    (rep.reissued.length ? `, CA reinstalled in ${rep.reissued.length}` : '')
+  );
+}
+
+// Ephemeral sudo grants must be locked INTERNALLY in the container as soon as they
+// expire — expiry is therefore not passive. This active sweeper periodically locks
+// the 'noot' user in every container with an expired grant and cleans up the row.
+// Best-effort per container (a disappeared container leaves the rest untouched).
+const SUDO_SWEEP_INTERVAL_MS = 30_000;
+async function sweepSudoGrants(): Promise<void> {
+  try {
+    const locked = await sweepExpiredSudoGrants(execInContainer);
+    if (locked.length) console.log(`[sudo-grant] noot locked in ${locked.length} expired container(s)`);
+  } catch (err: any) {
+    console.error('[sudo-grant] sweep failed:', err.message);
+  }
+}
+
+export function bootNode(): void {
+  initDb();
+  // Resource limits + folder mappings moved from the DB into config.json (#98).
+  runSettingsMigration();
+  // Node owns the CA: it generates it, hands it to containers and to the host
+  // trust store, and bind-mounts the directory into the gateway read-only. One
+  // CA, one writer — two processes each minting their own root would validate
+  // nothing.
+  initCa({ generate: true });
+
+  // Mint the gateway token NOW, before either listener starts.
+  //
+  // It is created on first use, and the gateway's own first use is a /control
+  // request — which it cannot make without already having the token. `huddle
+  // init` breaks that circle by reading it out of the data dir and passing it
+  // into the container, so on a fresh install the file has to exist by the time
+  // Node answers at all, or init dies with a bare
+  // `ENOENT: ... open '~/.huddle/gateway-token'` and never creates the gateway.
+  //
+  // Here rather than in control/server.ts because the two listeners start
+  // concurrently: init waits for the API, so minting it on the control side
+  // would leave a window where the API answers and the file is not there yet.
+  getGatewayToken();
+
+  createControlServer().catch(err => {
+    console.error('[control] failed to start', err);
+    process.exit(1);
+  });
+
+  createApiServer().catch(err => {
+    console.error('[api] failed to start', err);
+    process.exit(1);
+  });
+
+  // Background sbx sync: auto-reconcile Huddle→sbx + ingest blocked requests as
+  // pending (sbx→Huddle). Best-effort; no-op when sbx isn't reachable.
+  startAutoSync();
+
+  setInterval(() => { void sweepSudoGrants(); }, SUDO_SWEEP_INTERVAL_MS);
+  void sweepSudoGrants();
+
+  void initContainerProxies();
+  // Reconnecting to the devcontainer networks pollutes resolv.conf (Podman puts
+  // the internal-net aardvark DNS in it). Note the seam: the connect is a Docker
+  // call (Node's) but the resolv.conf it breaks belongs to the GATEWAY container
+  // (see dns-egress.ts), which notices on its own — scheduleSettlingSanitize()
+  // in boot-gateway.ts.
+  void wireGatewayWhenItAppears();
+}

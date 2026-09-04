@@ -4,9 +4,12 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
-import { runFirewallList, runFirewallAdd, runFirewallDelete } from './firewall';
+import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
+import { runNode } from './node';
 import { runMigrate } from './migrate';
+import { runLogs } from './logs';
+import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog } from './sbx';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -18,18 +21,23 @@ import {
   runExperimentUse,
 } from './experiment';
 
-interface ParsedArgs {
+export interface ParsedArgs {
   positional: string[];
   flags: Record<string, string | boolean>;
+  mounts: string[];
+  /** Repeatable `--folder <host path>[:ro]` — extra folders for `huddle sbx start`. */
+  folders: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'migrate', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'agent', 'entry', 'port', 'data-dir', 'lines', 'n']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'dry-run', 'follow', 'f', 'node', 'gateway']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'sbx', 'node', 'logs', 'log', 'help', 'version']);
 
-function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  const mounts: string[] = [];
+  const folders: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -43,6 +51,25 @@ function parseArgs(argv: string[]): ParsedArgs {
       const eq = raw.indexOf('=');
       const name = eq >= 0 ? raw.slice(0, eq) : raw;
       if (!name) throw new Error(`Invalid option: ${arg}`);
+
+      // Repeatable, unlike every other value flag (one `--mount host=container` or
+      // one `--folder <host path>` per folder).
+      if (name === 'mount' || name === 'folder') {
+        const expects = name === 'mount' ? 'host=container' : 'a host path';
+        let value: string;
+        if (eq >= 0) {
+          value = raw.slice(eq + 1);
+        } else {
+          const next = argv[i + 1];
+          if (next === undefined || next.startsWith('-')) {
+            throw new Error(`Option --${name} expects a value (${expects})`);
+          }
+          value = next;
+          i++;
+        }
+        (name === 'mount' ? mounts : folders).push(value);
+        continue;
+      }
 
       if (eq >= 0) {
         flags[name] = raw.slice(eq + 1);
@@ -79,7 +106,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     positional.push(arg);
   }
 
-  return { positional, flags };
+  return { positional, flags, mounts, folders };
+}
+
+function parseMountFlag(raw: string): { hostPath: string; containerPath: string } {
+  const eq = raw.indexOf('=');
+  if (eq <= 0) throw new Error(`Invalid --mount value "${raw}", expected host=container`);
+  return { hostPath: raw.slice(0, eq), containerPath: raw.slice(eq + 1) };
 }
 
 function readVersion(): string {
@@ -103,6 +136,8 @@ Usage:
   huddle start [options] [folder]    Explicitly start a devcontainer
   huddle init [options]              Pull the Huddle + devcontainer base images and
                                      start them via Docker or Podman
+  huddle restart                     Recreate the gateway (e.g. after changing the
+                                     team extensions folder, which loads at boot)
   huddle migrate [folder]            Wire an existing docker-compose devcontainer
                                      behind Huddle by generating an override file
   huddle firewall list [options]     Show firewall requests
@@ -111,10 +146,56 @@ Usage:
                                      supported: *.example.com and /path/*)
   huddle firewall delete <id>        Delete a firewall rule by id (or domain;
                                      narrow with --container)
+  huddle firewall export [options]   Export firewall rules as JSON
+  huddle firewall import <file>      Import firewall rules from a JSON file
+  huddle firewall group list         List firewall groups (#69)
+  huddle firewall group export <name>  Export a group as JSON (--out <file>)
+  huddle firewall group import <file>  Import a group (--replace to mirror)
+  huddle firewall group apply <name>   Apply a group (--container <id> or global)
+  huddle sbx status                  Show Docker Sandboxes (sbx) mode status:
+                                     host-agent pipe, upstream proxy, sbx version
+  huddle sbx list                    List sandboxes the host sbx daemon knows
+  huddle sbx start [name] [options]  Start a microVM sandbox with Huddle as its
+                                     upstream proxy (--agent <name> --workspace <path>)
+                                     --folder <host path>[:ro] adds another folder
+                                     (repeatable); Huddle's folder mappings are
+                                     mounted automatically
+  huddle sbx rm <name> [--force]     Remove a sandbox
+  huddle sbx reconcile [--dry-run]   Set every Huddle sandbox to allow-all in sbx
+                                     (Huddle's proxy enforces the rules)
+  huddle sbx trust-ca <name>         Install Huddle's CA in a sandbox so HTTPS
+                                     works (needed for VS Code / JetBrains backends)
+  huddle sbx trust-host              Trust Huddle's CA on the HOST, where the sbx
+                                     daemon runs — sbx terminates TLS itself for
+                                     some hosts (platform.claude.com) and then
+                                     validates Huddle against the host store; without
+                                     this those calls fail with "Empty reply from
+                                     server". Run by 'huddle init'; idempotent.
+  huddle sbx ssh-setup               Enable the SSH bridge (<name>.sbx) for
+                                     VS Code / JetBrains remote development
+  huddle firewall folder set <path>  Set the team-managed rules folder
+  huddle firewall folder reload      Re-read the team-managed rules folder
+  huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle logs [options]              Show both halves' output: Huddle Node's log
+                                     file on this host and the gateway container
+                                     (-n <lines>, -f to follow, --node/--gateway
+                                     for one half)
+  huddle node [options]              Run Huddle Node (portal + API + orchestration)
+                                     directly on this host instead of in the
+                                     gateway container. The firewall stays in
+                                     huddle-gateway. Foreground; Ctrl-C to stop.
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
   huddle experiment status           Show the active channel and CLI version
+
+Node options:
+  --entry <path>                     Path to the built Huddle Node entrypoint
+                                     (default: the gateway build in this checkout;
+                                     also via HUDDLE_NODE_ENTRY)
+  --port <port>                      Portal + API port (default: 24842)
+  --data-dir <path>                  Database, CA and config location
+                                     (default: ~/.huddle)
 
 Init options:
   --runtime <docker|podman>          Container runtime (default: auto-detected;
@@ -125,6 +206,11 @@ Init options:
 Start options:
   --ide <intellij|rider|vscode>      IDE (default: intellij)
   --workspace <path>                 Workspace directory (default: current directory)
+  --mount <host>=<container>         Mount a host folder at an absolute container path, e.g.
+                                     C:/projects/my-repo/backend=/workspace/backend
+                                     (repeatable; cannot combine with --workspace/--empty)
+  --workspace-root <path>            Container path the IDE opens as project root when using
+                                     --mount (default: common parent of the mount targets)
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
@@ -132,8 +218,9 @@ Start options:
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
                                      (NODE_EXTRA_CA_CERTS; default /home/vscode/.huddle-ca.crt)
-  --docker-socket                    Also wire the filtered Docker socket + DOCKER_HOST
-                                     (requires gateway socket pre-provisioning; see docs)
+  --docker-socket                    Also wire the filtered Docker socket + DOCKER_HOST;
+                                     registers the container(s) with Huddle Node so the
+                                     socket exists before "docker compose up" starts them
   --output <path>                    Override file to write
                                      (default: docker-compose.huddle.yml next to the source)
   --force                            Overwrite an existing override file
@@ -141,6 +228,8 @@ Migrate options:
 Firewall options:
   -i, --interactive                  Interactively approve/deny (list)
   --container <name>                 Filter by (list) / scope to (add) a container
+                                     (or __global__). On import: remap all rules
+                                     to this scope
   --status <requested|allow|deny>    Filter by status (default: requested)
 
 Firewall add options:
@@ -149,8 +238,13 @@ Firewall add options:
                                      (e.g. /_packaging/*/nuget/v3/*)
   --deny                             Create a block rule (default: allow)
 
+Firewall export/import options:
+  --out <file>                       Write export to a file (default: stdout)
+  --replace                          Import in replace mode: wipe the target
+                                     scope first (default: merge/upsert)
+
 Global options:
-  --url <url>                        Huddle URL (default: http://localhost:3000)
+  --url <url>                        Huddle URL (default: http://localhost:24842)
                                      Or via the HUDDLE_URL env var
   --help, -h                         Show help
   --version, -v                      Show version (as published to
@@ -168,7 +262,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { positional, flags } = parsed;
+  const { positional, flags, mounts } = parsed;
   const [cmd, sub] = positional;
 
   if (flagBool(flags, 'version', 'v') || cmd === 'version') {
@@ -181,8 +275,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL ?? 'http://localhost:3000';
-  setBaseUrl(url);
+  // Only when the operator named an address. The fallback used to be nodeUrl(),
+  // which is the URL for a HUMAN — `http://localhost:…` — and that is the one
+  // spelling the CLI must not use: Node binds a single literal, `localhost` is
+  // two, and on Windows it resolves to ::1 first. A browser papers over that,
+  // fetch() does not, so every command failed with "Huddle does not appear to be
+  // running" against a healthy process the portal was talking to happily.
+  // Leaving this unset lets api.ts try the loopback literals instead.
+  const url = flagString(flags, 'url') ?? process.env.HUDDLE_URL;
+  if (url) setBaseUrl(url);
 
   const startsWithExistingPath = cmd !== undefined && !COMMANDS.has(cmd) && fs.existsSync(path.resolve(cmd));
   if (!cmd || cmd === 'start' || startsWithExistingPath) {
@@ -194,9 +295,23 @@ async function main(): Promise<void> {
     await runStart({
       ide: flagString(flags, 'ide') ?? 'intellij',
       workspace: flagString(flags, 'workspace') ?? startArgs[0],
+      mounts: mounts.length ? mounts.map(parseMountFlag) : undefined,
+      workspaceRoot: flagString(flags, 'workspace-root'),
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),
+    });
+    return;
+  }
+
+  if (cmd === 'node') {
+    // Runs Huddle Node in the FOREGROUND on this host — the shape you want
+    // while working on Huddle itself. `huddle init` starts the same process
+    // detached, alongside the gateway container.
+    await runNode({
+      entry: flagString(flags, 'entry'),
+      port: flagString(flags, 'port'),
+      dataDir: flagString(flags, 'data-dir'),
     });
     return;
   }
@@ -215,6 +330,16 @@ async function main(): Promise<void> {
     // While an experiment is active, the CLI itself must also run on the matching
     // version; if needed this installs the right version and restarts the
     // process itself (in which case it does not return).
+    ensureCliForChannel(process.argv.slice(2));
+    await runInit(initOpts, resolveImages());
+    return;
+  }
+
+  if (cmd === 'restart') {
+    // Stop + recreate the gateway (runInit does `rm -f` first) so changed team
+    // folders get mounted. The portal writes the paths straight into the mounted
+    // ~/.huddle/config.json, so runInit already reads the latest values here.
+    const initOpts = { runtime: flagString(flags, 'runtime') };
     ensureCliForChannel(process.argv.slice(2));
     await runInit(initOpts, resolveImages());
     return;
@@ -256,8 +381,77 @@ async function main(): Promise<void> {
         target: positional[2],
         container: flagString(flags, 'container'),
       });
+    } else if (subCmd === 'export') {
+      await runFirewallExport({
+        container: flagString(flags, 'container'),
+        out: flagString(flags, 'out'),
+      });
+    } else if (subCmd === 'import') {
+      const file = positional[2];
+      if (!file) {
+        console.error('Usage: huddle firewall import <file> [--replace] [--container <id>]');
+        process.exit(1);
+      }
+      await runFirewallImport({
+        file,
+        replace: flagBool(flags, 'replace'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'group' || subCmd === 'groups') {
+      await runFirewallGroup({
+        action: positional[2],
+        arg: positional[3],
+        out: flagString(flags, 'out'),
+        replace: flagBool(flags, 'replace'),
+        container: flagString(flags, 'container'),
+      });
+    } else if (subCmd === 'folder') {
+      await runFirewallFolder({ action: positional[2], path: positional[3] });
     } else {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'logs' || cmd === 'log') {
+    await runLogs({
+      lines: flagString(flags, 'lines', 'n'),
+      follow: flagBool(flags, 'follow', 'f'),
+      node: flagBool(flags, 'node'),
+      gateway: flagBool(flags, 'gateway'),
+    });
+    return;
+  }
+
+  if (cmd === 'sbx') {
+    const subCmd = sub ?? 'status';
+    if (subCmd === 'status') {
+      await runSbxStatus();
+    } else if (subCmd === 'list' || subCmd === 'ls') {
+      await runSbxList();
+    } else if (subCmd === 'start' || subCmd === 'create') {
+      await runSbxStart({
+        name: positional[2] ?? flagString(flags, 'name'),
+        agent: flagString(flags, 'agent'),
+        workspace: flagString(flags, 'workspace'),
+        folders: parsed.folders,
+      });
+    } else if (subCmd === 'rm' || subCmd === 'remove' || subCmd === 'delete') {
+      await runSbxRemove({ name: positional[2] ?? flagString(flags, 'name'), force: flagBool(flags, 'force') });
+    } else if (subCmd === 'reconcile' || subCmd === 'sync') {
+      await runSbxReconcile({ dryRun: flagBool(flags, 'dry-run') });
+    } else if (subCmd === 'trust-ca' || subCmd === 'ca') {
+      await runSbxTrustCa({ name: positional[2] ?? flagString(flags, 'name') });
+    } else if (subCmd === 'trust-host' || subCmd === 'host-ca') {
+      await runSbxTrustHost({ runtime: flagString(flags, 'runtime') });
+    } else if (subCmd === 'log') {
+      await runSbxLog({ name: positional[2] ?? flagString(flags, 'name') });
+    } else if (subCmd === 'ssh-setup' || subCmd === 'ssh') {
+      await runSbxSshSetup();
+    } else {
+      console.error(`Unknown sbx subcommand: ${subCmd}`);
+      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|log>');
       process.exit(1);
     }
     return;
@@ -292,7 +486,9 @@ function flagBool(flags: Record<string, string | boolean>, ...names: string[]): 
   return names.some((name) => flags[name] === true);
 }
 
-main().catch((err: Error) => {
+// Guarded so the arg parser above can be imported by tests without the CLI
+// running itself as a side effect of the import.
+if (require.main === module) main().catch((err: Error) => {
   console.error(`Error: ${err.message ?? err}`);
   if (err instanceof ApiError && err.message.includes('Cannot reach Huddle API')) {
     console.error('\nHuddle does not appear to be running. Start it with:\n  huddle init');
