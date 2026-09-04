@@ -21,6 +21,7 @@ describe('de basis-URL van de CLI', () => {
     vi.resetModules();
     delete process.env.HUDDLE_URL;
     delete process.env.HUDDLE_OPERATOR_TOKEN;
+    delete process.env.HUDDLE_PORT;
   });
 
   afterEach(() => {
@@ -61,6 +62,19 @@ describe('de basis-URL van de CLI', () => {
     seen.length = 0;
     await get('/api/ping');
     expect(seen).toEqual(['http://[::1]:24842/api/ping']);
+  });
+
+  // `huddle init`/`huddle node` read HUDDLE_PORT for a custom port (init.ts's
+  // HOST_PORT); every later command must follow it there too, or it keeps
+  // probing the default port and reports Huddle as not running.
+  it('gebruikt HUDDLE_PORT voor een aangepaste poort', async () => {
+    const seen: string[] = [];
+    process.env.HUDDLE_PORT = '9999';
+    globalThis.fetch = fetchAnsweringOn('http://127.0.0.1:9999', seen) as never;
+    const { get } = await import('../src/api');
+
+    await get('/api/ping');
+    expect(seen[0]).toBe('http://127.0.0.1:9999/api/ping');
   });
 
   // Stilletjes met een ander adres praten dan de operator opgaf is erger dan falen.
