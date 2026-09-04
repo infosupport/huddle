@@ -355,7 +355,19 @@ let exited;
 const smoke = await new Promise((resolve) => {
   const child = spawn(smokeBin, [], {
     cwd: smokeHome,
-    env: { ...process.env, HOME: smokeHome, HUDDLE_ROLE: 'node' },
+    env: {
+      ...process.env,
+      // os.homedir() — what runtime-env.ts actually resolves dataDir from —
+      // reads $HOME on POSIX but USERPROFILE on Windows; HOME alone is a no-op
+      // there. Set both, and drop HOMEDRIVE/HOMEPATH so libuv's Windows fallback
+      // path can't win over USERPROFILE and point homedir() back at the real
+      // profile (see gateway/src/runtime-env.ts's dataDir default).
+      HOME: smokeHome,
+      USERPROFILE: smokeHome,
+      HOMEDRIVE: undefined,
+      HOMEPATH: undefined,
+      HUDDLE_ROLE: 'node',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   exited = new Promise((r) => child.on('exit', r));
