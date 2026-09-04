@@ -8,7 +8,7 @@
 // thing per poll is not worth optimizing; the gateway asks with If-None-Match
 // and usually gets a 304 back.
 
-import { db, listRegisteredSocketNames, socketRegistrationRevisions } from '../db';
+import { db, listRegisteredSocketNames, pruneDeadSocketRegistrations, socketRegistrationRevisions } from '../db';
 import { containerSnapshot, currentNetworkGeneration } from '../docker';
 import type { RuleRow } from '../rule-match';
 import type { ContainerFeed, PolicyFeed } from './feed';
@@ -42,6 +42,17 @@ export async function buildContainerFeed(): Promise<ContainerFeed> {
   // are meant to get a socket BEFORE they ever run, so the socket exists by
   // the time compose starts them and their bind mount sees a live file
   // instead of an empty directory. `running` alone would never include them.
+  // A row that was ready (served at least once) and has since dropped out of
+  // Docker's live list is a container that existed and is now gone — removed
+  // directly against the engine, since Huddle has no devcontainer "delete"
+  // route of its own to have unregistered it from. Prune before reading the
+  // table below so this same poll already reflects it, instead of leaking a
+  // relay listener/directory for a container nothing will ever restart. A row
+  // that isn't ready yet is left alone regardless of `running` — that is the
+  // expected, temporary state for a name `huddle migrate --docker-socket` (or
+  // createAndStartContainer, briefly) registered ahead of its container
+  // starting; see pruneDeadSocketRegistrations' doc in db.ts.
+  pruneDeadSocketRegistrations(running);
   const socketRegistrations = listRegisteredSocketNames();
   const socketRevisions = socketRegistrationRevisions();
   const devcontainers = [...new Set([...running, ...socketRegistrations])].sort();

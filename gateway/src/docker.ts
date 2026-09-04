@@ -7,7 +7,7 @@ import type { ContainerExec, ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { runtimeEnv } from './runtime-env';
-import { registerSocketName } from './db';
+import { registerSocketName, unregisterSocketName } from './db';
 import { notifyStateChanged } from './events';
 import { waitForSocketReadiness } from './socket-registration';
 
@@ -1180,138 +1180,156 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // first.
   registerSocketName(containerName);
   notifyStateChanged();
-  if (!(await waitForSocketReadiness([containerName], 6_000))) {
-    throw new Error(
-      `Huddle's gateway did not confirm the Docker socket for '${containerName}' within 6s — ` +
-      `is huddle-gateway running and reachable at its control channel?`,
-    );
-  }
 
-  // JB-specific env (host-config path, JBR/RemoteDev data, java-proxy) is skipped
-  // for VS Code; the proxy and user env stay the same.
-  const env = [
-    '_CONTAINER_USER=vscode',
-    '_CONTAINER_USER_HOME=/home/vscode',
-    '_REMOTE_USER=vscode',
-    '_REMOTE_USER_HOME=/home/vscode',
-    'http_proxy=http://huddle:80',
-    'https_proxy=http://huddle:80',
-    'HTTP_PROXY=http://huddle:80',
-    'HTTPS_PROXY=http://huddle:80',
-    // Loopback must never go via the proxy: it cannot reach the container's own
-    // loopback. The bracketed form `[::1]` is included explicitly because
-    // .NET/Aspire's DCP addresses its targets as `http://[::1]:<port>` and
-    // NO_PROXY matches literally against that bracketed host (issue #12).
-    'no_proxy=localhost,127.0.0.1,::1,[::1]',
-    'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
-    // CA trust at the container level so EVERY process trusts the MITM CA — not
-    // only login shells that source /etc/profile.d. Without this, tools started by
-    // the IDE/non-login shell validate against their own bundle, reject the leaf
-    // cert and you see only an empty CONNECT tunnel.
-    // NODE_EXTRA_CA_CERTS = standalone huddle cert (Node adds it to its bundle).
-    // SSL_CERT_FILE/REQUESTS_CA_BUNDLE = the combined system bundle (huddle + all
-    // normal roots) that update-ca-certificates regenerates, so TLS to
-    // non-intercepted hosts keeps working.
-    'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
-    'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
-    'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
-    // The docker proxy socket is in the mounted directory /var/run/huddle (see
-    // Mounts). DOCKER_HOST lets docker/compose/SDKs find it there; for tools that
-    // hardcode the default path the config script also places a symlink at
-    // /var/run/docker.sock.
-    'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
-    ...(isVscode ? [] : [
-      'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
-      'XDG_DATA_HOME=/.jbdevcontainer/data',
-      'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
-    ]),
-  ];
-
-  // Each mount is its own git repo (or not a repo — ensureWorktree then falls
-  // back to the path itself), so every mount gets its own worktree call. With a
-  // single mount that is the classic behaviour; with multiple mounts each host
-  // path is bound at the container path the user chose (m.containerPath) and the
-  // IDE opens `containerWorkspace` (the explicit "open at" path) as project root.
-  // Resolved once per start: the bind Source prefix depends on the engine, not on
-  // the individual mount (issue #93). Needed for the folder mappings below too,
-  // which exist even for an empty container — hence outside the `!empty` block.
-  const mountStyle = await detectWindowsMountStyle();
-  const workspaceMounts: FolderMount[] = [];
-  let sourcesPathLabel = '';
-  if (!empty) {
-    if (isMultiMount) {
-      for (const m of mountParams!) {
-        const effectiveSource = await ensureWorktree(toLinuxPath(m.hostPath, mountStyle), containerName);
-        workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: m.containerPath });
-      }
-      sourcesPathLabel = mountParams![0].hostPath;
-    } else {
-      const effectiveSource = await ensureWorktree(toLinuxPath(workspaceDir, mountStyle), containerName);
-      workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: containerWorkspace });
-      sourcesPathLabel = workspaceDir;
+  // Everything from here through the container actually starting is wrapped
+  // so a failure anywhere in it — readiness timeout, image build, the create
+  // call itself, the start call — rolls the registration back before
+  // rethrowing. Left unregistered, a failed attempt would otherwise leave a
+  // permanent phantom row: nothing else in this codebase ever deletes one
+  // (there is no devcontainer "delete" route to hook a cleanup into — see
+  // unregisterSocketName's doc in db.ts), so buildContainerFeed() would keep
+  // handing the gateway a name whose container never came up, and the relay
+  // would keep a socket/directory open for it indefinitely.
+  let id: string;
+  let folderMounts: FolderMount[];
+  try {
+    if (!(await waitForSocketReadiness([containerName], 6_000))) {
+      throw new Error(
+        `Huddle's gateway did not confirm the Docker socket for '${containerName}' within 6s — ` +
+        `is huddle-gateway running and reachable at its control channel?`,
+      );
     }
+
+    // JB-specific env (host-config path, JBR/RemoteDev data, java-proxy) is skipped
+    // for VS Code; the proxy and user env stay the same.
+    const env = [
+      '_CONTAINER_USER=vscode',
+      '_CONTAINER_USER_HOME=/home/vscode',
+      '_REMOTE_USER=vscode',
+      '_REMOTE_USER_HOME=/home/vscode',
+      'http_proxy=http://huddle:80',
+      'https_proxy=http://huddle:80',
+      'HTTP_PROXY=http://huddle:80',
+      'HTTPS_PROXY=http://huddle:80',
+      // Loopback must never go via the proxy: it cannot reach the container's own
+      // loopback. The bracketed form `[::1]` is included explicitly because
+      // .NET/Aspire's DCP addresses its targets as `http://[::1]:<port>` and
+      // NO_PROXY matches literally against that bracketed host (issue #12).
+      'no_proxy=localhost,127.0.0.1,::1,[::1]',
+      'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
+      // CA trust at the container level so EVERY process trusts the MITM CA — not
+      // only login shells that source /etc/profile.d. Without this, tools started by
+      // the IDE/non-login shell validate against their own bundle, reject the leaf
+      // cert and you see only an empty CONNECT tunnel.
+      // NODE_EXTRA_CA_CERTS = standalone huddle cert (Node adds it to its bundle).
+      // SSL_CERT_FILE/REQUESTS_CA_BUNDLE = the combined system bundle (huddle + all
+      // normal roots) that update-ca-certificates regenerates, so TLS to
+      // non-intercepted hosts keeps working.
+      'NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt',
+      'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt',
+      'REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt',
+      // The docker proxy socket is in the mounted directory /var/run/huddle (see
+      // Mounts). DOCKER_HOST lets docker/compose/SDKs find it there; for tools that
+      // hardcode the default path the config script also places a symlink at
+      // /var/run/docker.sock.
+      'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
+      ...(isVscode ? [] : [
+        'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
+        'XDG_DATA_HOME=/.jbdevcontainer/data',
+        'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
+      ]),
+    ];
+
+    // Each mount is its own git repo (or not a repo — ensureWorktree then falls
+    // back to the path itself), so every mount gets its own worktree call. With a
+    // single mount that is the classic behaviour; with multiple mounts each host
+    // path is bound at the container path the user chose (m.containerPath) and the
+    // IDE opens `containerWorkspace` (the explicit "open at" path) as project root.
+    // Resolved once per start: the bind Source prefix depends on the engine, not on
+    // the individual mount (issue #93). Needed for the folder mappings below too,
+    // which exist even for an empty container — hence outside the `!empty` block.
+    const mountStyle = await detectWindowsMountStyle();
+    const workspaceMounts: FolderMount[] = [];
+    let sourcesPathLabel = '';
+    if (!empty) {
+      if (isMultiMount) {
+        for (const m of mountParams!) {
+          const effectiveSource = await ensureWorktree(toLinuxPath(m.hostPath, mountStyle), containerName);
+          workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: m.containerPath });
+        }
+        sourcesPathLabel = mountParams![0].hostPath;
+      } else {
+        const effectiveSource = await ensureWorktree(toLinuxPath(workspaceDir, mountStyle), containerName);
+        workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: containerWorkspace });
+        sourcesPathLabel = workspaceDir;
+      }
+    }
+
+    folderMounts = buildFolderMounts(containerName, mountStyle);
+
+    // The RemoteDev distro volume is JB-only; VS Code does not need it.
+    const mounts = [
+      ...folderMounts,
+      ...(isVscode ? [] : [{
+        Type: 'volume',
+        Source: 'jb_devcontainers_shared_volume',
+        Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
+      }]),
+      ...workspaceMounts,
+      {
+        // Mount the per-container socket DIRECTORY, not the socket file itself: a
+        // file bind pins the inode and after a huddle restart (unlink + new socket)
+        // points forever at the dead old socket. Via the directory the container
+        // always sees the current socket; DOCKER_HOST (env) and the symlink
+        // /var/run/docker.sock (config script) point to it.
+        Type: 'bind',
+        Source: `${SOCKET_DIR}/${containerName}`,
+        Target: '/var/run/huddle',
+      },
+    ];
+
+    // Read once per create: the resource defaults live in the mounted CLI config
+    // (~/.huddle/config.json, #98), so an operator edit applies to the next
+    // container without restarting Huddle.
+    const resourceDefaults = getResourceDefaults();
+
+    const createBody = {
+      Image: imageName,
+      Entrypoint: ['/bin/sh'],
+      Cmd: ['-c', 'while sleep 1000; do :; done'],
+      Env: env,
+      Labels: {
+        'com.intellij.devcontainer.id': devcontainerId,
+        'com.intellij.devcontainer.presentable.name': presentableName,
+        // With multiple mounts this holds only the primary (first) host path, for
+        // backwards-compat with everything that reads this label as a single string.
+        // The full host→container list lives in the separate 'mounts' label below.
+        'com.intellij.devcontainer.sources.path': empty ? '' : sourcesPathLabel,
+        ...(isMultiMount ? { 'com.intellij.devcontainer.mounts': JSON.stringify(mountParams!) } : {}),
+        'com.intellij.devcontainer.workspace.path': containerWorkspace,
+        'com.intellij.devcontainer.model': modelJson,
+        'com.devcontainer.ide': ideName,
+        'devcontainer.metadata': metadataJson,
+      },
+      HostConfig: {
+        Mounts: mounts,
+        NetworkMode: netName,
+        CapAdd: ['NET_ADMIN'],
+        ...(RUNTIME_SECURITY_OPT.length ? { SecurityOpt: RUNTIME_SECURITY_OPT } : {}),
+        Memory: parseMemoryBytes(params.memory || resourceDefaults.defaultMemory || '8g'),
+        CpuQuota: parseCpuQuota(params.cpus || resourceDefaults.defaultCpus || '2'),
+        CpuPeriod: 100000,
+      },
+    };
+
+    const created = await dockerRequest('POST', `/containers/create?name=${encodeURIComponent(containerName)}`, createBody);
+    id = created.Id;
+    await startContainer(id);
+  } catch (err) {
+    unregisterSocketName(containerName);
+    notifyStateChanged();
+    throw err;
   }
-
-  const folderMounts = buildFolderMounts(containerName, mountStyle);
-
-  // The RemoteDev distro volume is JB-only; VS Code does not need it.
-  const mounts = [
-    ...folderMounts,
-    ...(isVscode ? [] : [{
-      Type: 'volume',
-      Source: 'jb_devcontainers_shared_volume',
-      Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
-    }]),
-    ...workspaceMounts,
-    {
-      // Mount the per-container socket DIRECTORY, not the socket file itself: a
-      // file bind pins the inode and after a huddle restart (unlink + new socket)
-      // points forever at the dead old socket. Via the directory the container
-      // always sees the current socket; DOCKER_HOST (env) and the symlink
-      // /var/run/docker.sock (config script) point to it.
-      Type: 'bind',
-      Source: `${SOCKET_DIR}/${containerName}`,
-      Target: '/var/run/huddle',
-    },
-  ];
-
-  // Read once per create: the resource defaults live in the mounted CLI config
-  // (~/.huddle/config.json, #98), so an operator edit applies to the next
-  // container without restarting Huddle.
-  const resourceDefaults = getResourceDefaults();
-
-  const createBody = {
-    Image: imageName,
-    Entrypoint: ['/bin/sh'],
-    Cmd: ['-c', 'while sleep 1000; do :; done'],
-    Env: env,
-    Labels: {
-      'com.intellij.devcontainer.id': devcontainerId,
-      'com.intellij.devcontainer.presentable.name': presentableName,
-      // With multiple mounts this holds only the primary (first) host path, for
-      // backwards-compat with everything that reads this label as a single string.
-      // The full host→container list lives in the separate 'mounts' label below.
-      'com.intellij.devcontainer.sources.path': empty ? '' : sourcesPathLabel,
-      ...(isMultiMount ? { 'com.intellij.devcontainer.mounts': JSON.stringify(mountParams!) } : {}),
-      'com.intellij.devcontainer.workspace.path': containerWorkspace,
-      'com.intellij.devcontainer.model': modelJson,
-      'com.devcontainer.ide': ideName,
-      'devcontainer.metadata': metadataJson,
-    },
-    HostConfig: {
-      Mounts: mounts,
-      NetworkMode: netName,
-      CapAdd: ['NET_ADMIN'],
-      ...(RUNTIME_SECURITY_OPT.length ? { SecurityOpt: RUNTIME_SECURITY_OPT } : {}),
-      Memory: parseMemoryBytes(params.memory || resourceDefaults.defaultMemory || '8g'),
-      CpuQuota: parseCpuQuota(params.cpus || resourceDefaults.defaultCpus || '2'),
-      CpuPeriod: 100000,
-    },
-  };
-
-  const created = await dockerRequest('POST', `/containers/create?name=${encodeURIComponent(containerName)}`, createBody);
-  const id: string = created.Id;
-  await startContainer(id);
 
   const containerPaths = folderMounts.map(m => m.Target);
   const seedScript = buildFolderMappingSeedScript(containerPaths);
