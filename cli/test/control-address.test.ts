@@ -88,12 +88,46 @@ describe('resolveControlAddress', () => {
     expect(a.reason).toMatch(/explicitly/);
   });
 
-  it('an explicit bind host wins on the bind side only', () => {
+  it('an explicit bind host moves the URL with it, so Node and the gateway agree', () => {
+    // Regression: leaving `url` pinned to the auto-derived address (here the VM
+    // host alias) while only `bindHost` moved meant Node bound one address and
+    // the gateway kept probing another — fail-closed, so this HUDDLE_CONTROL_HOST
+    // recovery path silently denied everything.
     const a = resolveControlAddress({
       isRemote: true, port: PORT, gatewayIp: null, bindOverride: '192.168.1.5',
     });
     expect(a.bindHost).toBe('192.168.1.5');
-    expect(a.url).toBe(`http://${HOST_ALIAS}:${PORT}`);
+    expect(a.url).toBe(`http://192.168.1.5:${PORT}`);
+    expect(a.runArgs).toEqual([]);
+    expect(a.reachable).toBe(true);
+    expect(a.reason).toMatch(/explicitly/);
+  });
+
+  it('an explicit bind host on a native engine also moves the URL', () => {
+    const a = resolveControlAddress({
+      isRemote: false, port: PORT, gatewayIp: '172.17.0.1', bindOverride: '10.0.0.9',
+    });
+    expect(a.bindHost).toBe('10.0.0.9');
+    expect(a.url).toBe(`http://10.0.0.9:${PORT}`);
+    expect(a.runArgs).toEqual([]);
+  });
+
+  it('brackets an IPv6 bind-host override in the derived URL', () => {
+    const a = resolveControlAddress({
+      isRemote: true, port: PORT, gatewayIp: null, bindOverride: 'fd00::5',
+    });
+    expect(a.bindHost).toBe('fd00::5');
+    expect(a.url).toBe(`http://[fd00::5]:${PORT}`);
+  });
+
+  it('an explicit URL still wins over a bind-host override when both are set', () => {
+    const a = resolveControlAddress({
+      isRemote: true, port: PORT, gatewayIp: null,
+      bindOverride: '192.168.1.5', override: 'http://10.0.0.9:24843',
+    });
+    expect(a.bindHost).toBe('192.168.1.5');
+    expect(a.url).toBe('http://10.0.0.9:24843');
+    expect(a.runArgs).toEqual([]);
     expect(a.reachable).toBe(true);
   });
 

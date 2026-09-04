@@ -201,6 +201,10 @@ jobs:
           VERSION="0.0.0-${{ steps.meta.outputs.tag }}.${{ github.run_number }}.${{ github.run_attempt }}"
           echo "Experiment-versie: $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # Houd de optionalDependencies (huddle-node-*) in lockstep, anders
+          # resolvet deze CLI de stable Huddle Node-package i.p.v. de
+          # experiment-build (zie set-cli-release-version.mjs).
+          node ../scripts/set-cli-release-version.mjs "$VERSION"
 
       - name: Install & build
         run: cd cli && npm install && npm run build
@@ -253,6 +257,10 @@ jobs:
           VERSION="0.0.0-experiment-${KEY}.${{ github.run_number }}.${{ github.run_attempt }}"
           echo "Experiment-versie: $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # Houd de optionalDependencies (huddle-node-*) in lockstep, anders
+          # resolvet deze CLI de stable Huddle Node-package i.p.v. de
+          # experiment-build (zie set-cli-release-version.mjs).
+          node ../scripts/set-cli-release-version.mjs "$VERSION"
 
       - name: Install & build
         run: cd cli && npm install && npm run build

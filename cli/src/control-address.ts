@@ -116,6 +116,11 @@ export interface ControlAddressInput {
   bindOverride?: string;
 }
 
+/** Bracket a literal IPv6 host for use in a URL, the way every other http://host:port here does. */
+function formatHost(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
+
 /**
  * Decide the pair (bind host, URL) from what we know about the engine. Pure —
  * the engine probing happens in bridgeGateway() above.
@@ -124,18 +129,28 @@ export function resolveControlAddress(input: ControlAddressInput): ControlAddres
   const override = input.override?.trim();
   const bindOverride = input.bindOverride?.trim();
   const derived = derive(input);
+
+  // HUDDLE_CONTROL_HOST moves where Node binds; unless HUDDLE_NODE_CONTROL_URL
+  // says otherwise too, the URL handed to the gateway has to move with it. Left
+  // pinned to the auto-derived URL, Node ends up listening on the overridden
+  // host while the gateway keeps probing the stale one — and being fail-closed,
+  // denies every request. HUDDLE_NODE_CONTROL_URL, when given, still wins: it is
+  // the more specific override and may legitimately name something other than
+  // the bind host (a different port, a tunnel, host.docker.internal itself).
+  const url = override || (bindOverride ? `http://${formatHost(bindOverride)}:${input.port}` : derived.url);
+
   return {
     ...derived,
     bindHost: bindOverride || derived.bindHost,
-    url: override || derived.url,
+    url,
     reason: override || bindOverride
       ? 'set explicitly via HUDDLE_NODE_CONTROL_URL / HUDDLE_CONTROL_HOST'
       : derived.reason,
     // Whoever set it explicitly knows their own topology better than we do.
     reachable: derived.reachable || !!override || !!bindOverride,
-    // An explicit URL may well name something other than the alias; adding a
-    // host entry for a name nobody asked about would be noise at best.
-    runArgs: override ? [] : derived.runArgs,
+    // Either override may name something other than the alias; adding a host
+    // entry for a name nobody asked about would be noise at best.
+    runArgs: (override || bindOverride) ? [] : derived.runArgs,
   };
 }
 
