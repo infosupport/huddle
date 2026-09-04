@@ -358,8 +358,16 @@ export async function policyLogFor(name: string): Promise<{ raw: string; denied:
 
 export async function removeSandbox(name: string, force = false): Promise<number> {
   const code = await ops.remove({ name, force });
-  // A sandbox does not outlive its credential; there is no rotation beyond this.
-  if (code === 0) dropSandboxIdentity(name);
+  // Drop the identity NO MATTER what `sbx rm` returned. A sandbox does not
+  // outlive its credential — there is no rotation beyond this — and a failed
+  // `rm` is exactly the case where we cannot tell whether the box is still
+  // intact or half torn down: the credential is the only thing the gateway
+  // checks (identifySandbox → resolveSandboxBySecret), so gating the drop on
+  // `code === 0` leaves that row, and the ability to pass for this "removed"
+  // sandbox, live until someone retries. Fail closed instead — a box that is
+  // truly still there just re-mints its row the next time Huddle (re)creates
+  // or otherwise re-identifies it; one that isn't leaves no secret behind.
+  dropSandboxIdentity(name);
   return code;
 }
 
