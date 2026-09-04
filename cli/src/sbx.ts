@@ -119,11 +119,6 @@ export async function runSbxLog(opts: { name?: string }): Promise<void> {
   if (r.denied.length === 0) console.log(dim('  (parser matched nothing — paste the raw JSON above so the parser can be tuned)'));
 }
 
-export async function runSbxIngest(): Promise<void> {
-  const r = await post<{ added: number }>('/api/sbx/ingest', {});
-  console.log(`Ingested ${r.added} blocked request(s) from sbx → pending in Huddle.`);
-}
-
 export async function runSbxTrustCa(opts: { name?: string }): Promise<void> {
   if (!opts.name) {
     console.error('Usage: huddle sbx trust-ca <name>');
