@@ -48,7 +48,7 @@ export const DEFAULT_NODE_PORT = 24842;
  * CLI change with a test rather than an implicit package-name convention.
  */
 export function platformNodePackageName(platform = process.platform, arch = process.arch): string | null {
-  const supported = new Set(['win32-x64', 'darwin-x64', 'darwin-arm64']);
+  const supported = new Set(['win32-x64', 'darwin-x64', 'darwin-arm64', 'linux-x64']);
   const target = `${platform}-${arch}`;
   return supported.has(target) ? `@infosupport/huddle-node-${target}` : null;
 }

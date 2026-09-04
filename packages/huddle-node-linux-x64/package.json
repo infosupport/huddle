@@ -1,0 +1,10 @@
+{
+  "name": "@infosupport/huddle-node-linux-x64",
+  "version": "1.3.0",
+  "description": "Huddle Node executable for Linux x64",
+  "license": "GPL-3.0-or-later",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": ["bin/huddle-node"],
+  "publishConfig": { "access": "public" }
+}
