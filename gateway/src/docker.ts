@@ -7,6 +7,9 @@ import type { ContainerExec, ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { runtimeEnv } from './runtime-env';
+import { registerSocketName } from './db';
+import { notifyStateChanged } from './events';
+import { waitForSocketReadiness } from './socket-registration';
 
 const SOCKET_DIR = runtimeEnv.socketDir;
 
@@ -1156,11 +1159,33 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     console.log(`[huddle] Base image '${imageName}' built successfully`);
   }
 
-  // Claim the name for the Docker socket filter. The SOCKET itself is created by
-  // the gateway, on the engine host, as soon as its next container feed shows
-  // this container running — which is why the mount below is a directory: the
-  // socket appears inside it a moment later (control/socket-relay-protocol.ts).
+  // Claim the name for Node's own Docker socket filter (registerContainerProxy)
+  // — separate from the gateway's socket DIRECTORY below, which containers/create
+  // is about to bind-mount.
   await registerContainerProxy(containerName);
+
+  // The mount below binds SOCKET_DIR/<containerName> — a directory only the
+  // GATEWAY creates, on the engine host, once its container feed lists this
+  // name (socket-relay.ts). Normally that feed is built from Docker's own
+  // "currently running" list, which is exactly the problem here: this
+  // container does not exist yet, so it can never appear there, so the
+  // directory is never created, so `containers/create` 400s on "bind source
+  // path does not exist" before the container ever gets a chance to run.
+  //
+  // `huddle migrate --docker-socket` solved this same chicken-and-egg for
+  // Compose-created containers by registering the name up front and waiting
+  // for the gateway's readiness ack before proceeding (socket-registration.ts)
+  // — do the same here, since a container Huddle itself is about to create is
+  // no different: also not running yet, also needs the directory to exist
+  // first.
+  registerSocketName(containerName);
+  notifyStateChanged();
+  if (!(await waitForSocketReadiness([containerName], 6_000))) {
+    throw new Error(
+      `Huddle's gateway did not confirm the Docker socket for '${containerName}' within 6s — ` +
+      `is huddle-gateway running and reachable at its control channel?`,
+    );
+  }
 
   // JB-specific env (host-config path, JBR/RemoteDev data, java-proxy) is skipped
   // for VS Code; the proxy and user env stay the same.
