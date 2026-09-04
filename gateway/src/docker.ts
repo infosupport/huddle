@@ -7,7 +7,7 @@ import type { ContainerExec, ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { runtimeEnv } from './runtime-env';
-import { registerSocketName, unregisterSocketName } from './db';
+import { registerSocketName, unregisterSocketNameIfCurrent } from './db';
 import { notifyStateChanged } from './events';
 import { waitForSocketReadiness } from './socket-registration';
 
@@ -66,6 +66,18 @@ export interface ContainerSnapshot {
   byIp: Map<string, string>;
   /** Running devcontainers, by name — the ones a Docker socket is served for. */
   devcontainers: string[];
+  /**
+   * Every running container's name, regardless of label.
+   *
+   * `devcontainers` above is deliberately filtered to IDE-labeled containers
+   * only — right for what it is used for elsewhere (the socket a devcontainer
+   * is served through). A `huddle migrate --docker-socket`-registered Compose
+   * service is a real running container that simply carries no such label,
+   * so anything that needs to know whether a name is genuinely alive in
+   * Docker (e.g. pruneDeadSocketRegistrations) must use this list instead —
+   * `devcontainers` would wrongly read it as gone.
+   */
+  allNames: string[];
 }
 
 /**
@@ -79,6 +91,7 @@ async function fetchContainerSnapshot(): Promise<ContainerSnapshot> {
   const containers: any[] = await dockerRequest('GET', '/containers/json');
   const byIp = new Map<string, string>();
   const devcontainers: string[] = [];
+  const allNames: string[] = [];
   for (const c of containers) {
     const name = ((c.Names?.[0] as string) ?? '').replace(/^\//, '');
     // Child containers inherit their parent's allowlist: map their IP to the
@@ -90,9 +103,12 @@ async function fetchContainerSnapshot(): Promise<ContainerSnapshot> {
     // The same label listDevcontainers filters on. Running only, deliberately:
     // a stopped devcontainer has nothing to serve a socket to.
     if (name && c.Labels?.['com.intellij.devcontainer.id']) devcontainers.push(name);
+    // Unfiltered, unlike devcontainers above — see ContainerSnapshot.allNames' doc.
+    if (name) allNames.push(name);
   }
   devcontainers.sort();
-  return { byIp, devcontainers };
+  allNames.sort();
+  return { byIp, devcontainers, allNames };
 }
 
 async function fetchContainerMap(): Promise<Map<string, string>> {
@@ -1178,7 +1194,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // — do the same here, since a container Huddle itself is about to create is
   // no different: also not running yet, also needs the directory to exist
   // first.
-  registerSocketName(containerName);
+  const socketRegistrationRevision = registerSocketName(containerName);
   notifyStateChanged();
 
   // Everything from here through the container actually starting is wrapped
@@ -1187,9 +1203,14 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // rethrowing. Left unregistered, a failed attempt would otherwise leave a
   // permanent phantom row: nothing else in this codebase ever deletes one
   // (there is no devcontainer "delete" route to hook a cleanup into — see
-  // unregisterSocketName's doc in db.ts), so buildContainerFeed() would keep
-  // handing the gateway a name whose container never came up, and the relay
-  // would keep a socket/directory open for it indefinitely.
+  // unregisterSocketNameIfCurrent's doc in db.ts), so buildContainerFeed()
+  // would keep handing the gateway a name whose container never came up, and
+  // the relay would keep a socket/directory open for it indefinitely. The
+  // rollback is scoped to `socketRegistrationRevision` — the exact revision
+  // this call's own registerSocketName() minted — so if a second request for
+  // the same containerName raced in and re-registered the name while this
+  // one was still failing, this rollback becomes a safe no-op instead of
+  // deleting the second request's live registration out from under it.
   let id: string;
   let folderMounts: FolderMount[];
   try {
@@ -1326,7 +1347,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     id = created.Id;
     await startContainer(id);
   } catch (err) {
-    unregisterSocketName(containerName);
+    unregisterSocketNameIfCurrent(containerName, socketRegistrationRevision);
     notifyStateChanged();
     throw err;
   }
