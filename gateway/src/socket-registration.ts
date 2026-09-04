@@ -8,7 +8,9 @@ import { registerSocketName, socketNamesReady } from './db';
 
 const CONTAINER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
-function waitForSocketReadiness(names: string[], timeoutMs: number): Promise<boolean> {
+// Exported so docker.ts's normal (non-migrate) create path can wait on the
+// exact same handshake — see the call site in createAndStartContainer().
+export function waitForSocketReadiness(names: string[], timeoutMs: number): Promise<boolean> {
   if (socketNamesReady(names)) return Promise.resolve(true);
   return new Promise((resolve) => {
     let done = false;
