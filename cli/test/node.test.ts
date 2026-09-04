@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -10,11 +10,23 @@ import {
   nodeLaunch,
   nodeEnv,
   nodeProbeUrls,
+  normalizeControlHost,
   platformNodePackageName,
   nodeUrl,
   resolveNodeEntry,
+  startNodeDetached,
+  NODE_PID_FILE,
+  NODE_CONTROL_HOST_FILE,
 } from '../src/node';
 import { parseArgs } from '../src/index';
+import { spawn } from 'child_process';
+
+// Only startNodeDetached() ever spawns for real; every other test in this file
+// exercises pure functions. Mocking it here, once, keeps those tests untouched.
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, spawn: vi.fn() };
+});
 
 // `huddle node` runs the control plane on the host (docs/ADR-huddle-node-split.md,
 // step 3). Two things have to be right: which build it picks, and the environment
@@ -243,6 +255,145 @@ describe('nodeProbeUrls', () => {
       expect(nodeProbeUrls(24842)).toEqual(['http://127.0.0.1:24842', 'http://[::1]:24842']);
     }
     delete process.env.HUDDLE_API_HOST;
+  });
+});
+
+describe('normalizeControlHost', () => {
+  it('collapses unset to the loopback default', () => {
+    expect(normalizeControlHost(undefined)).toBe('127.0.0.1');
+    expect(normalizeControlHost('')).toBe('127.0.0.1');
+    expect(normalizeControlHost('   ')).toBe('127.0.0.1');
+  });
+
+  it('keeps an explicit host, trimmed', () => {
+    expect(normalizeControlHost('172.17.0.1')).toBe('172.17.0.1');
+    expect(normalizeControlHost('  172.17.0.1  ')).toBe('172.17.0.1');
+  });
+});
+
+// startNodeDetached()'s reuse-vs-restart decision (Aikido finding: a rerun with
+// a changed HUDDLE_CONTROL_HOST must not silently reuse a Node still bound to
+// the old one — the gateway would get a control URL nothing listens on and fail
+// closed on every devcontainer while init reports success).
+//
+// A fake "server": pingNode's fetch and the spawn mock both read/write `alive`
+// and `boundHost`, so the two behave like one process the way the real API port
+// (always loopback, regardless of control host) and the real control bind do.
+describe('startNodeDetached — control-host mismatch', () => {
+  let entry: string;
+  let dataDir: string;
+  let alive = false;
+  let boundHost: string | null = null;
+  const files = new Map<string, string>();
+  let originalFetch: typeof fetch;
+
+  const realReadFileSync = fs.readFileSync.bind(fs);
+  const realWriteFileSync = fs.writeFileSync.bind(fs);
+  const realUnlinkSync = fs.unlinkSync.bind(fs);
+
+  beforeAll(() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-node-detached-test-'));
+    entry = path.join(tmp, 'index.js');
+    fs.writeFileSync(entry, '// fake build, never actually run — spawn is mocked\n');
+    dataDir = path.join(tmp, 'data');
+  });
+
+  beforeEach(() => {
+    alive = false;
+    boundHost = null;
+    files.clear();
+    originalFetch = global.fetch;
+
+    global.fetch = vi.fn(async () => {
+      if (!alive) throw new Error('connection refused');
+      return { ok: true } as Response;
+    }) as unknown as typeof fetch;
+
+    (spawn as unknown as ReturnType<typeof vi.fn>).mockReset().mockImplementation(
+      (_cmd: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+        alive = true;
+        boundHost = normalizeControlHost(options?.env?.HUDDLE_CONTROL_HOST);
+        return { pid: 4242, unref: () => {} } as unknown as ReturnType<typeof spawn>;
+      },
+    );
+
+    // Only the two files startNodeDetached itself manages are redirected to the
+    // in-memory store; everything else (the fake entry, its tmp data dir) goes
+    // to the real filesystem exactly like the rest of this test file already does.
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, enc?: unknown) => {
+      const key = String(p);
+      if (key === NODE_PID_FILE || key === NODE_CONTROL_HOST_FILE) {
+        if (!files.has(key)) {
+          const err = new Error('ENOENT') as NodeJS.ErrnoException;
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return files.get(key)!;
+      }
+      return realReadFileSync(p, enc as never);
+    }) as typeof fs.readFileSync);
+
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, data: unknown, opts?: unknown) => {
+      const key = String(p);
+      if (key === NODE_PID_FILE || key === NODE_CONTROL_HOST_FILE) {
+        files.set(key, String(data));
+        return;
+      }
+      return realWriteFileSync(p, data as never, opts as never);
+    }) as typeof fs.writeFileSync);
+
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(((p: fs.PathLike) => {
+      const key = String(p);
+      if (key === NODE_PID_FILE) {
+        files.delete(key);
+        alive = false; // SIGTERM landed and stopNode() cleared its pid file.
+        return;
+      }
+      if (key === NODE_CONTROL_HOST_FILE) {
+        files.delete(key);
+        return;
+      }
+      return realUnlinkSync(p);
+    }) as typeof fs.unlinkSync);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    fs.rmSync(path.dirname(entry), { recursive: true, force: true });
+  });
+
+  it('reuses the running Node when the control host is unchanged', async () => {
+    const first = await startNodeDetached({ entry, dataDir, controlHost: '172.17.0.1' });
+    expect(first.reused).toBe(false);
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    const second = await startNodeDetached({ entry, dataDir, controlHost: '172.17.0.1' });
+    expect(second.reused).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1); // nothing new spawned
+  });
+
+  it('reuses the running Node when controlHost is unset both times', async () => {
+    await startNodeDetached({ entry, dataDir });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    const second = await startNodeDetached({ entry, dataDir });
+    expect(second.reused).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts, rather than silently reusing, when HUDDLE_CONTROL_HOST changed', async () => {
+    const first = await startNodeDetached({ entry, dataDir, controlHost: '172.17.0.1' });
+    expect(first.reused).toBe(false);
+    expect(boundHost).toBe('172.17.0.1');
+
+    const second = await startNodeDetached({ entry, dataDir, controlHost: '10.88.0.1' });
+    expect(second.reused).toBe(false);
+    expect(spawn).toHaveBeenCalledTimes(2); // old one stopped, a new one spawned
+    expect(boundHost).toBe('10.88.0.1'); // actually bound where this call asked
   });
 });
 

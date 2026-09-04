@@ -34,11 +34,9 @@ import {
   nodeDataDir,
   nodeProbeUrls,
   nodeUrl,
-  pingNode,
   readGatewayToken,
   readOperatorToken,
   startNodeDetached,
-  stopNode,
 } from './node';
 
 const CONTAINER = 'huddle';
@@ -377,13 +375,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // Both halves are up; now prove they can see each other, before the gateway is
   // handed an address it may never reach.
   control = await verifyControlChannel(rt, IMAGE, runtime.defaultNetwork, control, async (bindHost) => {
-    // A running Node keeps the interface it was started on, and startNodeDetached
-    // deliberately reuses one that answers — so it has to actually stop first.
-    await stopNode();
-    for (let i = 0; i < 40 && (await pingNode(HOST_PORT)); i++) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    if (await pingNode(HOST_PORT)) return false;
+    // startNodeDetached() now recognizes a running Node bound to a different
+    // control host than requested and stops-and-restarts it on its own
+    // (cli/src/node.ts) — so naming the new host here is enough.
     try {
       node = await startNodeDetached({ port: HOST_PORT, controlHost: bindHost, operatorToken, extraEnv });
       return true;

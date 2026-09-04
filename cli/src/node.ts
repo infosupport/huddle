@@ -300,6 +300,21 @@ export async function runNode(opts: NodeOptions = {}): Promise<void> {
 
 export const NODE_PID_FILE = path.join(CONFIG_DIR, 'node.pid');
 export const NODE_LOG_FILE = path.join(CONFIG_DIR, 'node.log');
+// The control host the running Node was actually started with — see
+// startNodeDetached()'s mismatch check below. Written beside the pid file
+// because the two describe the same process and go stale together.
+export const NODE_CONTROL_HOST_FILE = path.join(CONFIG_DIR, 'node.control-host');
+
+/**
+ * Collapse "unset" to the address nodeEnv/resolveControlAddress default to, so
+ * an unset request compares equal to a previous unset run instead of the empty
+ * string never matching anything. 127.0.0.1 is that default on both sides:
+ * nodeEnv() only sets HUDDLE_CONTROL_HOST when opts.controlHost is given, and
+ * control-address.ts's derive() falls back to the same loopback literal.
+ */
+export function normalizeControlHost(host?: string): string {
+  return host?.trim() || '127.0.0.1';
+}
 
 /** The URL a HUMAN talks to Huddle Node on: printed, opened in a browser. */
 export function nodeUrl(port: number | string = DEFAULT_NODE_PORT): string {
@@ -334,6 +349,15 @@ export function readNodePid(): number | null {
   try {
     const pid = Number(fs.readFileSync(NODE_PID_FILE, 'utf8').trim());
     return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The control host the running Node was actually started with, or null if unknown. */
+export function readNodeControlHost(): string | null {
+  try {
+    return fs.readFileSync(NODE_CONTROL_HOST_FILE, 'utf8').trim() || null;
   } catch {
     return null;
   }
@@ -400,6 +424,25 @@ export async function stopNode(): Promise<boolean> {
     // Already gone. Clearing the pid file below is still the right cleanup.
   }
   try { fs.unlinkSync(NODE_PID_FILE); } catch { /* nothing to clean up */ }
+  try { fs.unlinkSync(NODE_CONTROL_HOST_FILE); } catch { /* nothing to clean up */ }
+  return true;
+}
+
+/**
+ * stopNode(), then wait until Huddle Node has actually gone quiet. SIGTERM is
+ * not instant, and a caller about to spawn a replacement on the same port needs
+ * to know the old process is truly down, not merely asked to leave — otherwise
+ * the new one can lose the race for the port, or the old one keeps answering
+ * and gets mistaken for the new one. Shared by startNodeDetached()'s own
+ * mismatch handling and init.ts's control-channel rebind.
+ */
+export async function stopNodeAndWait(port: number | string, timeoutMs = 10_000): Promise<boolean> {
+  if (!(await stopNode())) return true; // nothing was running
+  const deadline = Date.now() + timeoutMs;
+  while (await pingNode(port)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 250));
+  }
   return true;
 }
 
@@ -408,14 +451,37 @@ export async function stopNode(): Promise<boolean> {
  *
  * Refuses to spawn a second one: two Huddle Nodes on one machine would both open
  * the same SQLite file and both hand the gateway a policy feed, and only one of
- * them would own the port. If one is already answering, that one is used.
+ * them would own the port. If one is already answering AND bound to the control
+ * host this call is asking for, that one is used.
+ *
+ * That second condition matters because the API (what pingNode checks) always
+ * listens on loopback regardless of HUDDLE_CONTROL_HOST — so a Node started with
+ * a different control host still answers the ping. Reusing it anyway would hand
+ * the gateway a control URL nothing is listening on: it fails closed, so every
+ * devcontainer is denied all egress while init reports success. So a running
+ * Node bound to a different host than requested is stopped and replaced here,
+ * rather than reused — see NODE_CONTROL_HOST_FILE.
  */
 export async function startNodeDetached(opts: NodeOptions = {}): Promise<StartedNode> {
   const env = nodeEnv(opts);
   const port = env.HUDDLE_API_PORT ?? String(DEFAULT_NODE_PORT);
+  const requestedControlHost = normalizeControlHost(opts.controlHost);
 
   if (await pingNode(port)) {
-    return { pid: readNodePid() ?? 0, entry: '(already running)', port, reused: true };
+    const runningControlHost = normalizeControlHost(readNodeControlHost() ?? undefined);
+    if (runningControlHost === requestedControlHost) {
+      return { pid: readNodePid() ?? 0, entry: '(already running)', port, reused: true };
+    }
+    // Bound to a different control host than asked for: stop it and fall
+    // through to spawn a fresh one on the requested host, rather than silently
+    // reusing a process the gateway would never actually be able to reach.
+    if (!(await stopNodeAndWait(port))) {
+      throw new Error(
+        `Huddle Node is running on the old control host (${runningControlHost}) and did not stop in time ` +
+        `to rebind to ${requestedControlHost}.\n` +
+        `  Stop it manually (pid in ${NODE_PID_FILE}) and re-run.`,
+      );
+    }
   }
 
   const entry = resolveNodeEntry(opts, __dirname);
@@ -436,7 +502,10 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   child.unref();
   fs.closeSync(log);
 
-  if (child.pid) fs.writeFileSync(NODE_PID_FILE, String(child.pid));
+  if (child.pid) {
+    fs.writeFileSync(NODE_PID_FILE, String(child.pid));
+    fs.writeFileSync(NODE_CONTROL_HOST_FILE, requestedControlHost);
+  }
 
   if (!(await waitForNode(port))) {
     // Alive-but-unreachable and dead are different bugs with the same symptom,

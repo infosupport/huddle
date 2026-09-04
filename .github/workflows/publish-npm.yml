@@ -29,11 +29,80 @@ on:
         type: string
 
 jobs:
+  # Eén job die de publicatieversie/-tag ÉÉN keer bepaalt, zodat node_platforms
+  # en de CLI-job (stable/experiment/dispatch) altijd in lockstep publiceren.
+  # Voorheen berekende elke job zijn eigen versie en sloeg node_platforms
+  # experiment/dispatch-runs zelfs helemaal over, waardoor een gepubliceerde
+  # experiment-CLI naar niet-bestaande huddle-node-* versies verwees.
+  version:
+    if: ${{ github.event_name == 'push' || inputs.key != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set.outputs.version }}
+      tag: ${{ steps.set.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # GitVersion heeft de volledige historie én tags (het anker) nodig.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install GitVersion
+        if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
+        uses: gittools/actions/gitversion/setup@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+        with:
+          versionSpec: '5.x'
+
+      - name: Determine version
+        if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+
+      - name: Determine publicatieversie en dist-tag
+        id: set
+        env:
+          BRANCH: ${{ github.ref_name }}
+          KEY: ${{ inputs.key }}
+          EVENT: ${{ github.event_name }}
+          GV_MAJOR: ${{ steps.gitversion.outputs.major }}
+          GV_MINOR: ${{ steps.gitversion.outputs.minor }}
+          GV_PATCH: ${{ steps.gitversion.outputs.patch }}
+          GV_COMMITS: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
+        run: |
+          if [ -n "$KEY" ]; then
+            # Maintainer-getriggerde experiment-publish (workflow_dispatch).
+            TAG="experiment-$KEY"
+            VERSION="0.0.0-${TAG}.${{ github.run_number }}.${{ github.run_attempt }}"
+          elif [ "$EVENT" = "push" ] && [[ "$BRANCH" == experiment/* ]]; then
+            # Push naar experiment/<issuenummer>-<omschrijving>.
+            ISSUE=$(echo "$BRANCH" | sed -nE 's#^experiment/([0-9]+).*#\1#p')
+            if [ -z "$ISSUE" ]; then
+              echo "::error::Branchnaam '$BRANCH' bevat geen issue-nummer. Verwacht: experiment/<issuenummer>-<omschrijving>"
+              exit 1
+            fi
+            # Leading zeros strippen zodat de tag overeenkomt met wat de CLI
+            # uit het issue-nummer afleidt (experiment/007-... -> experiment-7).
+            ISSUE=$((10#$ISSUE))
+            TAG="experiment-$ISSUE"
+            VERSION="0.0.0-${TAG}.${{ github.run_number }}.${{ github.run_attempt }}"
+          else
+            # Reguliere stable-push (main / release/*).
+            PATCH=$((GV_PATCH + GV_COMMITS))
+            VERSION="${GV_MAJOR}.${GV_MINOR}.${PATCH}"
+            TAG="latest"
+          fi
+          echo "Publicatieversie: $VERSION (tag: $TAG)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
   node_platforms:
     # The CLI names these packages as exact optional dependencies. Publish every
     # native target first, so a newly published CLI cannot point npm at an absent
-    # executable for one of its supported platforms.
-    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'experiment/') }}
+    # executable for one of its supported platforms. Runs for every trigger the
+    # `version` job runs for (stable push, experiment push, and dispatch) so the
+    # CLI never references a huddle-node-* version that was never published.
+    needs: version
     name: Huddle Node (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -70,26 +139,26 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
+          # Head-SHA van de (fork-)PR bij een maintainer-getriggerde
+          # experiment-dispatch (zie de `dispatch`-job) — leeg bij een gewone
+          # push, dan checkt actions/checkout gewoon de triggerende ref uit.
+          # Zonder dit zou deze job (die nu ook voor dispatch draait, via
+          # `needs: version`) Huddle Node vanaf de default branch bouwen in
+          # plaats van vanaf de ref die de CLI-job zojuist publiceerde.
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
-        with:
-          versionSpec: '5.x'
-
-      - name: Determine version
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
-
       - name: Determine release version
+        # De versie komt van de `version`-job hierboven, zodat deze package en
+        # de CLI die er (als optionalDependency) naar verwijst altijd dezelfde
+        # versie krijgen, ongeacht stable/experiment/dispatch.
         shell: pwsh
         run: |
-          $patch = [int]${{ steps.gitversion.outputs.patch }} + [int]${{ steps.gitversion.outputs.commitsSinceVersionSource }}
-          "VERSION=${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}.$patch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VERSION=${{ needs.version.outputs.version }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build and stage Huddle Node
         shell: pwsh
@@ -100,7 +169,9 @@ jobs:
           node scripts/stage-node-package.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version $env:VERSION
 
       - name: Publish Huddle Node package
-        run: npm publish --provenance --access public
+        # dist-tag komt van de `version`-job: `latest` voor stable, of
+        # experiment-<tag> zodat een experiment-run `latest` niet aanraakt.
+        run: npm publish --provenance --access public --tag ${{ needs.version.outputs.tag }}
         working-directory: packages/${{ matrix.package }}
 
   stable:
@@ -157,6 +228,10 @@ jobs:
 
   experiment:
     if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'experiment/') }}
+    # node_platforms moet de bijbehorende huddle-node-* versie al gepubliceerd
+    # hebben voordat de CLI ernaar verwijst (anders installeren gebruikers een
+    # CLI zonder werkende Huddle Node-executable, zie de Aikido-finding).
+    needs: [version, node_platforms]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -169,22 +244,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Issue-nummer uit branchnaam lezen
-        id: meta
-        env:
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          ISSUE=$(echo "$BRANCH" | sed -nE 's#^experiment/([0-9]+).*#\1#p')
-          if [ -z "$ISSUE" ]; then
-            echo "::error::Branchnaam '$BRANCH' bevat geen issue-nummer. Verwacht: experiment/<issuenummer>-<omschrijving>"
-            exit 1
-          fi
-          # Leading zeros strippen zodat de tag overeenkomt met wat de CLI
-          # uit het issue-nummer afleidt (experiment/007-... -> experiment-7).
-          ISSUE=$((10#$ISSUE))
-          echo "tag=experiment-$ISSUE" >> "$GITHUB_OUTPUT"
-          echo "Experiment-tag: experiment-$ISSUE"
-
       - uses: actions/setup-node@v4
         with:
           # Node 24 levert npm >= 11.5.1, vereist voor trusted publishing
@@ -193,12 +252,11 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Set experiment version
-        # De versie bevat de experiment-tag zodat de CLI zelf kan bepalen bij
-        # welk experiment hij hoort (zie cliExperiment() in de CLI). Run-nummer
-        # en -attempt maken elke publish uniek.
+        # Versie/tag komen van de `version`-job, zodat deze exact overeenkomt
+        # met de huddle-node-* versie die node_platforms zojuist publiceerde.
         run: |
           cd cli
-          VERSION="0.0.0-${{ steps.meta.outputs.tag }}.${{ github.run_number }}.${{ github.run_attempt }}"
+          VERSION="${{ needs.version.outputs.version }}"
           echo "Experiment-versie: $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           # Houd de optionalDependencies (huddle-node-*) in lockstep, anders
@@ -212,7 +270,7 @@ jobs:
       - name: Publish
         # dist-tag experiment-<nr> zodat gebruikers installeren met
         # @infosupport/huddle-cli@experiment-<nr>; `latest` blijft onaangeroerd.
-        run: cd cli && npm publish --provenance --access public --tag ${{ steps.meta.outputs.tag }}
+        run: cd cli && npm publish --provenance --access public --tag ${{ needs.version.outputs.tag }}
 
   # Maintainer-getriggerde experiment-publish, via workflow_dispatch getriggerd
   # door experiment-publish.yml (zie de comment bovenaan: als entry-workflow
@@ -225,6 +283,10 @@ jobs:
     # geeft altijd een key mee); bij een push is inputs.key leeg/null -> skip,
     # dan draaien stable/experiment o.b.v. github.event_name == 'push'.
     if: ${{ inputs.key != '' }}
+    # node_platforms moet de bijbehorende huddle-node-* versie al gepubliceerd
+    # hebben voordat de CLI ernaar verwijst (anders installeren gebruikers een
+    # CLI zonder werkende Huddle Node-executable, zie de Aikido-finding).
+    needs: [version, node_platforms]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -247,14 +309,11 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Set experiment version
-        # De versie bevat de experiment-tag zodat de CLI zelf kan bepalen bij
-        # welk experiment hij hoort (zie cliExperiment() in de CLI). Run-nummer
-        # en -attempt maken elke publish uniek.
-        env:
-          KEY: ${{ inputs.key }}
+        # Versie/tag komen van de `version`-job, zodat deze exact overeenkomt
+        # met de huddle-node-* versie die node_platforms zojuist publiceerde.
         run: |
           cd cli
-          VERSION="0.0.0-experiment-${KEY}.${{ github.run_number }}.${{ github.run_attempt }}"
+          VERSION="${{ needs.version.outputs.version }}"
           echo "Experiment-versie: $VERSION"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           # Houd de optionalDependencies (huddle-node-*) in lockstep, anders
@@ -268,6 +327,4 @@ jobs:
       - name: Publish
         # dist-tag experiment-<key> zodat gebruikers installeren met
         # @infosupport/huddle-cli@experiment-<key>; `latest` blijft onaangeroerd.
-        env:
-          KEY: ${{ inputs.key }}
-        run: cd cli && npm publish --provenance --access public --tag "experiment-${KEY}"
+        run: cd cli && npm publish --provenance --access public --tag ${{ needs.version.outputs.tag }}

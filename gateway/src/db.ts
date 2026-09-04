@@ -702,6 +702,51 @@ export function registerSocketName(name: string): void {
     .run(name);
 }
 
+/**
+ * Undo a registration — the counterpart `registerSocketName` never had.
+ *
+ * Two callers need this, both about not leaving a permanent phantom row
+ * behind: `createAndStartContainer` (docker.ts), to roll back its own
+ * registration when anything after it fails before the container is actually
+ * up; and `pruneDeadSocketRegistrations` below, for a row whose container
+ * existed and was served (ready_at set) but is no longer in Docker's live
+ * list — e.g. removed by `docker rm` outside Huddle, since there is no
+ * devcontainer "delete" route in this codebase to hook a cleanup into
+ * instead. Safe to call for a name that was never registered (0 rows
+ * affected, no error) so callers do not need to check first.
+ */
+export function unregisterSocketName(name: string): void {
+  db.prepare('DELETE FROM socket_registrations WHERE name = ?').run(name);
+}
+
+/**
+ * Drop registrations that are stale rather than merely not-yet-running.
+ *
+ * `ready_at IS NOT NULL` is the signal that separates the two: it means the
+ * gateway already served this name's socket at least once, so the container
+ * genuinely existed. If that name is now missing from `liveNames` (Docker's
+ * current running list, from containerSnapshot()), the container is gone —
+ * removed directly against the engine, since there is no delete route in
+ * Huddle to have unregistered it. A row with `ready_at IS NULL` is left
+ * alone no matter what: that is exactly the state `huddle migrate
+ * --docker-socket` (and createAndStartContainer, briefly) put it in on
+ * purpose, ahead of the container ever running — pruning on "not running yet"
+ * would break that registration before it had a chance to be served.
+ *
+ * Called from buildContainerFeed(), which runs on every gateway poll (~1s,
+ * see boot-gateway.ts) — kept to one indexed DELETE so that stays cheap.
+ */
+export function pruneDeadSocketRegistrations(liveNames: string[]): void {
+  if (liveNames.length === 0) {
+    db.prepare('DELETE FROM socket_registrations WHERE ready_at IS NOT NULL').run();
+    return;
+  }
+  const placeholders = liveNames.map(() => '?').join(',');
+  db.prepare(
+    `DELETE FROM socket_registrations WHERE ready_at IS NOT NULL AND name NOT IN (${placeholders})`
+  ).run(...liveNames);
+}
+
 export function listRegisteredSocketNames(): string[] {
   return (db.prepare('SELECT name FROM socket_registrations ORDER BY name').all() as { name: string }[])
     .map((r) => r.name);
