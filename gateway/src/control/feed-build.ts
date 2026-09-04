@@ -32,6 +32,19 @@ export function buildPolicyFeed(): PolicyFeed {
   return feed;
 }
 
+// The single source of truth for "is this a devcontainer Node actually
+// authorized?" — used both to build ContainerFeed.devcontainers below and by
+// the socket relay's upgrade handler to decide whether a requested container
+// name may be served at all (control/socket-relay-server.ts). `running` is
+// Docker's own IDE-labeled "currently running" list (containerSnapshot());
+// socketRegistrations are the `huddle migrate --docker-socket` /
+// in-flight-create rows a name can be authorized under before Docker ever
+// reports it running — see buildContainerFeed's comment below for why both
+// are needed.
+export function authorizedDevcontainerNames(running: string[]): Set<string> {
+  return new Set([...running, ...listRegisteredSocketNames()]);
+}
+
 export async function buildContainerFeed(): Promise<ContainerFeed> {
   const { byIp: map, devcontainers: running, allNames } = await containerSnapshot();
   const byIp: Record<string, string> = {};
@@ -63,7 +76,7 @@ export async function buildContainerFeed(): Promise<ContainerFeed> {
   pruneDeadSocketRegistrations(allNames);
   const socketRegistrations = listRegisteredSocketNames();
   const socketRevisions = socketRegistrationRevisions();
-  const devcontainers = [...new Set([...running, ...socketRegistrations])].sort();
+  const devcontainers = [...authorizedDevcontainerNames(running)].sort();
   // Only the hash leaves this process. Node mints and spends the secret (it
   // writes the sandbox' upstream-proxy URL); the gateway is handed just enough
   // to recognise one. See ./feed and docs/ADR-sbx-identity.md §5.
