@@ -9,7 +9,7 @@ import { runInit } from './init';
 import { runNode } from './node';
 import { runMigrate } from './migrate';
 import { runLogs } from './logs';
-import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog, runSbxIngest } from './sbx';
+import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog } from './sbx';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -447,13 +447,11 @@ async function main(): Promise<void> {
       await runSbxTrustHost({ runtime: flagString(flags, 'runtime') });
     } else if (subCmd === 'log') {
       await runSbxLog({ name: positional[2] ?? flagString(flags, 'name') });
-    } else if (subCmd === 'ingest') {
-      await runSbxIngest();
     } else if (subCmd === 'ssh-setup' || subCmd === 'ssh') {
       await runSbxSshSetup();
     } else {
       console.error(`Unknown sbx subcommand: ${subCmd}`);
-      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|log|ingest>');
+      console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|log>');
       process.exit(1);
     }
     return;
