@@ -115,6 +115,35 @@ async function setSandboxProxy(label: string, url: string): Promise<SbxStep> {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A transient failure of the park-to-unclaimed step is the whole threat model
+// here: the global setting is left on a just-created sandbox's REAL credential,
+// so this is worth a few retries before we give up and fail closed.
+const PARK_UNCLAIMED_ATTEMPTS = 3;
+const PARK_UNCLAIMED_RETRY_DELAY_MS = 200;
+
+/**
+ * `setSandboxProxy` for the unclaimed park, retried: the step it wraps is not
+ * "did the sandbox start" but "is the global credential still safe to leave
+ * lying around", and giving up after one transient failure would defeat the
+ * whole point of parking it (see the call site).
+ */
+async function parkUnclaimedProxy(): Promise<SbxStep> {
+  let step: SbxStep;
+  for (let attempt = 1; attempt <= PARK_UNCLAIMED_ATTEMPTS; attempt++) {
+    step = await setSandboxProxy(
+      'reset sandbox upstream proxy → unclaimed',
+      sandboxProxyUrl(sbxUpstreamUrl(), UNCLAIMED_SANDBOX, mintSandboxSecret())
+    );
+    if (step.code === 0) return step;
+    if (attempt < PARK_UNCLAIMED_ATTEMPTS) await sleep(PARK_UNCLAIMED_RETRY_DELAY_MS);
+  }
+  return step!;
+}
+
 export interface SbxStartOpts {
   name: string;
   agent?: string;
@@ -194,10 +223,28 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   // would come back holding THIS box's identity. Park it on a credential that
   // maps to no sandbox — denied by name beats impersonating the last box
   // created (docs/ADR-sbx-identity.md, section 4).
-  steps.push(await setSandboxProxy(
-    'reset sandbox upstream proxy → unclaimed',
-    sandboxProxyUrl(sbxUpstreamUrl(), UNCLAIMED_SANDBOX, mintSandboxSecret())
-  ));
+  const parkStep = await parkUnclaimedProxy();
+  steps.push(parkStep);
+
+  if (parkStep.code !== 0) {
+    // Retries (parkUnclaimedProxy) exhausted: the global setting is STILL this
+    // box's real bearer credential and the identity row is still live. Pressing
+    // on to trustCa/linkSettingsFolders as if nothing happened would leave a
+    // sandbox created or restarted from the host free to inherit it and be
+    // evaluated as THIS box — merging both boxes' policy and audit scopes,
+    // exactly the impersonation the park step exists to prevent. Fail closed
+    // instead: stop here so a caller cannot mistake this for an ordinary failed
+    // step buried among otherwise-green ones.
+    console.error(
+      `[sbx] failed to park proxy.sandbox off "${opts.name}" after ${PARK_UNCLAIMED_ATTEMPTS} attempts — ` +
+      'the global upstream-proxy credential is still this sandbox\'s real secret'
+    );
+    // A box that never created keeps no identity either way; one that DID
+    // create must keep its row — it is the credential the running box itself
+    // now authenticates with, and dropping it would just orphan a live secret.
+    if (!created) dropSandboxIdentity(opts.name);
+    return result(false);
+  }
 
   if (!created) {
     // No box, so no identity — leaving the row would leave a live secret behind.
