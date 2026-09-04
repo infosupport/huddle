@@ -33,7 +33,7 @@ export function buildPolicyFeed(): PolicyFeed {
 }
 
 export async function buildContainerFeed(): Promise<ContainerFeed> {
-  const { byIp: map, devcontainers: running } = await containerSnapshot();
+  const { byIp: map, devcontainers: running, allNames } = await containerSnapshot();
   const byIp: Record<string, string> = {};
   for (const ip of [...map.keys()].sort()) byIp[ip] = map.get(ip)!;
   // Union with the names `huddle migrate --docker-socket` registered
@@ -52,7 +52,15 @@ export async function buildContainerFeed(): Promise<ContainerFeed> {
   // expected, temporary state for a name `huddle migrate --docker-socket` (or
   // createAndStartContainer, briefly) registered ahead of its container
   // starting; see pruneDeadSocketRegistrations' doc in db.ts.
-  pruneDeadSocketRegistrations(running);
+  //
+  // Liveness for the prune must be `allNames` (every running container),
+  // not `running` (IDE-labeled only): a `huddle migrate --docker-socket`
+  // Compose service is a real running container but carries none of the IDE
+  // labels `running` is filtered on, so pruning against `running` would
+  // delete its registration — and the relay listener serving its mounted
+  // socket — as soon as the first readiness cycle completed. See
+  // ContainerSnapshot.allNames' doc in docker.ts.
+  pruneDeadSocketRegistrations(allNames);
   const socketRegistrations = listRegisteredSocketNames();
   const socketRevisions = socketRegistrationRevisions();
   const devcontainers = [...new Set([...running, ...socketRegistrations])].sort();
