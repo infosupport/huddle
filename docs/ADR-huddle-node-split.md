@@ -374,8 +374,9 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
 
    **Resolved: platform-specific optional npm packages.** The CLI declares
    `@infosupport/huddle-node-win32-x64`,
-   `@infosupport/huddle-node-darwin-x64`, and
-   `@infosupport/huddle-node-darwin-arm64` as exact optional dependencies.
+   `@infosupport/huddle-node-darwin-x64`,
+   `@infosupport/huddle-node-darwin-arm64`, and
+   `@infosupport/huddle-node-linux-x64` as exact optional dependencies.
    npm selects the matching package from its `os`/`cpu` metadata, and the CLI
    resolves `bin/huddle-node[.exe]` there. This keeps install free of a
    postinstall download and makes the executable available offline once npm has

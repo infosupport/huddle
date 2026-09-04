@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The Windows binary is the release target we verify ourselves.
+          # The Windows binary is a release target we verify ourselves.
           - runner: windows-latest
             target: win32-x64
             platform: win32
@@ -38,6 +38,11 @@ jobs:
             platform: darwin
             arch: arm64
             package: huddle-node-darwin-arm64
+          - runner: ubuntu-latest
+            target: linux-x64
+            platform: linux
+            arch: x64
+            package: huddle-node-linux-x64
 
     steps:
       - uses: actions/checkout@v4
