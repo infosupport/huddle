@@ -72,28 +72,47 @@ function normalizeTarget(t: string): string {
   return t.trim().toLowerCase().replace(/:\d+$/, '');
 }
 
+/** Per sandbox, the allow targets and the deny targets HUDDLE put in its sbx
+ * policy, kept apart. */
+interface ProjectedTargets {
+  allow: Set<string>;
+  deny: Set<string>;
+}
+
 /**
  * Per sandbox, the targets HUDDLE put in its sbx policy — everything else there
  * is the operator's and stays. An sbx rule carries no author, so Huddle's own
  * ruleset is the only fingerprint there is: the old projection wrote a box' own
- * allow/deny domains into that box' scope, and nothing else.
+ * allow/deny domains into that box' scope, as the SAME decision, and nothing
+ * else. A target is only a fingerprint of Huddle's hand when the decision
+ * matches too — one query per decision, so an operator's `allow bad.com` is
+ * never mistaken for ours just because Huddle's table separately denies
+ * bad.com (that denial was never mirrored into sbx as an allow, and dropping
+ * the operator's rule on that basis would be deleting a rule we never wrote).
  *
  * The gap this leaves is deliberate rather than hidden: a rule already deleted
  * from Huddle's table is no longer recognisable and its sbx rule stays behind.
  * A leftover allow is inert under allow-all; a leftover deny is not, and shows
  * up as sbx refusing traffic Huddle permits.
  */
-function projectedTargets(managed: Set<string>): Map<string, Set<string>> {
-  const rows = db
-    .prepare(`SELECT domain, container_id FROM rules WHERE status IN ('allow','deny')`)
-    .all() as { domain: string; container_id: string | null }[];
-  const out = new Map<string, Set<string>>();
-  for (const r of rows) {
-    if (!r.container_id || !managed.has(r.container_id)) continue;
-    let set = out.get(r.container_id);
-    if (!set) out.set(r.container_id, (set = new Set<string>()));
-    set.add(normalizeTarget(r.domain));
-  }
+function projectedTargets(managed: Set<string>): Map<string, ProjectedTargets> {
+  const out = new Map<string, ProjectedTargets>();
+  const entryFor = (containerId: string): ProjectedTargets => {
+    let entry = out.get(containerId);
+    if (!entry) out.set(containerId, (entry = { allow: new Set(), deny: new Set() }));
+    return entry;
+  };
+  const load = (status: 'allow' | 'deny'): void => {
+    const rows = db
+      .prepare(`SELECT domain, container_id FROM rules WHERE status = ?`)
+      .all(status) as { domain: string; container_id: string | null }[];
+    for (const r of rows) {
+      if (!r.container_id || !managed.has(r.container_id)) continue;
+      entryFor(r.container_id)[status].add(normalizeTarget(r.domain));
+    }
+  };
+  load('allow');
+  load('deny');
   return out;
 }
 
@@ -162,9 +181,17 @@ export async function reconcile(opts: { dryRun?: boolean } = {}): Promise<Reconc
 
     // A `deny *` is not the mirror of our rule — it is an operator locking the box
     // down, and dropping it would widen the box without anyone asking.
-    const ours = (r: ActualPolicyRule): boolean =>
-      (r.action === 'allow' && r.target === ALLOW_ALL_TARGET) ||
-      projected.get(name)?.has(r.target) === true;
+    //
+    // The decision has to match too, not just the target: Huddle's table saying
+    // "deny bad.com" is not evidence that an `allow bad.com` sitting in sbx is
+    // ours — the projection only ever wrote a target under the same decision it
+    // recorded, so an opposite-decision rule on the same target is someone
+    // else's, however it got there.
+    const ours = (r: ActualPolicyRule): boolean => {
+      if (r.action === 'allow' && r.target === ALLOW_ALL_TARGET) return true;
+      const proj = projected.get(name);
+      return (r.action === 'allow' ? proj?.allow.has(r.target) : proj?.deny.has(r.target)) === true;
+    };
 
     // sbx removes a rule by ID and one rule can list several targets, so an ID is
     // only ours to delete when every target under it is — otherwise the
