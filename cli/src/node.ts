@@ -467,6 +467,12 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   const port = env.HUDDLE_API_PORT ?? String(DEFAULT_NODE_PORT);
   const requestedControlHost = normalizeControlHost(opts.controlHost);
 
+  // Resolved before anything is stopped: if the replacement build can't be
+  // found, a mismatched-host Node below should be left running rather than
+  // killed and not replaced.
+  const entry = resolveNodeEntry(opts, __dirname);
+  if (!entry) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
+
   if (await pingNode(port)) {
     const runningControlHost = normalizeControlHost(readNodeControlHost() ?? undefined);
     if (runningControlHost === requestedControlHost) {
@@ -483,9 +489,6 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
       );
     }
   }
-
-  const entry = resolveNodeEntry(opts, __dirname);
-  if (!entry) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
 
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.mkdirSync(nodeDataDir(opts), { recursive: true, mode: 0o700 });
