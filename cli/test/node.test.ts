@@ -95,7 +95,8 @@ describe('nodeEntryCandidates', () => {
   it('names only supported release targets', () => {
     expect(platformNodePackageName('win32', 'x64')).toBe('@infosupport/huddle-node-win32-x64');
     expect(platformNodePackageName('darwin', 'arm64')).toBe('@infosupport/huddle-node-darwin-arm64');
-    expect(platformNodePackageName('linux', 'x64')).toBeNull();
+    expect(platformNodePackageName('linux', 'x64')).toBe('@infosupport/huddle-node-linux-x64');
+    expect(platformNodePackageName('linux', 'arm64')).toBeNull();
   });
 });
 

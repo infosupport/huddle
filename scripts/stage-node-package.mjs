@@ -18,6 +18,7 @@ const packages = new Map([
   ['win32-x64', { dir: 'huddle-node-win32-x64', file: 'huddle-node.exe' }],
   ['darwin-x64', { dir: 'huddle-node-darwin-x64', file: 'huddle-node' }],
   ['darwin-arm64', { dir: 'huddle-node-darwin-arm64', file: 'huddle-node' }],
+  ['linux-x64', { dir: 'huddle-node-linux-x64', file: 'huddle-node' }],
 ]);
 const spec = packages.get(target);
 if (!spec) throw new Error(`unsupported Huddle Node package target: ${target}`);

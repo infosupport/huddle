@@ -58,6 +58,11 @@ jobs:
             platform: darwin
             arch: arm64
             package: huddle-node-darwin-arm64
+          - target: linux-x64
+            runner: ubuntu-latest
+            platform: linux
+            arch: x64
+            package: huddle-node-linux-x64
 
     steps:
       - uses: actions/checkout@v4

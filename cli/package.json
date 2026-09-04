@@ -34,6 +34,7 @@
   "optionalDependencies": {
     "@infosupport/huddle-node-darwin-arm64": "1.3.0",
     "@infosupport/huddle-node-darwin-x64": "1.3.0",
+    "@infosupport/huddle-node-linux-x64": "1.3.0",
     "@infosupport/huddle-node-win32-x64": "1.3.0"
   },
   "files": [
