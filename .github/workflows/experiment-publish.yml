@@ -207,6 +207,9 @@ jobs:
   # reusable call (uses:) faalt: de entry blijft dan dit bestand en npm wijst de
   # trusted-publish af (E404). Daarom triggeren we publish-npm.yml via
   # workflow_dispatch, zodat DÍT niet de entry is maar publish-npm.yml zelf.
+  # Gebruik dezelfde workflow-ref als deze run. Zonder --ref kiest `gh` de
+  # default branch, waardoor een experiment de oude publish-workflow uitvoert
+  # terwijl de artifacts wel vanaf de gevraagde PR-head worden gebouwd.
   # GITHUB_TOKEN mag workflow_dispatch triggeren (expliciete uitzondering op de
   # recursie-preventie); daarvoor is alleen actions: write nodig.
   npm:
@@ -221,7 +224,8 @@ jobs:
         run: |
           gh workflow run publish-npm.yml \
             --repo "${{ github.repository }}" \
+            --ref "${{ github.ref_name }}" \
             -f ref="${{ needs.meta.outputs.sha }}" \
             -f key="${{ needs.meta.outputs.key }}"
-          echo "publish-npm.yml gedispatcht voor experiment-${{ needs.meta.outputs.key }} (ref ${{ needs.meta.outputs.sha }})."
+          echo "publish-npm.yml gedispatcht vanaf workflow-ref ${{ github.ref_name }} voor experiment-${{ needs.meta.outputs.key }} (source ref ${{ needs.meta.outputs.sha }})."
           echo "Volg de run: https://github.com/${{ github.repository }}/actions/workflows/publish-npm.yml"
