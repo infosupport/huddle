@@ -31,16 +31,43 @@ export interface ImportGroupSummary {
   skipped: number;
 }
 
-// ── Prepared statements (built lazily so importing this module never touches an
-//    uninitialised DB) ─────────────────────────────────────────────────────────
+// ── Rule lookup (statements are prepared inside the functions below, so
+//    importing this module never touches an uninitialised DB) ────────────────
 
-function findRuleStmt() {
-  return db.prepare(
-    `SELECT id, source FROM rules
-      WHERE domain = ? COLLATE NOCASE
-        AND COALESCE(container_id, '') = COALESCE(?, '')
-        AND COALESCE(path_pattern, '') = COALESCE(?, '')`,
-  );
+// The unique identity of a rule: domain case-insensitively, container and path
+// with NULL and '' treated alike — exactly what the (domain, container, path)
+// unique index enforces, and what the per-rule SELECT this replaces matched on.
+function ruleKey(domain: string, containerId: string | null, pathPattern: string | null): string {
+  return `${domain.toLowerCase()}\u0000${containerId ?? ''}\u0000${pathPattern ?? ''}`;
+}
+
+interface ExistingRule {
+  id: number;
+  source: string;
+}
+
+// Look the whole batch up in ONE query per ~400 domains instead of one query per
+// rule: import and apply both walk a list of rules and used to run a point lookup
+// inside the loop, which is an avoidable N+1 on a large envelope. Only the
+// envelope's own domains are fetched, so this stays cheap on a big rules table.
+function existingRuleIndex(rules: Array<{ domain: string }>): Map<string, ExistingRule> {
+  const index = new Map<string, ExistingRule>();
+  const domains = [...new Set(rules.map((r) => r.domain.toLowerCase()))];
+  const CHUNK = 400; // comfortably under SQLite's bound-parameter limit
+  for (let i = 0; i < domains.length; i += CHUNK) {
+    const slice = domains.slice(i, i + CHUNK);
+    // Placeholders only — no value is ever interpolated into the SQL text.
+    const rows = db
+      .prepare(
+        `SELECT id, source, domain, container_id, path_pattern FROM rules
+          WHERE domain COLLATE NOCASE IN (${slice.map(() => '?').join(', ')})`,
+      )
+      .all(...slice) as Array<ExistingRule & { domain: string; container_id: string | null; path_pattern: string | null }>;
+    for (const row of rows) {
+      index.set(ruleKey(row.domain, row.container_id, row.path_pattern), { id: row.id, source: row.source });
+    }
+  }
+  return index;
 }
 
 // A group's members = its own rules PLUS, for any path-mode domain in the group
@@ -144,7 +171,8 @@ function upsertGroupRow(env: GroupEnvelope, source: string): number {
 // re-targets the marker at the scope apply() is stamping into.
 function ensurePathModeMarkers(
   rules: Array<Pick<ShareableGroupRule, 'domain' | 'path_pattern'> & { container_id?: string | null }>,
-  containerOverride?: string | null,
+  containerOverride: string | null | undefined,
+  groupId: number,
 ): void {
   const seen = new Set<string>();
   for (const r of rules) {
@@ -153,7 +181,9 @@ function ensurePathModeMarkers(
     const key = `${r.domain.toLowerCase()}\n${container ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    ensurePathModeMarker(r.domain, container);
+    // The marker joins the group as well, so a path-mode domain the group brings
+    // along is not left sitting in "Ungrouped" (#98).
+    ensurePathModeMarker(r.domain, container, groupId);
   }
 }
 
@@ -165,7 +195,6 @@ export function importGroupEnvelope(
   const source = opts.source ?? 'manual';
   const addedBy = opts.addedBy ?? null;
 
-  const find = findRuleStmt();
   const insertRule = db.prepare(
     `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, group_id, added_by, source)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -184,29 +213,40 @@ export function importGroupEnvelope(
     const groupId = upsertGroupRow(env, source);
 
     // 'replace' clears the group's current members before re-inserting, so the
-    // group ends up as an exact mirror of the envelope.
+    // group ends up as an exact mirror of the envelope — but only for the rules
+    // THIS source owns. Since apply() now leaves its copies in the group (#98),
+    // a folder reload must not delete the copies an operator applied to a
+    // container by hand (those are source='manual'), and a manual re-import must
+    // not delete what the team folder owns.
     if (mode === 'replace') {
-      db.prepare(`DELETE FROM rules WHERE group_id = ?`).run(groupId);
+      db.prepare(`DELETE FROM rules WHERE group_id = ? AND source = ?`).run(groupId, source);
     }
 
+    // Read the batch AFTER the replace-delete, so the index can never hand out
+    // the id of a row this import just removed.
+    const existing = existingRuleIndex(env.rules);
     const seen = new Set<string>();
     for (const r of env.rules) {
-      const key = `${r.domain.toLowerCase()} ${r.container_id ?? ''} ${r.path_pattern ?? ''}`;
+      const key = ruleKey(r.domain, r.container_id, r.path_pattern);
       if (seen.has(key)) { skipped++; continue; }
       seen.add(key);
-      const existing = find.get(r.domain, r.container_id, r.path_pattern) as { id: number; source: string } | undefined;
-      if (existing) {
+      const hit = existing.get(key);
+      if (hit) {
         // Folder reload must not adopt a manually-created rule (that would
         // reclassify it as startup-folder and delete it on the next reload).
-        if (source === 'startup-folder' && existing.source !== 'startup-folder') { skipped++; continue; }
-        updateRule.run(r.status, r.expires_at, r.path_mode, groupId, source, existing.id);
+        if (source === 'startup-folder' && hit.source !== 'startup-folder') { skipped++; continue; }
+        updateRule.run(r.status, r.expires_at, r.path_mode, groupId, source, hit.id);
         updated++;
       } else {
-        insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode, groupId, addedBy, source);
+        const res = insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode, groupId, addedBy, source);
+        // Keep the index in step with what we just wrote: the batch was read
+        // before the loop, so without this a second envelope entry for the same
+        // rule identity would insert again and trip the unique index.
+        existing.set(key, { id: Number(res.lastInsertRowid), source });
         imported++;
       }
     }
-    ensurePathModeMarkers(env.rules);
+    ensurePathModeMarkers(env.rules, undefined, groupId);
     group = getGroup(groupId)!;
   });
   tx();
@@ -224,9 +264,12 @@ export function importGroupEnvelope(
 // ── Apply a group to a scope (global or one container) ──────────────────────────
 //
 // Stamps the group's member rules into the target scope as concrete, active
-// rules. The copies are ungrouped (group_id NULL): the group stays the stable
-// "template" whose membership never changes, and re-applying is idempotent via
-// the (domain, container, path) unique key (existing copies are just refreshed).
+// rules, and LEAVES THEM IN THE GROUP (#98): applying decides *where* a group is
+// in force, so a group applied to one container is still that group there —
+// otherwise the copies showed up as loose "Ungrouped" rules and the group could
+// no longer be exported, re-applied or removed as a unit. Re-applying is
+// idempotent via the (domain, container, path) unique key: an existing rule in
+// the target scope is refreshed and adopted into the group.
 export function applyGroup(
   groupId: number,
   container: string | null,
@@ -236,32 +279,39 @@ export function applyGroup(
   if (!group) throw new Error('group not found');
   const members = memberRulesForScope(groupId);
 
-  const find = findRuleStmt();
   const insertRule = db.prepare(
     `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, group_id, added_by, source)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'manual')`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual')`,
   );
-  // Refresh an existing rule's policy without re-tagging its group membership.
+  // Refresh an existing rule's policy AND make it a member of the group being
+  // applied — the group defines this rule in this scope, so leaving it outside
+  // the group would hide it from the group's own export/apply/delete.
   const updateRule = db.prepare(
-    `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, updated_at = unixepoch() WHERE id = ?`,
+    `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, group_id = ?, updated_at = unixepoch() WHERE id = ?`,
   );
 
   let applied = 0;
   let updated = 0;
   const tx = db.transaction(() => {
+    const existing = existingRuleIndex(members);
     for (const m of members) {
-      const existing = find.get(m.domain, container, m.path_pattern) as { id: number } | undefined;
-      if (existing) {
-        updateRule.run(m.status, m.expires_at, m.path_mode, existing.id);
+      const key = ruleKey(m.domain, container, m.path_pattern);
+      const hit = existing.get(key);
+      if (hit) {
+        updateRule.run(m.status, m.expires_at, m.path_mode, groupId, hit.id);
         updated++;
       } else {
-        insertRule.run(m.domain, container, m.status, m.expires_at, m.path_pattern, m.path_mode, addedBy);
+        const res = insertRule.run(m.domain, container, m.status, m.expires_at, m.path_pattern, m.path_mode, groupId, addedBy);
+        // The index was read before the loop; record the insert so two members
+        // that collapse onto the same identity in this scope can never insert
+        // twice and trip the unique index.
+        existing.set(key, { id: Number(res.lastInsertRowid), source: 'manual' });
         applied++;
       }
     }
     // Ensure the host-only path-mode marker exists in the TARGET scope for every
     // applied path rule, so path-scoped rules are admitted over HTTPS CONNECT.
-    ensurePathModeMarkers(members, container);
+    ensurePathModeMarkers(members, container, groupId);
   });
   tx();
 
@@ -291,7 +341,22 @@ export function retagGroupAsFolderManaged(groupId: number): void {
 // Drop everything the team folder currently manages. Only source='startup-folder'
 // rows are ever touched; manual (UI/API) groups and rules are left alone. Called
 // inside the folder-reload transaction so a failed reload rolls this back too.
-export function clearFolderManagedRules(): void {
+//
+// `keepGroups` names the groups the folder is about to re-import. Those group
+// ROWS survive (their rules are still cleared and re-imported), so a group keeps
+// its id across a reload — without that, rules an operator applied to a
+// container would be left pointing at a deleted group id. A folder group that is
+// gone from the folder is deleted, and anything still pointing at it is
+// ungrouped rather than orphaned.
+export function clearFolderManagedRules(keepGroups: string[] = []): void {
   db.prepare(`DELETE FROM rules WHERE source = 'startup-folder'`).run();
-  db.prepare(`DELETE FROM firewall_groups WHERE source = 'startup-folder'`).run();
+  const keep = new Set(keepGroups.map((n) => n.trim().toLowerCase()));
+  const folderGroups = db
+    .prepare(`SELECT id, name FROM firewall_groups WHERE source = 'startup-folder'`)
+    .all() as { id: number; name: string }[];
+  for (const g of folderGroups) {
+    if (keep.has(g.name.toLowerCase())) continue;
+    db.prepare(`UPDATE rules SET group_id = NULL WHERE group_id = ?`).run(g.id);
+    db.prepare(`DELETE FROM firewall_groups WHERE id = ?`).run(g.id);
+  }
 }

@@ -51,7 +51,10 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     expect(res.group.shared).toBe(1);
     const list = dbMod.listGroups();
     expect(list).toHaveLength(1);
-    expect(list[0].rule_count).toBe(2);
+    // The 2 envelope rules + the path-mode marker auto-established for
+    // files.openai.com (its rule is path-scoped). The marker joins the group too,
+    // so the group's own path-mode domain is not left in "Ungrouped" (#98).
+    expect(list[0].rule_count).toBe(3);
   });
 
   it('round-trips via export (strips volatile fields, keeps group meta)', () => {
@@ -60,7 +63,10 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     const env = groups.exportGroup(g.id)!;
     expect(env.kind).toBe('huddle-firewall-group');
     expect(env.group).toMatchObject({ name: 'OpenAI', shared: true });
-    expect(env.rules).toHaveLength(2);
+    // 2 imported rules + the path-mode marker for files.openai.com, which the
+    // import establishes as a member — so the export is self-contained: a
+    // re-import elsewhere puts that domain in path mode without a second pass.
+    expect(env.rules).toHaveLength(3);
     // No volatile columns leak.
     expect(Object.keys(env.rules[0]).sort()).toEqual(
       ['container_id', 'domain', 'expires_at', 'path_mode', 'path_pattern', 'status'].sort(),
@@ -93,13 +99,15 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     groups.importGroupEnvelope(groups.validateGroupEnvelope(envOpenAI()));
     const g = dbMod.getGroupByName('OpenAI')!;
     const first = groups.applyGroup(g.id, 'devcontainer-x');
-    expect(first.applied).toBe(2);
+    // The group's 2 rules + the path-mode marker for files.openai.com, which is
+    // a member since the import (#98) and is stamped into the scope as well.
+    expect(first.applied).toBe(3);
     const again = groups.applyGroup(g.id, 'devcontainer-x');
     expect(again.applied).toBe(0);
-    expect(again.updated).toBe(2);
+    expect(again.updated).toBe(3);
     const scoped = dbMod.db.prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-x'").get() as { n: number };
-    // 2 applied members + the host-only path-mode marker auto-established for
-    // files.openai.com (its rule is path-scoped), so it is admitted over HTTPS.
+    // The domain rule, the path rule, and the host-only path-mode marker that
+    // admits it over HTTPS.
     expect(scoped.n).toBe(3);
   });
 
@@ -295,6 +303,108 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     } as any);
     expect(env.group).toMatchObject({ name: 'Bare', description: 'no wrapper', shared: true });
     expect(env.rules).toHaveLength(1);
+  });
+
+  // ── #98 review feedback ─────────────────────────────────────────────────────
+
+  it('apply leaves the stamped rules inside the group, in the target scope', () => {
+    // Reviewer feedback on PR #98: applying "AlbertHeijn" to one container used
+    // to create UNGROUPED copies, so the group could no longer be seen, exported
+    // or re-applied as a unit in that scope.
+    groups.importGroupEnvelope(groups.validateGroupEnvelope(envOpenAI()));
+    const g = dbMod.getGroupByName('OpenAI')!;
+    groups.applyGroup(g.id, 'devcontainer-ah');
+    const scoped = dbMod.db
+      .prepare("SELECT domain, group_id FROM rules WHERE container_id = 'devcontainer-ah' AND path_pattern IS NULL AND domain = 'api.openai.com'")
+      .get() as { domain: string; group_id: number | null };
+    expect(scoped.group_id).toBe(g.id);
+    // Nothing landed as "Ungrouped" in that scope.
+    const ungrouped = dbMod.db
+      .prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-ah' AND group_id IS NULL AND path_pattern IS NULL")
+      .get() as { n: number };
+    expect(ungrouped.n).toBe(0);
+  });
+
+  it('apply adopts a rule that already exists in the target scope into the group', () => {
+    groups.importGroupEnvelope(groups.validateGroupEnvelope(envOpenAI()));
+    const g = dbMod.getGroupByName('OpenAI')!;
+    dbMod.db.prepare("INSERT INTO rules (domain, container_id, status, source) VALUES ('api.openai.com', 'devcontainer-ah', 'deny', 'manual')").run();
+    const res = groups.applyGroup(g.id, 'devcontainer-ah');
+    expect(res.updated).toBe(1);
+    const row = dbMod.db
+      .prepare("SELECT status, group_id FROM rules WHERE container_id = 'devcontainer-ah' AND domain = 'api.openai.com'")
+      .get() as { status: string; group_id: number | null };
+    expect(row).toMatchObject({ status: 'allow', group_id: g.id });
+  });
+
+  it('a folder reload keeps applied copies and the group id they point at', () => {
+    // Applied copies are source='manual', so the folder must neither delete them
+    // (clear + replace-import) nor strip their membership by recreating the group
+    // row under a fresh id.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-apply-'));
+    fs.writeFileSync(path.join(dir, 'openai.json'), JSON.stringify(envOpenAI()));
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    groups.reloadFirewallRulesFolder();
+    const g = dbMod.getGroupByName('OpenAI')!;
+    groups.applyGroup(g.id, 'devcontainer-ah');
+
+    const second = groups.reloadFirewallRulesFolder();
+    expect(second.errors).toHaveLength(0);
+    const after = dbMod.getGroupByName('OpenAI')!;
+    expect(after.id).toBe(g.id); // same row, so the applied copies still belong to it
+    const scoped = dbMod.db
+      .prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-ah' AND group_id = ?")
+      .get(after.id) as { n: number };
+    expect(scoped.n).toBeGreaterThan(0);
+  });
+
+  it('ungroups (never orphans) rules of a group that disappeared from the folder', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-stale-'));
+    fs.writeFileSync(path.join(dir, 'openai.json'), JSON.stringify(envOpenAI()));
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    groups.reloadFirewallRulesFolder();
+    const g = dbMod.getGroupByName('OpenAI')!;
+    groups.applyGroup(g.id, 'devcontainer-ah');
+
+    fs.rmSync(path.join(dir, 'openai.json'));
+    groups.reloadFirewallRulesFolder();
+    expect(dbMod.getGroupByName('OpenAI')).toBeUndefined();
+    // The applied copies survive as ordinary rules, pointing at no group at all —
+    // a dangling group_id would hide them from every bucket in the portal.
+    const dangling = dbMod.db
+      .prepare('SELECT COUNT(*) AS n FROM rules WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM firewall_groups)')
+      .get() as { n: number };
+    expect(dangling.n).toBe(0);
+    const kept = dbMod.db
+      .prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-ah'")
+      .get() as { n: number };
+    expect(kept.n).toBeGreaterThan(0);
+  });
+
+  it('explains that a flat rules export is not a group envelope', () => {
+    // Reported on PR #98: exporting "All rules"/"Ungrouped" yields a document
+    // without a `group`, and importing it said "group.name must be a non-empty
+    // string".
+    const flat = { version: 1, exported_at: 1, rules: [{ domain: 'a.example', container_id: null, status: 'allow', path_pattern: null, path_mode: 0, expires_at: null }] };
+    expect(() => groups.validateGroupEnvelope(flat)).toThrow(/plain rules export/);
+  });
+
+  it('imports a large envelope in one batched lookup, without duplicating rules', () => {
+    // The lookup is batched (was one query per rule); a re-import must still
+    // update in place, and a duplicate entry inside one envelope must be skipped
+    // rather than trip the unique index.
+    const many = Array.from({ length: 120 }, (_, i) => ({
+      domain: `d${i}.example`, container_id: null, status: 'allow', path_pattern: null, path_mode: 0, expires_at: null,
+    }));
+    const env = { version: 1, kind: 'huddle-firewall-group', group: { name: 'Bulk' }, rules: [...many, many[0]] };
+    const first = groups.importGroupEnvelope(groups.validateGroupEnvelope(env));
+    expect(first.imported).toBe(120);
+    expect(first.skipped).toBe(1);
+    const second = groups.importGroupEnvelope(groups.validateGroupEnvelope(env));
+    expect(second.imported).toBe(0);
+    expect(second.updated).toBe(120);
+    const n = (dbMod.db.prepare('SELECT COUNT(*) AS n FROM rules').get() as { n: number }).n;
+    expect(n).toBe(120);
   });
 
   it('export/apply include only ALLOWED sub-paths, not requested/deny placeholders', () => {

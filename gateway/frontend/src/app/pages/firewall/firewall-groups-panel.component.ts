@@ -95,12 +95,36 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
           <!-- Right: detail -->
           <div class="grp__detail">
             <div class="grp__detail-head">
-              <h3>
-                {{ headTitle() }}
-                @if (selectedGroup()?.shared) { <span class="pill pill--shared">Shared</span> }
-                @if (selectedGroup()?.source === 'startup-folder') { <span class="pill pill--folder">From folder</span> }
-              </h3>
-              <p class="grp__desc">{{ headDesc() }}</p>
+              @if (editing()) {
+                <form class="grp__edit" (ngSubmit)="saveGroupEdit()">
+                  <label class="grp__edit-row">
+                    <span>Name</span>
+                    <input [(ngModel)]="editName" name="editName" placeholder="Group name" autocomplete="off" />
+                  </label>
+                  <label class="grp__edit-row">
+                    <span>Description</span>
+                    <textarea [(ngModel)]="editDesc" name="editDesc" rows="2" placeholder="What this group is for (shown here and in the export)"></textarea>
+                  </label>
+                  <label class="grp__edit-check">
+                    <input type="checkbox" [(ngModel)]="editShared" name="editShared" />
+                    <span>Shared — meant to travel between containers, installs and teammates</span>
+                  </label>
+                  @if (selectedGroup()?.source === 'startup-folder') {
+                    <p class="grp__edit-hint">This group comes from the team-managed folder. Use “Sync to folder” after saving, or the next reload puts the file's name and description back.</p>
+                  }
+                  <div class="grp__edit-actions">
+                    <button type="submit" class="btn btn--accent btn--sm" [disabled]="!editName.trim() || savingEdit()">{{ savingEdit() ? 'Saving…' : 'Save' }}</button>
+                    <button type="button" class="btn btn-ghost btn--sm" (click)="cancelGroupEdit()">Cancel</button>
+                  </div>
+                </form>
+              } @else {
+                <h3>
+                  {{ headTitle() }}
+                  @if (selectedGroup()?.shared) { <span class="pill pill--shared">Shared</span> }
+                  @if (selectedGroup()?.source === 'startup-folder') { <span class="pill pill--folder">From folder</span> }
+                </h3>
+                <p class="grp__desc">{{ headDesc() }}</p>
+              }
               <div class="grp__toolbar">
                 <div class="grp__search">
                   <app-icon name="search" [size]="15" />
@@ -120,6 +144,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                       @for (c of containers(); track c) { <option [value]="c">{{ shortName(c) }}</option> }
                     </select>
                     <button type="button" class="btn btn-ghost btn--sm" (click)="applySelected()">Apply</button>
+                    <button type="button" class="btn btn-ghost btn--sm" [class.on]="editing()" (click)="startGroupEdit()"><app-icon name="settings" [size]="13" /> Rename / edit</button>
                     <button type="button" class="btn btn-ghost btn--sm grp__del-group" (click)="deleteGroup()"><app-icon name="trash" [size]="13" /> Delete group</button>
                   </div>
                 }
@@ -264,6 +289,12 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
 
     .grp__detail-head h3 { margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
     .grp__desc { margin: 0 0 12px; color: var(--text-muted); font-size: 0.88em; }
+    .grp__edit { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+    .grp__edit-row { display: flex; flex-direction: column; gap: 4px; font-size: 0.85em; color: var(--text-muted); }
+    .grp__edit-row input, .grp__edit-row textarea { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; resize: vertical; }
+    .grp__edit-check { display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: var(--text-muted); }
+    .grp__edit-hint { margin: 0; font-size: 0.8em; color: var(--text-dim); }
+    .grp__edit-actions { display: flex; gap: 6px; }
     .grp__toolbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
     .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
     .seg button { border: none; background: transparent; color: var(--text-muted); padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 0.85em; display: inline-flex; align-items: center; gap: 6px; }
@@ -368,6 +399,13 @@ export class FirewallGroupsPanelComponent implements OnInit {
   query = signal('');
   newName = '';
   applyScope = '';
+  // Inline "Rename / edit" form for the selected group (#98): name, description
+  // and the shared flag were previously only reachable by editing the JSON.
+  editing = signal(false);
+  savingEdit = signal(false);
+  editName = '';
+  editDesc = '';
+  editShared = false;
   newDomain = '';
   newPath = '';
   newScope = '';
@@ -464,7 +502,7 @@ export class FirewallGroupsPanelComponent implements OnInit {
   }
   reloadAfterMutation(): void { this.state.loadAll(); this.loadGroups(); }
 
-  selectBucket(id: Bucket): void { this.selectedId.set(id); this.creating.set(false); this.clearSelection(); }
+  selectBucket(id: Bucket): void { this.selectedId.set(id); this.creating.set(false); this.editing.set(false); this.clearSelection(); }
   toggleExpand(id: number): void { this.expanded.set(this.expanded() === id ? null : id); }
 
   onPathMode(r: Rule, ev: Event): void {
@@ -511,6 +549,37 @@ export class FirewallGroupsPanelComponent implements OnInit {
     this.api.createGroup(name).subscribe({
       next: (g) => { this.creating.set(false); this.newName = ''; this.loadGroups(); this.selectBucket(g.id); },
       error: (e) => this.note.set(e.message),
+    });
+  }
+
+  // Edit the selected group's metadata: rename it, give it a description, or
+  // mark it shared — all three used to be reachable only through the JSON
+  // envelope (#98).
+  startGroupEdit(): void {
+    const g = this.selectedGroup();
+    if (!g) return;
+    if (this.editing()) { this.editing.set(false); return; }
+    this.editName = g.name;
+    this.editDesc = g.description ?? '';
+    this.editShared = g.shared === 1;
+    this.editing.set(true);
+  }
+  cancelGroupEdit(): void { this.editing.set(false); }
+  saveGroupEdit(): void {
+    const g = this.selectedGroup();
+    const name = this.editName.trim();
+    if (!g || !name || this.savingEdit()) return;
+    this.savingEdit.set(true);
+    this.api.updateGroup(g.id, { name, description: this.editDesc.trim(), shared: this.editShared }).subscribe({
+      next: (updated) => {
+        this.savingEdit.set(false);
+        this.editing.set(false);
+        this.note.set(name === g.name ? `Updated group "${name}"` : `Renamed "${g.name}" to "${name}"`);
+        // Refresh the list so the left column and the header show the new name.
+        this.loadGroups();
+        this.selectedId.set(updated.id);
+      },
+      error: (e) => { this.savingEdit.set(false); this.note.set(`Could not save: ${e.message}`); },
     });
   }
 
@@ -573,6 +642,11 @@ export class FirewallGroupsPanelComponent implements OnInit {
     });
   }
 
+  // Import accepts BOTH files the portal hands out: a group envelope
+  // ({ group: { name }, rules }) and a plain rules export ({ rules }) — the
+  // "All rules", "Ungrouped" and selection downloads carry no group, and posting
+  // those to the group importer failed with "group.name must be a non-empty
+  // string" (#98). Pick the endpoint from the document's shape.
   onImportFile(event: Event): void {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
@@ -580,23 +654,66 @@ export class FirewallGroupsPanelComponent implements OnInit {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      let doc: unknown;
+      let doc: Record<string, any>;
       try { doc = JSON.parse(String(reader.result)); }
       catch { this.note.set('Import failed: not valid JSON'); return; }
-      this.api.importGroup(doc, 'merge').subscribe({
-        next: (res) => { this.note.set(`Imported "${res.group.name}": ${res.imported} added, ${res.updated} updated`); this.reloadAfterMutation(); this.selectBucket(res.group.id); },
-        error: (e) => this.note.set('Import failed: ' + e.message),
-      });
+      if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc['rules'])) {
+        this.note.set('Import failed: this is not a Huddle rules or group export (no "rules" array).');
+        return;
+      }
+      if (this.groupNameOf(doc)) this.importAsGroup(doc);
+      else this.importAsRules(doc['rules']);
     };
     reader.readAsText(file);
   }
 
+  // A group envelope names its group either under `group` or, in the documented
+  // bare form, at the top level. No name → a flat rules export.
+  private groupNameOf(doc: Record<string, any>): string | null {
+    const meta = doc['group'] && typeof doc['group'] === 'object' && !Array.isArray(doc['group']) ? doc['group'] : doc;
+    const name = typeof meta['name'] === 'string' ? meta['name'].trim() : '';
+    return name || null;
+  }
+
+  private importAsGroup(doc: unknown): void {
+    this.api.importGroup(doc, 'merge').subscribe({
+      next: (res) => {
+        this.note.set(`Imported group "${res.group.name}": ${res.imported} added, ${res.updated} updated`);
+        this.reloadAfterMutation();
+        this.selectBucket(res.group.id);
+      },
+      error: (e) => this.note.set('Import failed: ' + e.message),
+    });
+  }
+
+  private importAsRules(rules: unknown[]): void {
+    this.api.importRules({ mode: 'merge', rules }).subscribe({
+      next: (res) => {
+        const skipped = res.skipped ? `, ${res.skipped} skipped` : '';
+        this.note.set(`Imported ${rules.length} rule(s): ${res.imported} added, ${res.updated} updated${skipped}`);
+        this.reloadAfterMutation();
+      },
+      error: (e) => this.note.set('Import failed: ' + e.message),
+    });
+  }
+
+  // Apply the group to the chosen scope. The rules land IN the group (see
+  // applyGroup in firewall-group-store), so the note spells out what changed and
+  // where instead of only naming the scope (#98).
   applySelected(): void {
     const g = this.selectedGroup();
     if (!g) return;
     const container = this.applyScope || null;
+    const scope = container ? `container ${this.shortName(container)}` : 'all containers (global)';
     this.api.applyGroup(g.id, container).subscribe({
-      next: (r) => { this.note.set(`Applied "${g.name}" to ${container ? this.shortName(container) : 'global'} (${r.applied} added, ${r.updated} updated)`); this.reloadAfterMutation(); },
+      next: (r) => {
+        const total = r.applied + r.updated;
+        this.note.set(
+          `Group "${g.name}" now applies to ${scope}: ${total} rule(s) active there ` +
+            `(${r.applied} added, ${r.updated} already present and refreshed). They stay part of "${g.name}".`,
+        );
+        this.reloadAfterMutation();
+      },
       error: (e) => this.note.set(e.message),
     });
   }

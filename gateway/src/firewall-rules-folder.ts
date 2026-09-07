@@ -119,7 +119,10 @@ function parseEnvelopeFiles(mount: string, entries: string[], summary: FolderRel
 // instead of leaving it half-cleared. Throws on failure; the caller reports it.
 function applyParsedEnvelopes(parsed: { file: string; env: GroupEnvelope }[], summary: FolderReloadSummary): void {
   const apply = db.transaction(() => {
-    clearFolderManagedRules();
+    // Keep the group rows we are about to re-import, so their ids (and with them
+    // the membership of rules an operator applied to a container) survive the
+    // reload; groups that vanished from the folder are still dropped.
+    clearFolderManagedRules(parsed.map((p) => p.env.group.name));
     for (const { file, env } of parsed) {
       try {
         const res = importGroupEnvelope(env, { mode: 'replace', source: 'startup-folder', addedBy: 'team-folder' });

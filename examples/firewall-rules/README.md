@@ -41,6 +41,12 @@ A rule of thumb for writing your own groups:
    `huddle firewall folder reload`). They appear in **Firewall → Groups** with a
    *From folder* badge, and can be **applied** globally or to a container.
 
+**Applying** decides *where* a group is in force: its rules are stamped into the
+chosen scope and stay part of the group there, so the group can be exported,
+re-applied or removed as a unit. A rule that already exists in that scope is
+refreshed and adopted into the group. Copies you applied by hand survive a
+folder reload — the folder only owns the rules it loaded itself.
+
 ## Format
 
 ```json
