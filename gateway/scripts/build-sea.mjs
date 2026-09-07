@@ -18,6 +18,17 @@
  * therefore earned by injection *and* a passing smoke test, never by reaching the
  * end of the script.
  *
+ * The executable stays named `huddle-node` on every platform — nothing that
+ * spawns or searches for it (cli/src/node.ts, stage-node-package.mjs) should
+ * ever have to change because a human looks at it differently. What a human
+ * sees is fixed separately, per OS, because it copied straight off Node
+ * itself: Task Manager on Windows shows "Node.js" because that is what
+ * node.exe's PE version resource says (step 7b rewrites it — the filename was
+ * never the problem there). macOS has no equivalent resource on a bare Unix
+ * executable at all, so getting an icon in Finder/Activity Monitor/Dock means
+ * wrapping huddle-node in a Huddle.app bundle instead (step 9) — the binary
+ * inside keeps its name, only the bundle around it is new.
+ *
  * Usage: node scripts/build-sea.mjs [--skip-tsc] [--skip-ui] [--out DIR]
  */
 
@@ -26,6 +37,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import png2icons from 'png2icons';
+import * as PELibrary from 'pe-library';
+import * as ResEdit from 'resedit';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GATEWAY = path.resolve(HERE, '..');
@@ -47,9 +61,15 @@ const BLOB = path.join(OUT, 'huddle-node.blob');
  * The staged name keeps it too, because step 8 EXECUTES the staged copy.
  */
 const EXE = process.platform === 'win32' ? '.exe' : '';
+const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
 const STAGED = path.join(OUT, `huddle-node.staged${EXE}`);
-const FINAL = path.join(OUT, `huddle-node${EXE}`);
+// Everywhere except macOS, the artefact this produces IS huddle-node[.exe] —
+// see the file header. On macOS FINAL is the Huddle.app wrapper built in step
+// 9; huddle-node keeps its name at Contents/MacOS/huddle-node inside it.
+const FINAL = IS_MAC ? path.join(OUT, 'Huddle.app') : path.join(OUT, `huddle-node${EXE}`);
 const UI_DIR = path.join(GATEWAY, 'dist', 'ui', 'browser');
+const ICON_SOURCE = path.join(GATEWAY, 'frontend', 'src', 'assets', 'hex-2d.png');
 
 /** Node ships the reader, not the injector; postject does the writing. */
 const SENTINEL = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
@@ -321,6 +341,60 @@ runCli('postject', 'postject', [
 
 ok(`injected — ${mb(fs.statSync(STAGED).size)}`);
 
+// ----------------------------------------------------------------- 7b. brand
+
+/**
+ * Windows Task Manager's "Name" column reads FileDescription (falling back to
+ * ProductName) out of the exe's PE version resource — not the filename. A
+ * copy of node.exe says "Node.js" there no matter what it is named, because
+ * that resource was never touched. resedit rewrites it in place; both it and
+ * pe-library underneath are pure JS with no bundled binary and no Wine
+ * dependency, unlike the (now npm-deprecated) `rcedit` package.
+ *
+ * Runs before the smoke test on purpose, same as injection above: a resource
+ * section resedit corrupted is exactly the kind of breakage that test exists
+ * to catch, so this has to happen before the artefact can prove itself, not
+ * after.
+ */
+if (IS_WIN) {
+  step('7b', 'Branding (icon + version info)');
+
+  const ico = png2icons.createICO(fs.readFileSync(ICON_SOURCE), png2icons.BICUBIC, 0, false, true);
+  if (!ico) throw new Error(`png2icons could not build an .ico from ${ICON_SOURCE}`);
+
+  const exe = PELibrary.NtExecutable.from(fs.readFileSync(STAGED));
+  const res = PELibrary.NtExecutableResource.from(exe);
+
+  // Replace every icon group the base node.exe carries (normally exactly
+  // one) instead of assuming an ID — this must not depend on Node's own
+  // resource layout. Falls back to adding one if somehow there are none.
+  const iconImages = ResEdit.Data.IconFile.from(ico).icons.map((i) => i.data);
+  const groups = ResEdit.Resource.IconGroupEntry.fromEntries(res.entries);
+  for (const g of groups.length ? groups : [{ id: 1, lang: 1033 }]) {
+    ResEdit.Resource.IconGroupEntry.replaceIconsForResource(res.entries, g.id, g.lang, iconImages);
+  }
+
+  // Every language node.exe's version resource carries, not a hardcoded
+  // en-US — Task Manager reads whichever block matches the OS's own locale,
+  // and rewriting only one would leave "Node.js" showing on the rest.
+  const vi = ResEdit.Resource.VersionInfo.fromEntries(res.entries)[0];
+  for (const lang of vi.getAllLanguagesForStringValues()) {
+    vi.setStringValues(lang, { ProductName: 'Huddle', FileDescription: 'Huddle', CompanyName: 'Info Support B.V.' });
+  }
+  vi.outputToResourceEntries(res.entries);
+
+  res.outputResource(exe);
+  // Written to a sibling path, not back onto STAGED directly — resedit's own
+  // README advises against generate()-ing a binary onto the same path it was
+  // read from — then renamed over it, so a crash mid-write never leaves
+  // STAGED half-rewritten.
+  const branded = `${STAGED}.branded`;
+  fs.writeFileSync(branded, Buffer.from(exe.generate()));
+  fs.chmodSync(branded, 0o755);
+  fs.renameSync(branded, STAGED);
+  ok('icon + ProductName/FileDescription set to "Huddle"');
+}
+
 // -------------------------------------------------------------- 8. smoke test
 
 step(8, 'Smoke test');
@@ -427,18 +501,70 @@ step(9, 'Naming the artefact');
 // through, which is exactly the failure this ordering exists to prevent.
 // fs.renameSync() overwrites an existing destination file on POSIX on its own,
 // but throws EEXIST on Windows if FINAL is already present, so it is removed
-// explicitly here, one line before the rename that replaces it.
-fs.rmSync(FINAL, { force: true });
-fs.renameSync(STAGED, FINAL);
+// explicitly here, one line before the rename that replaces it. recursive:
+// true is a no-op for the plain-file case (Windows/Linux) and required for
+// the directory case (macOS's Huddle.app) below.
+fs.rmSync(FINAL, { force: true, recursive: true });
+
+// The path whose size actually means something below: FINAL itself everywhere
+// except macOS, where FINAL is now a bundle directory and the one file worth
+// reporting a size for is the binary inside it.
+let reportPath = FINAL;
+
+if (IS_MAC) {
+  // No PE-style resource to rewrite on a bare Unix executable (step 7b has no
+  // macOS equivalent), so the only way Finder/Activity Monitor/Dock get an
+  // icon+name is the enclosing bundle — huddle-node keeps its name and moves
+  // inside it, unchanged.
+  const macosDir = path.join(FINAL, 'Contents', 'MacOS');
+  const resourcesDir = path.join(FINAL, 'Contents', 'Resources');
+  fs.mkdirSync(macosDir, { recursive: true });
+  fs.mkdirSync(resourcesDir, { recursive: true });
+
+  reportPath = path.join(macosDir, 'huddle-node');
+  fs.copyFileSync(STAGED, reportPath);
+  fs.chmodSync(reportPath, 0o755);
+  fs.rmSync(STAGED, { force: true });
+
+  const icns = png2icons.createICNS(fs.readFileSync(ICON_SOURCE), png2icons.BICUBIC, 0);
+  if (!icns) throw new Error(`png2icons could not build an .icns from ${ICON_SOURCE}`);
+  fs.writeFileSync(path.join(resourcesDir, 'Huddle.icns'), icns);
+
+  const { version } = JSON.parse(fs.readFileSync(path.join(GATEWAY, 'package.json'), 'utf8'));
+  const plist = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0"><dict>',
+    '  <key>CFBundleExecutable</key><string>huddle-node</string>',
+    '  <key>CFBundleIdentifier</key><string>com.infosupport.huddle.node</string>',
+    '  <key>CFBundleName</key><string>Huddle</string>',
+    '  <key>CFBundleDisplayName</key><string>Huddle</string>',
+    '  <key>CFBundlePackageType</key><string>APPL</string>',
+    '  <key>CFBundleIconFile</key><string>Huddle</string>',
+    `  <key>CFBundleShortVersionString</key><string>${version}</string>`,
+    `  <key>CFBundleVersion</key><string>${version}</string>`,
+    '  <key>LSMinimumSystemVersion</key><string>11.0</string>',
+    // This process never touches AppKit, so it was never going to claim a
+    // Dock slot or menu bar either way — said explicitly rather than relying
+    // on that staying true.
+    '  <key>LSBackgroundOnly</key><true/>',
+    '  <key>NSHighResolutionCapable</key><true/>',
+    '</dict></plist>',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(FINAL, 'Contents', 'Info.plist'), plist);
+} else {
+  fs.renameSync(STAGED, FINAL);
+}
 
 // Renaming ~130 MB can leave the new name briefly invisible to stat() on
 // overlay and 9p filesystems (WSL2 among them). The rename itself has already
 // returned, so wait for the entry rather than failing a build that succeeded.
 let finalSize = 0;
 for (let attempt = 0; attempt < 50; attempt++) {
-  try { finalSize = fs.statSync(FINAL).size; break; } catch { sleepSync(100); }
+  try { finalSize = fs.statSync(reportPath).size; break; } catch { sleepSync(100); }
 }
-if (!finalSize) throw new Error(`renamed to ${FINAL} but it never became visible`);
-try { fs.chmodSync(FINAL, 0o755); } catch { /* already 0755 from STAGED */ }
+if (!finalSize) throw new Error(`${reportPath} never became visible after step 9`);
+try { fs.chmodSync(reportPath, 0o755); } catch { /* already 0755 */ }
 
 console.log(`\n✓ ${path.relative(ROOT, FINAL)} — ${mb(finalSize)}\n`);
