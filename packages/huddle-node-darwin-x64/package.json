@@ -5,7 +5,7 @@
   "license": "GPL-3.0-or-later",
   "os": ["darwin"],
   "cpu": ["x64"],
-  "files": ["bin/huddle-node"],
+  "files": ["bin/Huddle.app"],
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",

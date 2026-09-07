@@ -6,6 +6,7 @@ import {
   DEFAULT_NODE_PORT,
   MissingNodeEntryError,
   explicitNodeEntry,
+  installedNodeEntry,
   nodeEntryCandidates,
   nodeLaunch,
   nodeEnv,
@@ -95,13 +96,37 @@ describe('nodeEntryCandidates', () => {
     const cliDir = path.join(tmp, 'installed-cli', 'dist');
     const pkg = platformNodePackageName();
     expect(pkg).not.toBeNull();
-    const executable = process.platform === 'win32' ? 'huddle-node.exe' : 'huddle-node';
-    const entry = path.join(tmp, 'installed-cli', 'node_modules', ...pkg!.split('/'), 'bin', executable);
+    // huddle-node keeps its name on every platform (see nodeBinSubpath's
+    // comment in node.ts) — except macOS, where Finder/Activity Monitor/Dock
+    // only ever show an icon for a binary living inside a bundle, so it moves
+    // to Contents/MacOS/huddle-node under a Huddle.app wrapper there.
+    const executable = process.platform === 'win32'
+      ? ['huddle-node.exe']
+      : process.platform === 'darwin'
+        ? ['Huddle.app', 'Contents', 'MacOS', 'huddle-node']
+        : ['huddle-node'];
+    const entry = path.join(tmp, 'installed-cli', 'node_modules', ...pkg!.split('/'), 'bin', ...executable);
     fs.mkdirSync(path.dirname(entry), { recursive: true });
     fs.writeFileSync(path.join(path.dirname(entry), '..', 'package.json'), JSON.stringify({ name: pkg }));
     fs.writeFileSync(entry, 'SEA');
     expect(nodeEntryCandidates(cliDir)).toContain(entry);
     expect(resolveNodeEntry({}, cliDir, {})).toBe(entry);
+  });
+
+  // installedNodeEntry() takes platform/arch explicitly, so the macOS bundle
+  // path is testable regardless of which OS actually runs this suite (CI runs
+  // it on Linux).
+  it('resolves the installed package inside Huddle.app on macOS', () => {
+    const cliDir = path.join(tmp, 'installed-cli-darwin', 'dist');
+    const pkg = platformNodePackageName('darwin', 'arm64')!;
+    const entry = path.join(
+      tmp, 'installed-cli-darwin', 'node_modules', ...pkg.split('/'), 'bin',
+      'Huddle.app', 'Contents', 'MacOS', 'huddle-node',
+    );
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'installed-cli-darwin', 'node_modules', ...pkg.split('/'), 'package.json'), JSON.stringify({ name: pkg }));
+    fs.writeFileSync(entry, 'SEA');
+    expect(installedNodeEntry(cliDir, 'darwin', 'arm64')).toBe(entry);
   });
 
   it('names only supported release targets', () => {
