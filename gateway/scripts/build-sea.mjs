@@ -362,7 +362,14 @@ if (IS_WIN) {
   const ico = png2icons.createICO(fs.readFileSync(ICON_SOURCE), png2icons.BICUBIC, 0, false, true);
   if (!ico) throw new Error(`png2icons could not build an .ico from ${ICON_SOURCE}`);
 
-  const exe = PELibrary.NtExecutable.from(fs.readFileSync(STAGED));
+  // ignoreCert: true — node.exe ships Authenticode-signed by Microsoft, and
+  // postject's injection one step above already invalidates that signature
+  // (see its own "signature seems corrupted" warning in step 7's output).
+  // pe-library otherwise refuses to parse a signed binary at all; generate()
+  // below produces a plain unsigned PE regardless; re-signing the final
+  // artefact is the separate, not-yet-done Windows signing work the ADR
+  // already calls out.
+  const exe = PELibrary.NtExecutable.from(fs.readFileSync(STAGED), { ignoreCert: true });
   const res = PELibrary.NtExecutableResource.from(exe);
 
   // Replace every icon group the base node.exe carries (normally exactly
