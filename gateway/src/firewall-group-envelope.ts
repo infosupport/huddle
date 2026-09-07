@@ -69,7 +69,18 @@ export function validateGroupEnvelope(raw: unknown): GroupEnvelope {
   // back to `e` itself so the documented bare form actually works.
   const groupRaw = (e.group && typeof e.group === 'object' && !Array.isArray(e.group) ? e.group : e) as Record<string, unknown>;
   const name = typeof groupRaw.name === 'string' && groupRaw.name.trim() ? groupRaw.name.trim() : undefined;
-  if (!name) throw new Error('group.name must be a non-empty string');
+  if (!name) {
+    // The commonest way to land here is a FLAT rules export (the "All rules" /
+    // "Ungrouped" download, or `huddle firewall export`): it carries `rules` but
+    // no group at all. Say so, instead of leaving the operator to guess what
+    // "group.name" is (#98).
+    if (Array.isArray(e.rules) && !e.group) {
+      throw new Error(
+        'this file is a plain rules export (no "group" — so there is nothing to name a group after); import it as rules with `huddle firewall import`, or add a "group": { "name": "..." } to make it a group',
+      );
+    }
+    throw new Error('group.name must be a non-empty string');
+  }
   const description = typeof groupRaw.description === 'string' ? groupRaw.description : '';
   const shared = groupRaw.shared === true || groupRaw.shared === 1;
   if (!Array.isArray(e.rules)) throw new Error('rules must be an array');

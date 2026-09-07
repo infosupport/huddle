@@ -412,10 +412,15 @@ huddle firewall export --container __global__ --out rules.json
 huddle firewall import rules.json            # merge (upsert)
 huddle firewall import rules.json --replace  # replace the imported scope(s)
 huddle firewall import rules.json --container devcontainer-app   # remap scope
+huddle firewall import openai.json           # a group file is imported as a group
 ```
 
 **UI:** the Firewall page has **Export** and **Import** buttons. Export
 downloads a `.json` file; Import reads a selected `.json` file and merges it.
+Import takes both files the portal writes and picks the right target from the
+file's shape: a **group** envelope (Export with a group selected) restores that
+group, a plain **rules** export (Export under *All rules* / *Ungrouped*, or on a
+selection) restores loose rules.
 
 **API:** `GET /api/rules/export[?container=<id|__global__>]` and
 `POST /api/rules/import[?container=<id|__global__>]` with body

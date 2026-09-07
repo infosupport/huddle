@@ -239,10 +239,33 @@ export interface FirewallImportOptions {
   container?: string;
 }
 
+// The name of the group a document describes, or null when it is a plain rules
+// export. A group envelope carries it under `group`, or at the top level in the
+// documented bare form.
+function groupNameOf(doc: Record<string, unknown>): string | null {
+  const meta = (doc['group'] && typeof doc['group'] === 'object' && !Array.isArray(doc['group']) ? doc['group'] : doc) as Record<string, unknown>;
+  const name = typeof meta['name'] === 'string' ? meta['name'].trim() : '';
+  return name || null;
+}
+
 export async function runFirewallImport(opts: FirewallImportOptions): Promise<void> {
-  const doc = readJsonFile<{ rules?: unknown }>(opts.file);
+  const doc = readJsonFile<Record<string, unknown> & { rules?: unknown }>(opts.file);
 
   const mode = opts.replace ? 'replace' : 'merge';
+
+  // A group envelope handed to the flat importer used to import its rules and
+  // silently drop the group (#98). Send it where it belongs instead — unless
+  // --container asks for a scope remap, which only the flat importer does.
+  const groupName = groupNameOf(doc);
+  if (groupName && !opts.container) {
+    console.error(dim(`[i] ${opts.file} is the group "${groupName}" — importing it as a group.`));
+    await runFirewallGroup({ action: 'import', arg: opts.file, replace: opts.replace });
+    return;
+  }
+  if (groupName) {
+    console.error(dim(`[i] ${opts.file} is the group "${groupName}"; --container imports its rules into that scope without the group.`));
+  }
+
   const qs = new URLSearchParams();
   if (opts.container) qs.set('container', opts.container);
   const suffix = qs.toString() ? `?${qs}` : '';

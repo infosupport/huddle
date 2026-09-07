@@ -406,18 +406,29 @@ export function isPathMode(domain: string, containerId: string | null): boolean 
 // Idempotent: creates the marker, or promotes an existing host-only row to one
 // (a stale 'requested' placeholder becomes a default-deny marker; an explicit
 // allow/deny keeps its decision).
-export function ensurePathModeMarker(domain: string, containerId: string | null): void {
+// `groupId` is passed when the marker is being established as part of applying or
+// importing a firewall group: the marker is that group's "blocked at the root"
+// row in this scope, so leaving it ungrouped would show the group's path-mode
+// domain under "Ungrouped" in the portal (#98).
+export function ensurePathModeMarker(domain: string, containerId: string | null, groupId?: number): void {
   const marker = db
     .prepare(
-      `SELECT id, status, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND COALESCE(container_id, '') = COALESCE(?, '') AND path_pattern IS NULL`
+      `SELECT id, status, path_mode, group_id FROM rules WHERE domain = ? COLLATE NOCASE AND COALESCE(container_id, '') = COALESCE(?, '') AND path_pattern IS NULL`
     )
-    .get(domain, containerId) as { id: number; status: RuleStatus; path_mode: number } | undefined;
+    .get(domain, containerId) as { id: number; status: RuleStatus; path_mode: number; group_id: number | null } | undefined;
   if (!marker) {
     db.prepare(
-      `INSERT INTO rules (domain, container_id, status, path_pattern, path_mode) VALUES (?, ?, 'deny', NULL, 1)`
-    ).run(domain, containerId);
-  } else if (marker.path_mode !== 1) {
+      `INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, group_id) VALUES (?, ?, 'deny', NULL, 1, ?)`
+    ).run(domain, containerId, groupId ?? null);
+    return;
+  }
+  if (marker.path_mode !== 1) {
     const status = marker.status === 'requested' ? 'deny' : marker.status;
     db.prepare(`UPDATE rules SET path_mode = 1, status = ?, updated_at = unixepoch() WHERE id = ?`).run(status, marker.id);
+  }
+  // Adopt an ungrouped marker into the group, but never move one that already
+  // belongs somewhere: an implicit row must not be stolen from another group.
+  if (groupId !== undefined && marker.group_id == null) {
+    db.prepare(`UPDATE rules SET group_id = ?, updated_at = unixepoch() WHERE id = ?`).run(groupId, marker.id);
   }
 }
