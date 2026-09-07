@@ -6,5 +6,9 @@
   "os": ["linux"],
   "cpu": ["x64"],
   "files": ["bin/huddle-node"],
-  "publishConfig": { "access": "public" }
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/infosupport/huddle.git"
+  }
 }
