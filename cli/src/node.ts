@@ -53,16 +53,32 @@ export function platformNodePackageName(platform = process.platform, arch = proc
   return supported.has(target) ? `@infosupport/huddle-node-${target}` : null;
 }
 
+/**
+ * The path segments under a package's bin/ directory where the built
+ * executable lives. It stays named `huddle-node` on every platform — nothing
+ * that spawns or searches for it should care what a human looking at a
+ * process list sees — with one exception: a bare Unix executable has nowhere
+ * to carry a "friendly name" at all, so the only way macOS's Finder/Activity
+ * Monitor/Dock show one is the bundle wrapping it, not the binary itself
+ * (gateway/scripts/build-sea.mjs step 9). Windows gets its friendly name a
+ * different way — a rewritten PE version resource, same step 7b, no path
+ * change — which is why it isn't singled out here too.
+ */
+function nodeBinSubpath(platform: NodeJS.Platform): string[] {
+  if (platform === 'win32') return ['huddle-node.exe'];
+  if (platform === 'darwin') return ['Huddle.app', 'Contents', 'MacOS', 'huddle-node'];
+  return ['huddle-node'];
+}
+
 export function installedNodeEntry(cliDir: string, platform = process.platform, arch = process.arch): string | null {
   const pkg = platformNodePackageName(platform, arch);
   if (!pkg) return null;
-  const executable = platform === 'win32' ? 'huddle-node.exe' : 'huddle-node';
   try {
     // `npm install -g` may hoist optional dependencies beside the CLI package,
     // while a regular install commonly nests them below it. Node's resolver
     // knows both layouts; a hard-coded `cli/node_modules` path does not.
     const manifest = require.resolve(`${pkg}/package.json`, { paths: [path.resolve(cliDir, '..')] });
-    const entry = path.join(path.dirname(manifest), 'bin', executable);
+    const entry = path.join(path.dirname(manifest), 'bin', ...nodeBinSubpath(platform));
     return fs.existsSync(entry) ? entry : null;
   } catch {
     return null;
@@ -83,7 +99,7 @@ export function explicitNodeEntry(opts: NodeOptions, env: NodeJS.ProcessEnv = pr
 export function nodeEntryCandidates(cliDir: string): string[] {
   // A repo checkout: cli/dist/index.js → ../../gateway/dist/index.js, and the
   // same one level up for layouts that nest the build one deeper.
-  const exe = process.platform === 'win32' ? '.exe' : '';
+  const platform = process.platform;
   const candidates = [
     path.resolve(cliDir, '..', '..', 'gateway', 'dist', 'index.js'),
     path.resolve(cliDir, '..', '..', '..', 'gateway', 'dist', 'index.js'),
@@ -91,13 +107,18 @@ export function nodeEntryCandidates(cliDir: string): string[] {
     // hand. Last, so a checkout keeps winning over a stale download when both
     // exist — the layout of someone working ON Huddle, whose build is the one
     // they mean.
-    path.resolve(cliDir, '..', '..', 'gateway', 'build', 'sea', `huddle-node${exe}`),
+    path.resolve(cliDir, '..', '..', 'gateway', 'build', 'sea', ...nodeBinSubpath(platform)),
   ];
   // A checkout takes precedence so contributors always run the code they just
   // built. Installed CLI packages have no checkout sibling and take this path.
   const installed = installedNodeEntry(cliDir);
   if (installed) candidates.push(installed);
-  candidates.push(path.join(os.homedir(), '.huddle', `huddle-node${exe}`));
+  candidates.push(path.join(os.homedir(), '.huddle', ...nodeBinSubpath(platform)));
+  // macOS-only fallback: the flat, unwrapped path this resolved to before the
+  // Huddle.app bundle (build-sea.mjs step 9) existed. Kept so a build or a
+  // hand-dropped copy from before that change keeps resolving after an
+  // upgrade.
+  if (platform === 'darwin') candidates.push(path.join(os.homedir(), '.huddle', 'huddle-node'));
   return candidates;
 }
 

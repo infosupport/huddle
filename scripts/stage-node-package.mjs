@@ -14,10 +14,15 @@ const platform = value('--platform') ?? process.platform;
 const arch = value('--arch') ?? process.arch;
 const version = value('--version');
 const target = `${platform}-${arch}`;
+// `file` is what build-sea.mjs (gateway/scripts/build-sea.mjs) actually
+// produces under gateway/build/sea/ — a bare executable everywhere except
+// macOS, where it's the Huddle.app bundle wrapping huddle-node (step 9; the
+// bundle is what gives Finder/Activity Monitor/Dock an icon there, since a
+// bare Unix executable has nowhere to carry one).
 const packages = new Map([
   ['win32-x64', { dir: 'huddle-node-win32-x64', file: 'huddle-node.exe' }],
-  ['darwin-x64', { dir: 'huddle-node-darwin-x64', file: 'huddle-node' }],
-  ['darwin-arm64', { dir: 'huddle-node-darwin-arm64', file: 'huddle-node' }],
+  ['darwin-x64', { dir: 'huddle-node-darwin-x64', file: 'Huddle.app' }],
+  ['darwin-arm64', { dir: 'huddle-node-darwin-arm64', file: 'Huddle.app' }],
   ['linux-x64', { dir: 'huddle-node-linux-x64', file: 'huddle-node' }],
 ]);
 const spec = packages.get(target);
@@ -31,8 +36,19 @@ if (!fs.existsSync(source)) throw new Error(`SEA executable missing: ${source}`)
 const out = path.join(ROOT, 'packages', spec.dir);
 const bin = path.join(out, 'bin');
 fs.mkdirSync(bin, { recursive: true });
-fs.copyFileSync(source, path.join(bin, spec.file));
-if (platform !== 'win32') fs.chmodSync(path.join(bin, spec.file), 0o755);
+const dest = path.join(bin, spec.file);
+// The macOS artefact is a directory (the .app bundle); everywhere else it's
+// a single file. cp -r handles both, but stays a plain file copy elsewhere so
+// this doesn't start silently accepting a directory where a single
+// executable was expected on win32/linux.
+if (platform === 'darwin') {
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.cpSync(source, dest, { recursive: true });
+  fs.chmodSync(path.join(dest, 'Contents', 'MacOS', 'huddle-node'), 0o755);
+} else {
+  fs.copyFileSync(source, dest);
+  if (platform !== 'win32') fs.chmodSync(dest, 0o755);
+}
 
 if (version) {
   const manifest = path.join(out, 'package.json');

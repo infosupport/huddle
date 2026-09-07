@@ -378,12 +378,27 @@ Settled by inspection in step 3 and confirmed by what step 6 shipped:
    `@infosupport/huddle-node-darwin-arm64`, and
    `@infosupport/huddle-node-linux-x64` as exact optional dependencies.
    npm selects the matching package from its `os`/`cpu` metadata, and the CLI
-   resolves `bin/huddle-node[.exe]` there. This keeps install free of a
-   postinstall download and makes the executable available offline once npm has
-   it cached. `verify-sea.yml` builds and smoke-tests each target natively and
+   resolves `bin/huddle-node[.exe]` there (macOS: `bin/Huddle.app/Contents/
+   MacOS/huddle-node` — see below). This keeps install free of a postinstall
+   download and makes the executable available offline once npm has it
+   cached. `verify-sea.yml` builds and smoke-tests each target natively and
    stages the package as an artifact. `publish-npm.yml` builds and publishes all
    three native packages before the CLI. Windows signing and macOS
    signing/notarisation remain separate operational work.
+
+   **The executable is still named `huddle-node` everywhere** — nothing above
+   changes because of what a human looking at it sees. What a human sees is
+   fixed separately, because it copied straight off Node itself:  Task Manager
+   on Windows read "Node.js" off node.exe's untouched PE version resource, so
+   `build-sea.mjs` now rewrites it in place (icon + ProductName/
+   FileDescription) with `resedit`/`pe-library` — pure JS, no Wine or bundled
+   binary, unlike the now-deprecated `rcedit` package. A bare Unix executable
+   has no equivalent resource at all, so macOS instead gets `huddle-node`
+   wrapped in a `Huddle.app` bundle (Info.plist + `.icns`, both generated at
+   build time from `gateway/frontend/src/assets/hex-2d.png` via `png2icons`) —
+   the only way Finder/Activity Monitor/Dock associate an icon with a plain
+   CLI binary there. `cli/src/node.ts`'s `nodeBinSubpath()` is the one place
+   that knows the macOS path differs.
 7. **The resolv.conf seam.** `initContainerNetworks()` is a Docker call (Node),
    but the `/etc/resolv.conf` it corrupts belongs to the *gateway* container
    (`dns-egress.ts`). In one process those chain directly. Split, Node performs
