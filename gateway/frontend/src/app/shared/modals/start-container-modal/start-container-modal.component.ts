@@ -187,10 +187,10 @@ interface Lifecycle {
        for the ring; this rule only ever touches the background property, so
        the two never clobber each other when a tinted field is focused). */
     .mount-target input.mount-target-input--tint {
-      background: linear-gradient(to top, var(--accent-soft), transparent 70%);
+      background: linear-gradient(to top, var(--accent-soft), transparent 25%);
     }
     .mount-target input.mount-target-input--tint.mount-target-input--ro {
-      background: linear-gradient(to top, var(--info-soft), transparent 70%);
+      background: linear-gradient(to top, var(--info-soft), transparent 25%);
     }
 
     /* ── Split "Add folder" button (container kind) ──────────────────────────── */
@@ -261,7 +261,7 @@ interface Lifecycle {
     .sc-col-head { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 20px; }
     .sc-col-head > div { flex: 1 1 220px; min-width: 0; }
     .sc-col-head .btn { flex: none; margin-left: auto; }
-    .sc-field { margin-bottom: 20px; }
+    .sc-field { margin-bottom: 12px; }
     .sc-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 7px; color: var(--text); }
 
     .sc-automount { margin-top: 12px; padding: 11px 12px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface-2); }

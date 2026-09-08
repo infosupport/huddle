@@ -61,10 +61,24 @@ let uid = 0;
        wrapper, absolutely positioned icon, extra input padding so text never
        runs under it). */
     .fs-field--icon { position: relative; display: block; }
-    .fs-field--icon input { width: 100%; padding-right: 38px; }
+    /* Match the destination-path input's own footprint (start-container-modal's
+       input[type="text"] base rule + its .mount-row input override) so the
+       host-path field (rendered inside THIS component's own template) doesn't
+       visually diverge from the container-path field next to it — the parent
+       modal's scoped input[type="text"] rule can never reach into here (see
+       the .btn app-icon comment in start-container-modal.component.ts for why
+       emulated view encapsulation blocks that). Right padding stays separate
+       (below) to leave room for the browse icon; every other value is copied
+       as-is. Scoped to --icon only: the default text-mode variant (used by
+       settings.component.ts) must keep the plain global .modal-body input
+       styling it has always had. */
+    .fs-field--icon input {
+      width: 100%; height: 36px; padding: 0 38px 0 13px; border-radius: 10px;
+      border: 1px solid var(--border-strong); background: var(--surface); font-size: 12.5px;
+    }
     .fs-browse-icon {
       position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
-      width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid transparent;
+      width: 26px; height: 26px; padding: 0; border-radius: 7px; border: 1px solid transparent;
       background: transparent; color: var(--text-dim); display: grid; place-items: center; cursor: pointer;
     }
     .fs-browse-icon:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--border-strong); }
