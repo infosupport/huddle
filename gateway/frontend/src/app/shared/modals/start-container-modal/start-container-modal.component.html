@@ -16,7 +16,7 @@
           <!-- ── Essential settings ─────────────────────────────────────── -->
           <div class="sc-col">
             <h3 class="sc-col-title">Essential settings</h3>
-            <p class="sc-col-sub">Basic information for your development environment.</p>
+            <p class="sc-col-sub muted">Basic information for your development environment.</p>
 
             <div class="sc-field">
               <div class="sc-label">Environment type</div>
@@ -48,17 +48,17 @@
             </div>
 
             <div class="sc-field">
-              <label for="start-name" class="sc-label">Name</label>
+              <label for="start-name">Name</label>
               <input id="start-name" type="text" [ngModel]="envName" (ngModelChange)="setEnvName($event)"
                      [placeholder]="kind === 'container' ? 'devcontainer-my-project' : 'auto (huddle-sbx-…)'" />
-              <p class="mount-hint">A recognisable name for your environment.</p>
+              <p class="mount-hint muted">A recognisable name for your environment.</p>
             </div>
 
             <div class="sc-field">
               <div class="sc-label">Project folders</div>
 
               @if (kind === 'container') {
-                <p class="mount-hint">Select where the folders should be mounted inside the environment.</p>
+                <p class="mount-hint muted">Select where the folders should be mounted inside the environment.</p>
 
                 <label class="empty-toggle">
                   <input type="checkbox" [(ngModel)]="empty" (ngModelChange)="onEmptyToggle()" />
@@ -74,11 +74,15 @@
                                            pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
                                            (valueChange)="onHostPathInput(m, $event)"
                                            (valuesChange)="onMountPicked($event)" />
-                        <p class="mount-target"><app-icon name="chevron-right" [size]="12" /><code>{{ mountTargets[$index] }}</code></p>
+                        <div class="mount-target muted">
+                          <app-icon name="chevron-right" [size]="12" />
+                          <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
+                                 placeholder="/workspaces/…" aria-label="Path inside the environment" />
+                          <label class="ro-toggle" title="Mount this folder read-only">
+                            <input type="checkbox" [(ngModel)]="m.readOnly" /> read-only
+                          </label>
+                        </div>
                       </div>
-                      <label class="ro-toggle" title="Mount this folder read-only">
-                        <input type="checkbox" [(ngModel)]="m.readOnly" /> read-only
-                      </label>
                       <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
                     </div>
                   }
@@ -111,7 +115,7 @@
                   </div>
                 }
               } @else {
-                <p class="mount-hint">The first folder is where the agent starts; every folder is mounted inside the sandbox at its own host path.</p>
+                <p class="mount-hint muted">The first folder is where the agent starts; every folder is mounted inside the sandbox at its own host path.</p>
                 @for (f of sbxFolders; track $index) {
                   <div class="mount-row">
                     <app-folder-select class="mount-host" [value]="f.path" browseMode="icon"
@@ -145,13 +149,13 @@
                     </div>
                   }
                   @if (s.skipped.length) {
-                    <p class="mount-hint">Not available in a sandbox:</p>
+                    <p class="mount-hint muted">Not available in a sandbox:</p>
                     <ul class="settings-list settings-list--skip">
                       @for (k of s.skipped; track k.name) { <li>{{ k.name }} — {{ k.reason }}</li> }
                     </ul>
                   }
                 }
-                <p class="mount-hint">Huddle becomes the sandbox's upstream proxy and its CA is installed automatically, so HTTPS + editor backends work.</p>
+                <p class="mount-hint muted">Huddle becomes the sandbox's upstream proxy and its CA is installed automatically, so HTTPS + editor backends work.</p>
               }
             </div>
           </div>
@@ -161,7 +165,7 @@
             <div class="sc-col-head">
               <div>
                 <h3 class="sc-col-title">Dev environment settings</h3>
-                <p class="sc-col-sub">Optional settings from devcontainer.json.</p>
+                <p class="sc-col-sub muted">Optional settings from devcontainer.json.</p>
               </div>
               <!-- Reading devcontainer.json is out of scope for this pass (separate
                    future plan) — inert on purpose: disabled, no file input wired up. -->
@@ -182,10 +186,10 @@
                 <span class="sc-acc-t">
                   @if (kind === 'container') {
                     <span class="sc-acc-name">Base image</span>
-                    <span class="sc-acc-sub">{{ selectedImage || baseImage || 'No image selected' }}</span>
+                    <span class="sc-acc-sub muted">{{ selectedImage || baseImage || 'No image selected' }}</span>
                   } @else {
                     <span class="sc-acc-name">Agent</span>
-                    <span class="sc-acc-sub">{{ sbxAgent || 'claude (default)' }}</span>
+                    <span class="sc-acc-sub muted">{{ sbxAgent || 'claude (default)' }}</span>
                   }
                 </span>
                 <app-icon name="chevron-down" [size]="16" class="sc-acc-chev" [class.closed]="!accOpen['baseImage']" />
@@ -193,7 +197,7 @@
               @if (accOpen['baseImage']) {
                 <div class="sc-acc-body">
                   @if (kind === 'container') {
-                    <label for="start-image" class="sc-label">Image</label>
+                    <label for="start-image">Image</label>
                     <select id="start-image" [(ngModel)]="selectedImage">
                       @if (baseImage) {
                         <option [value]="baseImage">[Default] {{ baseImage }}</option>
@@ -208,9 +212,9 @@
                       }
                     </select>
                   } @else {
-                    <label for="sbx-agent" class="sc-label">agent</label>
+                    <label for="sbx-agent">agent</label>
                     <input id="sbx-agent" type="text" [(ngModel)]="sbxAgent" placeholder="claude" />
-                    <p class="mount-hint">The CLI agent that runs inside the sandbox (e.g. claude, codex).</p>
+                    <p class="mount-hint muted">The CLI agent that runs inside the sandbox (e.g. claude, codex).</p>
                   }
                 </div>
               }
@@ -222,7 +226,7 @@
                 <app-icon name="file-text" [size]="16" class="sc-acc-mark" />
                 <span class="sc-acc-t">
                   <span class="sc-acc-name">Environment variables</span>
-                  <span class="sc-acc-sub">containerEnv · remoteEnv</span>
+                  <span class="sc-acc-sub muted">containerEnv · remoteEnv</span>
                 </span>
                 <app-icon name="chevron-down" [size]="16" class="sc-acc-chev" [class.closed]="!accOpen['envVars']" />
               </button>
@@ -269,14 +273,14 @@
                   <app-icon name="settings" [size]="16" class="sc-acc-mark" />
                   <span class="sc-acc-t">
                     <span class="sc-acc-name">Customisations — JetBrains</span>
-                    <span class="sc-acc-sub">customizations.jetbrains</span>
+                    <span class="sc-acc-sub muted">customizations.jetbrains</span>
                   </span>
                   <app-icon name="chevron-down" [size]="16" class="sc-acc-chev" [class.closed]="!accOpen['jetbrains']" />
                 </button>
                 @if (accOpen['jetbrains']) {
                   <div class="sc-acc-body">
                     <div class="sc-field">
-                      <label for="jb-backend" class="sc-label">backend</label>
+                      <label for="jb-backend">backend</label>
                       <select id="jb-backend" [(ngModel)]="jbBackend" (ngModelChange)="onJbBackendChange()">
                         <option>IntelliJ IDEA</option>
                         <option>RubyMine</option>
@@ -288,7 +292,7 @@
                         <option>GoLand</option>
                         <option>RustRover</option>
                       </select>
-                      <p class="mount-hint">JetBrains backend IDE that runs inside the environment.</p>
+                      <p class="mount-hint muted">JetBrains backend IDE that runs inside the environment.</p>
                     </div>
                     <div class="sc-field">
                       <div class="sc-label">plugins</div>
@@ -303,9 +307,9 @@
                       </div>
                     </div>
                     <div class="sc-field">
-                      <label for="jb-settings" class="sc-label">settings</label>
+                      <label for="jb-settings">settings</label>
                       <textarea id="jb-settings" [(ngModel)]="jbSettingsJson" placeholder='{ "editor.font.size": 14 }'></textarea>
-                      <p class="mount-hint">Merged into the IDE settings on first start.</p>
+                      <p class="mount-hint muted">Merged into the IDE settings on first start.</p>
                     </div>
                   </div>
                 }
@@ -316,13 +320,13 @@
                   <app-icon name="settings" [size]="16" class="sc-acc-mark" />
                   <span class="sc-acc-t">
                     <span class="sc-acc-name">Customisations — VS Code</span>
-                    <span class="sc-acc-sub">customizations.vscode</span>
+                    <span class="sc-acc-sub muted">customizations.vscode</span>
                   </span>
                   <app-icon name="chevron-down" [size]="16" class="sc-acc-chev" [class.closed]="!accOpen['vscode']" />
                 </button>
                 @if (accOpen['vscode']) {
                   <div class="sc-acc-body">
-                    <p class="mount-hint">Extensions and settings for VS Code aren't wired up yet.
+                    <p class="mount-hint muted">Extensions and settings for VS Code aren't wired up yet.
                       <span class="pill pill--pending">Coming soon</span></p>
                   </div>
                 }
@@ -335,7 +339,7 @@
                 <app-icon name="external-link" [size]="16" class="sc-acc-mark" />
                 <span class="sc-acc-t">
                   <span class="sc-acc-name">Lifecycle commands</span>
-                  <span class="sc-acc-sub">initializeCommand · onCreateCommand · updateContentCommand · postCreateCommand · postStartCommand · postAttachCommand</span>
+                  <span class="sc-acc-sub muted">initializeCommand · onCreateCommand · updateContentCommand · postCreateCommand · postStartCommand · postAttachCommand</span>
                 </span>
                 <app-icon name="chevron-down" [size]="16" class="sc-acc-chev" [class.closed]="!accOpen['lifecycle']" />
               </button>
@@ -365,7 +369,7 @@
                     <div class="life-row">
                       <label for="lc-postattach">postAttachCommand</label>
                       <input id="lc-postattach" type="text" [(ngModel)]="lifecycle.postAttachCommand" placeholder="every time a client attaches" />
-                      <p class="mount-hint">Best-effort — runs shortly after the IDE attaches, not exactly on it.</p>
+                      <p class="mount-hint muted">Best-effort — runs shortly after the IDE attaches, not exactly on it.</p>
                     </div>
                   </div>
                 </div>
