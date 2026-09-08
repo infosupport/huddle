@@ -34,7 +34,13 @@ const daemon = net.createServer((sock) => {
     // one flush after the blank line is enough to see all of it.
     if (buf.includes('\r\n\r\n')) {
       requests.push(buf);
-      sock.end('HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n');
+      // `Connection: close` forces a new connection per request instead of
+      // Node's http client silently reusing this one (the default when
+      // neither side objects to keep-alive) — startExistingContainer now
+      // makes a SECOND request on the same call (the postStart-label lookup
+      // below), and a shared connection would replay it into this same
+      // per-connection `buf`/`sock.end()` handler, which only expects one.
+      sock.end('HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
     }
   });
 });
@@ -51,7 +57,11 @@ afterAll(async () => {
 describe('starting an existing container', () => {
   it('sends the start with no body and no content-length', async () => {
     await startExistingContainer('d769439d7fbb');
-    expect(requests).toHaveLength(1);
+    // [0] is the /start call this test exists to guard; [1] is
+    // startExistingContainer's own best-effort postStart-label lookup (an
+    // inspect) added alongside the lifecycle-command feature — the fake
+    // daemon has no Labels to give it, so it stops there without a 3rd call.
+    expect(requests).toHaveLength(2);
     const [head, body] = requests[0].split('\r\n\r\n');
     expect(head.split('\r\n')[0]).toBe('POST /containers/d769439d7fbb/start HTTP/1.1');
     // `content-length: 0` is Node's own and is fine — the daemon rejects on
@@ -59,5 +69,6 @@ describe('starting an existing container', () => {
     expect(head.toLowerCase()).not.toContain('content-type');
     // Not `{}`: two bytes is non-empty.
     expect(body).toBe('');
+    expect(requests[1].split('\r\n')[0]).toBe('GET /containers/d769439d7fbb/json HTTP/1.1');
   });
 });
