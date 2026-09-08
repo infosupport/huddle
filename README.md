@@ -8,9 +8,15 @@
 
 ## What is Huddle?
 
-Huddle is a security gateway that shields devcontainers from the external network through a per-domain firewall. Every devcontainer runs in a DMZ: all outbound traffic is forced through Huddle, and only domains on the allowlist are let through. Operators manage firewall rules, Docker access, and network logs through a central web UI.
+Huddle is a security gateway that shields devcontainers from the external
+network through a per-domain firewall. Every devcontainer runs in a DMZ: all
+outbound traffic is forced through Huddle, and only domains on the allowlist are
+let through. Operators manage firewall rules, Docker access, and network logs
+through a central web UI.
 
-Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a shielded environment. Execution is isolated; the portal stays in control of what goes in and out.
+Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a
+shielded environment. Execution is isolated; the portal stays in control of what
+goes in and out.
 
 <p align="center">
   <img src="docs/images/huddle-portal.png" alt="Developers working through Huddle in shielded devcontainers" width="820">
@@ -20,8 +26,11 @@ Your IDE (JetBrains or VS Code) feels normal, but code, tools, and AI run in a s
 
 Huddle addresses two major risks of modern, AI-assisted development:
 
-- **Developing safely *with* AI** — AI should be able to help, but not modify your system unchecked or exfiltrate data.
-- **Developing safely *against* AI-amplified attacks** — supply-chain attacks are getting smarter, faster, and multi-stage. Huddle intercepts outbound traffic and blocks anything that isn't explicitly allowed.
+- **Developing safely _with_ AI** — AI should be able to help, but not modify
+  your system unchecked or exfiltrate data.
+- **Developing safely _against_ AI-amplified attacks** — supply-chain attacks
+  are getting smarter, faster, and multi-stage. Huddle intercepts outbound
+  traffic and blocks anything that isn't explicitly allowed.
 
 <p align="center">
   <img src="docs/images/huddle-risks.png" alt="Developing safely with AI and against supply-chain attacks" width="820">
@@ -43,10 +52,10 @@ Browser
 
 Two servers run in the same process:
 
-| Server | Port | Purpose |
-|--------|------|---------|
-| HTTP proxy | 80 | Forward/intercept all outbound container traffic |
-| API + UI | 3000 | REST API, Angular frontend, WebSocket push |
+| Server     | Port | Purpose                                          |
+| ---------- | ---- | ------------------------------------------------ |
+| HTTP proxy | 80   | Forward/intercept all outbound container traffic |
+| API + UI   | 3000 | REST API, Angular frontend, WebSocket push       |
 
 <p align="center">
   <img src="docs/images/huddle-gateway.png" alt="Huddle gateway: traffic, Docker access, and logs flow through the DMZ under control" width="820">
@@ -54,84 +63,128 @@ Two servers run in the same process:
 
 ### Three security principles
 
-| Principle | What it means |
-|-----------|---------------|
-| **No direct internet** | Traffic flows through the Huddle Gateway with firewall approvals — no container talks to the external network directly. |
-| **Docker proxy socket** | No full Docker socket, but controlled Docker actions through a per-container proxy with a label policy. |
-| **No root user** | A safer default user; `sudo` is only possible in a controlled way through Huddle. The admin user `noot` is locked by default and only gets a fresh, time-boxed password when you grant admin access — no standing admin credentials. |
+| Principle               | What it means                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **No direct internet**  | Traffic flows through the Huddle Gateway with firewall approvals — no container talks to the external network directly.                                                                                                              |
+| **Docker proxy socket** | No full Docker socket, but controlled Docker actions through a per-container proxy with a label policy.                                                                                                                              |
+| **No root user**        | A safer default user; `sudo` is only possible in a controlled way through Huddle. The admin user `noot` is locked by default and only gets a fresh, time-boxed password when you grant admin access — no standing admin credentials. |
 
 ---
 
 ## Features
 
 ### Firewall
+
 - Per-container and global allow/deny rules stored in SQLite
 - Rules can be permanent or time-bound (with an expiry date)
-- Containers can *request* access; operators approve or reject via the UI
+- Containers can _request_ access; operators approve or reject via the UI
 - HTTP: full request/response logged in the network log
 - HTTPS: tunneled through CONNECT (contents not intercepted)
-- WebSocket: `ws://` and `wss://` upgrades are transparently proxied and subject to the same firewall rules (host and path) as regular requests — so tools like the OpenAI Codex CLI connect without falling back to slow HTTPS retries
+- WebSocket: `ws://` and `wss://` upgrades are transparently proxied and subject
+  to the same firewall rules (host and path) as regular requests — so tools like
+  the OpenAI Codex CLI connect without falling back to slow HTTPS retries
 
 ### Docker Socket Proxy
-- Every devcontainer gets its own Unix socket at `/tmp/dc-sockets/<name>/docker.sock`; the per-container *directory* is mounted into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the socket. A file mount of the socket itself would keep seeing the dead old inode after a Huddle restart; a directory mount does not. The old flat path `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created before this change.
+
+- Every devcontainer gets its own Unix socket at
+  `/tmp/dc-sockets/<name>/docker.sock`; the per-container _directory_ is mounted
+  into the container (at `/var/run/huddle`) and `DOCKER_HOST` points to the
+  socket. A file mount of the socket itself would keep seeing the dead old inode
+  after a Huddle restart; a directory mount does not. The old flat path
+  `/tmp/dc-sockets/<name>.sock` remains as a symlink for containers created
+  before this change.
 - Fine-grained permissions per devcontainer, in two classes:
-  - **Temporary actions** (mutations: container create/start/stop/restart/remove/update/exec, image pull/build/push/remove/tag, volume create/remove/prune, network create/remove/connect/disconnect) — only effective while the time-bound grant (1–120 minutes) is active *and* the action toggle is enabled in the portal
-  - **Always-allowed actions** (read-only: list/inspect/logs/stats, ping/version/events) — independent of the timer, enabled per action
-  - Secure by default: **all actions are off by default**; the operator explicitly enables what each devcontainer may do. Be extra cautious with `image.push`: pushing goes through the host daemon and does not pass the egress firewall
+  - **Temporary actions** (mutations: container
+    create/start/stop/restart/remove/update/exec, image
+    pull/build/push/remove/tag, volume create/remove/prune, network
+    create/remove/connect/disconnect) — only effective while the time-bound
+    grant (1–120 minutes) is active _and_ the action toggle is enabled in the
+    portal
+  - **Always-allowed actions** (read-only: list/inspect/logs/stats,
+    ping/version/events) — independent of the timer, enabled per action
+  - Secure by default: **all actions are off by default**; the operator
+    explicitly enables what each devcontainer may do. Be extra cautious with
+    `image.push`: pushing goes through the host daemon and does not pass the
+    egress firewall
 - Policy is enforced per request:
   - `docker ps` → filtered to the container's own started containers
   - `docker run` → allowed; label `huddle.parent` added automatically
-  - `docker exec` → only the container's own child containers, never the devcontainer itself
+  - `docker exec` → only the container's own child containers, never the
+    devcontainer itself
   - `docker rm` / `docker rmi` → only resources the container created itself
-  - `docker volume rm` / network delete → only the container's own (labeled) resources; `dc-net-*` networks are untouchable
-  - `docker volume prune` → limited to the container's own volumes via an injected label filter
+  - `docker volume rm` / network delete → only the container's own (labeled)
+    resources; `dc-net-*` networks are untouchable
+  - `docker volume prune` → limited to the container's own volumes via an
+    injected label filter
   - `docker push` → only self-built (labeled) images
   - `docker images` → all images (read-only)
-- Grants and action toggles survive a Huddle restart; proxy sockets are recreated on restart
+- Grants and action toggles survive a Huddle restart; proxy sockets are
+  recreated on restart
 
 ### Container management
-- Overview of all devcontainers with status, image, uptime, and pending rule requests
-- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / VS Code)
+
+- Overview of all devcontainers with status, image, uptime, and pending rule
+  requests
+- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / VS
+  Code)
 - Commit a running container to a snapshot image
 - Force-remove a container including network cleanup
 - A per-container Docker socket proxy is created automatically on start
 
 ### Admin access (sudo)
-Each managed container has two users: `vscode` (the normal dev user, **without** sudo) and `noot` (administrator **with** sudo). Instead of a permanent admin password, Huddle uses an **ephemeral per-grant model**:
 
-- `noot` is created **locked** (in the sudo/wheel group, but with no usable password) when the container is built — there are no standing admin credentials.
-- On the container detail page (**Noot** tab) you **grant admin access** for a chosen duration (5–120 min). Huddle generates a fresh random password, sets it on `noot` via `chpasswd` (over stdin, never a shell argument) and unlocks the account.
-- The password is shown **exactly once** in the UI and is never stored (not even hashed) or retrievable again.
-- When the timer expires, an active sweeper **locks `noot` again** inside the container (and you can **Revoke** early). Because locking must happen inside the container, expiry is not passive — the gateway sweeps every 30 seconds.
+Each managed container has two users: `vscode` (the normal dev user, **without**
+sudo) and `noot` (administrator **with** sudo). Instead of a permanent admin
+password, Huddle uses an **ephemeral per-grant model**:
+
+- `noot` is created **locked** (in the sudo/wheel group, but with no usable
+  password) when the container is built — there are no standing admin
+  credentials.
+- On the container detail page (**Noot** tab) you **grant admin access** for a
+  chosen duration (5–120 min). Huddle generates a fresh random password, sets it
+  on `noot` via `chpasswd` (over stdin, never a shell argument) and unlocks the
+  account.
+- The password is shown **exactly once** in the UI and is never stored (not even
+  hashed) or retrievable again.
+- When the timer expires, an active sweeper **locks `noot` again** inside the
+  container (and you can **Revoke** early). Because locking must happen inside
+  the container, expiry is not passive — the gateway sweeps every 30 seconds.
 - All `sudo` actions are still forwarded to the network log.
 
-This closes security-review finding **#10** (plaintext admin credentials retrievable over the operator API). The old `GET /api/docker/containers/:name/credentials` endpoint is replaced by `GET/POST/DELETE /api/docker/containers/:name/sudo-grant` (status / grant / revoke).
+This closes security-review finding **#10** (plaintext admin credentials
+retrievable over the operator API). The old
+`GET /api/docker/containers/:name/credentials` endpoint is replaced by
+`GET/POST/DELETE /api/docker/containers/:name/sudo-grant` (status / grant /
+revoke).
 
 ### Network log
-- Every proxied HTTP request is logged (container, domain, method, path, status, headers, body — truncated at 20 KB)
+
+- Every proxied HTTP request is logged (container, domain, method, path, status,
+  headers, body — truncated at 20 KB)
 - Admin actions (rule changes, grant changes, container operations) are logged
 - Filterable by container, domain, and action prefix
 
 ### Live UI
+
 - Angular 21 SPA on port 3000
 - WebSocket connection pushes a `reload` event on every state change
 - Unified icon system (`app-icon`) backed by a central SVG registry
-- Pie-action menus in the firewall and container views (approve / snooze / reject)
-
+- Pie-action menus in the firewall and container views (approve / snooze /
+  reject)
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Runtime | Node.js 24 LTS (Alpine) |
-| Backend | Fastify 5, TypeScript 5 |
-| Database | SQLite via better-sqlite3 (WAL mode) |
-| WebSocket | ws |
-| Frontend | Angular 21 (standalone components, signals) |
-| Build | Angular CLI, esbuild |
-| Container | Docker multi-stage build |
+| Layer     | Technology                                  |
+| --------- | ------------------------------------------- |
+| Runtime   | Node.js 24 LTS (Alpine)                     |
+| Backend   | Fastify 5, TypeScript 5                     |
+| Database  | SQLite via better-sqlite3 (WAL mode)        |
+| WebSocket | ws                                          |
+| Frontend  | Angular 21 (standalone components, signals) |
+| Build     | Angular CLI, esbuild                        |
+| Container | Docker multi-stage build                    |
 
 ---
 
@@ -153,7 +206,10 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pulls the latest Huddle image and starts the container. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
+`huddle init` pulls the latest Huddle image and starts the container. It
+automatically detects whether Docker or Podman is available; use
+`huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to
+pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
 
 After that, you start devcontainers directly from a project directory:
 
@@ -163,32 +219,34 @@ huddle
 
 ### Rancher Desktop
 
-Huddle works with [Rancher Desktop](https://rancherdesktop.io/) as long as it runs
-in **dockerd (moby)** mode — the `containerd`/`nerdctl` backend is *not* supported,
-because it does not expose a Docker-compatible engine or socket. Switch the container
-engine to `dockerd (moby)` under **Preferences → Container Engine**.
+Huddle works with [Rancher Desktop](https://rancherdesktop.io/) as long as it
+runs in **dockerd (moby)** mode — the `containerd`/`nerdctl` backend is _not_
+supported, because it does not expose a Docker-compatible engine or socket.
+Switch the container engine to `dockerd (moby)` under **Preferences → Container
+Engine**.
 
-In dockerd mode Rancher Desktop looks like a normal Docker engine, so `huddle init`
-auto-detects it (`--runtime docker`, which is also the default). The one difference
-is the socket location: Rancher Desktop puts its Docker socket at `~/.rd/docker.sock`
-instead of `/var/run/docker.sock`. Huddle reads the active `docker context` and
-mounts that socket automatically — no extra configuration needed. Rancher Desktop
-runs the engine inside a VM on every OS, so Huddle treats it as a remote engine (as
-it does Docker Desktop).
+In dockerd mode Rancher Desktop looks like a normal Docker engine, so
+`huddle init` auto-detects it (`--runtime docker`, which is also the default).
+The one difference is the socket location: Rancher Desktop puts its Docker
+socket at `~/.rd/docker.sock` instead of `/var/run/docker.sock`. Huddle reads
+the active `docker context` and mounts that socket automatically — no extra
+configuration needed. Rancher Desktop runs the engine inside a VM on every OS,
+so Huddle treats it as a remote engine (as it does Docker Desktop).
 
 If auto-detection ever fails, make sure the `rancher-desktop` context is active
 (`docker context use rancher-desktop`) and that `docker info` works, then re-run
 `huddle init --runtime docker`.
 
-> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used for
-> the per-container proxy sockets) into its VM. The defaults cover this, but if you
-> customized the VM's mounts you may need to add those paths back.
+> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used
+> for the per-container proxy sockets) into its VM. The defaults cover this, but
+> if you customized the VM's mounts you may need to add those paths back.
 
 ---
 
 ## Building base images (optional)
 
-Huddle builds base images automatically when you start a devcontainer. To speed this up, you can build them ahead of time:
+Huddle builds base images automatically when you start a devcontainer. To speed
+this up, you can build them ahead of time:
 
 ```bash
 docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
@@ -200,26 +258,42 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 ## Starting containers
 
-You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
+You can start devcontainers via the CLI or via the web UI at
+`http://localhost:3000`.
 
 ### Via the CLI
 
 From a project directory you start a devcontainer with a single command:
 
 ```bash
-huddle                            # IntelliJ (default), current directory
-huddle --ide rider                # Rider
-huddle --ide vscode               # VS Code
-huddle ./my-project               # a different directory
-huddle --ide vscode ./my-project
+huddle start [options] [folder]
 ```
-
-Other options:
 
 ```bash
-huddle --name my-container        # custom container name
-huddle --empty                    # container without a workspace
+huddle start                            # IntelliJ (default), current directory
+huddle start --ide rider                # Rider
+huddle start --ide vscode               # VS Code
+huddle start ./my-project               # a different directory
+huddle start --ide vscode ./my-project
 ```
+
+Options:
+
+| Option                            | Description                                            |
+| --------------------------------- | ------------------------------------------------------ |
+| `--ide <intellij\|rider\|vscode>` | IDE to prepare the container for (default: `intellij`) |
+| `--workspace <path>`              | Workspace directory (default: current directory)       |
+| `--name <name>`                   | Container name (default: `devcontainer-<foldername>`)  |
+| `--image <image>`                 | Use a specific image                                   |
+| `--empty`                         | Empty container without a workspace                    |
+
+```bash
+huddle start --name my-container        # custom container name
+huddle start --empty                    # container without a workspace
+```
+
+The `start` command is the default, so you can leave it out:
+`huddle --ide vscode ./my-project` does the same thing.
 
 After starting, the CLI shows the container name and how to open it in your IDE.
 
@@ -230,7 +304,8 @@ After starting, the CLI shows the container name and how to open it in your IDE.
 3. Select the started container
 4. Click **Open Project** and choose the project directory in the container
 
-The CLI also prints a direct gateway link once the JetBrains backend has started (this can take a few seconds).
+The CLI also prints a direct gateway link once the JetBrains backend has started
+(this can take a few seconds).
 
 ### Opening in VS Code
 
@@ -243,17 +318,19 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 
 ## Migrating an existing Dev Container / Compose project
 
-Already have a `docker-compose.yml` + `devcontainer.json` and want to keep it while routing it
-through Huddle? Mark the network your services share with `huddle.network: "true"` and run:
+Already have a `docker-compose.yml` + `devcontainer.json` and want to keep it
+while routing it through Huddle? Mark the network your services share with
+`huddle.network: "true"` and run:
 
 ```bash
 huddle migrate
 ```
 
-This generates a `docker-compose.huddle.yml` override that attaches your services to Huddle's
-internal network and injects the proxy env vars and CA path — your own files stay untouched.
-See [docs/migrate-devcontainers.md](docs/migrate-devcontainers.md) for the convention, an
-example, and the exact steps.
+This generates a `docker-compose.huddle.yml` override that attaches your
+services to Huddle's internal network and injects the proxy env vars and CA path
+— your own files stay untouched. See
+[docs/migrate-devcontainers.md](docs/migrate-devcontainers.md) for the
+convention, an example, and the exact steps.
 
 ---
 
@@ -266,24 +343,27 @@ huddle fw list               # list of recent requests
 huddle firewall list -i      # interactive mode
 ```
 
-When a devcontainer tries to reach a blocked domain, the request appears on the Firewall page. From there you can allow the domain (permanently or temporarily) or reject it — per container or globally.
+When a devcontainer tries to reach a blocked domain, the request appears on the
+Firewall page. From there you can allow the domain (permanently or temporarily)
+or reject it — per container or globally.
 
 ### Custom rules and wildcards
 
-Besides triaging incoming requests, you can author your own rules up front — from the
-**Firewall** page (**Add rule**) or the CLI. Both the domain and an optional path
-pattern support wildcards:
+Besides triaging incoming requests, you can author your own rules up front —
+from the **Firewall** page (**Add rule**) or the CLI. Both the domain and an
+optional path pattern support wildcards:
 
-- **Domain wildcard** — a `*.` prefix matches any subdomain (but not the bare host).
-  For example `*.pkgs.dev.azure.com` matches `myorg.pkgs.dev.azure.com` but not
-  `pkgs.dev.azure.com`.
-- **Path wildcard** — a `*` in the path pattern matches any run of characters *within
-  a single segment* (it never crosses a `/`). A **trailing** `*` keeps the classic
-  prefix behaviour and spans deeper segments (`/foo/*` also matches `/foo/a/b`).
+- **Domain wildcard** — a `*.` prefix matches any subdomain (but not the bare
+  host). For example `*.pkgs.dev.azure.com` matches `myorg.pkgs.dev.azure.com`
+  but not `pkgs.dev.azure.com`.
+- **Path wildcard** — a `*` in the path pattern matches any run of characters
+  _within a single segment_ (it never crosses a `/`). A **trailing** `*` keeps
+  the classic prefix behaviour and spans deeper segments (`/foo/*` also matches
+  `/foo/a/b`).
 
-This solves the Azure DevOps NuGet case, where every request carries a fresh feed GUID
-in the middle of the path so per-request approvals never match. Author one broad rule
-instead:
+This solves the Azure DevOps NuGet case, where every request carries a fresh
+feed GUID in the middle of the path so per-request approvals never match. Author
+one broad rule instead:
 
 ```bash
 # Allow a whole Azure DevOps NuGet feed, GUID and endpoint wildcarded
@@ -295,12 +375,12 @@ huddle firewall add example.com --path "/admin/*" --deny --container devcontaine
 
 `huddle firewall add` options:
 
-| Option | Description |
-|--------|-------------|
-| `<domain>` | Domain to match (supports a leading `*.` wildcard). Required. |
+| Option             | Description                                                        |
+| ------------------ | ------------------------------------------------------------------ |
+| `<domain>`         | Domain to match (supports a leading `*.` wildcard). Required.      |
 | `--path <pattern>` | Optional path pattern (supports `*` wildcards as described above). |
-| `--deny` | Create a block rule (default is allow). |
-| `--container <id>` | Scope the rule to one container (default is global). |
+| `--deny`           | Create a block rule (default is allow).                            |
+| `--container <id>` | Scope the rule to one container (default is global).               |
 
 Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
 `/foo/..%2fsecret`) can never slip through a wildcard allow.
@@ -309,17 +389,22 @@ Paths are normalised before matching, so traversal tricks (`/foo/../secret`,
 
 ## AI configuration
 
-When building a base image, Huddle can automatically bake AI CLI configurations (such as `CLAUDE.md`, `settings.json`, agents, and skills) into the container. You manage this through the Huddle settings: set the path to your own AI config directory there. Huddle mounts that directory when building the image.
+When building a base image, Huddle can automatically bake AI CLI configurations
+(such as `CLAUDE.md`, `settings.json`, agents, and skills) into the container.
+You manage this through the Huddle settings: set the path to your own AI config
+directory there. Huddle mounts that directory when building the image.
 
-| AI tool | Source path (host) | Target path (container) |
-|---------|--------------------|-------------------------|
-| claude | `<your-ai-config-dir>/claude/` | `/home/vscode/.claude` |
+| AI tool | Source path (host)             | Target path (container) |
+| ------- | ------------------------------ | ----------------------- |
+| claude  | `<your-ai-config-dir>/claude/` | `/home/vscode/.claude`  |
 
 ---
 
 ## Extensions
 
-Huddle has a runtime extension platform. Extensions are `.zip` files you upload through the UI — no restart needed. After uploading, the extension appears as a sub-item in the sidebar.
+Huddle has a runtime extension platform. Extensions are `.zip` files you upload
+through the UI — no restart needed. After uploading, the extension appears as a
+sub-item in the sidebar.
 
 ### Building an extension
 
@@ -332,93 +417,102 @@ my-extension.zip
 ```
 
 **`manifest.json`:**
+
 ```json
 {
   "id": "my-extension",
   "name": "My Extension",
   "version": "1.0.0",
-  "settings": [
-    { "key": "apiKey", "label": "API key", "secret": true }
-  ]
+  "settings": [{ "key": "apiKey", "label": "API key", "secret": true }]
 }
 ```
 
 **`index.js`** — export a `register(ctx)` function:
+
 ```js
-exports.register = async function(ctx) {
-  ctx.app.get('/api/ext/my-extension/data', async (req, reply) => {
-    const key = ctx.getSetting('apiKey');
-    return { data: '...' };
+exports.register = async function (ctx) {
+  ctx.app.get("/api/ext/my-extension/data", async (req, reply) => {
+    const key = ctx.getSetting("apiKey");
+    return { data: "..." };
   });
 };
 ```
 
 **`frontend/component.js`** — Web Component for the in-app UI:
+
 ```js
 class MyExtension extends HTMLElement {
   connectedCallback() {
-    this.innerHTML = '<h1>Hello from the extension</h1>';
+    this.innerHTML = "<h1>Hello from the extension</h1>";
   }
 }
-customElements.define('ext-my-extension', MyExtension);
+customElements.define("ext-my-extension", MyExtension);
 ```
 
 ### Extension context (`ctx`)
 
-| | |
-|---|---|
-| `ctx.app.get/post/put/delete(path, handler)` | Register a route under `/api/ext/<id>/` |
-| `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Read/write settings (SQLite) |
-| `ctx.fetch(url, opts)` | HTTP call through the Huddle proxy — appears as `ext:<id>` in the network log |
-| `ctx.runInContainer(name, cmd)` | Run a shell command in a running devcontainer |
-| `ctx.events` | Listen to Huddle events |
-| `ctx.db` | Direct SQLite access |
-| `ctx.log(msg)` | Log to the Huddle console |
+|                                                      |                                                                               |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `ctx.app.get/post/put/delete(path, handler)`         | Register a route under `/api/ext/<id>/`                                       |
+| `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Read/write settings (SQLite)                                                  |
+| `ctx.fetch(url, opts)`                               | HTTP call through the Huddle proxy — appears as `ext:<id>` in the network log |
+| `ctx.runInContainer(name, cmd)`                      | Run a shell command in a running devcontainer                                 |
+| `ctx.events`                                         | Listen to Huddle events                                                       |
+| `ctx.db`                                             | Direct SQLite access                                                          |
+| `ctx.log(msg)`                                       | Log to the Huddle console                                                     |
 
 ### Firewall and external calls
 
-External calls via `ctx.fetch()` go through the Huddle proxy. The domain must be on the allowlist (**Firewall** → find the domain → **Allow**). Requests appear in the network log as `ext:<id>`.
+External calls via `ctx.fetch()` go through the Huddle proxy. The domain must be
+on the allowlist (**Firewall** → find the domain → **Allow**). Requests appear
+in the network log as `ext:<id>`.
 
 ### Example: Aikido Security
 
-The built-in Aikido extension lives in `gateway/extensions/aikido/`. After loading (automatically on start), **Aikido Security** appears in the sidebar. Functionality:
+The built-in Aikido extension lives in `gateway/extensions/aikido/`. After
+loading (automatically on start), **Aikido Security** appears in the sidebar.
+Functionality:
 
 - Fetch open security issues per workspace from the Aikido API
-- Inject issues as context into a running devcontainer (`aikido/AIKIDO_CLAUDE.md`, `AIKIDO_CONTEXT.md`)
-- Write an MCP server (`aikido-mcp-server.js`) into the container so Claude can fetch issues and trigger scans directly
+- Inject issues as context into a running devcontainer
+  (`aikido/AIKIDO_CLAUDE.md`, `AIKIDO_CONTEXT.md`)
+- Write an MCP server (`aikido-mcp-server.js`) into the container so Claude can
+  fetch issues and trigger scans directly
 - Install an `aikido-fix` script that starts Claude with the right context
 
-You configure credentials (Client ID + Secret) through the UI under **Aikido Security → Settings**.
+You configure credentials (Client ID + Secret) through the UI under **Aikido
+Security → Settings**.
 
 ---
 
 ## API Reference
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/rules` | List rules (filter: `?status=`, `?container=`) |
-| POST | `/api/rules` | Create a rule |
-| PUT | `/api/rules/:id` | Update a rule's status or expiry |
-| POST | `/api/rules/:id/resolve` | Resolve a requested rule as allow/deny (per container or global) |
-| DELETE | `/api/rules/:id` | Delete a rule |
-| GET | `/api/docker/containers` | List devcontainers with pending rule requests |
-| GET | `/api/docker/containers/:name` | Container detail + associated rules |
-| POST | `/api/docker/start` | Start a new devcontainer |
-| POST | `/api/docker/containers/:name/snapshot` | Commit a container to an image |
-| DELETE | `/api/docker/containers/:name` | Force-remove a container |
-| GET | `/api/docker/images` | List snapshot images |
-| GET | `/api/authz/grants` | List active Docker socket grants |
-| PUT | `/api/authz/grants/:container` | Grant Docker access (body: `{ minutes }`) |
-| DELETE | `/api/authz/grants/:container` | Revoke Docker access |
-| GET | `/api/docker/containers/:name/sudo-grant` | Admin-access status (`{ active, until }`) — never returns a password |
-| POST | `/api/docker/containers/:name/sudo-grant` | Grant ephemeral admin access (body: `{ minutes }`); returns the one-time password `{ password, until }` |
-| DELETE | `/api/docker/containers/:name/sudo-grant` | Revoke admin access (locks `noot` immediately) |
-| GET | `/api/authz/docker-actions` | Action catalog (kind, group, label, default) |
-| GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
-| PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
-| GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
+| Method | Path                                           | Description                                                                                             |
+| ------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/rules`                                   | List rules (filter: `?status=`, `?container=`)                                                          |
+| POST   | `/api/rules`                                   | Create a rule                                                                                           |
+| PUT    | `/api/rules/:id`                               | Update a rule's status or expiry                                                                        |
+| POST   | `/api/rules/:id/resolve`                       | Resolve a requested rule as allow/deny (per container or global)                                        |
+| DELETE | `/api/rules/:id`                               | Delete a rule                                                                                           |
+| GET    | `/api/docker/containers`                       | List devcontainers with pending rule requests                                                           |
+| GET    | `/api/docker/containers/:name`                 | Container detail + associated rules                                                                     |
+| POST   | `/api/docker/start`                            | Start a new devcontainer                                                                                |
+| POST   | `/api/docker/containers/:name/snapshot`        | Commit a container to an image                                                                          |
+| DELETE | `/api/docker/containers/:name`                 | Force-remove a container                                                                                |
+| GET    | `/api/docker/images`                           | List snapshot images                                                                                    |
+| GET    | `/api/authz/grants`                            | List active Docker socket grants                                                                        |
+| PUT    | `/api/authz/grants/:container`                 | Grant Docker access (body: `{ minutes }`)                                                               |
+| DELETE | `/api/authz/grants/:container`                 | Revoke Docker access                                                                                    |
+| GET    | `/api/docker/containers/:name/sudo-grant`      | Admin-access status (`{ active, until }`) — never returns a password                                    |
+| POST   | `/api/docker/containers/:name/sudo-grant`      | Grant ephemeral admin access (body: `{ minutes }`); returns the one-time password `{ password, until }` |
+| DELETE | `/api/docker/containers/:name/sudo-grant`      | Revoke admin access (locks `noot` immediately)                                                          |
+| GET    | `/api/authz/docker-actions`                    | Action catalog (kind, group, label, default)                                                            |
+| GET    | `/api/authz/docker-actions/:container`         | Effective action toggles + grant per container                                                          |
+| PUT    | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`)                                                          |
+| GET    | `/api/audit`                                   | Network log (filter: `?container=`, `?domain=`, `?action=`)                                             |
 
-All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
+All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to
+connected clients.
 
 ---
 
@@ -508,60 +602,57 @@ There are two ways an `experiment-<nr>` build gets published:
   This is a `workflow_dispatch`, so only users with write access can start it —
   fork code is only ever built on an explicit maintainer action, never
   automatically. Once the run finishes, `huddle experiment use 68` works for
-  everyone. Because GitHub issues and PRs share one number space, a PR-based
-  key never collides with an issue-based one.
+  everyone. Because GitHub issues and PRs share one number space, a PR-based key
+  never collides with an issue-based one.
 
 ---
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)). |
-| `huddle init` finds no runtime | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`. |
-| Rancher Desktop not detected | Use **dockerd (moby)** mode (not `containerd`), activate the context with `docker context use rancher-desktop`, verify `docker info` works, then re-run `huddle init --runtime docker`. |
-| Web UI not reachable at `http://localhost:3000` | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host. |
-| Devcontainer can't reach a domain | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`. |
-| JetBrains Gateway doesn't see the container right away | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready. |
-| `docker` inside the devcontainer gives *permission denied* | Docker access runs through a time-bound grant. Grant access via **Docker Access** in the UI (or `PUT /api/authz/grants/:container`). |
-| Port 80 already in use | Another proxy/web server is using port 80. Stop that service or adjust the port mapping when starting the Huddle container. |
+| Problem                                                        | Solution                                                                                                                                                                                |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker login ghcr.io` or `npm install` fails with **401/403** | Your token expired or lacks the `read:packages` scope. Create a new token and log in again (see [Getting Started](#getting-started)).                                                   |
+| `huddle init` finds no runtime                                 | Make sure Docker or Podman is running. Force it explicitly with `huddle init --runtime docker` (or `podman`), or set `HUDDLE_RUNTIME`.                                                  |
+| Rancher Desktop not detected                                   | Use **dockerd (moby)** mode (not `containerd`), activate the context with `docker context use rancher-desktop`, verify `docker info` works, then re-run `huddle init --runtime docker`. |
+| Web UI not reachable at `http://localhost:3000`                | Check that the Huddle container is running (`docker ps`). The management API binds to `127.0.0.1` by default — reach it locally, not from another host.                                 |
+| Devcontainer can't reach a domain                              | Expected behavior: all traffic goes through the firewall. Allow the domain via **Firewall** in the UI or `huddle fw list`.                                                              |
+| JetBrains Gateway doesn't see the container right away         | The JetBrains backend needs a moment to start; the CLI prints the gateway link once it's ready.                                                                                         |
+| `docker` inside the devcontainer gives _permission denied_     | Docker access runs through a time-bound grant. Grant access via **Docker Access** in the UI (or `PUT /api/authz/grants/:container`).                                                    |
+| Port 80 already in use                                         | Another proxy/web server is using port 80. Stop that service or adjust the port mapping when starting the Huddle container.                                                             |
 
-Need more logs? The network log and admin actions are in the UI under
-**Network log**; view container logs with `docker logs <container>`.
+Need more logs? The network log and admin actions are in the UI under **Network
+log**; view container logs with `docker logs <container>`.
 
 ---
 
 ## FAQ
 
-**Is Huddle a replacement for a corporate firewall or VPN?**
-No. Huddle shields *devcontainers* at the application level (per-domain
-allowlist, controlled Docker actions). It complements, but does not replace,
-network infrastructure.
+**Is Huddle a replacement for a corporate firewall or VPN?** No. Huddle shields
+_devcontainers_ at the application level (per-domain allowlist, controlled
+Docker actions). It complements, but does not replace, network infrastructure.
 
-**Does Huddle work with Podman?**
-Yes. `huddle init` automatically detects Docker or Podman; you can force it with
-`--runtime` or the `HUDDLE_RUNTIME` env var.
+**Does Huddle work with Podman?** Yes. `huddle init` automatically detects
+Docker or Podman; you can force it with `--runtime` or the `HUDDLE_RUNTIME` env
+var.
 
-**Does Huddle work with Rancher Desktop?**
-Yes, in **dockerd (moby)** mode (not `containerd`/`nerdctl`). Huddle auto-detects it
-as Docker and reads the `~/.rd/docker.sock` socket from the active docker context.
-See [Rancher Desktop](#rancher-desktop) under Getting Started.
+**Does Huddle work with Rancher Desktop?** Yes, in **dockerd (moby)** mode (not
+`containerd`/`nerdctl`). Huddle auto-detects it as Docker and reads the
+`~/.rd/docker.sock` socket from the active docker context. See
+[Rancher Desktop](#rancher-desktop) under Getting Started.
 
-**Does Huddle intercept HTTPS traffic?**
-HTTP requests are logged in full. HTTPS is tunneled through `CONNECT`; its
-contents are not intercepted, only the target domain is checked against the
-allowlist.
+**Does Huddle intercept HTTPS traffic?** HTTP requests are logged in full. HTTPS
+is tunneled through `CONNECT`; its contents are not intercepted, only the target
+domain is checked against the allowlist.
 
-**Where is state stored?**
-In a local SQLite database (WAL mode) inside the Huddle container. Firewall
-rules and Docker grants survive a restart.
+**Where is state stored?** In a local SQLite database (WAL mode) inside the
+Huddle container. Firewall rules and Docker grants survive a restart.
 
-**Do I have to build the base images myself?**
-No. Huddle builds them automatically when you start a devcontainer. Building them
-ahead of time can speed this up (see [Building base images](#building-base-images-optional)).
+**Do I have to build the base images myself?** No. Huddle builds them
+automatically when you start a devcontainer. Building them ahead of time can
+speed this up (see [Building base images](#building-base-images-optional)).
 
-**Can I use Huddle in production?**
-Huddle is provided "AS IS" without warranty (see below). Use at your own risk.
+**Can I use Huddle in production?** Huddle is provided "AS IS" without warranty
+(see below). Use at your own risk.
 
 ---
 
@@ -569,8 +660,8 @@ Huddle is provided "AS IS" without warranty (see below). Use at your own risk.
 
 Contributions are welcome! Please read first:
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to report bugs, propose features, and
-  open a pull request.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to report bugs, propose features,
+  and open a pull request.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community behavior guidelines.
 - [`SECURITY.md`](SECURITY.md) — report security issues **privately**, not as a
   public issue.
@@ -596,8 +687,8 @@ See [`SUPPORT.md`](SUPPORT.md) for details.
 
 ## License
 
-Huddle is licensed under the **GNU General Public License v3.0 (or later)**.
-See the [`LICENSE`](LICENSE) file for the full text.
+Huddle is licensed under the **GNU General Public License v3.0 (or later)**. See
+the [`LICENSE`](LICENSE) file for the full text.
 
 ```
 Copyright (C) 2026 Info Support B.V.
