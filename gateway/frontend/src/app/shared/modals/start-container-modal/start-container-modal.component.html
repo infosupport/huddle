@@ -57,6 +57,25 @@
             <div class="sc-field">
               <div class="sc-label">Project folders</div>
 
+              <!-- Shared by both kinds' "Add folder" rows below — only one
+                   kind's section is ever visible, so one dispatcher/menu-state
+                   (addFolderRow()/addMenuOpen) safely serves both. -->
+              <ng-template #addFolderBtn>
+                <div class="mount-add">
+                  <div class="sc-split-btn">
+                    <button type="button" class="btn btn-sm sc-split-main" (click)="addFolderRow()"><app-icon name="plus" [size]="14" /> Add folder</button>
+                    <button type="button" class="btn btn-sm sc-split-chevron" (click)="toggleAddMenu($event)" title="More ways to add folders">
+                      <app-icon name="chevron-down" [size]="14" />
+                    </button>
+                    @if (addMenuOpen) {
+                      <div class="sc-split-menu" (click)="$event.stopPropagation()">
+                        <button type="button" (click)="openFolderPicker()">Browse…</button>
+                      </div>
+                    }
+                  </div>
+                </div>
+              </ng-template>
+
               @if (kind === 'container') {
                 <p class="mount-hint muted">Select where the folders should be mounted inside the environment.</p>
 
@@ -86,19 +105,7 @@
                     <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
                   </div>
                 }
-                <div class="mount-add">
-                  <div class="sc-split-btn">
-                    <button type="button" class="btn btn-sm sc-split-main" (click)="addMount()"><app-icon name="plus" [size]="14" /> Add folder</button>
-                    <button type="button" class="btn btn-sm sc-split-chevron" (click)="toggleAddMenu($event)" title="More ways to add folders">
-                      <app-icon name="chevron-down" [size]="14" />
-                    </button>
-                    @if (addMenuOpen) {
-                      <div class="sc-split-menu" (click)="$event.stopPropagation()">
-                        <button type="button" (click)="openFolderPicker()">Browse…</button>
-                      </div>
-                    }
-                  </div>
-                </div>
+                <ng-container *ngTemplateOutlet="addFolderBtn" />
 
                 @if (empty) {
                   <p class="mount-hint muted">No folders — this environment starts empty; clone manually after it's created.</p>
@@ -132,10 +139,7 @@
                     <button type="button" class="sc-map-x" (click)="removeSbxFolder($index)" [disabled]="sbxFolders.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
                   </div>
                 }
-                <div class="mount-add">
-                  <button type="button" class="btn btn-sm" (click)="addSbxFolder()"><app-icon name="plus" [size]="14" /> Add folder</button>
-                  <button type="button" class="btn btn-sm" (click)="sbxFolderPickerOpen = true">Browse folders…</button>
-                </div>
+                <ng-container *ngTemplateOutlet="addFolderBtn" />
 
                 @if (sbxSettings; as s) {
                   @if (s.folders.length) {
