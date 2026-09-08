@@ -401,6 +401,20 @@ describe('startNodeDetached — control-host mismatch', () => {
     expect(spawn).toHaveBeenCalledTimes(1); // nothing new spawned
   });
 
+  it('reuses a healthy recorded Node without resolving another local entry', async () => {
+    await startNodeDetached({ entry, dataDir, controlHost: '172.17.0.1' });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    // Simulate the optional platform package disappearing after the original
+    // Node was launched. Reuse must not turn that into an unnecessary init
+    // failure: resolving an entry is only needed when we have to spawn one.
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const reused = await startNodeDetached({ dataDir, controlHost: '172.17.0.1' });
+
+    expect(reused.reused).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('reuses the running Node when controlHost is unset both times', async () => {
     await startNodeDetached({ entry, dataDir });
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -419,6 +433,17 @@ describe('startNodeDetached — control-host mismatch', () => {
     expect(second.reused).toBe(false);
     expect(spawn).toHaveBeenCalledTimes(2); // old one stopped, a new one spawned
     expect(boundHost).toBe('10.88.0.1'); // actually bound where this call asked
+  });
+
+  it('keeps a mismatched Node running when no replacement entry is available', async () => {
+    await startNodeDetached({ entry, dataDir, controlHost: '172.17.0.1' });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    await expect(startNodeDetached({ dataDir, controlHost: '10.88.0.1' }))
+      .rejects.toBeInstanceOf(MissingNodeEntryError);
+
+    expect(alive).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
 
