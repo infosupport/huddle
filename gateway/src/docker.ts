@@ -1244,7 +1244,7 @@ export interface LifecycleCommands {
 export interface StartParams {
   imageName: string;
   workspaceDir: string;     // host path, forward slashes; empty string when empty=true or mounts is set
-  mounts?: { hostPath: string; containerPath: string }[]; // multiple folder mounts, each host path bound at its own container path; takes precedence over workspaceDir when set
+  mounts?: { hostPath: string; containerPath: string; readOnly?: boolean }[]; // multiple folder mounts, each host path bound at its own container path; takes precedence over workspaceDir when set
   containerName: string;
   containerWorkspace: string; // container path the IDE opens as project root: /workspaces/<leaf> for a single mount, the explicit "open at" path for multiple
   presentableName: string;
@@ -1579,7 +1579,7 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
       if (isMultiMount) {
         for (const m of mountParams!) {
           const effectiveSource = await ensureWorktree(toLinuxPath(m.hostPath, mountStyle), containerName);
-          workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: m.containerPath });
+          workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: m.containerPath, ReadOnly: m.readOnly });
         }
         sourcesPathLabel = mountParams![0].hostPath;
       } else {
