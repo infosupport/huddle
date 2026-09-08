@@ -71,13 +71,16 @@
                       <app-icon name="chevron-right" [size]="12" />
                       <div class="mount-path-field">
                         <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
-                               [class.mount-target-input--ro]="m.readOnly"
+                               [class.mount-target-input--tint]="m.containerPath"
+                               [class.mount-target-input--ro]="m.containerPath && m.readOnly"
                                placeholder="/workspaces/…" aria-label="Path inside the environment" />
-                        <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
-                                [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
-                                (click)="m.readOnly = !m.readOnly">
-                          <app-icon [name]="m.readOnly ? 'lock' : 'unlock'" [size]="14" />
-                        </button>
+                        @if (m.containerPath) {
+                          <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
+                                  [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
+                                  (click)="m.readOnly = !m.readOnly">
+                            <app-icon [name]="m.readOnly ? 'eye' : 'pen'" [size]="14" />
+                          </button>
+                        }
                       </div>
                     </div>
                     <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
@@ -182,7 +185,7 @@
                  shared (docs/ADR-workspace-runtime-abstraction.md). -->
             <div class="sc-acc">
               <button type="button" class="sc-acc-head" (click)="toggleAcc('baseImage')">
-                <app-icon [name]="kind === 'sandbox' ? 'activity' : 'box'" [size]="16" class="sc-acc-mark" />
+                <app-icon [name]="kind === 'sandbox' ? 'bot' : 'box'" [size]="16" class="sc-acc-mark" />
                 <span class="sc-acc-t">
                   @if (kind === 'container') {
                     <span class="sc-acc-name">Base image</span>
@@ -223,7 +226,7 @@
             <!-- Environment variables -->
             <div class="sc-acc">
               <button type="button" class="sc-acc-head" (click)="toggleAcc('envVars')">
-                <app-icon name="file-text" [size]="16" class="sc-acc-mark" />
+                <app-icon name="braces" [size]="16" class="sc-acc-mark" />
                 <span class="sc-acc-t">
                   <span class="sc-acc-name">Environment variables</span>
                   <span class="sc-acc-sub muted">containerEnv · remoteEnv</span>
@@ -270,7 +273,7 @@
             @if (ideFamily === 'jetbrains') {
               <div class="sc-acc">
                 <button type="button" class="sc-acc-head" (click)="toggleAcc('jetbrains')">
-                  <app-icon name="settings" [size]="16" class="sc-acc-mark" />
+                  <img src="/assets/ide-jetbrains.png" alt="" class="sc-acc-mark sc-acc-mark--img" />
                   <span class="sc-acc-t">
                     <span class="sc-acc-name">Customisations — JetBrains</span>
                     <span class="sc-acc-sub muted">customizations.jetbrains</span>
@@ -317,7 +320,7 @@
             } @else {
               <div class="sc-acc">
                 <button type="button" class="sc-acc-head" (click)="toggleAcc('vscode')">
-                  <app-icon name="settings" [size]="16" class="sc-acc-mark" />
+                  <img src="/assets/ide-vscode.png" alt="" class="sc-acc-mark sc-acc-mark--img" />
                   <span class="sc-acc-t">
                     <span class="sc-acc-name">Customisations — VS Code</span>
                     <span class="sc-acc-sub muted">customizations.vscode</span>
@@ -336,7 +339,7 @@
             <!-- Lifecycle commands -->
             <div class="sc-acc">
               <button type="button" class="sc-acc-head" (click)="toggleAcc('lifecycle')">
-                <app-icon name="external-link" [size]="16" class="sc-acc-mark" />
+                <app-icon name="terminal" [size]="16" class="sc-acc-mark" />
                 <span class="sc-acc-t">
                   <span class="sc-acc-name">Lifecycle commands</span>
                   <span class="sc-acc-sub muted">initializeCommand · onCreateCommand · updateContentCommand · postCreateCommand · postStartCommand · postAttachCommand</span>
