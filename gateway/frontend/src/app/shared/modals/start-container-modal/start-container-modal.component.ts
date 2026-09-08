@@ -86,7 +86,7 @@ interface Lifecycle {
     }
     .modal-header h2 {
       font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600;
-      letter-spacing: -.2px; color: var(--text);
+      letter-spacing: -.2px; color: var(--text); margin: 0;
     }
     .modal-close {
       width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
