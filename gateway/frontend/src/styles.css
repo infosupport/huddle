@@ -36,9 +36,9 @@
 
   --sidebar-w: 248px;
 
-  --asset-igloo: url("/assets/igloo-light.png");
-  --asset-sunset: url("/assets/sunset-light.png");
-  --asset-aurora: url("/assets/aurora-light.png");
+  --asset-igloo: url("/assets/igloo-light.webp");
+  --asset-sunset: url("/assets/sunset-light.webp");
+  --asset-aurora: url("/assets/aurora-light.webp");
   --asset-logo: url("/assets/logo-light.png");
 }
 
@@ -68,9 +68,9 @@
 
   --accent-soft: rgba(244,117,33,.14);
 
-  --asset-igloo: url("/assets/igloo-dark.png");
-  --asset-sunset: url("/assets/sunset-dark.png");
-  --asset-aurora: url("/assets/aurora-dark.png");
+  --asset-igloo: url("/assets/igloo-dark.webp");
+  --asset-sunset: url("/assets/sunset-dark.webp");
+  --asset-aurora: url("/assets/aurora-dark.webp");
   --asset-logo: url("/assets/logo-dark.png");
 }
 
