@@ -135,7 +135,12 @@ interface Lifecycle {
     .sc-map-x:hover { background: var(--danger-soft); color: var(--danger); }
     .sc-map-x:disabled { opacity: .4; cursor: not-allowed; }
 
-    .mount-row { display: flex; gap: .5rem; align-items: center; }
+    /* margin-bottom, not gap on the parent: consecutive rows need space
+       between them, but this collapses (max, not sum) with .mount-add's own
+       margin-top: 11px below the last row — since 8px < 11px that collapsed
+       margin stays 11px, so the "Add folder" button doesn't end up doubly
+       spaced away from the last row. */
+    .mount-row { display: flex; gap: .5rem; align-items: center; margin-bottom: 8px; }
     .mount-row .mount-host { flex: 1; min-width: 0; }
     .mount-row .mount-arrow { flex: 0 0 auto; color: var(--text-dim); }
     .mount-row input { flex: 1; min-width: 0; }
