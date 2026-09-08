@@ -60,45 +60,40 @@
               @if (kind === 'container') {
                 <p class="mount-hint muted">Select where the folders should be mounted inside the environment.</p>
 
-                <label class="empty-toggle">
-                  <input type="checkbox" [(ngModel)]="empty" (ngModelChange)="onEmptyToggle()" />
-                  Empty (clone manually)
-                </label>
-
-                @if (!empty) {
-                  @for (m of mounts; track $index) {
-                    <div class="mount-row sc-mount-row">
-                      <div class="mount-host">
-                        <app-folder-select [value]="m.hostPath" browseMode="icon"
-                                           placeholder="C:/projects/my-repo/backend" [multiple]="true"
-                                           pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
-                                           (valueChange)="onHostPathInput(m, $event)"
-                                           (valuesChange)="onMountPicked($event)" />
-                        <div class="mount-target muted">
-                          <app-icon name="chevron-right" [size]="12" />
-                          <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
-                                 placeholder="/workspaces/…" aria-label="Path inside the environment" />
-                          <label class="ro-toggle" title="Mount this folder read-only">
-                            <input type="checkbox" [(ngModel)]="m.readOnly" /> read-only
-                          </label>
-                        </div>
-                      </div>
-                      <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
+                @for (m of mounts; track $index) {
+                  <div class="mount-row sc-mount-row">
+                    <app-folder-select class="mount-host" [value]="m.hostPath" browseMode="icon"
+                                       placeholder="C:/projects/my-repo/backend" [multiple]="true"
+                                       pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
+                                       (valueChange)="onHostPathInput(m, $event)"
+                                       (valuesChange)="onMountPicked($event)" />
+                    <div class="mount-target muted">
+                      <app-icon name="chevron-right" [size]="12" />
+                      <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
+                             placeholder="/workspaces/…" aria-label="Path inside the environment" />
+                      <label class="ro-toggle" title="Mount this folder read-only">
+                        <input type="checkbox" [(ngModel)]="m.readOnly" /> read-only
+                      </label>
                     </div>
-                  }
-                  <div class="mount-add">
-                    <div class="sc-split-btn">
-                      <button type="button" class="btn btn-sm sc-split-main" (click)="addMount()"><app-icon name="plus" [size]="14" /> Add folder</button>
-                      <button type="button" class="btn btn-sm sc-split-chevron" (click)="toggleAddMenu($event)" title="More ways to add folders">
-                        <app-icon name="chevron-down" [size]="14" />
-                      </button>
-                      @if (addMenuOpen) {
-                        <div class="sc-split-menu" (click)="$event.stopPropagation()">
-                          <button type="button" (click)="openFolderPicker()">Browse…</button>
-                        </div>
-                      }
-                    </div>
+                    <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
                   </div>
+                }
+                <div class="mount-add">
+                  <div class="sc-split-btn">
+                    <button type="button" class="btn btn-sm sc-split-main" (click)="addMount()"><app-icon name="plus" [size]="14" /> Add folder</button>
+                    <button type="button" class="btn btn-sm sc-split-chevron" (click)="toggleAddMenu($event)" title="More ways to add folders">
+                      <app-icon name="chevron-down" [size]="14" />
+                    </button>
+                    @if (addMenuOpen) {
+                      <div class="sc-split-menu" (click)="$event.stopPropagation()">
+                        <button type="button" (click)="openFolderPicker()">Browse…</button>
+                      </div>
+                    }
+                  </div>
+                </div>
+
+                @if (empty) {
+                  <p class="mount-hint muted">No folders — this environment starts empty; clone manually after it's created.</p>
                 }
 
                 @if (containerSettingsFolders.length) {
@@ -109,7 +104,7 @@
                         <code>{{ m.host_path }}</code>
                         <app-icon name="chevron-right" [size]="12" />
                         <code>{{ m.container_path }}</code>
-                        @if (m.read_only) { <span>(read-only)</span> }
+                        @if (m.read_only) { <span class="pill">read-only</span> }
                       </div>
                     }
                   </div>
@@ -143,7 +138,7 @@
                           <code>{{ f.hostPath }}</code>
                           <app-icon name="chevron-right" [size]="12" />
                           <code>{{ f.targetPath }}</code>
-                          @if (f.readOnly) { <span>(read-only)</span> }
+                          @if (f.readOnly) { <span class="pill">read-only</span> }
                         </div>
                       }
                     </div>
@@ -401,7 +396,7 @@
         }
       </div>
       <div class="modal-footer sc-foot-panel">
-        <img class="sc-foot-art" src="/assets/penguin-create.png" alt="" width="64" height="64">
+        <img class="sc-foot-art" src="/assets/penguin-create.webp" alt="" width="64" height="64">
         <div class="sc-foot-text">
           <b>Ready to build something great?</b>
           <span>Your environment will be created in a secure, isolated space.</span>

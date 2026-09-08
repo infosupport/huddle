@@ -144,18 +144,24 @@ interface Lifecycle {
     .mount-hint { font-size: 12px; margin: 7px 0 0; }
     .mount-add { display: flex; gap: 9px; margin-top: 11px; }
     .mount-row .ro-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: .3rem; font-size: 11.5px; color: var(--text-muted); }
-    /* Project-folder rows only: a second line (the editable container-path
-       field + its read-only toggle) sits under the folder field, so the
-       row's remove button top-aligns instead of centering against the
-       now-taller left column. */
-    .mount-row.sc-mount-row { align-items: flex-start; }
-    .mount-row.sc-mount-row .sc-map-x { margin-top: 2px; }
-    /* The container-path line: a chevron, the editable path input (grows to
+    /* Project-folder rows only: host path and the container-path group (arrow
+       + editable path + read-only toggle) sit side by side as two flex items,
+       each with its own flex-basis, in a row that's allowed to wrap. When the
+       column is wide enough both fit on one line; when it isn't, flex-wrap
+       breaks the line BETWEEN the two items (neither item's own children wrap
+       internally), so host path drops to its own line and the arrow+path+
+       toggle group moves to the next line as one unit — exactly the "split
+       before the arrow" layout, with no media query needed. The remove button
+       is a third, non-shrinking item that wraps along with whichever line has
+       room for it. */
+    .mount-row.sc-mount-row { flex-wrap: wrap; }
+    .mount-row.sc-mount-row .mount-host { flex: 1 1 200px; min-width: 0; }
+    /* The container-path group: a chevron, the editable path input (grows to
        fill the space — sized via the shared ".mount-row input" rule above),
        and the read-only toggle right after it (moved here from beside the
        whole row, per the redesign — it's the path's own toggle, not the
        row's). */
-    .mount-target { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 2px; }
+    .mount-target { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
 
     /* ── Split "Add folder" button (container kind) ──────────────────────────── */
     .sc-split-btn { position: relative; display: inline-flex; }
@@ -233,6 +239,10 @@ interface Lifecycle {
     .sc-automount-t span { font-weight: 400; color: var(--text-muted); }
     .sc-automount-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-muted); margin-top: 7px; flex-wrap: wrap; }
     .sc-automount-row code { font-size: 11px; }
+    /* Bare .pill (no --allow/--deny/etc modifier) carries no background/color
+       of its own — give the read-only marker a small, muted fill so it reads
+       as a badge rather than invisible padding inside this dashed row. */
+    .sc-automount-row .pill { padding: 2px 9px; font-size: 10px; font-weight: 700; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border-strong); }
 
     /* ── Accordions (right column) ───────────────────────────────────────────── */
     .sc-acc { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; overflow: hidden; background: var(--surface); }
@@ -320,7 +330,6 @@ export class StartContainerModalComponent {
   addMenuOpen = false;
   containerName = '';
   nameTouched = false;
-  empty = false;
   error = '';
   status = '';
   loading = false;
@@ -368,6 +377,13 @@ export class StartContainerModalComponent {
   /** A fresh, non-dirty mount row — see MountRow. */
   private newMountRow(hostPath = '', readOnly = false): MountRow {
     return { hostPath, containerPath: '', readOnly, containerPathDirty: false };
+  }
+
+  /** True when every mount row's hostPath is blank — an intentionally empty
+   * environment (user clones manually after create). Derived, not a separate
+   * toggle: not specifying any folder mapping simply means "empty". */
+  get empty(): boolean {
+    return this.mounts.every((m) => !m.hostPath.trim());
   }
 
   /**
@@ -419,7 +435,6 @@ export class StartContainerModalComponent {
     this.addMenuOpen = false;
     this.containerName = '';
     this.nameTouched = false;
-    this.empty = false;
     this.error = '';
     this.status = '';
     this.loading = false;
@@ -651,24 +666,10 @@ export class StartContainerModalComponent {
     this.containerName = leaf ? `devcontainer-${leaf}` : '';
   }
 
-  onEmptyToggle(): void {
-    if (this.empty) {
-      this.mounts = [];
-      if (!this.nameTouched && !this.containerName) {
-        this.containerName = 'devcontainer-empty';
-      }
-    } else if (this.mounts.length === 0) {
-      this.mounts = [this.newMountRow()];
-      this.refreshMountTargets();
-    }
-    this.updateAutoName();
-  }
-
   private validate(): string | null {
     if (!this.selectedImage || !this.containerName) return 'All fields are required';
     if (this.empty) return null;
     const hostPaths = this.mounts.map((m) => m.hostPath.trim()).filter(Boolean);
-    if (hostPaths.length === 0) return 'Add at least one folder';
     // Same normalize-and-compare style as validateSandbox() below (Windows
     // paths are case-insensitive, and a trailing slash is not a difference).
     const seen = new Set<string>();
