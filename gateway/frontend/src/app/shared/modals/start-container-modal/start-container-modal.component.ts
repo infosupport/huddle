@@ -446,6 +446,17 @@ export class StartContainerModalComponent {
       // never user-editable (see the disabled destination input in the
       // template, and setKind() below which re-syncs this on every switch).
       this.mounts.forEach((m) => { m.containerPath = m.hostPath; });
+      // buildCreateArgs() (ops.ts) only ever runs `extras` (every folder after
+      // the first) through workspaceArg(), which is what appends `:ro` — the
+      // primary/first folder can NEVER be mounted read-only in a sandbox, a
+      // real sbx CLI limitation (see WorkspaceSpec/CreateParams in
+      // protocol.ts). Force it false here, not just hide the toggle for row 0
+      // in the template: a row can arrive at index 0 already marked readOnly
+      // (e.g. it was a non-primary row in 'container' kind, or a multi-folder
+      // layout got reordered/removed down to one row), and with the toggle
+      // hidden that stale `true` would otherwise be invisible and still get
+      // silently ignored rather than corrected.
+      if (this.mounts[0]) this.mounts[0].readOnly = false;
       return;
     }
     const targets = computeMountTargets(this.mounts.map((m) => m.hostPath));

@@ -76,13 +76,17 @@
                 </div>
               </ng-template>
 
-              <!-- The ONE shared row for both kinds. The only kind-conditional
-                   bits are the destination-input's [disabled]/[title] pair —
-                   sbx has no path-remapping capability, so for that kind the
-                   destination always mirrors the host path (see
-                   refreshMountTargets()) and is never user-editable.
-                   Everything else (host field, read-only pen/eye toggle,
-                   remove button) is identical between kinds. -->
+              <!-- The ONE shared row for both kinds. The destination-input's
+                   [disabled]/[title] pair is kind-conditional — sbx has no
+                   path-remapping capability, so for that kind the destination
+                   always mirrors the host path (see refreshMountTargets())
+                   and is never user-editable. The read-only toggle is ALSO
+                   kind-conditional at index 0: `sbx create`'s primary/first
+                   folder can never be mounted read-only (see buildCreateArgs()
+                   in ops.ts and refreshMountTargets()'s sandbox branch below),
+                   so the control is hidden there rather than shown but inert.
+                   Everything else (host field, remove button) is identical
+                   between kinds. -->
               <ng-template #folderRow let-m let-i="index">
                 <div class="mount-row sc-mount-row">
                   <app-folder-select class="mount-host" [value]="m.hostPath" browseMode="icon"
@@ -99,7 +103,7 @@
                              [disabled]="kind === 'sandbox'"
                              [title]="kind === 'sandbox' ? &quot;Sandboxes mount every folder at its own host path — this can't be changed here.&quot; : ''"
                              placeholder="/workspaces/…" aria-label="Path inside the environment" />
-                      @if (m.containerPath) {
+                      @if (m.containerPath && !(kind === 'sandbox' && i === 0)) {
                         <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
                                 [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
                                 (click)="m.readOnly = !m.readOnly">
