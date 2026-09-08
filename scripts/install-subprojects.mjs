@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Installs the dependencies of gateway/ and cli/. Runs as the root package's
- * `install` lifecycle script, so a plain `npm install` at the repo root sets up
- * the whole monorepo — which README.md, CONTRIBUTING.md and .github/workflows/
- * test.yml all tell you to do.
+ * Installs the dependencies of gateway/, gateway/frontend/ and cli/. Runs as the
+ * root package's `install` lifecycle script, so a plain `npm install` at the
+ * repo root sets up the whole monorepo — which README.md, CONTRIBUTING.md and
+ * .github/workflows/test.yml all tell you to do.
  *
  * This used to be a one-liner in package.json:
  *
@@ -32,7 +32,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SUBPROJECTS = ['gateway', 'cli'];
+// gateway/frontend is its own npm project (Angular's dependency tree is a
+// world of its own), not an npm workspace of gateway/ and not installed by
+// gateway's own `npm install` — `gateway/package.json`'s build:ui just runs
+// `npm run build --prefix frontend` and assumes the deps are already there.
+// Left out of this list before, a plain `npm install` at the repo root would
+// build gateway fine and then fail (or silently run against a stale/foreign
+// node_modules) the first time anything tried gateway/frontend's own tooling.
+const SUBPROJECTS = ['gateway', 'gateway/frontend', 'cli'];
 
 // Set by npm for anything it runs. Absent only if someone runs this by hand.
 const npmCli = process.env.npm_execpath;

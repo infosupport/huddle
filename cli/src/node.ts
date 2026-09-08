@@ -21,7 +21,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { bold, cyan, dim, red, yellow } from './utils';
+import { bold, cyan, dim, green, red, yellow } from './utils';
 import { CONFIG_DIR } from './config';
 
 export interface NodeOptions {
@@ -237,6 +237,41 @@ export function readGatewayToken(dataDir: string): string {
   }
 }
 
+/**
+ * Waits for the just-spawned Node to answer, then prints the same auto-login
+ * link `huddle init` prints — same idea as init's verifyControlChannel-style
+ * probing, just against the portal instead of the control channel. Silent on
+ * timeout: if Node never comes up, runNode()'s own child 'error'/'exit'
+ * handlers already say why, and printing "couldn't find a token" on top of
+ * that would just be noise.
+ */
+async function printLoginLinkWhenReady(dataDir: string, port: string): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    for (const url of nodeProbeUrls(port)) {
+      try {
+        // Any response at all — even 401/500 — proves the API is accepting
+        // connections, which is all this needs to know before it goes looking
+        // for the token file Node writes at the same point in its own boot.
+        await fetch(`${url}/api/auth/status`, { signal: AbortSignal.timeout(1000) });
+        const token = readOperatorToken(dataDir);
+        if (!token) return; // up, but no token file — nothing to offer
+        console.log('');
+        console.log(bold('Open the portal (auto-login link):'));
+        console.log(green(`    ${nodeUrl(port)}/?token=${encodeURIComponent(token)}`));
+        console.log(dim('  Opens the portal and logs you in automatically.'));
+        console.log(dim(`  Manual token (if you prefer to paste it): ${token}`));
+        console.log('');
+        return;
+      } catch {
+        // Not up yet on this address, or this address doesn't answer at all
+        // (e.g. the ::1 literal on a v4-only host) — try the next one/retry.
+      }
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
 export async function runNode(opts: NodeOptions = {}): Promise<void> {
   let entry: string | null;
   try {
@@ -277,6 +312,18 @@ export async function runNode(opts: NodeOptions = {}): Promise<void> {
   console.log(yellow('  The firewall still lives in huddle-gateway; this process does not enforce it.'));
   console.log(dim('  Ctrl-C to stop.'));
   console.log('');
+
+  // `huddle init` prints an auto-login link once startNodeDetached() confirms
+  // Node is up (it can, because it awaits that probe before returning). This
+  // command never had an equivalent: it launches the child and immediately
+  // awaits its exit, so there was no point after "boot" and before "the
+  // process ends" to print anything — an operator running `huddle node` bare
+  // got dropped at the portal's login screen with no way to know the token
+  // short of digging it out of the data dir by hand. Fixed by polling
+  // alongside the awaited exit below, not instead of it: this only reads a
+  // token already on disk, it never blocks the child or changes when this
+  // function returns.
+  void printLoginLinkWhenReady(nodeDataDir(opts, env), port);
 
   // Foreground on purpose: this is the shape you want while working ON Huddle.
   // `huddle init` uses startNodeDetached() below. stdio inherit so Huddle Node's
