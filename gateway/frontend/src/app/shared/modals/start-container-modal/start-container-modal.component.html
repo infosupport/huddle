@@ -69,11 +69,16 @@
                                        (valuesChange)="onMountPicked($event)" />
                     <div class="mount-target muted">
                       <app-icon name="chevron-right" [size]="12" />
-                      <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
-                             placeholder="/workspaces/…" aria-label="Path inside the environment" />
-                      <label class="ro-toggle" title="Mount this folder read-only">
-                        <input type="checkbox" [(ngModel)]="m.readOnly" /> read-only
-                      </label>
+                      <div class="mount-path-field">
+                        <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
+                               [class.mount-target-input--ro]="m.readOnly"
+                               placeholder="/workspaces/…" aria-label="Path inside the environment" />
+                        <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
+                                [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
+                                (click)="m.readOnly = !m.readOnly">
+                          <app-icon [name]="m.readOnly ? 'lock' : 'unlock'" [size]="14" />
+                        </button>
+                      </div>
                     </div>
                     <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
                   </div>
