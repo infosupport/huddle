@@ -623,10 +623,7 @@ orchestration/sbx — no gateway container) against an isolated `HOME`
 (`~/.huddle-dev` by default) and alternate ports (`25842`/`25843`), so it can
 run alongside a real install with zero collision. `npm run dev:single -- logs`
 tails its log file and `npm run dev:single -- reset` wipes the isolated dir;
-run with no subcommand for full usage. See `scripts/dev-single.mjs`'s header
-comment and `.claude/plans/dev-huddle-plan.html` for the full investigation
-(a fully separate gateway + firewalled devcontainer was considered there and
-deliberately not built — this stays single-process by design).
+run with no subcommand for full usage.
 
 ### Experimental builds
 

@@ -8,10 +8,9 @@
  * sbx, extensions) — it never launches a gateway container, so it can't
  * `docker rm -f` a real install's gateway the way a second `huddle init`
  * would (init.ts hardcodes the container/network names it uses for exactly
- * that). A separate, isolated gateway container was investigated
- * (.claude/plans/dev-huddle-plan.html) and deliberately not pursued — this
- * stays a single-process, single-command tool by design; keep it that way
- * rather than growing it back toward that shape.
+ * that). A separate, isolated gateway container was investigated and
+ * deliberately not pursued — this stays a single-process, single-command
+ * tool by design; keep it that way rather than growing it back toward that shape.
  *
  * How the isolation works: cli/src/config.ts hardcodes CONFIG_DIR to
  * path.join(os.homedir(), '.huddle') — no env var reaches it, and that's
