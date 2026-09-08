@@ -566,12 +566,6 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
   const port = env.HUDDLE_API_PORT ?? String(DEFAULT_NODE_PORT);
   const requestedControlHost = normalizeControlHost(opts.controlHost);
 
-  // Resolved before anything is stopped: if the replacement build can't be
-  // found, a mismatched-host Node below should be left running rather than
-  // killed and not replaced.
-  const entry = resolveNodeEntry(opts, __dirname);
-  if (!entry) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
-
   if (await pingNode(port)) {
     // A 200 on the port alone is not proof it's Huddle Node: /api/auth/status
     // is deliberately unauthenticated (so the portal can ask "do I need to log
@@ -595,6 +589,12 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
     if (runningControlHost === requestedControlHost) {
       return { pid: readNodePid() ?? 0, entry: '(already running)', port, reused: true };
     }
+    // Resolve before stopping: a mismatched Node must stay up when the CLI no
+    // longer has a local build to replace it with. Keeping this after the
+    // reuse path also lets a thin CLI reuse the Node it started earlier even
+    // when its optional platform package has since been removed.
+    const replacement = resolveNodeEntry(opts, __dirname);
+    if (!replacement) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
     // Bound to a different control host than asked for: stop it and fall
     // through to spawn a fresh one on the requested host, rather than silently
     // reusing a process the gateway would never actually be able to reach.
@@ -606,6 +606,9 @@ export async function startNodeDetached(opts: NodeOptions = {}): Promise<Started
       );
     }
   }
+
+  const entry = resolveNodeEntry(opts, __dirname);
+  if (!entry) throw new MissingNodeEntryError(nodeEntryCandidates(__dirname)[0]);
 
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   fs.mkdirSync(nodeDataDir(opts), { recursive: true, mode: 0o700 });
