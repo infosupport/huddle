@@ -142,5 +142,21 @@ export function bootNode(): void {
   // call (Node's) but the resolv.conf it breaks belongs to the GATEWAY container
   // (see dns-egress.ts), which notices on its own — scheduleSettlingSanitize()
   // in boot-gateway.ts.
-  void wireGatewayWhenItAppears();
+  //
+  // gatewayContainerExists()/listDevcontainers() are both scoped to "everything
+  // on this Docker engine", not "everything THIS Node created" — there is no
+  // second Node instance in the design this assumes. Confirmed live
+  // (2026-09-08): a second, isolated Huddle Node (scripts/dev-single.mjs)
+  // booted, found the real 'huddle' gateway container already running, and
+  // dutifully reissued a brand-new CA — its OWN, freshly minted, unrelated to
+  // the real one — into a real devcontainer it had no business touching,
+  // breaking that devcontainer's HTTPS through the real gateway until the real
+  // Node's own wiring ran again. HUDDLE_SKIP_GATEWAY_WIRING=1 is the escape
+  // hatch: a second instance has no gateway of its own to wire anyone to, so it
+  // has no reason to touch devcontainers at all. dev-single.mjs sets this.
+  if (process.env.HUDDLE_SKIP_GATEWAY_WIRING === '1') {
+    console.log('[wiring] HUDDLE_SKIP_GATEWAY_WIRING=1 — not touching devcontainers on this engine');
+  } else {
+    void wireGatewayWhenItAppears();
+  }
 }

@@ -19,6 +19,7 @@
     "cli:build": "npm --prefix cli run build",
     "cli:typecheck": "npm --prefix cli run typecheck",
     "cli:install": "npm --prefix cli run install-global",
-    "local:prepare": "podman build ./gateway -t huddle-debug && cd cli && npm install && npm run build && npm link"
+    "local:prepare": "podman build ./gateway -t huddle-debug && cd cli && npm install && npm run build && npm link",
+    "dev:single": "node scripts/dev-single.mjs"
   }
 }

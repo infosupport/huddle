@@ -67,8 +67,14 @@ export function getOperatorToken(): string {
     process.env.HUDDLE_OPERATOR_TOKEN,
     tokenFilePath(),
     'operator token',
+    // Hardcoded to :3000 until now — a leftover from when this ran only as the
+    // single gateway container (its role default, still 3000 — see
+    // runtime-env.ts). Huddle Node moved to the host with its own port
+    // (24842 default, HUDDLE_API_PORT-overridable) and this message never
+    // followed; a second instance on a non-default port (scripts/dev-single.mjs)
+    // is exactly what surfaced it printing the wrong, unreachable URL.
     (generated) => console.log(
-      `\n[auth] Operator token generated. Log in to the portal (http://localhost:3000) with:\n\n    ${generated}\n\n` +
+      `\n[auth] Operator token generated. Log in to the portal (http://localhost:${runtimeEnv.apiPort}) with:\n\n    ${generated}\n\n` +
       `Set HUDDLE_OPERATOR_TOKEN to choose a fixed token.\n`
     ),
   );
