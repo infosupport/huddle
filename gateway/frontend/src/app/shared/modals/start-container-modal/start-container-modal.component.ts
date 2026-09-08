@@ -176,16 +176,22 @@ interface Lifecycle {
       background: transparent; color: var(--text-dim); display: grid; place-items: center; cursor: pointer;
     }
     .mount-ro-toggle:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--border-strong); }
-    /* Subtle background tint on the destination-path field itself, separate
-       from the toggle button above: orange (--accent-soft) = writable (the
-       default — every row's field is tinted, not just read-only ones),
-       blue (--info-soft) = read-only ("safe"). Just a background fill, no
-       full-saturation border, so it doesn't fight the :focus rule above —
-       that rule already puts an --accent/--accent-soft ring around every
-       input in this component; layering a full-strength border here too
-       would clash with it on focus. */
-    .mount-target input[type="text"] { background: var(--accent-soft); }
-    .mount-target input.mount-target-input--ro { background: var(--info-soft); }
+    /* Subtle tint on the destination-path field, gated on containerPath being
+       non-empty (mount-target-input--tint) — an untouched row (no source
+       folder picked yet) shows no tint and no toggle at all, see the
+       @if around the toggle button in the template. Once a path exists:
+       orange (--accent-soft) = writable (the default), blue (--info-soft) =
+       read-only ("safe"). A soft bottom-up gradient rather than a flat fill,
+       so it reads as a hint rather than a solid color block — and it doesn't
+       fight the :focus rule above (that rule owns box-shadow/border-color
+       for the ring; this rule only ever touches the background property, so
+       the two never clobber each other when a tinted field is focused). */
+    .mount-target input.mount-target-input--tint {
+      background: linear-gradient(to top, var(--accent-soft), transparent 70%);
+    }
+    .mount-target input.mount-target-input--tint.mount-target-input--ro {
+      background: linear-gradient(to top, var(--info-soft), transparent 70%);
+    }
 
     /* ── Split "Add folder" button (container kind) ──────────────────────────── */
     .sc-split-btn { position: relative; display: inline-flex; }
@@ -279,6 +285,12 @@ interface Lifecycle {
     }
     .sc-acc-head:hover { background: var(--surface-hover); }
     .sc-acc-mark { flex-shrink: 0; color: var(--accent); }
+    /* IDE-logo marks (Customisations accordions) are an <img>, not the usual
+       app-icon SVG — .sc-acc-mark alone only sets color (irrelevant to a
+       raster image) and doesn't size or align a non-SVG child, so pin it to
+       the same footprint as the other 16px icon marks and neutralize the
+       whitespace/baseline gap an inline <img> gets by default. */
+    .sc-acc-mark--img { width: 16px; height: 16px; object-fit: contain; display: block; }
     .sc-acc-t { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 2px; }
     .sc-acc-name { font-size: 13.5px; font-weight: 600; }
     .sc-acc-sub { font-size: 11.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
