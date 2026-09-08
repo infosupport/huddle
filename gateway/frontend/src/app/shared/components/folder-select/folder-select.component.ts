@@ -1,5 +1,6 @@
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { FolderPickerModalComponent } from '../../modals/folder-picker-modal/folder-picker-modal.component';
+import { IconComponent } from '../icon/icon.component';
 
 // One host-path input, used everywhere a host folder has to be named.
 //
@@ -15,14 +16,19 @@ let uid = 0;
 @Component({
   selector: 'app-folder-select',
   standalone: true,
-  imports: [FolderPickerModalComponent],
+  imports: [FolderPickerModalComponent, IconComponent],
   template: `
-    <div class="fs-field">
+    <div class="fs-field" [class.fs-field--icon]="browseMode === 'icon'">
       <input type="text" [id]="inputId" [value]="value" [placeholder]="placeholder"
              autocomplete="off" spellcheck="false"
              (input)="onInput($any($event.target).value)" />
-      <button type="button" class="fs-browse" title="Browse the folders on this host"
-              (click)="open = true">Browse…</button>
+      @if (browseMode === 'icon') {
+        <button type="button" class="fs-browse-icon" title="Browse the folders on this host"
+                (click)="open = true"><app-icon name="folder" [size]="15" /></button>
+      } @else {
+        <button type="button" class="fs-browse" title="Browse the folders on this host"
+                (click)="open = true">Browse…</button>
+      }
     </div>
 
     @if (hint) {
@@ -48,6 +54,20 @@ let uid = 0;
     .fs-browse:hover { background: var(--surface-hover); border-color: var(--accent); color: var(--accent); }
     .fs-hint { font-size: 12px; color: var(--text-muted); margin: .25rem 0 0; }
     .fs-hint code { font-size: 11px; }
+
+    /* Icon variant: the Browse trigger lives INSIDE the input rather than
+       beside it — same absolute-positioned-over-the-field technique the IDE
+       select in start-container-modal uses for its logo (position: relative
+       wrapper, absolutely positioned icon, extra input padding so text never
+       runs under it). */
+    .fs-field--icon { position: relative; display: block; }
+    .fs-field--icon input { width: 100%; padding-right: 38px; }
+    .fs-browse-icon {
+      position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+      width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid transparent;
+      background: transparent; color: var(--text-dim); display: grid; place-items: center; cursor: pointer;
+    }
+    .fs-browse-icon:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--border-strong); }
   `],
 })
 export class FolderSelectComponent {
@@ -62,6 +82,11 @@ export class FolderSelectComponent {
   // path — the extra folders are the caller's problem, handed over on
   // valuesChange, because only the caller knows what several folders mean.
   @Input() multiple = false;
+  // 'text' (default) keeps the original "Browse…" button beside the input, for
+  // every existing call site. 'icon' is the compact variant (folder icon
+  // inside the field) used where the row is already crowded with other
+  // controls (read-only toggle, remove button, computed-path preview).
+  @Input() browseMode: 'icon' | 'text' = 'text';
   @Output() valueChange = new EventEmitter<string>();
   @Output() valuesChange = new EventEmitter<string[]>();
 

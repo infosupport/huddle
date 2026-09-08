@@ -968,7 +968,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.post<{ Body: {
     imageName: string;
     workspaceDir?: string;
-    mounts?: { hostPath: string; containerPath: string }[];
+    mounts?: { hostPath: string; containerPath: string; readOnly?: boolean }[];
     containerWorkspace?: string;
     containerName: string;
     ideName?: string;
@@ -1018,7 +1018,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       // Each mount binds a host path at an explicit absolute container path; the
       // container paths must be unique so two folders never land on the same target.
-      let normalizedMounts: { hostPath: string; containerPath: string }[] | undefined;
+      let normalizedMounts: { hostPath: string; containerPath: string; readOnly?: boolean }[] | undefined;
       if (mounts?.length) {
         try {
           const seen = new Set<string>();
@@ -1035,7 +1035,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
             if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
             if (seen.has(containerPath)) throw new Error(`Duplicate container path: ${containerPath}`);
             seen.add(containerPath);
-            return { hostPath, containerPath };
+            // Defensive typeof guard, same convention as this file's other
+            // optional boolean flags — a non-boolean is silently treated as
+            // "not read-only" rather than 400ing the whole request over it.
+            return { hostPath, containerPath, readOnly: typeof m.readOnly === 'boolean' ? m.readOnly : undefined };
           });
         } catch (err: any) {
           return reply.code(400).send({ error: err.message });
@@ -1108,7 +1111,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // A sandbox may get MULTIPLE folders: `workspaces[]` (first = the folder the
   // agent starts in, the rest extra, optionally read-only). `workspace` stays
   // accepted as the single-folder form older clients send.
-  app.post<{ Body: { name?: string; agent?: string; workspace?: string; workspaces?: { path?: string; readOnly?: boolean }[] } }>(
+  app.post<{ Body: {
+    name?: string; agent?: string; workspace?: string; workspaces?: { path?: string; readOnly?: boolean }[];
+    // devcontainer.json-shaped settings — same shape/validation as
+    // /api/docker/start (see StartParams in docker.ts); the create modal's
+    // right column is shared between kinds (docs/ADR-workspace-runtime-
+    // abstraction.md), so a sandbox accepts what a devcontainer does.
+    containerEnv?: Record<string, string>;
+    remoteEnv?: Record<string, string>;
+    jbPlugins?: string[];
+    jbSettings?: Record<string, unknown>;
+    lifecycle?: LifecycleCommands;
+  } }>(
     '/api/sbx/start',
     async (req, reply) => {
       const name = (req.body?.name ?? '').trim() || `huddle-sbx-${Date.now().toString(36)}`;
@@ -1137,8 +1151,26 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (workspace !== undefined && workspace !== '' && !isValidWorkspacePath(workspace)) {
         return reply.code(400).send({ error: `invalid folder path: ${workspace}` });
       }
+      const { containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle } = req.body ?? {};
+      // Same structural checks as /api/docker/start — a reserved-name
+      // collision is a warning (ignoredEnv) but an illegal identifier is a
+      // client bug, rejected here rather than silently dropped.
+      for (const [label, map] of [['containerEnv', containerEnv], ['remoteEnv', remoteEnv]] as const) {
+        if (!map) continue;
+        for (const key of Object.keys(map)) {
+          if (!ENV_KEY_RE.test(key)) {
+            return reply.code(400).send({ error: `${label} key is not a valid environment variable name: "${key}"` });
+          }
+        }
+      }
+      if (jbSettings !== undefined && (typeof jbSettings !== 'object' || jbSettings === null || Array.isArray(jbSettings))) {
+        return reply.code(400).send({ error: 'jbSettings must be a JSON object' });
+      }
       try {
-        const result = await startSandbox({ name, agent: agent || undefined, workspace: workspace || undefined, workspaces });
+        const result = await startSandbox({
+          name, agent: agent || undefined, workspace: workspace || undefined, workspaces,
+          containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle,
+        });
         logAudit({ containerId: null, domain: '-', action: `admin:sbx-start${result.ok ? '' : '-failed'}` });
         return { name, ...result };
       } catch (err: any) {

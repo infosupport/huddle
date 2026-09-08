@@ -103,6 +103,13 @@ export interface SbxStartResult {
   workspaces?: SbxWorkspace[];
   settingsFolders?: SbxSettingsFolder[];
   settingsSkipped?: { name: string; reason: string }[];
+  ignoredEnv?: string[];
+}
+
+/** devcontainer.json lifecycle hooks — shared shape between container and sbx starts. */
+export interface DevcontainerLifecycle {
+  initializeCommand?: string; onCreateCommand?: string; updateContentCommand?: string;
+  postCreateCommand?: string; postStartCommand?: string; postAttachCommand?: string;
 }
 
 export interface SandboxInfo {
@@ -297,7 +304,7 @@ export class ApiService {
   }
 
   startContainer(params: {
-    image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[];
+    image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string; readOnly?: boolean }[];
     containerName: string; empty?: boolean;
     // devcontainer.json-shaped extras (container kind only) — all optional,
     // field names agreed with the backend plan (docker.ts's StartParams) so
@@ -306,10 +313,7 @@ export class ApiService {
     remoteEnv?: Record<string, string>;
     jbPlugins?: string[];
     jbSettings?: Record<string, unknown>;
-    lifecycle?: {
-      initializeCommand?: string; onCreateCommand?: string; updateContentCommand?: string;
-      postCreateCommand?: string; postStartCommand?: string; postAttachCommand?: string;
-    };
+    lifecycle?: DevcontainerLifecycle;
   }): Observable<{ id: string; containerName: string; ignoredEnv: string[] }> {
     return this.handle(this.http.post<{ id: string; containerName: string; ignoredEnv: string[] }>('/api/docker/start', {
       imageName: params.image,
@@ -343,9 +347,26 @@ export class ApiService {
   }
 
   startSbx(
-    body: { name?: string; agent?: string; workspace?: string; workspaces?: { path: string; readOnly?: boolean }[] } = {}
+    body: {
+      name?: string; agent?: string; workspace?: string; workspaces?: { path: string; readOnly?: boolean }[];
+      // devcontainer.json-shaped extras — same fields/shape as startContainer,
+      // shared right column between kinds (docs/ADR-workspace-runtime-abstraction.md).
+      containerEnv?: Record<string, string>;
+      remoteEnv?: Record<string, string>;
+      jbPlugins?: string[];
+      jbSettings?: Record<string, unknown>;
+      lifecycle?: DevcontainerLifecycle;
+    } = {}
   ): Observable<SbxStartResult> {
-    return this.handle(this.http.post<SbxStartResult>('/api/sbx/start', body));
+    return this.handle(this.http.post<SbxStartResult>('/api/sbx/start', {
+      ...body,
+      // Same "omit rather than send empty" convention as startContainer.
+      containerEnv: body.containerEnv && Object.keys(body.containerEnv).length ? body.containerEnv : undefined,
+      remoteEnv: body.remoteEnv && Object.keys(body.remoteEnv).length ? body.remoteEnv : undefined,
+      jbPlugins: body.jbPlugins?.length ? body.jbPlugins : undefined,
+      jbSettings: body.jbSettings ?? undefined,
+      lifecycle: body.lifecycle ?? undefined,
+    }));
   }
 
   /** The settings folders (folder mappings) a new sandbox will get. */

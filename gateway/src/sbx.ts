@@ -9,6 +9,8 @@
 // a binary — which is exactly why removing the bridge (step 5 of
 // docs/ADR-huddle-node-split.md) touched the comments and not the flow.
 
+import { exec as execCb } from 'child_process';
+import { promisify } from 'util';
 import * as ops from './sandbox/ops';
 import { reconcile, type ReconcileReport } from './sandbox/reconcile';
 import type { SandboxInfo, WorkspaceSpec } from './sandbox/protocol';
@@ -23,6 +25,13 @@ import { listFolderMappings } from './host-config';
 import { getCaCertPem } from './tls-ca';
 import { dropSandboxIdentity, mintSandboxIdentity } from './sandbox/registry';
 import { UNCLAIMED_SANDBOX, mintSandboxSecret, redactProxyUrl, sandboxProxyUrl } from './sbx-identity';
+// Reused verbatim from the devcontainer path so a hand-typed env key/lifecycle
+// command is validated and rendered identically in both runtimes — see
+// docs/ADR-workspace-runtime-abstraction.md on keeping the devcontainer.json
+// shape (env/lifecycle/customizations) common across container and sbx.
+import { filterUserEnv, shQuote, type LifecycleCommands } from './docker';
+
+const execHostCommand = promisify(execCb);
 
 export { reconcile };
 export type { ReconcileReport };
@@ -50,6 +59,8 @@ export interface SbxStartResult {
   /** Which settings folders (folder mappings) travelled along, and which did not. */
   settingsFolders?: { name: string; hostPath: string; targetPath: string; readOnly: boolean }[];
   settingsSkipped?: { name: string; reason: string }[];
+  /** containerEnv/remoteEnv keys dropped for colliding with a Huddle-owned name — see filterUserEnv (docker.ts). */
+  ignoredEnv?: string[];
 }
 
 const CAP = 8 * 1024;
@@ -149,6 +160,59 @@ export interface SbxStartOpts {
   agent?: string;
   workspace?: string;
   workspaces?: WorkspaceSpec[];
+  // devcontainer.json-shaped settings, same fields as StartParams (docker.ts) —
+  // the create modal's right column is shared between kinds (§ADR-workspace-
+  // runtime-abstraction), so a sandbox accepts the same shape a devcontainer
+  // does. Applied best-effort inside the microVM; see startSandboxExclusive.
+  containerEnv?: Record<string, string>;
+  remoteEnv?: Record<string, string>;
+  jbPlugins?: string[];
+  jbSettings?: Record<string, unknown>;
+  lifecycle?: LifecycleCommands;
+}
+
+/**
+ * sbx has no `su vscode -c` equivalent (the sandbox "Runs as root" — one of
+ * the facts the create modal shows) so, unlike buildLifecycleStep in
+ * docker.ts, the command runs directly. Otherwise identical: best-effort, a
+ * failing command is logged to stderr and swallowed rather than failing the
+ * step (and therefore never fails the overall `ok`).
+ */
+function buildSbxLifecycleStep(label: string, command: string | undefined, workspace: string): string {
+  const cmd = (command ?? '').trim();
+  if (!cmd) return '';
+  const inner = `cd ${shQuote(workspace)} 2>/dev/null; ${cmd}`;
+  return `sh -c ${shQuote(inner)} || echo "[huddle] lifecycle:${label} exited non-zero" >&2`;
+}
+
+/**
+ * containerEnv/remoteEnv, merged: a sandbox has no separate "baked into the
+ * image" vs. "injected on attach" moment the way a container's create vs. exec
+ * does (there is no image build step here at all), so both scopes land in the
+ * same login-shell profile script — remoteEnv wins on a key collision since it
+ * is the more specific ask. Mirrors buildRemoteEnvScript's heredoc idiom.
+ */
+function buildSbxEnvScript(entries: [string, string][]): string {
+  if (entries.length === 0) return '';
+  const lines = entries.map(([k, v]) => `export ${k}=${shQuote(v)}`).join('\n');
+  return `cat <<'HUDDLE_SBX_ENV_EOF' > /etc/profile.d/95-huddle-env.sh
+${lines}
+HUDDLE_SBX_ENV_EOF
+chmod 644 /etc/profile.d/95-huddle-env.sh`;
+}
+
+/**
+ * customizations.jetbrains, recorded but not applied: a bare Docker Sandbox
+ * has no JetBrains backend process to install plugins into or hand settings
+ * to (ADR-workspace-runtime-abstraction §6 Phase 1 item 4 — "validate
+ * JetBrains Gateway / VS Code attach" — is still open). Writing the same
+ * shape docker.ts's buildJbConfigScript uses means a future Gateway attach
+ * finds it already in place instead of this being a second migration later.
+ */
+function buildSbxJbConfigScript(plugins: string[], settings: Record<string, unknown> | undefined): string {
+  if (plugins.length === 0 && (!settings || Object.keys(settings).length === 0)) return '';
+  const payload = shQuote(JSON.stringify({ plugins, settings: settings ?? {} }));
+  return `mkdir -p /.jbdevcontainer/config/JetBrains && printf '%s' ${payload} > /.jbdevcontainer/config/JetBrains/huddle-customizations.json`;
 }
 
 /** Serialises starts; see startSandbox. */
@@ -184,6 +248,28 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
     settingsFolders: settings.folders.map((f) => ({ name: f.name, hostPath: f.hostPath, targetPath: f.targetPath, readOnly: f.readOnly })),
     settingsSkipped: settings.skipped,
   };
+
+  // initializeCommand (devcontainer.json semantics): runs on the HOST, before
+  // the sbx proxy setting, identity, or sandbox exist — mirrors docker.ts's
+  // createAndStartContainer placement exactly, including "failing here aborts
+  // outright" (nothing to roll back yet, unlike a reserved-env-name warning).
+  const initializeCommand = opts.lifecycle?.initializeCommand?.trim();
+  if (initializeCommand) {
+    const command = `(host) ${initializeCommand}`;
+    try {
+      await execHostCommand(initializeCommand, { cwd: workspace || undefined, timeout: 5 * 60 * 1000 });
+      steps.push({ label: 'initializeCommand (host)', command, code: 0, stdout: '', stderr: '' });
+    } catch (err: any) {
+      const stderr = typeof err?.stderr === 'string' ? err.stderr : '';
+      const stdout = typeof err?.stdout === 'string' ? err.stdout : '';
+      steps.push({
+        label: 'initializeCommand (host)', command,
+        code: typeof err?.code === 'number' ? err.code : 1,
+        stdout: cap(stdout), stderr: cap(stderr || (err as Error).message),
+      });
+      return { ok: false, upstreamUrl: '', proxyPort: SBX_PROXY_PORT, steps, ...info };
+    }
+  }
 
   // A create always mints a FRESH secret: reusing one would make two boxes a
   // single identity wearing two names.
@@ -256,7 +342,61 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   // Link the settings folders where the agent looks for them (~/.claude etc.).
   const linkStep = await linkSettingsFolders(opts.name, settings);
   if (linkStep) steps.push(linkStep);
-  return result(steps.every((s) => s.code === 0));
+
+  // ── devcontainer.json-shaped settings — same fields the container path
+  // accepts, applied best-effort inside the microVM (§ADR-workspace-runtime-
+  // abstraction: the create modal's right column is shared across kinds). ──
+  const containerEnvFilter = filterUserEnv(opts.containerEnv);
+  const remoteEnvFilter = filterUserEnv(opts.remoteEnv);
+  const ignoredEnv = [...containerEnvFilter.ignored, ...remoteEnvFilter.ignored];
+  // No create-vs-attach moment to tell containerEnv and remoteEnv apart inside
+  // a sandbox (there is no image build step at all) — merge into one profile
+  // script; remoteEnv wins a collision as the more specific of the two asks.
+  const mergedEnv = new Map(containerEnvFilter.applied);
+  for (const [k, v] of remoteEnvFilter.applied) mergedEnv.set(k, v);
+  const envScript = buildSbxEnvScript([...mergedEnv.entries()]);
+  if (envScript) steps.push(await runInSandbox(opts.name, 'apply environment variables', envScript));
+
+  const lifecycleScript = [
+    buildSbxLifecycleStep('onCreate', opts.lifecycle?.onCreateCommand, workspace),
+    // updateContentCommand has no real trigger on a just-created sandbox any
+    // more than it does for a container — approximated as "runs once at
+    // create", the same call docker.ts makes for the same reason.
+    buildSbxLifecycleStep('updateContent', opts.lifecycle?.updateContentCommand, workspace),
+    buildSbxLifecycleStep('postCreate', opts.lifecycle?.postCreateCommand, workspace),
+    buildSbxLifecycleStep('postStart', opts.lifecycle?.postStartCommand, workspace),
+    // postAttachCommand: docker.ts polls for an IDE backend process to
+    // approximate "on attach" (buildPostAttachWatcher) — a bare sandbox has no
+    // such process to watch for yet (ADR-workspace-runtime-abstraction §6
+    // Phase 1 item 4), so this runs once here instead of pretending to
+    // observe an attach event that cannot happen.
+    buildSbxLifecycleStep('postAttach', opts.lifecycle?.postAttachCommand, workspace),
+  ].filter(Boolean).join('\n');
+  if (lifecycleScript) steps.push(await runInSandbox(opts.name, 'run lifecycle commands', lifecycleScript));
+
+  const jbScript = buildSbxJbConfigScript(
+    (opts.jbPlugins ?? []).map((p) => p.trim()).filter(Boolean),
+    opts.jbSettings
+  );
+  if (jbScript) steps.push(await runInSandbox(opts.name, 'record JetBrains customizations', jbScript));
+
+  return { ...result(steps.every((s) => s.code === 0)), ignoredEnv: ignoredEnv.length ? ignoredEnv : undefined };
+}
+
+/** Generic "run this script inside the sandbox" step — same shape as trustCa/linkSettingsFolders. */
+async function runInSandbox(name: string, label: string, script: string): Promise<SbxStep> {
+  const command = `sbx exec ${name} -- sh -c '…${label}…'`;
+  let out = '';
+  let errOut = '';
+  try {
+    const code = await ops.exec({ name, cmd: ['sh', '-c', script] }, (s, d) => {
+      if (s === 'stdout') out = cap(out + d);
+      else errOut = cap(errOut + d);
+    });
+    return { label, command, code, stdout: out, stderr: errOut };
+  } catch (err) {
+    return { label, command, code: 1, stdout: out, stderr: cap(errOut || (err as Error).message) };
+  }
 }
 
 /**
