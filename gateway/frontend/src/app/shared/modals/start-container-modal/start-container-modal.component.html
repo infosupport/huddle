@@ -76,41 +76,58 @@
                 </div>
               </ng-template>
 
+              <!-- The ONE shared row for both kinds. The only kind-conditional
+                   bits are the destination-input's [disabled]/[title] pair —
+                   sbx has no path-remapping capability, so for that kind the
+                   destination always mirrors the host path (see
+                   refreshMountTargets()) and is never user-editable.
+                   Everything else (host field, read-only pen/eye toggle,
+                   remove button) is identical between kinds. -->
+              <ng-template #folderRow let-m let-i="index">
+                <div class="mount-row sc-mount-row">
+                  <app-folder-select class="mount-host" [value]="m.hostPath" browseMode="icon"
+                                     placeholder="C:/projects/my-repo/backend" [multiple]="true"
+                                     pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
+                                     (valueChange)="onHostPathInput(m, $event)"
+                                     (valuesChange)="onMountPicked($event)" />
+                  <div class="mount-target muted">
+                    <app-icon name="chevron-right" [size]="12" />
+                    <div class="mount-path-field">
+                      <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
+                             [class.mount-target-input--tint]="m.containerPath"
+                             [class.mount-target-input--ro]="m.containerPath && m.readOnly"
+                             [disabled]="kind === 'sandbox'"
+                             [title]="kind === 'sandbox' ? &quot;Sandboxes mount every folder at its own host path — this can't be changed here.&quot; : ''"
+                             placeholder="/workspaces/…" aria-label="Path inside the environment" />
+                      @if (m.containerPath) {
+                        <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
+                                [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
+                                (click)="m.readOnly = !m.readOnly">
+                          <app-icon [name]="m.readOnly ? 'eye' : 'pen'" [size]="14" />
+                        </button>
+                      }
+                    </div>
+                  </div>
+                  <button type="button" class="sc-map-x" (click)="removeMount(i)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
+                </div>
+              </ng-template>
+
               @if (kind === 'container') {
                 <p class="mount-hint muted">Select where the folders should be mounted inside the environment.</p>
+              } @else {
+                <p class="mount-hint muted">The first folder is where the agent starts; every folder is mounted inside the sandbox at its own host path.</p>
+              }
 
-                @for (m of mounts; track $index) {
-                  <div class="mount-row sc-mount-row">
-                    <app-folder-select class="mount-host" [value]="m.hostPath" browseMode="icon"
-                                       placeholder="C:/projects/my-repo/backend" [multiple]="true"
-                                       pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
-                                       (valueChange)="onHostPathInput(m, $event)"
-                                       (valuesChange)="onMountPicked($event)" />
-                    <div class="mount-target muted">
-                      <app-icon name="chevron-right" [size]="12" />
-                      <div class="mount-path-field">
-                        <input type="text" [(ngModel)]="m.containerPath" (ngModelChange)="onContainerPathInput(m)"
-                               [class.mount-target-input--tint]="m.containerPath"
-                               [class.mount-target-input--ro]="m.containerPath && m.readOnly"
-                               placeholder="/workspaces/…" aria-label="Path inside the environment" />
-                        @if (m.containerPath) {
-                          <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
-                                  [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
-                                  (click)="m.readOnly = !m.readOnly">
-                            <app-icon [name]="m.readOnly ? 'eye' : 'pen'" [size]="14" />
-                          </button>
-                        }
-                      </div>
-                    </div>
-                    <button type="button" class="sc-map-x" (click)="removeMount($index)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
-                  </div>
-                }
-                <ng-container *ngTemplateOutlet="addFolderBtn" />
+              @for (m of mounts; track $index) {
+                <ng-container [ngTemplateOutlet]="folderRow" [ngTemplateOutletContext]="{ $implicit: m, index: $index }" />
+              }
+              <ng-container *ngTemplateOutlet="addFolderBtn" />
 
-                @if (empty) {
-                  <p class="mount-hint muted">No folders — this environment starts empty; clone manually after it's created.</p>
-                }
+              @if (kind === 'container' && empty) {
+                <p class="mount-hint muted">No folders — this environment starts empty; clone manually after it's created.</p>
+              }
 
+              @if (kind === 'container') {
                 @if (containerSettingsFolders.length) {
                   <div class="sc-automount">
                     <div class="sc-automount-t">Settings folders mounted automatically <span>(Settings → Folder mappings)</span> <span class="pill">read-only</span></div>
@@ -125,22 +142,6 @@
                   </div>
                 }
               } @else {
-                <p class="mount-hint muted">The first folder is where the agent starts; every folder is mounted inside the sandbox at its own host path.</p>
-                @for (f of sbxFolders; track $index) {
-                  <div class="mount-row">
-                    <app-folder-select class="mount-host" [value]="f.path" browseMode="icon"
-                                       placeholder="host path, e.g. T:\projects\myrepo" [multiple]="true"
-                                       pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
-                                       (valueChange)="onSbxFolderInput(f, $event)"
-                                       (valuesChange)="onSbxFolderPicked($event)" />
-                    <label class="ro-toggle" title="Mount this folder read-only (sbx :ro)">
-                      <input type="checkbox" [(ngModel)]="f.readOnly" /> read-only
-                    </label>
-                    <button type="button" class="sc-map-x" (click)="removeSbxFolder($index)" [disabled]="sbxFolders.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
-                  </div>
-                }
-                <ng-container *ngTemplateOutlet="addFolderBtn" />
-
                 @if (sbxSettings; as s) {
                   @if (s.folders.length) {
                     <div class="sc-automount">
@@ -384,14 +385,6 @@
             </div>
           </div>
         </div>
-
-        @if (sbxFolderPickerOpen) {
-          <app-folder-picker-modal [multiple]="true"
-                                   title="Add folders"
-                                   subtitle="Every folder you pick is mounted in the sandbox at its own host path."
-                                   (pickedMany)="onSbxFoldersPickedBulk($event)"
-                                   (cancel)="sbxFolderPickerOpen = false" />
-        }
 
         @if (folderPickerOpen) {
           <app-folder-picker-modal [multiple]="true"

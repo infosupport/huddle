@@ -41,8 +41,6 @@ interface RememberedLayout {
    * dirty flag across sessions.
    */
   mounts?: { hostPath: string; readOnly: boolean }[];
-  /** Last-used sandbox folder list (host paths; sbx mounts them at the same path). */
-  sbxFolders?: { path: string; readOnly: boolean }[];
 }
 
 /**
@@ -340,10 +338,10 @@ export class StartContainerModalComponent {
 
   // sandbox fields. A sandbox can hold several folders: the FIRST is the one the
   // agent starts in, the rest ride along. Unlike a devcontainer mount there is no
-  // container path to pick — sbx mounts every folder at its own host path.
+  // container path to pick — sbx mounts every folder at its own host path (see
+  // the shared `mounts` array below and refreshMountTargets()).
   sbxName = '';
   sbxAgent = 'claude';
-  sbxFolders: { path: string; readOnly: boolean }[] = [{ path: '', readOnly: false }];
   sbxSettings: SbxSettingsFolders | null = null;
 
   images: DockerImage[] = [];
@@ -359,10 +357,11 @@ export class StartContainerModalComponent {
   // Always multi-capable — no separate single/multi mode. Each row's
   // containerPath defaults to whatever computeMountTargets() (see
   // folder-mount-targets.ts) derives from hostPath, but the user can type
-  // over it — see MountRow / refreshMountTargets().
+  // over it — see MountRow / refreshMountTargets(). Shared by BOTH kinds
+  // (container and sandbox) — see refreshMountTargets() and sbxWorkspaces()
+  // for how the sandbox kind adapts this same array.
   mounts: MountRow[] = [this.newMountRow()];
   folderPickerOpen = false;
-  sbxFolderPickerOpen = false;
   // The split "Add folder" button's little "Browse..." menu (container kind
   // only) — closed on any outside click/scroll/resize, same idiom as
   // firewall-groups-panel.component.ts's row menu.
@@ -441,6 +440,14 @@ export class StartContainerModalComponent {
    * a push model rather than the old always-live `mountTargets` getter.
    */
   private refreshMountTargets(): void {
+    if (this.kind === 'sandbox') {
+      // sbx has no path-remapping capability -- every folder mounts at its own
+      // host path, so "destination" is always just the host path itself, and
+      // never user-editable (see the disabled destination input in the
+      // template, and setKind() below which re-syncs this on every switch).
+      this.mounts.forEach((m) => { m.containerPath = m.hostPath; });
+      return;
+    }
     const targets = computeMountTargets(this.mounts.map((m) => m.hostPath));
     this.mounts.forEach((m, i) => {
       if (!m.containerPathDirty) m.containerPath = targets[i];
@@ -478,7 +485,6 @@ export class StartContainerModalComponent {
     this.status = '';
     this.loading = false;
     this.sbxName = '';
-    this.sbxFolders = [{ path: '', readOnly: false }];
     this.sbxAgent = 'claude';
     this.sbxSettings = null;
     this.kind = 'container'; // legacy "Start devcontainer" entry points must default to a devcontainer
@@ -510,56 +516,13 @@ export class StartContainerModalComponent {
     });
   }
 
-  addSbxFolder(): void {
-    this.sbxFolders.push({ path: '', readOnly: false });
-  }
-
-  removeSbxFolder(i: number): void {
-    this.sbxFolders.splice(i, 1);
-    if (this.sbxFolders.length === 0) this.addSbxFolder();
-  }
-
-  // Same deal as the devcontainer mounts: browse once, Ctrl-click several
-  // folders, and each one lands as its own row rather than making the user open
-  // the dialog once per folder. Additive — filled rows (including hand-typed
-  // paths never browsed to) stay, and a folder already listed is not added
-  // twice.
-  onSbxFoldersPicked(paths: string[]): void {
-    const known = new Set(
-      this.sbxFolders.map((f) => f.path.trim().toLowerCase()).filter(Boolean)
-    );
-    for (const path of paths) {
-      if (known.has(path.toLowerCase())) continue;
-      known.add(path.toLowerCase());
-      const row = this.sbxFolders.find((f) => !f.path.trim());
-      if (row) row.path = path;
-      else this.sbxFolders.push({ path, readOnly: false });
-    }
-    this.updateAutoName();
-  }
-
-  /** One row's path, typed or picked. The extra folders arrive separately. */
-  onSbxFolderInput(folder: { path: string; readOnly: boolean }, value: string): void {
-    folder.path = value;
-    this.updateAutoName();
-  }
-
-  /** From a row: the first folder filled the row, the rest become new rows. */
-  onSbxFolderPicked(paths: string[]): void {
-    if (paths.length > 1) this.onSbxFoldersPicked(paths.slice(1));
-  }
-
-  /** From the bulk Browse button: nothing was filled in yet, so take them all. */
-  onSbxFoldersPickedBulk(paths: string[]): void {
-    this.sbxFolderPickerOpen = false;
-    this.onSbxFoldersPicked(paths);
-  }
-
-  /** Non-empty folders, trimmed — the payload for /api/sbx/start. */
+  /** Non-empty folders from the shared mounts list, in the shape /api/sbx/start
+   *  wants -- container path is irrelevant here (sbx mounts at the host path
+   *  regardless), only hostPath/readOnly are sent. */
   private sbxWorkspaces(): { path: string; readOnly: boolean }[] {
-    return this.sbxFolders
-      .map((f) => ({ path: f.path.trim(), readOnly: f.readOnly === true }))
-      .filter((f) => f.path !== '');
+    return this.mounts
+      .map((m) => ({ path: m.hostPath.trim(), readOnly: m.readOnly === true }))
+      .filter((w) => w.path !== '');
   }
 
   private validateSandbox(): string | null {
@@ -577,6 +540,11 @@ export class StartContainerModalComponent {
   setKind(k: 'sandbox' | 'container'): void {
     this.kind = k;
     this.error = '';
+    // A folder already entered under the previous kind must immediately show
+    // the correct destination-field behavior for the newly selected kind
+    // (e.g. switching to sandbox disables the field and mirrors hostPath
+    // right away, rather than showing a stale value until the next edit).
+    this.refreshMountTargets();
   }
 
   // The IDE choice drives both the default base image and the snapshot filter.
@@ -623,12 +591,10 @@ export class StartContainerModalComponent {
     this.refreshMountTargets();
   }
 
-  /** The split "Add folder" button's primary click — routes to whichever
-   *  kind's row-adding method applies (only one kind's section is ever
-   *  visible, so sharing one dispatcher/menu-state is safe). */
+  /** The split "Add folder" button's primary click — both kinds add to the
+   *  same shared `mounts` array now, so there's nothing left to dispatch on. */
   addFolderRow(): void {
-    if (this.kind === 'sandbox') this.addSbxFolder();
-    else this.addMount();
+    this.addMount();
   }
 
   // The split "Add folder" button's chevron segment: opens/closes the tiny
@@ -641,8 +607,7 @@ export class StartContainerModalComponent {
 
   openFolderPicker(): void {
     this.addMenuOpen = false;
-    if (this.kind === 'sandbox') this.sbxFolderPickerOpen = true;
-    else this.folderPickerOpen = true;
+    this.folderPickerOpen = true;
   }
 
   @HostListener('document:click') onDocClick(): void {
@@ -963,7 +928,6 @@ export class StartContainerModalComponent {
       mounts: this.mounts
         .map(m => ({ hostPath: m.hostPath.trim(), readOnly: m.readOnly === true }))
         .filter(m => m.hostPath !== ''),
-      sbxFolders: this.sbxWorkspaces(),
     };
     try { localStorage.setItem(REMEMBER_KEY, JSON.stringify(layout)); } catch { /* storage unavailable */ }
   }
@@ -983,12 +947,6 @@ export class StartContainerModalComponent {
           .filter((m): m is NonNullable<typeof m> => !!m && typeof m.hostPath === 'string' && m.hostPath.trim() !== '')
           .map(m => this.newMountRow(m.hostPath, m.readOnly === true));
         if (restored.length) this.mounts = restored;
-      }
-      if (Array.isArray(layout.sbxFolders) && layout.sbxFolders.length) {
-        const restored = layout.sbxFolders
-          .filter((f): f is NonNullable<typeof f> => !!f && typeof f.path === 'string')
-          .map(f => ({ path: f.path, readOnly: f.readOnly === true }));
-        if (restored.length) this.sbxFolders = restored;
       }
     }
     // Every restored (or default) row starts non-dirty, so this seeds
