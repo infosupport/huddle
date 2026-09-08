@@ -1,5 +1,6 @@
 import { Component, inject, effect, HostListener } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { NgTemplateOutlet } from '@angular/common';
 import { ModalService } from '../../../core/services/modal.service';
 import { ApiService, FolderMapping } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
@@ -72,7 +73,7 @@ interface Lifecycle {
 @Component({
   selector: 'app-start-container-modal',
   standalone: true,
-  imports: [FormsModule, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent, IconComponent],
+  imports: [FormsModule, NgTemplateOutlet, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent, IconComponent],
   templateUrl: './start-container-modal.component.html',
   styles: [`
     /* ── Modal chrome — ported from the create-modal.html mockup (.ce-* rules),
@@ -622,6 +623,14 @@ export class StartContainerModalComponent {
     this.refreshMountTargets();
   }
 
+  /** The split "Add folder" button's primary click — routes to whichever
+   *  kind's row-adding method applies (only one kind's section is ever
+   *  visible, so sharing one dispatcher/menu-state is safe). */
+  addFolderRow(): void {
+    if (this.kind === 'sandbox') this.addSbxFolder();
+    else this.addMount();
+  }
+
   // The split "Add folder" button's chevron segment: opens/closes the tiny
   // "Browse..." menu. stopPropagation so the same click that opens it doesn't
   // also reach the document:click listener below and instantly close it again.
@@ -632,7 +641,8 @@ export class StartContainerModalComponent {
 
   openFolderPicker(): void {
     this.addMenuOpen = false;
-    this.folderPickerOpen = true;
+    if (this.kind === 'sandbox') this.sbxFolderPickerOpen = true;
+    else this.folderPickerOpen = true;
   }
 
   @HostListener('document:click') onDocClick(): void {
