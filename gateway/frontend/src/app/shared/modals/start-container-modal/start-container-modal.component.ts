@@ -31,10 +31,32 @@ const RESERVED_ENV_NAMES = new Set([
 ]);
 
 interface RememberedLayout {
-  /** Last-used project folder list. Container path is never stored — it's always recomputed (see folder-mount-targets.ts). */
+  /**
+   * Last-used project folder list. Container path is never stored, even
+   * though it can now be a manual override (see MountRow) — a remembered
+   * override could point at a stale/renamed leaf next session, so a restored
+   * row always starts non-dirty and gets its containerPath recomputed fresh
+   * by refreshMountTargets(). Simpler and safer than trying to preserve a
+   * dirty flag across sessions.
+   */
   mounts?: { hostPath: string; readOnly: boolean }[];
   /** Last-used sandbox folder list (host paths; sbx mounts them at the same path). */
   sbxFolders?: { path: string; readOnly: boolean }[];
+}
+
+/**
+ * One project-folder mount row. `containerPath` is normally kept in sync with
+ * `hostPath` (and every other row's hostPath, for collision numbering) by
+ * refreshMountTargets() — but the moment the user types into the
+ * container-path field directly, `containerPathDirty` latches true and the
+ * row is excluded from further auto-recompute, so their explicit choice is
+ * never silently clobbered by an unrelated row changing.
+ */
+interface MountRow {
+  hostPath: string;
+  containerPath: string;
+  readOnly: boolean;
+  containerPathDirty: boolean;
 }
 
 /** One devcontainer.json-shaped lifecycle hook, all optional (see docker.ts). */
@@ -73,10 +95,11 @@ interface Lifecycle {
     }
     .modal-close:hover { background: var(--surface-hover); }
     .modal-body { padding: 0; gap: 0; flex: 1; min-height: 0; overflow: hidden; }
-    .modal-body > .sc-grid { padding: 22px 24px 26px; }
-    /* .sc-grid carries its own padding (above); everything else that can land
-       directly in .modal-body (submit error/status) still needs it since the
-       0-padding above is for the grid's benefit, not theirs. */
+    /* The grid itself carries no padding — each .sc-col owns its own (see
+       below), so the divider border between them sits flush against each
+       column's own padding on either side. Everything else that can land
+       directly in .modal-body (submit error/status) still needs an explicit
+       margin since there's no ambient padding here for them to inherit. */
     .modal-body > .form-error, .modal-body > .form-status { margin: 0 24px 16px; }
 
     /* ── Base field controls — the mockup's .ce-input/.ce-select/.ce-textarea ── */
@@ -118,21 +141,21 @@ interface Lifecycle {
     .mount-row .mount-arrow { flex: 0 0 auto; color: var(--text-dim); }
     .mount-row input { flex: 1; min-width: 0; }
     .mount-row .btn { flex: 0 0 auto; }
-    .mount-hint { font-size: 12px; color: var(--text-muted); margin: 7px 0 0; }
+    .mount-hint { font-size: 12px; margin: 7px 0 0; }
     .mount-add { display: flex; gap: 9px; margin-top: 11px; }
     .mount-row .ro-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: .3rem; font-size: 11.5px; color: var(--text-muted); }
-    /* Project-folder rows only: a second line (the computed container-path
-       preview) sits under the folder field, so the row's other controls
-       (read-only toggle, remove button) top-align instead of centering
-       against the now-taller left column. */
+    /* Project-folder rows only: a second line (the editable container-path
+       field + its read-only toggle) sits under the folder field, so the
+       row's remove button top-aligns instead of centering against the
+       now-taller left column. */
     .mount-row.sc-mount-row { align-items: flex-start; }
-    .mount-row.sc-mount-row .ro-toggle { margin-top: 11px; }
     .mount-row.sc-mount-row .sc-map-x { margin-top: 2px; }
-    .mount-target {
-      display: flex; align-items: center; gap: 5px; margin: 5px 0 0 2px;
-      font-size: 11.5px; color: var(--text-muted);
-    }
-    .mount-target code { font-size: 11px; }
+    /* The container-path line: a chevron, the editable path input (grows to
+       fill the space — sized via the shared ".mount-row input" rule above),
+       and the read-only toggle right after it (moved here from beside the
+       whole row, per the redesign — it's the path's own toggle, not the
+       row's). */
+    .mount-target { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 2px; }
 
     /* ── Split "Add folder" button (container kind) ──────────────────────────── */
     .sc-split-btn { position: relative; display: inline-flex; }
@@ -190,10 +213,15 @@ interface Lifecycle {
     /* ── Two-column layout (container kind only) ─────────────────────────────── */
     .sc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 0; flex: 1; min-height: 0; overflow: hidden; }
     @media (max-width: 760px) { .sc-grid { grid-template-columns: 1fr; } }
-    .sc-col { overflow-y: auto; min-height: 0; }
+    /* Padding lives on the column itself (not the grid, which has gap: 0 and
+       no padding of its own) — a border here is a border of THIS box, so it
+       sits at the box's outer edge with the column's own padding inside it
+       on both sides. No matching removal is needed anywhere else: standard
+       box model (content -> padding -> border -> margin), nothing doubles up. */
+    .sc-col { overflow-y: auto; min-height: 0; padding: 22px 24px 26px; }
     .sc-col + .sc-col { border-left: 1px solid var(--border); background: var(--surface-2); }
     .sc-col-title { font-family: 'Space Grotesk', sans-serif; font-size: 16.5px; font-weight: 600; margin: 0; color: var(--text); }
-    .sc-col-sub { font-size: 12.5px; color: var(--text-muted); margin: 3px 0 20px; }
+    .sc-col-sub { font-size: 12.5px; margin: 3px 0 20px; }
     .sc-col-head { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 20px; }
     .sc-col-head > div { flex: 1 1 220px; min-width: 0; }
     .sc-col-head .btn { flex: none; margin-left: auto; }
@@ -217,7 +245,7 @@ interface Lifecycle {
     .sc-acc-mark { flex-shrink: 0; color: var(--accent); }
     .sc-acc-t { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 2px; }
     .sc-acc-name { font-size: 13.5px; font-weight: 600; }
-    .sc-acc-sub { font-size: 11.5px; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sc-acc-sub { font-size: 11.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sc-acc-chev { color: var(--text-muted); transition: transform .18s ease; flex-shrink: 0; }
     .sc-acc-chev.closed { transform: rotate(-90deg); }
     .sc-acc-body { padding: 2px 14px 14px; border-top: 1px solid var(--border); }
@@ -279,11 +307,11 @@ export class StartContainerModalComponent {
   // -rider are different images) — kept in sync by syncIdeFromFamily().
   ideFamily: 'jetbrains' | 'vscode' = 'jetbrains';
   ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
-  // Always multi-capable — no separate single/multi mode. Container path is
-  // never stored per row: it's always derived from hostPath by
-  // computeMountTargets() (folder-mount-targets.ts), recomputed live for the
-  // on-screen preview and again, unchanged, at submit time.
-  mounts: { hostPath: string; readOnly: boolean }[] = [{ hostPath: '', readOnly: false }];
+  // Always multi-capable — no separate single/multi mode. Each row's
+  // containerPath defaults to whatever computeMountTargets() (see
+  // folder-mount-targets.ts) derives from hostPath, but the user can type
+  // over it — see MountRow / refreshMountTargets().
+  mounts: MountRow[] = [this.newMountRow()];
   folderPickerOpen = false;
   sbxFolderPickerOpen = false;
   // The split "Add folder" button's little "Browse..." menu (container kind
@@ -329,24 +357,39 @@ export class StartContainerModalComponent {
   // no backend change needed for this piece.
   containerSettingsFolders: FolderMapping[] = [];
 
-  // Right-column accordions, all expanded by default: every field in them is
-  // optional, so there is no "important" one to single out as pre-opened —
-  // unlike the mockup's static screenshot (which shows Base image/Env vars
-  // collapsed), an interactive form is better served defaulting open so a
-  // first-time user actually sees what is available.
-  accOpen: Record<string, boolean> = { baseImage: true, envVars: true, jetbrains: true, vscode: true, lifecycle: true };
+  // Right-column accordions, all collapsed by default. (Previously defaulted
+  // open on the theory that an interactive form should show everything up
+  // front — reverted per product feedback: a first-time user should see the
+  // collapsed section structure, not a wall of open panels.)
+  accOpen: Record<string, boolean> = { baseImage: false, envVars: false, jetbrains: false, vscode: false, lifecycle: false };
 
   get open() { return this.modalService.startOpen(); }
 
+  /** A fresh, non-dirty mount row — see MountRow. */
+  private newMountRow(hostPath = '', readOnly = false): MountRow {
+    return { hostPath, containerPath: '', readOnly, containerPathDirty: false };
+  }
+
   /**
-   * The computed `/workspaces/<leaf>` preview for every mount row, in order —
-   * same array length/order as `mounts`. Recomputed on every read (cheap: a
-   * handful of rows), not cached, so it can never drift from what confirm()
-   * actually sends — see buildMounts(), which runs the same function over the
-   * same host paths and only then drops the blank rows.
+   * Re-derives `containerPath` for every row that hasn't been manually
+   * edited (containerPathDirty === false), via computeMountTargets() over
+   * ALL rows' host paths — same as before, so collision numbering still
+   * accounts for every row, including dirty ones. A dirty row's own
+   * containerPath is left untouched; note this means computeMountTargets()
+   * doesn't know a dirty row may have already claimed a target by hand, so
+   * a fresh auto-computed target can in principle still collide with one a
+   * user typed manually — validate() catches that at submit time rather
+   * than this function trying to reverse-engineer manual overrides.
+   *
+   * Called after anything that changes a hostPath or the row set (typing,
+   * the folder picker, add/remove row) — never on a plain re-render, so it's
+   * a push model rather than the old always-live `mountTargets` getter.
    */
-  get mountTargets(): string[] {
-    return computeMountTargets(this.mounts.map((m) => m.hostPath));
+  private refreshMountTargets(): void {
+    const targets = computeMountTargets(this.mounts.map((m) => m.hostPath));
+    this.mounts.forEach((m, i) => {
+      if (!m.containerPathDirty) m.containerPath = targets[i];
+    });
   }
 
   // The "Name" field is the one Essential-settings field bound to a
@@ -372,7 +415,7 @@ export class StartContainerModalComponent {
     this.selectedImage = '';
     this.ideFamily = 'jetbrains';
     this.ide = 'intellij';
-    this.mounts = [{ hostPath: '', readOnly: false }];
+    this.mounts = [this.newMountRow()];
     this.addMenuOpen = false;
     this.containerName = '';
     this.nameTouched = false;
@@ -520,7 +563,10 @@ export class StartContainerModalComponent {
   }
 
   addMount(): void {
-    this.mounts.push({ hostPath: '', readOnly: false });
+    this.mounts.push(this.newMountRow());
+    // A new blank row can shift "project"-fallback collision numbering on
+    // existing non-dirty rows (see refreshMountTargets()'s doc comment).
+    this.refreshMountTargets();
   }
 
   // The split "Add folder" button's chevron segment: opens/closes the tiny
@@ -558,7 +604,7 @@ export class StartContainerModalComponent {
       known.add(path.toLowerCase());
       let row = this.mounts.find((m) => !m.hostPath.trim());
       if (!row) {
-        row = { hostPath: '', readOnly: false };
+        row = this.newMountRow();
         this.mounts.push(row);
       }
       this.onHostPathInput(row, path);
@@ -567,7 +613,7 @@ export class StartContainerModalComponent {
 
   removeMount(i: number): void {
     this.mounts.splice(i, 1);
-    if (this.mounts.length === 0) this.addMount();
+    if (this.mounts.length === 0) this.mounts.push(this.newMountRow());
     this.onMountInput();
   }
 
@@ -576,12 +622,19 @@ export class StartContainerModalComponent {
     if (paths.length > 1) this.onFoldersPicked(paths.slice(1));
   }
 
-  onHostPathInput(mount: { hostPath: string; readOnly: boolean }, value: string): void {
+  onHostPathInput(mount: MountRow, value: string): void {
     mount.hostPath = value;
     this.onMountInput();
   }
 
+  /** A row's containerPath field was edited directly — latch it dirty so
+   *  future hostPath changes elsewhere never clobber the manual choice. */
+  onContainerPathInput(mount: MountRow): void {
+    mount.containerPathDirty = true;
+  }
+
   onMountInput(): void {
+    this.refreshMountTargets();
     this.updateAutoName();
   }
 
@@ -591,7 +644,10 @@ export class StartContainerModalComponent {
       this.containerName = 'devcontainer-empty';
       return;
     }
-    const leaf = (this.mountTargets[0] ?? '').split('/').filter(Boolean).pop() ?? '';
+    // Reads the actual per-row containerPath (possibly a manual override)
+    // rather than a freshly-recomputed value — more honest about what will
+    // actually be created now that the field is real, editable state.
+    const leaf = (this.mounts[0]?.containerPath ?? '').split('/').filter(Boolean).pop() ?? '';
     this.containerName = leaf ? `devcontainer-${leaf}` : '';
   }
 
@@ -602,7 +658,8 @@ export class StartContainerModalComponent {
         this.containerName = 'devcontainer-empty';
       }
     } else if (this.mounts.length === 0) {
-      this.mounts = [{ hostPath: '', readOnly: false }];
+      this.mounts = [this.newMountRow()];
+      this.refreshMountTargets();
     }
     this.updateAutoName();
   }
@@ -612,9 +669,7 @@ export class StartContainerModalComponent {
     if (this.empty) return null;
     const hostPaths = this.mounts.map((m) => m.hostPath.trim()).filter(Boolean);
     if (hostPaths.length === 0) return 'Add at least one folder';
-    // Duplicate CONTAINER paths can no longer happen (computeMountTargets()
-    // numbers collisions by construction) — only host paths need checking,
-    // same normalize-and-compare style as validateSandbox() below (Windows
+    // Same normalize-and-compare style as validateSandbox() below (Windows
     // paths are case-insensitive, and a trailing slash is not a difference).
     const seen = new Set<string>();
     for (const hostPath of hostPaths) {
@@ -622,24 +677,37 @@ export class StartContainerModalComponent {
       if (seen.has(key)) return `Duplicate folder: ${hostPath}`;
       seen.add(key);
     }
+    // Container paths USED to be collision-free by construction
+    // (computeMountTargets() numbers collisions itself), but that's no longer
+    // strictly true now that a row's containerPath can be a manual override:
+    // refreshMountTargets() can't know a dirty row already claimed a target
+    // by hand, so a freshly auto-computed target on another row can collide
+    // with it. Catch that here rather than silently sending two mounts at
+    // the same in-environment path.
+    const seenTargets = new Set<string>();
+    for (const m of this.mounts) {
+      if (!m.hostPath.trim()) continue;
+      const target = m.containerPath.trim();
+      if (!target) continue;
+      const key = target.replace(/\/+$/, '').toLowerCase();
+      if (seenTargets.has(key)) return `Duplicate container path: ${target}`;
+      seenTargets.add(key);
+    }
     return null;
   }
 
   /**
    * The `{hostPath, containerPath, readOnly}` triples confirm() sends, and
-   * what remember() persists (minus readOnly there — see remember()).
-   *
-   * Targets are computed over the FULL row list (including blank ones) so a
-   * filled row's target always matches what mountTargets[] just showed it as
-   * a preview — a blank row's fallback "project" name must not shift a real
-   * row's numbering depending on whether blanks are filtered before or after
-   * computing. Only once the targets are settled are the blank rows dropped.
+   * what remember() persists (minus containerPath/dirty there — see
+   * RememberedLayout). containerPath is read straight off each row now (no
+   * separate recompute here) since refreshMountTargets() already keeps every
+   * non-dirty row's containerPath current as of the last hostPath edit, and a
+   * dirty row's containerPath is exactly what the user typed.
    */
   private buildMounts(): { hostPath: string; containerPath: string; readOnly: boolean }[] {
     if (this.empty) return [];
-    const targets = this.mountTargets;
     return this.mounts
-      .map((m, i) => ({ hostPath: m.hostPath.trim(), containerPath: targets[i], readOnly: m.readOnly === true }))
+      .map((m) => ({ hostPath: m.hostPath.trim(), containerPath: m.containerPath.trim(), readOnly: m.readOnly === true }))
       .filter((m) => m.hostPath !== '');
   }
 
@@ -850,22 +918,27 @@ export class StartContainerModalComponent {
       const raw = localStorage.getItem(REMEMBER_KEY);
       if (raw) layout = JSON.parse(raw) as RememberedLayout;
     } catch { layout = null; }
-    if (!layout) return;
     // A blob saved before this refactor (or any other unexpected shape) must
     // degrade to "nothing restored", never throw — hence the Array.isArray
     // and per-field guards rather than trusting the RememberedLayout cast.
-    if (Array.isArray(layout.mounts) && layout.mounts.length) {
-      const restored = layout.mounts
-        .filter((m): m is NonNullable<typeof m> => !!m && typeof m.hostPath === 'string' && m.hostPath.trim() !== '')
-        .map(m => ({ hostPath: m.hostPath, readOnly: m.readOnly === true }));
-      if (restored.length) this.mounts = restored;
+    if (layout) {
+      if (Array.isArray(layout.mounts) && layout.mounts.length) {
+        const restored = layout.mounts
+          .filter((m): m is NonNullable<typeof m> => !!m && typeof m.hostPath === 'string' && m.hostPath.trim() !== '')
+          .map(m => this.newMountRow(m.hostPath, m.readOnly === true));
+        if (restored.length) this.mounts = restored;
+      }
+      if (Array.isArray(layout.sbxFolders) && layout.sbxFolders.length) {
+        const restored = layout.sbxFolders
+          .filter((f): f is NonNullable<typeof f> => !!f && typeof f.path === 'string')
+          .map(f => ({ path: f.path, readOnly: f.readOnly === true }));
+        if (restored.length) this.sbxFolders = restored;
+      }
     }
-    if (Array.isArray(layout.sbxFolders) && layout.sbxFolders.length) {
-      const restored = layout.sbxFolders
-        .filter((f): f is NonNullable<typeof f> => !!f && typeof f.path === 'string')
-        .map(f => ({ path: f.path, readOnly: f.readOnly === true }));
-      if (restored.length) this.sbxFolders = restored;
-    }
+    // Every restored (or default) row starts non-dirty, so this seeds
+    // containerPath for whatever mounts ended up in place above — see
+    // RememberedLayout's comment for why containerPath itself isn't restored.
+    this.refreshMountTargets();
     this.updateAutoName();
   }
 
