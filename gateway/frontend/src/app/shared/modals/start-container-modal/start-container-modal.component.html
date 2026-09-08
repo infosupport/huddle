@@ -98,7 +98,7 @@
 
                 @if (containerSettingsFolders.length) {
                   <div class="sc-automount">
-                    <div class="sc-automount-t">Settings folders mounted automatically <span>(Settings → Folder mappings)</span></div>
+                    <div class="sc-automount-t">Settings folders mounted automatically <span>(Settings → Folder mappings)</span> <span class="pill">read-only</span></div>
                     @for (m of containerSettingsFolders; track m.id) {
                       <div class="sc-automount-row">
                         <code>{{ m.host_path }}</code>
@@ -132,7 +132,7 @@
                 @if (sbxSettings; as s) {
                   @if (s.folders.length) {
                     <div class="sc-automount">
-                      <div class="sc-automount-t">Settings folders mounted automatically <span>(Settings → Folder mappings)</span></div>
+                      <div class="sc-automount-t">Settings folders mounted automatically <span>(Settings → Folder mappings)</span> <span class="pill">read-only</span></div>
                       @for (f of s.folders; track f.targetPath) {
                         <div class="sc-automount-row">
                           <code>{{ f.hostPath }}</code>

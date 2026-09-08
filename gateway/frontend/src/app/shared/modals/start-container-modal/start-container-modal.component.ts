@@ -235,14 +235,16 @@ interface Lifecycle {
     .sc-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 7px; color: var(--text); }
 
     .sc-automount { margin-top: 12px; padding: 11px 12px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface-2); }
-    .sc-automount-t { font-size: 12px; font-weight: 600; color: var(--text); }
+    .sc-automount-t { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; font-weight: 600; color: var(--text); }
     .sc-automount-t span { font-weight: 400; color: var(--text-muted); }
     .sc-automount-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-muted); margin-top: 7px; flex-wrap: wrap; }
     .sc-automount-row code { font-size: 11px; }
     /* Bare .pill (no --allow/--deny/etc modifier) carries no background/color
        of its own — give the read-only marker a small, muted fill so it reads
-       as a badge rather than invisible padding inside this dashed row. */
-    .sc-automount-row .pill { padding: 2px 9px; font-size: 10px; font-weight: 700; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border-strong); }
+       as a badge rather than invisible padding: the per-row pill flags an
+       individual mapping that happens to be read-only, the one in the
+       heading flags that the whole automount list is read-only from here. */
+    .sc-automount-row .pill, .sc-automount-t .pill { padding: 2px 9px; font-size: 10px; font-weight: 700; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border-strong); }
 
     /* ── Accordions (right column) ───────────────────────────────────────────── */
     .sc-acc { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; overflow: hidden; background: var(--surface); }
