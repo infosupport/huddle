@@ -156,12 +156,36 @@ interface Lifecycle {
        room for it. */
     .mount-row.sc-mount-row { flex-wrap: wrap; }
     .mount-row.sc-mount-row .mount-host { flex: 1 1 200px; min-width: 0; }
-    /* The container-path group: a chevron, the editable path input (grows to
-       fill the space — sized via the shared ".mount-row input" rule above),
-       and the read-only toggle right after it (moved here from beside the
-       whole row, per the redesign — it's the path's own toggle, not the
-       row's). */
+    /* The container-path group: a chevron, and the path field itself (an
+       input plus its own read-only toggle button, attached to the trailing
+       edge of the input rather than sitting beside the whole row — it's the
+       path's own toggle, not the row's). */
     .mount-target { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
+    /* The read-only toggle lives INSIDE the destination-path input rather
+       than beside it — same absolute-positioned-over-the-field technique as
+       the IDE-select logo below (.sc-select-wrap--icon) and
+       FolderSelectComponent's browseMode="icon" (position: relative
+       wrapper, absolutely positioned control, extra input padding so text
+       never runs under it) — kept consistent with those two rather than
+       inventing a third variant. */
+    .mount-path-field { position: relative; flex: 1; min-width: 0; }
+    .mount-path-field input { width: 100%; padding-right: 34px; }
+    .mount-ro-toggle {
+      position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+      width: 26px; height: 26px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+      background: transparent; color: var(--text-dim); display: grid; place-items: center; cursor: pointer;
+    }
+    .mount-ro-toggle:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--border-strong); }
+    /* Subtle background tint on the destination-path field itself, separate
+       from the toggle button above: orange (--accent-soft) = writable (the
+       default — every row's field is tinted, not just read-only ones),
+       blue (--info-soft) = read-only ("safe"). Just a background fill, no
+       full-saturation border, so it doesn't fight the :focus rule above —
+       that rule already puts an --accent/--accent-soft ring around every
+       input in this component; layering a full-strength border here too
+       would clash with it on focus. */
+    .mount-target input[type="text"] { background: var(--accent-soft); }
+    .mount-target input.mount-target-input--ro { background: var(--info-soft); }
 
     /* ── Split "Add folder" button (container kind) ──────────────────────────── */
     .sc-split-btn { position: relative; display: inline-flex; }
@@ -648,6 +672,13 @@ export class StartContainerModalComponent {
    *  future hostPath changes elsewhere never clobber the manual choice. */
   onContainerPathInput(mount: MountRow): void {
     mount.containerPathDirty = true;
+  }
+
+  /** Tooltip/aria-label for a mount row's read-only toggle button — states
+   *  both the current state and what clicking it does, since the button is
+   *  icon-only and has no visible text label of its own. */
+  mountRoLabel(m: MountRow): string {
+    return m.readOnly ? 'Read-only — click to allow writes' : 'Writable — click to make read-only';
   }
 
   onMountInput(): void {
