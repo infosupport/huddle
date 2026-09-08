@@ -28,6 +28,11 @@ function leafOf(hostPath: string): string {
 export function computeMountTargets(hostPaths: string[]): string[] {
   const seenCount = new Map<string, number>();
   return hostPaths.map((hostPath) => {
+    // A blank/whitespace-only hostPath means nothing has been typed or picked
+    // yet — that must show up as an empty target, never the generic
+    // "project" fallback (which exists only for a non-blank path whose leaf
+    // genuinely can't be extracted, e.g. a bare drive root).
+    if (!hostPath || !hostPath.trim()) return '';
     const base = leafOf(hostPath) || 'project';
     const count = (seenCount.get(base) ?? 0) + 1;
     seenCount.set(base, count);
