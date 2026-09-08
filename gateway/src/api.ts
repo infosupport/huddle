@@ -53,8 +53,10 @@ import {
   isIdeName,
   execContainerOutput,
   execInContainer,
+  ENV_KEY_RE,
   type StartParams,
   type IdeName,
+  type LifecycleCommands,
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
 import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan } from './sbx';
@@ -974,12 +976,39 @@ export async function createApiServer(): Promise<FastifyInstance> {
     presentableName?: string;
     memory?: string;
     cpus?: string;
+    // devcontainer.json-shaped settings, hand-typed in the create modal — see
+    // StartParams (docker.ts) for what each one actually does and its caveats.
+    containerEnv?: Record<string, string>;
+    remoteEnv?: Record<string, string>;
+    jbPlugins?: string[];
+    jbSettings?: Record<string, unknown>;
+    lifecycle?: LifecycleCommands;
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const {
+        imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName,
+        empty, presentableName: presentableNameOverride, memory, cpus,
+        containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle,
+      } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
+      }
+      // Reserved-name collisions are a warning (ignoredEnv, handled inside
+      // createAndStartContainer) not a 400 — but a key that isn't even a legal
+      // identifier (contains `=`, whitespace, ...) is a client bug, same as a
+      // malformed mount below, so it's rejected here instead of silently
+      // dropped alongside a legitimate reserved-name collision.
+      for (const [label, map] of [['containerEnv', containerEnv], ['remoteEnv', remoteEnv]] as const) {
+        if (!map) continue;
+        for (const key of Object.keys(map)) {
+          if (!ENV_KEY_RE.test(key)) {
+            return reply.code(400).send({ error: `${label} key is not a valid environment variable name: "${key}"` });
+          }
+        }
+      }
+      if (jbSettings !== undefined && (typeof jbSettings !== 'object' || jbSettings === null || Array.isArray(jbSettings))) {
+        return reply.code(400).send({ error: 'jbSettings must be a JSON object' });
       }
       if (workspaceDir && mounts?.length) {
         return reply.code(400).send({ error: 'Provide either workspaceDir or mounts, not both' });
@@ -1051,10 +1080,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
         empty: empty === true,
         memory,
         cpus,
+        containerEnv,
+        remoteEnv,
+        jbPlugins,
+        jbSettings,
+        lifecycle,
       };
       try {
-        const id = await createAndStartContainer(params);
-        return { id, containerName };
+        const { id, ignoredEnv } = await createAndStartContainer(params);
+        return { id, containerName, ignoredEnv };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
       }

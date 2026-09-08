@@ -1,16 +1,33 @@
 import { Component, inject, effect } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ModalService } from '../../../core/services/modal.service';
-import { ApiService } from '../../../core/services/api.service';
+import { ApiService, FolderMapping } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
 import { SbxSettingsFolders } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
 import { FolderPickerModalComponent } from '../folder-picker-modal/folder-picker-modal.component';
+import { IconComponent } from '../../components/icon/icon.component';
 
 // Remembers the last-used multi-folder layout so the modal pre-fills it next time.
 const REMEMBER_KEY = 'huddle.start-modal.v1';
+
+// Same rule the backend enforces on env var keys (docker.ts / api.ts) — checked
+// here too so a bad key is never silently dropped without the user knowing why.
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Kept in sync BY HAND with docker.ts's RESERVED_ENV_NAMES; the backend is the
+// enforcement point (it drops these and reports them in `ignoredEnv`), this is
+// just an early hint so the warning shows up while the user is still typing
+// instead of only after the create request comes back. Never treat this list
+// as the source of truth.
+const RESERVED_ENV_NAMES = new Set([
+  '_CONTAINER_USER', '_CONTAINER_USER_HOME', '_REMOTE_USER', '_REMOTE_USER_HOME',
+  'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'DOCKER_HOST',
+  'DEVCONTAINER_CONFIG_PATH', 'XDG_DATA_HOME', 'JAVA_TOOL_OPTIONS',
+]);
 
 interface RememberedLayout {
   mode: 'single' | 'multi';
@@ -20,10 +37,20 @@ interface RememberedLayout {
   sbxFolders?: { path: string; readOnly: boolean }[];
 }
 
+/** One devcontainer.json-shaped lifecycle hook, all optional (see docker.ts). */
+interface Lifecycle {
+  initializeCommand: string;
+  onCreateCommand: string;
+  updateContentCommand: string;
+  postCreateCommand: string;
+  postStartCommand: string;
+  postAttachCommand: string;
+}
+
 @Component({
   selector: 'app-start-container-modal',
   standalone: true,
-  imports: [FormsModule, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent],
+  imports: [FormsModule, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent, IconComponent],
   templateUrl: './start-container-modal.component.html',
   styles: [`
     .mount-row { display: flex; gap: .5rem; align-items: center; }
@@ -38,13 +65,95 @@ interface RememberedLayout {
     .settings-list li { margin: 1px 0; }
     .settings-list code { font-size: 11px; }
     .settings-list--skip li { color: var(--warn, #d08a2a); }
-    .env-kind { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
-    .env-kind__opt { display: flex; flex-direction: column; gap: 2px; text-align: left; cursor: pointer;
-      border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); color: var(--text); }
-    .env-kind__opt:hover { border-color: var(--border-strong); }
-    .env-kind__opt.on { border-color: var(--accent, #5865f2); box-shadow: 0 0 0 1px var(--accent, #5865f2) inset; }
-    .env-kind__opt b { font-size: 13.5px; }
-    .env-kind__opt span { font-size: 11px; color: var(--text-muted); }
+
+    /* ── Environment-type cards (replaces the old plain env-kind toggle) ────── */
+    .sc-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+    .sc-card {
+      display: flex; align-items: center; gap: 8px; text-align: left; cursor: pointer;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 10px 12px; background: var(--surface); color: var(--text); font-family: inherit;
+    }
+    .sc-card:hover { border-color: var(--border-strong); }
+    .sc-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+    .sc-card app-icon { color: var(--text-muted); flex-shrink: 0; }
+    .sc-card.on app-icon { color: var(--accent); }
+    .sc-card-name { flex: 1; font-size: 13.5px; font-weight: 600; }
+    .sc-radio { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); flex-shrink: 0; }
+    .sc-card.on .sc-radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 40%, transparent 46%); }
+    .sc-fact { list-style: none; margin: 0 0 12px; padding: 0; display: none; flex-direction: column; gap: 4px; }
+    .sc-fact.on { display: flex; }
+    .sc-fact li { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); }
+    .sc-fact li app-icon { color: var(--success); flex-shrink: 0; }
+
+    .sc-head-icon {
+      width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+      background: var(--accent-soft); color: var(--accent); display: grid; place-items: center;
+    }
+    .sc-head-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    .sc-head-text h2 { flex: unset; }
+    .sc-head-text p { margin: 0; font-size: 11.5px; color: var(--text-muted); font-weight: 400; }
+
+    /* .modal-box--wide (720px, styles.css) is comfortable for one column but
+       cramped for two — this component-scoped override widens it further
+       rather than touching the shared class other modals rely on. */
+    .sc-xwide { width: min(94vw, 960px); }
+
+    /* ── Two-column layout (container kind only) ────────────────────────────── */
+    .sc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem; align-items: start; }
+    @media (max-width: 760px) { .sc-grid { grid-template-columns: 1fr; } }
+    .sc-col-title { font-size: 14px; font-weight: 700; margin: 0 0 2px; }
+    .sc-col-sub { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
+    .sc-col-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; margin-bottom: 6px; }
+    .sc-field { margin-bottom: 14px; }
+    .sc-label { font-size: 12.5px; font-weight: 600; margin-bottom: 5px; color: var(--text); }
+
+    .sc-automount { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
+    .sc-automount-t { font-size: 11.5px; color: var(--text-muted); margin-bottom: 4px; }
+    .sc-automount-t span { opacity: .75; }
+    .sc-automount-row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text); margin: 2px 0; }
+    .sc-automount-row code { font-size: 11px; }
+
+    /* ── Accordions (right column) ──────────────────────────────────────────── */
+    .sc-acc { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 10px; overflow: hidden; }
+    .sc-acc-head {
+      width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+      background: var(--surface); border: 0; cursor: pointer; text-align: left; color: var(--text); font-family: inherit;
+    }
+    .sc-acc-head:hover { background: var(--surface-hover); }
+    .sc-acc-mark { color: var(--text-muted); flex-shrink: 0; }
+    .sc-acc-t { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+    .sc-acc-name { font-size: 13px; font-weight: 600; }
+    .sc-acc-sub { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sc-acc-chev { color: var(--text-muted); transition: transform .15s; flex-shrink: 0; }
+    .sc-acc-chev.closed { transform: rotate(-90deg); }
+    .sc-acc-body { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
+
+    .ide-badge {
+      width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+      background: var(--accent-soft); color: var(--accent-strong);
+      font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .sc-select-wrap { display: flex; align-items: center; gap: 8px; }
+    .sc-select-wrap select { flex: 1; }
+
+    .env-row-warn { font-size: 11px; color: var(--warning); margin: -6px 0 8px; }
+    .sc-acc-body textarea {
+      width: 100%; min-height: 90px; resize: vertical; font-family: monospace;
+      padding: .45rem .65rem; border: 1px solid var(--border-strong); border-radius: .4rem;
+      font-size: .8rem; background: var(--surface); color: var(--text);
+    }
+    .life-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+    .life-row label { font-size: 11px; font-family: monospace; color: var(--text-muted); }
+    .life-row input { font-family: monospace; }
+
+    .sc-devcjson-pill { margin-left: 6px; }
+
+    /* ── Footer panel (container kind only) ─────────────────────────────────── */
+    .sc-foot-panel { justify-content: space-between; align-items: center; }
+    .sc-foot-text { display: flex; flex-direction: column; gap: 2px; }
+    .sc-foot-text b { font-size: 13.5px; }
+    .sc-foot-text span { font-size: 11.5px; color: var(--text-muted); }
+    .sc-foot-actions { display: flex; gap: .5rem; }
   `]
 })
 export class StartContainerModalComponent {
@@ -82,6 +191,45 @@ export class StartContainerModalComponent {
   status = '';
   loading = false;
 
+  // ── devcontainer.json-shaped fields (container kind only) ──────────────────
+  // A single flat array with a `scope` discriminator, not two separate arrays:
+  // the accordion renders container/remote vars in one add/remove-row list (it
+  // mirrors how the mockup and the folder-mount rows both work), and the API
+  // payload is split into containerEnv/remoteEnv records only at submit time —
+  // see buildEnvRecord().
+  envVars: { key: string; value: string; scope: 'container' | 'remote' }[] = [];
+  jbPlugins: string[] = [];
+  // Cosmetic-only for now: the mockup's JetBrains "backend" picker isn't wired
+  // to a real per-container "which JB product" concept beyond `ideName` — the
+  // backend has no place to put this yet, so it's captured as a plain string
+  // and simply not sent.
+  jbBackend = 'IntelliJ IDEA';
+  jbSettingsJson = ''; // raw textarea; parsed/validated on submit, see confirm()
+  lifecycle: Lifecycle = {
+    initializeCommand: '', onCreateCommand: '', updateContentCommand: '',
+    postCreateCommand: '', postStartCommand: '', postAttachCommand: '',
+  };
+  // Populated from the create response after a successful submit. The modal
+  // normally closes immediately on success, so when this is non-empty we keep
+  // it open a beat longer purely to show these — see confirm().
+  ignoredEnvWarnings: string[] = [];
+  doneWithWarnings = false;
+
+  // Devcontainer mode has the same "settings folders" concept sandbox already
+  // shows (host-config.ts folder mappings, applied to every container
+  // unconditionally by docker.ts's buildFolderMounts) but the modal never
+  // surfaced it for containers before now. Reuses the existing
+  // /api/folder-mappings read endpoint (already called by the Settings page) —
+  // no backend change needed for this piece.
+  containerSettingsFolders: FolderMapping[] = [];
+
+  // Right-column accordions, all expanded by default: every field in them is
+  // optional, so there is no "important" one to single out as pre-opened —
+  // unlike the mockup's static screenshot (which shows Base image/Env vars
+  // collapsed), an interactive form is better served defaulting open so a
+  // first-time user actually sees what is available.
+  accOpen: Record<string, boolean> = { baseImage: true, envVars: true, jetbrains: true, lifecycle: true };
+
   get open() { return this.modalService.startOpen(); }
 
   constructor() {
@@ -109,6 +257,19 @@ export class StartContainerModalComponent {
     this.sbxAgent = 'claude';
     this.sbxSettings = null;
     this.kind = 'container'; // legacy "Start devcontainer" entry points must default to a devcontainer
+    // devcontainer.json-shaped fields: reset every open so a previous
+    // environment's env vars/lifecycle commands never bleed into the next one.
+    this.envVars = [];
+    this.jbPlugins = [];
+    this.jbBackend = 'IntelliJ IDEA';
+    this.jbSettingsJson = '';
+    this.lifecycle = {
+      initializeCommand: '', onCreateCommand: '', updateContentCommand: '',
+      postCreateCommand: '', postStartCommand: '', postAttachCommand: '',
+    };
+    this.ignoredEnvWarnings = [];
+    this.doneWithWarnings = false;
+    this.containerSettingsFolders = [];
     this.restoreRemembered();
     this.loadImagesForIde();
     // Show which settings folders (folder mappings) the sandbox will get, and
@@ -116,6 +277,11 @@ export class StartContainerModalComponent {
     this.api.sbxSettingsFolders().subscribe({
       next: (s) => { this.sbxSettings = s; },
       error: () => { this.sbxSettings = null; },
+    });
+    // Same idea for devcontainer mode — see containerSettingsFolders' comment.
+    this.api.getFolderMappings().subscribe({
+      next: (m) => { this.containerSettingsFolders = m.filter((f) => !!f.enabled); },
+      error: () => { this.containerSettingsFolders = []; },
     });
   }
 
@@ -331,10 +497,103 @@ export class StartContainerModalComponent {
     return null;
   }
 
+  // ── Environment variables (container kind) ─────────────────────────────────
+  addEnvVar(): void {
+    this.envVars.push({ key: '', value: '', scope: 'container' });
+  }
+
+  removeEnvVar(i: number): void {
+    this.envVars.splice(i, 1);
+  }
+
+  /** Live per-row hint. Never blocks submission — see buildEnvRecord(). */
+  envRowWarning(row: { key: string }): string | null {
+    const key = row.key.trim();
+    if (!key) return null;
+    if (RESERVED_ENV_NAMES.has(key)) return `\`${key}\` is reserved by Huddle and will be ignored.`;
+    if (!ENV_KEY_PATTERN.test(key)) return `"${key}" is not a valid variable name and won't be sent.`;
+    return null;
+  }
+
+  /**
+   * Builds the containerEnv/remoteEnv record for one scope at submit time.
+   *
+   * Reserved names are still sent through (not filtered here) — the backend is
+   * the enforcement point and reports what it dropped via `ignoredEnv`; the
+   * inline warning above is what tells the user ahead of time, dropping it
+   * silently here would just hide that same information one step earlier.
+   * Only a structurally invalid key (fails the identifier regex) is dropped
+   * client-side, since the backend would 400 the whole request for that.
+   */
+  private buildEnvRecord(scope: 'container' | 'remote'): Record<string, string> | undefined {
+    const rec: Record<string, string> = {};
+    for (const row of this.envVars) {
+      if (row.scope !== scope) continue;
+      const key = row.key.trim();
+      if (!key || !ENV_KEY_PATTERN.test(key)) continue;
+      rec[key] = row.value;
+    }
+    return Object.keys(rec).length ? rec : undefined;
+  }
+
+  // ── JetBrains customisations (container kind) ───────────────────────────────
+  addJbPlugin(): void {
+    this.jbPlugins.push('');
+  }
+
+  removeJbPlugin(i: number): void {
+    this.jbPlugins.splice(i, 1);
+  }
+
+  ideMonogram(ide: 'rider' | 'intellij' | 'vscode'): string {
+    // Small fallback badge: shared/components has no IDE logo assets in the
+    // app-icon registry today (see icons.ts), and this component's file scope
+    // doesn't extend to adding new image assets — a monogram is the smallest
+    // thing that still visually distinguishes the IDE next to the select.
+    return ide === 'vscode' ? 'VS' : ide === 'rider' ? 'R#' : 'IJ';
+  }
+
+  // ── Lifecycle commands (container kind) ─────────────────────────────────────
+  /** Blank fields become `undefined` per-field — no point sending empty noise. */
+  private buildLifecycle(): Partial<Lifecycle> | undefined {
+    const out: Partial<Lifecycle> = {};
+    for (const key of Object.keys(this.lifecycle) as (keyof Lifecycle)[]) {
+      const trimmed = this.lifecycle[key].trim();
+      if (trimmed) out[key] = trimmed;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  toggleAcc(key: string): void {
+    this.accOpen[key] = !this.accOpen[key];
+  }
+
   confirm(): void {
     if (this.kind === 'sandbox') { this.confirmSandbox(); return; }
+    if (this.doneWithWarnings) { this.close(); return; }
     const err = this.validate();
     if (err) { this.error = err; return; }
+
+    // JetBrains settings JSON is parsed eagerly, before anything is sent: a bad
+    // paste should surface immediately rather than after Docker has already
+    // started creating something.
+    let jbSettings: Record<string, unknown> | undefined;
+    const rawJbSettings = this.jbSettingsJson.trim();
+    if (rawJbSettings) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawJbSettings);
+      } catch (e) {
+        this.error = `JetBrains settings is not valid JSON: ${(e as Error).message}`;
+        return;
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        this.error = 'JetBrains settings must be a JSON object';
+        return;
+      }
+      jbSettings = parsed as Record<string, unknown>;
+    }
+
     this.error = '';
     this.loading = true;
     this.status = 'Starting container…';
@@ -348,8 +607,33 @@ export class StartContainerModalComponent {
         : undefined,
       containerName: this.containerName,
       empty: this.empty,
+      containerEnv: this.buildEnvRecord('container'),
+      remoteEnv: this.buildEnvRecord('remote'),
+      jbPlugins: this.jbPlugins.map(p => p.trim()).filter(Boolean),
+      jbSettings,
+      lifecycle: this.buildLifecycle(),
     }).subscribe({
-      next: () => { this.remember(); this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
+      next: (r) => {
+        this.remember();
+        this.loading = false;
+        // ignoredEnv is the authoritative version of the same warning the
+        // per-row hint above already gave — something could in principle slip
+        // past it (e.g. a name added to RESERVED_ENV_NAMES on the backend
+        // after this frontend copy was last synced by hand). The modal
+        // normally closes immediately on success, and ModalService has no
+        // general-purpose "toast after an action" mechanism (only
+        // notifySandboxesChanged(), a one-shot refresh tick for a different
+        // list) — rather than build a whole notification system for one
+        // message, just keep the modal open long enough to show it.
+        this.state.loadAll();
+        if (r.ignoredEnv?.length) {
+          this.ignoredEnvWarnings = r.ignoredEnv;
+          this.doneWithWarnings = true;
+          this.status = '';
+        } else {
+          this.modalService.closeStart();
+        }
+      },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },
     });
   }

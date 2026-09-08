@@ -1,6 +1,8 @@
 import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
+import { exec as execCb } from 'child_process';
+import { promisify } from 'util';
 import { registerContainerProxy } from './socket-proxy';
 import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ContainerExec, ExecResult } from './sudo-grant';
@@ -12,6 +14,12 @@ import { notifyStateChanged } from './events';
 import { waitForSocketReadiness } from './socket-registration';
 
 const SOCKET_DIR = runtimeEnv.socketDir;
+
+// initializeCommand (see createAndStartContainer) runs on the HOST with Huddle
+// Node's own privileges — promisified so a failure rejects with the usual
+// ExecException (which util's child_process.exec promisify wires up to also
+// carry .stdout/.stderr) instead of a callback.
+const execHostCommand = promisify(execCb);
 
 // The CLI passes the detected container engine via HUDDLE_RUNTIME. On (rootless)
 // Podman the per-container proxy socket is SELinux-labeled; a SELinux-confined
@@ -667,6 +675,31 @@ export async function forceDeleteContainer(containerId: string): Promise<void> {
 
 export async function startExistingContainer(containerId: string): Promise<void> {
   await startContainer(encodeURIComponent(containerId));
+
+  // postStartCommand (devcontainer.json lifecycle) must run on EVERY start,
+  // not just the one baked into the create-time config script — this is the
+  // path every later `docker start` (resume) takes. The command survives the
+  // gap between create and this call as a label (createAndStartContainer
+  // writes it, only when non-empty) rather than a DB row, since a label is
+  // already durable across restarts with no migration needed. Best-effort,
+  // like every other lifecycle hook: a failure here must never block the
+  // resume itself, so it's logged and swallowed, not rethrown.
+  try {
+    const info = await inspectContainer(containerId);
+    const labels: Record<string, string> = info?.Config?.Labels ?? {};
+    const postStart = labels['com.huddle.lifecycle.postStart'];
+    if (!postStart) return;
+    const workspace = labels['com.intellij.devcontainer.workspace.path'] || '/';
+    const script = buildLifecycleStep('postStart', postStart, workspace);
+    if (!script) return;
+    const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/exec`, {
+      User: 'root',
+      Cmd: ['sh', '-c', script],
+    });
+    await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
+  } catch (err: any) {
+    console.warn(`[lifecycle] postStartCommand exec failed for ${containerId}:`, err?.message);
+  }
 }
 
 export async function cleanupContainerNetwork(containerName: string): Promise<void> {
@@ -786,9 +819,52 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
+export function buildJbConfigScript(
+  containerWorkspace: string,
+  containerName: string,
+  ideName: IdeName,
+  caCertPem: string,
+  seedScript: string,
+  lifecycle?: LifecycleCommands,
+  remoteEnv: Record<string, string> = {},
+  jbPlugins: string[] = [],
+  jbSettings?: Record<string, unknown>,
+): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
+  // Embedded via printf's %s (an ARGUMENT, not part of the format string), so
+  // a `%` or backslash inside the caller's JSON is never re-interpreted by
+  // printf itself — only the format string (the literal text before it) gets
+  // scanned for conversions. shQuote handles the shell-level escaping the
+  // same way PROJ does below.
+  const jbSettingsArg = shQuote(JSON.stringify(jbSettings ?? {}));
+  const remoteEnvScript = buildRemoteEnvScript(remoteEnv);
+  // devcontainer.json has no content-change detection in Huddle today, so
+  // updateContentCommand is approximated as "runs once at create, same as
+  // onCreate" rather than building real change-detection for this pass.
+  const onCreateStep = buildLifecycleStep('onCreate', lifecycle?.onCreateCommand, containerWorkspace);
+  const updateContentStep = buildLifecycleStep('updateContent', lifecycle?.updateContentCommand, containerWorkspace);
+  const postCreateStep = buildLifecycleStep('postCreate', lifecycle?.postCreateCommand, containerWorkspace);
+  // The very first start happens right here (create+start are one call), so
+  // postStartCommand runs once at the end of this script same as every other
+  // hook; every LATER start goes through startExistingContainer instead, which
+  // re-execs it from the com.huddle.lifecycle.postStart label this container
+  // is created with (see createAndStartContainer) since this script never
+  // runs again after the first start.
+  const postStartStep = buildLifecycleStep('postStart', lifecycle?.postStartCommand, containerWorkspace);
+  const postAttachWatcher = buildPostAttachWatcher(lifecycle?.postAttachCommand, containerWorkspace, false);
+  // UNVERIFIED: this codebase has never invoked `remote-dev-server.sh
+  // installPlugins` before — every other IDE CLI call in this script (run,
+  // the keytool imports) is confirmed live against a real build. The exact
+  // subcommand name and flag form need checking against the actual installed
+  // IDE the first time this ships; don't take it on faith. Repeated as a
+  // shell comment (not just here) so it's visible in the exec output too.
+  const installPluginsLine = jbPlugins.length
+    ? `# UNVERIFIED: remote-dev-server.sh installPlugins has never been invoked
+# live from this codebase before (unlike run/keytool below) — check the exact
+# subcommand/flag form against the installed IDE build.
+"$IDEA_PATH/bin/remote-dev-server.sh" installPlugins ${jbPlugins.map(shQuote).join(' ')} > /tmp/huddle-jb-plugins.log 2>&1 || echo "[jb-config] WARNING: installPlugins failed (see /tmp/huddle-jb-plugins.log)" >&2\n`
+    : '';
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
@@ -797,13 +873,13 @@ CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.jso
 PROJ=${shQuote(containerWorkspace)}
 mkdir -p /.jbdevcontainer/config/JetBrains
 if [ -n "$IDEA_DIR" ]; then
-  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
+  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":%s}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" ${jbSettingsArg} > /.jbdevcontainer/config/JetBrains/host-config.json
 else
   # IDE not yet in dist/ (empty shared volume on a new machine).
   # deploy:true lets IntelliJ download and install the backend itself.
   # After that first deploy the IDE is in the volume and everything works normally.
   echo "[jb-config] IDE not found in dist/, writing host-config with deploy:true so IntelliJ installs the backend"
-  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"true"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" > /.jbdevcontainer/config/JetBrains/host-config.json
+  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"true"},"forwardPorts":{},"customizations":{"jetbrains":%s}}' "$PROJ" ${jbSettingsArg} > /.jbdevcontainer/config/JetBrains/host-config.json
   # Background watcher: once IntelliJ has installed the IDE, import the Huddle CA
   # into the JBR keystore after all (the huddle-ca.crt has been created by then).
   ( i=0
@@ -838,6 +914,15 @@ iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-desti
 iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
+
+# onCreateCommand / updateContentCommand (devcontainer.json lifecycle): run
+# early, before CA/sudo/seed setup, as devcontainer.json's own ordering
+# implies ("on create" happens before the environment is otherwise fully
+# configured). updateContentCommand has no real trigger here — Huddle does
+# not detect content changes — so it is approximated as running once here too.
+${onCreateStep}
+
+${updateContentStep}
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
 # that do not read from the system store (node).
@@ -874,11 +959,19 @@ fi
 
 ${NOOT_LOCKED_SETUP}
 
+# remoteEnv (best-effort — see StartParams' doc comment: real per-attach
+# remoteEnv semantics are not achievable here, this is a login-shell profile.d
+# approximation only).
+${remoteEnvScript}
+
 # Fix workspace permissions. Uses "$PROJ" (set above) rather than interpolating
 # the path again, so the value is shell-quoted in exactly one place.
 mkdir -p "$PROJ" 2>/dev/null || true
 chown -R vscode:vscode "$PROJ" 2>/dev/null || true
 chmod -R u+rwX "$PROJ" 2>/dev/null || true
+
+# postCreateCommand: needs the workspace to exist and be owned by vscode first.
+${postCreateStep}
 
 ${seedScript}
 
@@ -900,8 +993,14 @@ touch /tmp/sudo-audit.log
 # Its output goes to /tmp, never into "$PROJ": a log file dropped in the project
 # root shows up in the user's git status (and in commits) on every start.
 if [ -n "$IDEA_DIR" ]; then
-nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > /tmp/huddle-ide-backend.log 2>&1 &
+${installPluginsLine}nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > /tmp/huddle-ide-backend.log 2>&1 &
 fi
+
+# postStartCommand: first-start-only here; see the comment above postStartStep
+# for how later starts get it too.
+${postStartStep}
+
+${postAttachWatcher}
 
 `;
 }
@@ -926,7 +1025,7 @@ fi
 //     from the remote window (newLocal).
 // Fully locking this down requires Huddle to manage the attach itself (managed
 // devcontainer.json with copyGitConfig:false); this is the container-side layer.
-export function buildVscodeMachineSettings(): Record<string, unknown> {
+export function buildVscodeMachineSettings(remoteEnv: Record<string, string> = {}): Record<string, unknown> {
   return {
     'security.workspace.trust.enabled': true,
     'security.workspace.trust.startupPrompt': 'always',
@@ -934,7 +1033,11 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
     'security.workspace.trust.emptyWindow': false,
     'task.allowAutomaticTasks': 'off',
     'terminal.integrated.allowLocalTerminal': false,
-    // null removes the variable from the terminal environment.
+    // null removes the variable from the terminal environment. remoteEnv is
+    // spread in AFTER the finding-#15 nulls: this is the "best-effort" half of
+    // StartParams.remoteEnv (see its doc comment) merging into the terminal
+    // env VS Code actually reads on attach — the caller's values win, same as
+    // a real devcontainer.json remoteEnv would override a machine default.
     'terminal.integrated.env.linux': {
       GIT_ASKPASS: null,
       VSCODE_GIT_ASKPASS_NODE: null,
@@ -944,13 +1047,30 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
       SSH_AUTH_SOCK: null,
       GPG_AGENT_INFO: null,
       GPG_TTY: null,
+      ...remoteEnv,
     },
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
+export function buildVscodeConfigScript(
+  containerWorkspace: string,
+  containerName: string,
+  caCertPem: string,
+  seedScript: string,
+  lifecycle?: LifecycleCommands,
+  remoteEnv: Record<string, string> = {},
+): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
-  const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
+  const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(remoteEnv), null, 2), 'utf8').toString('base64');
+  const remoteEnvScript = buildRemoteEnvScript(remoteEnv);
+  const onCreateStep = buildLifecycleStep('onCreate', lifecycle?.onCreateCommand, containerWorkspace);
+  const updateContentStep = buildLifecycleStep('updateContent', lifecycle?.updateContentCommand, containerWorkspace);
+  const postCreateStep = buildLifecycleStep('postCreate', lifecycle?.postCreateCommand, containerWorkspace);
+  // See the equivalent comment in buildJbConfigScript: this covers the first
+  // start only; every later start is re-exec'd by startExistingContainer from
+  // the com.huddle.lifecycle.postStart label.
+  const postStartStep = buildLifecycleStep('postStart', lifecycle?.postStartCommand, containerWorkspace);
+  const postAttachWatcher = buildPostAttachWatcher(lifecycle?.postAttachCommand, containerWorkspace, true);
   return `#!/bin/sh
 PROJ=${shQuote(containerWorkspace)}
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
@@ -965,6 +1085,13 @@ iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j AC
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
+# onCreateCommand / updateContentCommand (devcontainer.json lifecycle): run
+# early, before CA/sudo/seed setup — see the matching comment in
+# buildJbConfigScript for why updateContentCommand is approximated this way.
+${onCreateStep}
+
+${updateContentStep}
+
 # Install huddle's MITM CA in the system trust store + set env vars for tools
 # that do not read from the system store (node, java).
 mkdir -p /usr/local/share/ca-certificates
@@ -978,11 +1105,17 @@ ${IDE_CRED_SCRUB}
 
 ${NOOT_LOCKED_SETUP}
 
+# remoteEnv (best-effort — see StartParams' doc comment).
+${remoteEnvScript}
+
 # Fix workspace permissions. Uses "$PROJ" (set at the top) rather than
 # interpolating the path again, so the value is shell-quoted in exactly one place.
 mkdir -p "$PROJ" 2>/dev/null || true
 chown -R vscode:vscode "$PROJ" 2>/dev/null || true
 chmod -R u+rwX "$PROJ" 2>/dev/null || true
+
+# postCreateCommand: needs the workspace to exist and be owned by vscode first.
+${postCreateStep}
 
 ${seedScript}
 
@@ -1008,6 +1141,11 @@ touch /tmp/sudo-audit.log
       -H "Content-Type: application/json" \\
       -d "{\\"container\\":\\"${containerName}\\",\\"entry\\":\\"\$(echo "\$line" | sed 's/\\"/\\\\\\"/g')\\"}" >/dev/null 2>&1 || true
   done ) &
+
+# postStartCommand: first-start-only here; see the comment above postStartStep.
+${postStartStep}
+
+${postAttachWatcher}
 
 `;
 }
@@ -1094,6 +1232,15 @@ function buildFolderMounts(containerName: string, mountStyle: WindowsMountStyle)
   return result;
 }
 
+export interface LifecycleCommands {
+  initializeCommand?: string;
+  onCreateCommand?: string;
+  updateContentCommand?: string;
+  postCreateCommand?: string;
+  postStartCommand?: string;
+  postAttachCommand?: string;
+}
+
 export interface StartParams {
   imageName: string;
   workspaceDir: string;     // host path, forward slashes; empty string when empty=true or mounts is set
@@ -1105,6 +1252,19 @@ export interface StartParams {
   empty?: boolean;
   memory?: string;
   cpus?: string;
+  // devcontainer.json-shaped settings, hand-typed in the create modal. All
+  // optional and additive: omitting every one of these reproduces today's
+  // behavior exactly (see createAndStartContainer's env/script wiring below).
+  containerEnv?: Record<string, string>;   // baked into the container's Env at create — needs a recreate to change, same as real devcontainer.json containerEnv
+  // Best-effort only: a real devcontainer.json remoteEnv is injected per-attach
+  // by the IDE/CLI, a channel Huddle cannot see (see this file's "Finding #15"
+  // comment). This instead writes a profile.d script sourced by login shells,
+  // and — VS Code only — is merged into the Machine settings terminal env. Not
+  // the same semantics; do not oversell it as equivalent.
+  remoteEnv?: Record<string, string>;
+  jbPlugins?: string[];                    // customizations.jetbrains.plugins — JetBrains only, ignored for vscode
+  jbSettings?: Record<string, unknown>;    // customizations.jetbrains.settings — JetBrains only, ignored for vscode
+  lifecycle?: LifecycleCommands;
 }
 
 function parseMemoryBytes(s: string): number {
@@ -1126,7 +1286,113 @@ function parseCpuQuota(s: string): number {
   return Math.floor(n * 100000);
 }
 
-export async function createAndStartContainer(params: StartParams): Promise<string> {
+// ── User-supplied env (containerEnv/remoteEnv) ───────────────────────────────
+
+// Every name Huddle itself sets in the `env` array built below. A caller's
+// containerEnv/remoteEnv key colliding with one of these is dropped, never
+// merged or overridden: an emptied-out (or just wrong) http_proxy would
+// silently punch a hole straight through the firewall this whole project
+// exists to enforce, and DOCKER_HOST pointed elsewhere would hand a container
+// a socket Huddle never filtered. "Warn, don't block" (the product decision
+// for this feature) still means Huddle's own vars can never be shadowed —
+// only the caller's colliding value is discarded; the container is still
+// created and the caller is told which name(s) got dropped (ignoredEnv).
+export const RESERVED_ENV_NAMES: Set<string> = new Set([
+  '_CONTAINER_USER', '_CONTAINER_USER_HOME', '_REMOTE_USER', '_REMOTE_USER_HOME',
+  'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'no_proxy', 'NO_PROXY',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'DOCKER_HOST',
+  'DEVCONTAINER_CONFIG_PATH', 'XDG_DATA_HOME', 'JAVA_TOOL_OPTIONS',
+]);
+
+// What a POSIX env var name may look like. Anything failing this is not just
+// "reserved" but structurally invalid (e.g. contains `=` or whitespace) —
+// api.ts 400s on that as a client bug, rather than silently dropping it here.
+export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Splits a hand-typed containerEnv/remoteEnv map into what actually gets
+// applied and what got silently dropped. Never throws: by the time this runs,
+// api.ts has already 400'd any structurally-invalid key, so the only thing
+// left to catch here is a reserved-name collision (still checked again,
+// defensively, for any caller that reaches this function without going
+// through that validation — e.g. a future non-HTTP caller).
+export function filterUserEnv(entries?: Record<string, string>): { applied: [string, string][]; ignored: string[] } {
+  const applied: [string, string][] = [];
+  const ignored: string[] = [];
+  for (const [key, value] of Object.entries(entries ?? {})) {
+    if (!ENV_KEY_RE.test(key) || RESERVED_ENV_NAMES.has(key)) {
+      ignored.push(key);
+      continue;
+    }
+    applied.push([key, value]);
+  }
+  return { applied, ignored };
+}
+
+// ── devcontainer.json lifecycle commands ─────────────────────────────────────
+
+// One lifecycle hook, rendered as a shell fragment that runs the caller's
+// command as the container user (`vscode`), matching devcontainer.json's own
+// execution model — never as root, unlike the rest of these config scripts.
+// Best-effort by design: a failing command is logged to stderr and swallowed,
+// not fatal to container setup, because a devcontainer.json in the wild
+// commonly has hooks tuned for a slightly different base image/toolchain than
+// whatever Huddle happens to be running.
+function buildLifecycleStep(label: string, command: string | undefined, containerWorkspace: string): string {
+  const cmd = (command ?? '').trim();
+  if (!cmd) return '';
+  const inner = `cd ${containerWorkspace} 2>/dev/null; ${cmd}`;
+  return `# devcontainer.json lifecycle: ${label} (best-effort — a failing command is
+# logged, not fatal to container setup)
+su vscode -c ${shQuote(inner)} || echo "[huddle] lifecycle:${label} exited non-zero" >&2`;
+}
+
+// Best-effort approximation of a real per-attach remoteEnv (see StartParams'
+// doc comment on why it can't be exact): a profile.d script sourced by every
+// LOGIN shell. `<<'HUDDLE_REMOTE_ENV_EOF'` (quoted delimiter) disables all
+// expansion inside the heredoc, so the values below — already shell-quoted via
+// shQuote — land in the file exactly as written, not re-interpreted a second
+// time by the shell that's writing them.
+function buildRemoteEnvScript(remoteEnv: Record<string, string>): string {
+  const entries = Object.entries(remoteEnv);
+  if (entries.length === 0) return '';
+  const lines = entries.map(([k, v]) => `export ${k}=${shQuote(v)}`).join('\n');
+  return `cat <<'HUDDLE_REMOTE_ENV_EOF' > /etc/profile.d/95-huddle-remote-env.sh
+${lines}
+HUDDLE_REMOTE_ENV_EOF
+chmod 644 /etc/profile.d/95-huddle-remote-env.sh`;
+}
+
+// postAttachCommand approximation: the real IDE-attach channel is invisible to
+// Huddle (this file's "Finding #15" comment — attach goes over `docker
+// exec`/stdio, seen by neither the egress proxy nor the socket proxy), so
+// there is no event to hook postAttach into. This polls (same idiom as the
+// IDE_CRED_SCRUB inotify-or-poll loop above) for a NEW backend process
+// appearing — JetBrains' remote-dev-server, or VS Code Server's server.sh
+// under ~/.vscode-server* — and fires the command once per new PID, which
+// means "shortly after attach", not "exactly on attach". Said so explicitly
+// here and in the accordion hint text (frontend) rather than oversold.
+function buildPostAttachWatcher(command: string | undefined, containerWorkspace: string, isVscode: boolean): string {
+  const step = buildLifecycleStep('postAttach', command, containerWorkspace);
+  if (!step) return '';
+  const pattern = isVscode ? '\\.vscode-server[^ ]*/bin/[^ ]*/server\\.sh' : 'remote-dev-server(\\.sh)? run';
+  return `# devcontainer.json lifecycle: postAttach watcher (best-effort — see
+# buildPostAttachWatcher's comment in docker.ts for why this can only
+# approximate the real attach event)
+( SEEN_PIDS=""
+  while true; do
+    for pid in $(pgrep -f '${pattern}' 2>/dev/null); do
+      case " $SEEN_PIDS " in
+        *" $pid "*) ;;
+        *) SEEN_PIDS="$SEEN_PIDS $pid"
+${step}
+          ;;
+      esac
+    done
+    sleep 5
+  done ) &`;
+}
+
+export async function createAndStartContainer(params: StartParams): Promise<{ id: string; ignoredEnv: string[] }> {
   const { imageName, workspaceDir, mounts: mountParams, containerName, containerWorkspace, presentableName } = params;
   const ideName = params.ideName ?? 'intellij';
   const empty = params.empty === true;
@@ -1139,6 +1405,16 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
 
+  // Reserved-name filtering happens before anything else touches these maps:
+  // both the env array below and the config-script builders only ever see the
+  // already-filtered `applied` pairs, so there is exactly one place a
+  // caller-supplied name could ever end up shadowing a Huddle-owned var, and
+  // this is it (there is none — filterUserEnv drops it instead).
+  const containerEnvFilter = filterUserEnv(params.containerEnv);
+  const remoteEnvFilter = filterUserEnv(params.remoteEnv);
+  const ignoredEnv = [...containerEnvFilter.ignored, ...remoteEnvFilter.ignored];
+  const remoteEnvRecord = Object.fromEntries(remoteEnvFilter.applied);
+
   try {
     const existing = await inspectContainer(containerName);
     const existingIde = existing?.Config?.Labels?.['com.devcontainer.ide'] ?? ideFromContainerLabels(existing?.Config?.Labels);
@@ -1149,6 +1425,29 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   } catch (err: any) {
     if (!String(err.message).includes(`Docker API GET /containers/${encodeURIComponent(containerName)}/json → 404:`)) {
       throw err;
+    }
+  }
+
+  // initializeCommand (devcontainer.json semantics): runs on the HOST, before
+  // the network or container exist at all — this is not a container-side hook,
+  // unlike every other lifecycle command here. Executed with Huddle Node's own
+  // OS privileges directly on the developer's machine (Node — not
+  // gateway — runs there; see CLAUDE.md's process split). Placed after the
+  // "already exists" check (no point running it against a name we're about to
+  // refuse anyway) and before any state this function would otherwise have to
+  // roll back on failure: initializeCommand failing THROWS, aborting creation
+  // outright, consistent with this function's fail-fast structure elsewhere —
+  // "warn, don't block" applies to env-var collisions, not to a host command
+  // that failed to run at all.
+  const initializeCommand = params.lifecycle?.initializeCommand?.trim();
+  if (initializeCommand) {
+    const cwd = params.workspaceDir || params.mounts?.[0]?.hostPath || undefined;
+    const INITIALIZE_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+    try {
+      await execHostCommand(initializeCommand, { cwd, timeout: INITIALIZE_COMMAND_TIMEOUT_MS });
+    } catch (err: any) {
+      const stderr = typeof err?.stderr === 'string' ? err.stderr.trim() : '';
+      throw new Error(`initializeCommand failed: ${err.message}${stderr ? `\n${stderr}` : ''}`);
     }
   }
 
@@ -1260,6 +1559,10 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
         'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
       ]),
     ];
+    // containerEnv (already reserved-name-filtered above) is appended, never
+    // prepended: nothing here can come before — let alone override — a
+    // Huddle-owned var earlier in this same array.
+    env.push(...containerEnvFilter.applied.map(([k, v]) => `${k}=${v}`));
 
     // Each mount is its own git repo (or not a repo — ensureWorktree then falls
     // back to the path itself), so every mount gets its own worktree call. With a
@@ -1331,6 +1634,13 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
         'com.intellij.devcontainer.model': modelJson,
         'com.devcontainer.ide': ideName,
         'devcontainer.metadata': metadataJson,
+        // postStartCommand must fire on every start, not just this one — a
+        // resume goes through startExistingContainer, not this function, so
+        // the command is stashed here (only when non-empty) to survive every
+        // restart without a DB migration. Read back by startExistingContainer.
+        ...(params.lifecycle?.postStartCommand?.trim()
+          ? { 'com.huddle.lifecycle.postStart': params.lifecycle.postStartCommand.trim() }
+          : {}),
       },
       HostConfig: {
         Mounts: mounts,
@@ -1357,8 +1667,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
 
   // Run config script via exec — VS Code variant without JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript, params.lifecycle, remoteEnvRecord)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript, params.lifecycle, remoteEnvRecord, params.jbPlugins ?? [], params.jbSettings);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],
@@ -1368,5 +1678,5 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // No standing password anymore: 'noot' is created locked. Admin access now goes
   // via an ephemeral sudo grant (POST /api/docker/containers/:name/sudo-grant).
 
-  return id;
+  return { id, ignoredEnv };
 }

@@ -296,8 +296,22 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
-    return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
+  startContainer(params: {
+    image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[];
+    containerName: string; empty?: boolean;
+    // devcontainer.json-shaped extras (container kind only) — all optional,
+    // field names agreed with the backend plan (docker.ts's StartParams) so
+    // both sides serialize/deserialize the same shape without translation.
+    containerEnv?: Record<string, string>;
+    remoteEnv?: Record<string, string>;
+    jbPlugins?: string[];
+    jbSettings?: Record<string, unknown>;
+    lifecycle?: {
+      initializeCommand?: string; onCreateCommand?: string; updateContentCommand?: string;
+      postCreateCommand?: string; postStartCommand?: string; postAttachCommand?: string;
+    };
+  }): Observable<{ id: string; containerName: string; ignoredEnv: string[] }> {
+    return this.handle(this.http.post<{ id: string; containerName: string; ignoredEnv: string[] }>('/api/docker/start', {
       imageName: params.image,
       // No containerWorkspace: the gateway derives the IDE project root from the
       // mounts (deepest common parent, else /workspaces). The CLI can still send
@@ -308,6 +322,14 @@ export class ApiService {
       containerName: params.containerName,
       ideName: params.ide,
       empty: params.empty === true,
+      // Omitted entirely rather than sent as {}/[] when unused, so an older
+      // gateway build (or a test asserting on the exact request body) doesn't
+      // have to know about fields it never asked for.
+      ...(params.containerEnv && Object.keys(params.containerEnv).length ? { containerEnv: params.containerEnv } : {}),
+      ...(params.remoteEnv && Object.keys(params.remoteEnv).length ? { remoteEnv: params.remoteEnv } : {}),
+      ...(params.jbPlugins?.length ? { jbPlugins: params.jbPlugins } : {}),
+      ...(params.jbSettings ? { jbSettings: params.jbSettings } : {}),
+      ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
     }));
   }
 
