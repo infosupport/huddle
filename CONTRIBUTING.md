@@ -103,7 +103,8 @@ apply a sensible default.
 Huddle is a monorepo with two main parts: the **gateway** (Fastify API + Angular
 UI + proxy) and the **CLI**.
 
-**Prerequisites:** Node.js 20+ (24 LTS recommended), Docker or Podman, and Git.
+**Prerequisites:** Node.js 24+ (Huddle Node source uses `node:sqlite`), Docker
+or Podman, and Git.
 
 ```bash
 # 1. Clone

@@ -10,11 +10,11 @@ export interface Container {
   status: string;
   created: number;
   workspacePath?: string;
+  mounts?: { hostPath: string; containerPath: string }[];
   presentableName?: string;
   inNetwork?: boolean;
   huddleInNetwork?: boolean;
   ipAddress?: string;
-  securityScore?: number;
   labels?: Record<string, string>;
   Labels?: Record<string, string>;
   airlocked?: boolean;

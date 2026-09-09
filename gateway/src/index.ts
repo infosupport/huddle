@@ -1,11 +1,15 @@
-import { initDb } from './db';
-import { createProxyServer } from './proxy';
-import { createApiServer } from './api';
-import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
-import { sweepExpiredSudoGrants } from './sudo-grant';
-import { createContainerProxy } from './socket-proxy';
-import { initCa } from './tls-ca';
-import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
+// Which half of Huddle this process is.
+//
+// Huddle runs as two processes (docs/ADR-huddle-node-split.md): Huddle Node,
+// the control plane on the host, and huddle-gateway, the network enforcement
+// point in Docker. This file picks one and does nothing else.
+//
+// The imports are dynamic on purpose. db.ts opens the database at import time
+// and docker.ts a Docker client, so a static import graph would do both in the
+// gateway even though it never calls them — in the one process a devcontainer
+// can reach. Deciding first and importing after is what keeps them out.
+
+import { runtimeEnv } from './runtime-env';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -16,77 +20,50 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-const SOCKET_DIR = '/tmp/dc-sockets';
+/**
+ * Fails with a sentence instead of a stack trace when node:sqlite is missing.
+ *
+ * Huddle Node stores everything in node:sqlite (src/sqlite.ts). It landed in
+ * Node 22.5 behind --experimental-sqlite and became unflagged in 23.4, so an
+ * older Node reaches the store through three dynamic imports and then throws
+ * ERR_UNKNOWN_BUILTIN_MODULE from deep inside the CommonJS loader — pointing at
+ * dist/sqlite.js, which says nothing about the Node version being the cause.
+ *
+ * Loading the module IS the test. Version arithmetic would have to guess about
+ * both the 22.5 flag and the 23.4 change, and node:sqlite is absent from
+ * module.builtinModules even where it works, because that list omits
+ * experimental modules.
+ *
+ * The gateway half never calls this: it has no database (gateway/Dockerfile).
+ */
+async function requireNodeSqlite(): Promise<void> {
+  try {
+    await import('node:sqlite');
+  } catch {
+    console.error(
+      `[fatal] Huddle Node needs node:sqlite, which this Node does not have.\n` +
+        `        running: Node ${process.versions.node} at ${process.execPath}\n` +
+        `        needed:  Node 24 (or 22.5+ started with --experimental-sqlite)\n` +
+        `        The Docker image and CI both run Node 24; a host install is the\n` +
+        `        usual place to be behind.`,
+    );
+    process.exit(1);
+  }
+}
 
-initDb();
-initCa();
-createProxyServer();
-createApiServer().catch(err => {
-  console.error('[api] failed to start', err);
+async function main(): Promise<void> {
+  console.log(`[boot] role=${runtimeEnv.role}`);
+  if (runtimeEnv.runsGateway) {
+    const { bootGateway } = await import('./boot-gateway');
+    bootGateway();
+  } else {
+    await requireNodeSqlite();
+    const { bootNode } = await import('./boot-node');
+    bootNode();
+  }
+}
+
+main().catch(err => {
+  console.error('[fatal] failed to start:', err);
   process.exit(1);
 });
-
-// Re-create proxy sockets for all existing devcontainers (survives huddle restart)
-async function initContainerProxies(): Promise<void> {
-  try {
-    const containers = await listDevcontainers();
-    for (const c of containers) {
-      await createContainerProxy(c.name, SOCKET_DIR);
-    }
-    if (containers.length) {
-      console.log(`[socket-proxy] restored ${containers.length} proxy socket(s)`);
-    }
-  } catch (err: any) {
-    console.error('[socket-proxy] init failed:', err.message);
-  }
-}
-
-async function initContainerNetworks(): Promise<void> {
-  try {
-    const containers = await listDevcontainers();
-    for (const c of containers) {
-      const netName = `dc-net-${c.name}`;
-      if (await networkExists(netName)) {
-        try { await connectNetwork(netName, 'huddle'); } catch {} // already connected is fine
-      }
-    }
-  } catch (err: any) {
-    console.error('[network] init failed:', err.message);
-  }
-}
-
-async function initContainerIptables(): Promise<void> {
-  try {
-    const containers = await listDevcontainers();
-    for (const c of containers) {
-      await refreshContainerIptables(c.id, c.name);
-    }
-  } catch (err: any) {
-    console.error('[iptables] init failed:', err.message);
-  }
-}
-
-// Ephemeral sudo grants must be locked INTERNALLY in the container as soon as they
-// expire — expiry is therefore not passive. This active sweeper periodically locks
-// the 'noot' user in every container with an expired grant and cleans up the row.
-// Best-effort per container (a disappeared container leaves the rest untouched).
-const SUDO_SWEEP_INTERVAL_MS = 30_000;
-async function sweepSudoGrants(): Promise<void> {
-  try {
-    const locked = await sweepExpiredSudoGrants(execInContainer);
-    if (locked.length) console.log(`[sudo-grant] noot locked in ${locked.length} expired container(s)`);
-  } catch (err: any) {
-    console.error('[sudo-grant] sweep failed:', err.message);
-  }
-}
-setInterval(() => { void sweepSudoGrants(); }, SUDO_SWEEP_INTERVAL_MS);
-void sweepSudoGrants();
-
-initContainerProxies();
-// Reconnecting to the devcontainer networks pollutes resolv.conf (Podman puts the
-// internal-net aardvark DNS in it); sanitize afterwards so egress DNS keeps
-// working, even when there are (yet) no devcontainers. The settling runs also
-// catch the devcontainer-net connect that `huddle init` only performs after start.
-initContainerNetworks().finally(() => { void sanitizeResolvConf(); });
-scheduleSettlingSanitize();
-initContainerIptables();

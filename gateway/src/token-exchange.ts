@@ -61,3 +61,29 @@ export function resolveToken(placeholder: string, callerContainerId: string | nu
 export function isPlaceholderToken(token: string): boolean {
   return token.startsWith(PREFIX);
 }
+
+/**
+ * Does Huddle manage OAuth tokens on this listener? Only where it owns the
+ * identity the placeholder is bound to — the devcontainer proxy.
+ *
+ * NOT in sbx mode. Docker Sandboxes already runs proxy-managed credentials:
+ * the sandbox holds a sentinel, not a real token —
+ *
+ *   ~/.claude/.credentials.json → {"claudeAiOauth":{"accessToken":
+ *     "sk-ant-oat01-proxy-managed","refreshToken":"sk-ant-ort01-proxy-managed",…}}
+ *
+ * — and the sbx proxy substitutes the real credential on the way out. That is
+ * also why sbx MITMs the Anthropic hosts itself (measured: platform.claude.com
+ * gets a `Docker Sandboxes Proxy CA` leaf) instead of tunnelling them to Huddle.
+ * Layering Huddle's own rewriting on top gives two managers for one credential:
+ * Huddle would hand the sandbox a `huddle_tok_…` placeholder that overwrites
+ * sbx's sentinel and that Huddle cannot even redeem afterwards, because on the
+ * sbx port every request is unattributable (containerId is always null, ADR
+ * §1.3) and `resolveToken` refuses to redeem an unbound placeholder.
+ *
+ * The security property is unchanged: the real token never reaches the sandbox
+ * either way — it is just held by the layer that owns the identity.
+ */
+export function managesTokenExchange(isSbxProxy: boolean): boolean {
+  return !isSbxProxy;
+}

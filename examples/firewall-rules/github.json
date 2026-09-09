@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "GitHub",
+    "description": "GitHub in path mode: every host is blocked at the root and only the listed paths pass. The repo/API/raw/codeload/registry paths are scoped to the 'infosupport' org as an example — change it to your own org(s). The asset hosts (objects/assets) serve opaque, non-org paths, so their functional path prefixes are allowed instead.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "github.com",                    "container_id": null, "status": "deny",  "path_pattern": null,                    "path_mode": 1, "expires_at": null },
+    { "domain": "github.com",                    "container_id": null, "status": "allow", "path_pattern": "/infosupport/*",        "path_mode": 0, "expires_at": null },
+
+    { "domain": "api.github.com",                "container_id": null, "status": "deny",  "path_pattern": null,                    "path_mode": 1, "expires_at": null },
+    { "domain": "api.github.com",                "container_id": null, "status": "allow", "path_pattern": "/repos/infosupport/*",  "path_mode": 0, "expires_at": null },
+    { "domain": "api.github.com",                "container_id": null, "status": "allow", "path_pattern": "/orgs/infosupport/*",   "path_mode": 0, "expires_at": null },
+
+    { "domain": "raw.githubusercontent.com",     "container_id": null, "status": "deny",  "path_pattern": null,                    "path_mode": 1, "expires_at": null },
+    { "domain": "raw.githubusercontent.com",     "container_id": null, "status": "allow", "path_pattern": "/infosupport/*",        "path_mode": 0, "expires_at": null },
+
+    { "domain": "codeload.github.com",           "container_id": null, "status": "deny",  "path_pattern": null,                    "path_mode": 1, "expires_at": null },
+    { "domain": "codeload.github.com",           "container_id": null, "status": "allow", "path_pattern": "/infosupport/*",        "path_mode": 0, "expires_at": null },
+
+    { "domain": "ghcr.io",                       "container_id": null, "status": "deny",  "path_pattern": null,                    "path_mode": 1, "expires_at": null },
+    { "domain": "ghcr.io",                       "container_id": null, "status": "allow", "path_pattern": "/v2/infosupport/*",     "path_mode": 0, "expires_at": null },
+
+    { "domain": "objects.githubusercontent.com", "container_id": null, "status": "deny",  "path_pattern": null,                              "path_mode": 1, "expires_at": null },
+    { "domain": "objects.githubusercontent.com", "container_id": null, "status": "allow", "path_pattern": "/github-production-release-asset-*", "path_mode": 0, "expires_at": null },
+
+    { "domain": "github.githubassets.com",       "container_id": null, "status": "deny",  "path_pattern": null,                    "path_mode": 1, "expires_at": null },
+    { "domain": "github.githubassets.com",       "container_id": null, "status": "allow", "path_pattern": "/assets/*",             "path_mode": 0, "expires_at": null }
+  ]
+}

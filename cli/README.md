@@ -25,11 +25,66 @@ huddle                 # start an IntelliJ devcontainer for the current director
 huddle ./project       # start for a specific directory
 huddle --ide rider
 huddle --ide vscode --name devcontainer-demo
+huddle --ide vscode --mount ../docker-corpa=/workspaces/backend --mount ../frontend-real-estate-info=/workspaces/frontend --name corpa-dev
 huddle fw list
 huddle firewall list -i
 ```
 
-Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
+`--mount <host>=<container>` mounts an additional folder, worktree-isolated like the main workspace, at the container path you choose. The left side is a host path (relative paths are resolved against the current directory); the right side must be an **absolute** container path. Repeatable — pass one per folder — and cannot be combined with `--workspace`/`--empty`. Two mounts may not target the same container path.
+
+`--workspace-root <path>` sets the absolute container path the IDE opens as its project root. It requires at least one `--mount`. Without it the root defaults to the deepest directory the mount targets share, so the example above opens `/workspaces` and shows `backend/` and `frontend/` inside it. Mount targets that share nothing fall back to `/workspaces`.
+
+```bash
+huddle --ide vscode \
+  --mount ../ai-context-repo=/workspaces/ai \
+  --mount ../backend-repo=/workspaces/backend \
+  --mount ../frontend-repo=/workspaces/frontend \
+  --workspace-root /workspaces --name corpa-dev
+```
+
+Default API URL: `http://localhost:24842` — Huddle Node, on the host. Override it with
+`--url` or `HUDDLE_URL`.
+
+## Selecting host folders in the portal
+
+A browser cannot hand a server a folder path, so every host-path field in the portal
+grows a **Browse** button that opens Huddle's own folder dialog — starting a
+devcontainer, the folder mappings, and the team-managed folders. Ctrl-click picks
+several folders at once when starting a devcontainer, and each becomes its own
+worktree.
+
+It browses your host live: Huddle Node runs there and lists one folder per request as
+you open them, so a project you cloned a minute ago is simply in the list. There is
+nothing to index and no CLI command to run first. Hidden (dot) folders are listed too,
+and every input keeps accepting a path you type or paste.
+
+Windows paths may be typed either way (`T:\projects\app` or `T:/projects/app`) —
+Huddle stores one canonical form, so the two spellings are the same folder.
+
+## Starting sandboxes (Docker Sandboxes / sbx)
+
+```bash
+huddle sbx start                                    # sandbox for the current directory
+huddle sbx start my-box --workspace T:\projects\app  # a specific folder
+huddle sbx start my-box \
+  --workspace T:\projects\app \
+  --folder T:\projects\shared-lib \
+  --folder T:\docs:ro                               # extra folders, one read-only
+```
+
+`--workspace <path>` is the folder the agent starts in. `--folder <host path>` adds
+another folder and is **repeatable**; append `:ro` to mount that folder read-only.
+Unlike `--mount` for devcontainers there is no container path to choose: sbx mounts
+every folder inside the sandbox at the same path it has on the host (a Windows path
+`T:\projects\app` becomes `/t/projects/app`).
+
+The **folder mappings** from Settings (the settings folders devcontainers get, e.g.
+`~/.claude`) are added to every sandbox automatically: each one rides along as an
+extra folder and is then linked at the path the agent reads it from. An existing
+folder in the sandbox is never overwritten — only its missing entries are linked in,
+so the agent credentials sbx manages itself stay untouched. Mappings that cannot
+travel (a Docker volume, or a `~`/relative host path) are reported per sandbox
+instead of silently dropped.
 
 ## Experiments
 
@@ -59,6 +114,9 @@ Main flags:
 ```text
 --ide <intellij|rider|vscode>
 --workspace <path>
+--mount <host>=<container>   (repeatable, container path must be absolute)
+--workspace-root <path>      (container path the IDE opens; requires --mount)
+--folder <host path>[:ro]    (repeatable; extra sandbox folder for `huddle sbx start`)
 --name <name>
 --image <image>
 --empty

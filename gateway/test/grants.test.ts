@@ -6,19 +6,6 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 // is de grant verlopen. De API-routes (PUT/DELETE /api/authz/grants/:container)
 // zijn dunne wrappers om de db-helpers; we testen hier de helpers — dat is de
 // echte lifecycle-logica — plus de 1–120-min validatie die in api.ts zit.
-//
-// better-sqlite3 is native; in een DMZ-devcontainer zonder gebouwde binding
-// skippen we (zelfde probe als rules.test.ts).
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[grants.test] SKIPPED — better-sqlite3 binding niet bruikbaar: ${(e as Error).message}`
-  );
-}
 
 let db: typeof import('../src/db').db;
 let setGrant: typeof import('../src/db').setGrant;
@@ -39,7 +26,7 @@ function isActive(containerId: string): boolean {
   return !!g && g.until > Math.floor(Date.now() / 1000);
 }
 
-describe.skipIf(!sqliteAvailable)('docker grants', () => {
+describe('docker grants', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;

@@ -1,5 +1,5 @@
 import { green, dim, yellow } from './utils';
-import { activeExperiment, configPath, readConfig, writeConfig } from './config';
+import { activeExperiment, configPath, readConfig, updateConfig } from './config';
 import { CLI_PACKAGE, cliVersion, switchGlobalCli } from './self-update';
 import { resolveImages } from './images';
 import { runInit, InitOptions } from './init';
@@ -29,6 +29,11 @@ export function parseIssueNumber(raw: string | undefined): number {
  * function does not return (process.exit with the exit code of the new process).
  */
 export function ensureCliForChannel(relaunchArgs: string[], opts: { force?: boolean } = {}): void {
+  // Escape hatch for locally-built CLIs (e.g. dev-install.sh):
+  // when we deliberately run THIS build we must not hop to the published channel
+  // CLI — that would discard local, unpublished changes. The active experiment
+  // config is left untouched; only the auto-switch is suppressed for this run.
+  if (process.env.HUDDLE_SKIP_CLI_SWITCH === '1') return;
   const wanted = activeExperiment();
   // Normally we only switch when the experiment NUMBER differs — otherwise every
   // command would reinstall. But `huddle experiment use <n>` must pick up a newer
@@ -52,7 +57,7 @@ export function ensureCliForChannel(relaunchArgs: string[], opts: { force?: bool
  */
 export async function runExperimentUse(issue: number, initOpts: InitOptions = {}): Promise<void> {
   const previous = readConfig();
-  writeConfig({ ...previous, channel: 'experiment', experiment: issue });
+  updateConfig({ channel: 'experiment', experiment: issue });
   console.log(green(`Experiment ${issue} activated`) + dim(` (${configPath()})`));
 
   const relaunchArgs = ['init', ...(initOpts.runtime ? ['--runtime', initOpts.runtime] : [])];
@@ -62,8 +67,15 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
     ensureCliForChannel(relaunchArgs, { force: true });
   } catch (err) {
     // Activation failed → roll back the config so a subsequent `huddle init`
-    // doesn't stay stuck on an experiment that cannot be installed.
-    writeConfig(previous);
+    // doesn't stay stuck on an experiment that cannot be installed. Only the two
+    // keys this function set are restored; anything the gateway wrote to the
+    // shared file meanwhile (folder mappings, resource defaults) stays put.
+    try {
+      updateConfig({ channel: previous.channel, experiment: previous.experiment });
+    } catch (rollbackErr) {
+      // The rollback is a courtesy; never let it mask why activation failed.
+      console.error(dim(`Could not roll back ${configPath()}: ${(rollbackErr as Error).message}`));
+    }
     throw err;
   }
   await runInit(initOpts, resolveImages());
@@ -71,15 +83,12 @@ export async function runExperimentUse(issue: number, initOpts: InitOptions = {}
 
 /** Puts Huddle back on the stable release. */
 export async function runExperimentReset(): Promise<void> {
-  const config = readConfig();
   if (activeExperiment() === undefined && cliExperiment() === undefined) {
     console.log('No experiment active; Huddle is already running on stable.');
     return;
   }
 
-  delete config.experiment;
-  config.channel = 'stable';
-  writeConfig(config);
+  updateConfig({ channel: 'stable', experiment: undefined });
   console.log(green('Experiment config removed') + dim(` (${configPath()})`));
 
   // If an experimental CLI is still running, this installs the stable version

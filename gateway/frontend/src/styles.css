@@ -40,6 +40,7 @@
   --asset-sunset: url("/assets/sunset-light.png");
   --asset-aurora: url("/assets/aurora-light.png");
   --asset-logo: url("/assets/logo-light.png");
+  --asset-folder: url("/assets/folder.png");
 }
 
 :root[data-theme="dark"] {
@@ -72,6 +73,7 @@
   --asset-sunset: url("/assets/sunset-dark.png");
   --asset-aurora: url("/assets/aurora-dark.png");
   --asset-logo: url("/assets/logo-dark.png");
+  --asset-folder: url("/assets/folder-dark.png");
 }
 
 * { box-sizing: border-box; }
@@ -819,3 +821,28 @@ h4 { font-size: 13px; font-weight: 600; color: var(--text-muted); margin: 14px 0
 }
 .tabs .tab:hover { color: var(--text); }
 .tabs .tab.active { color: var(--text); border-bottom-color: var(--accent, #6366f1); }
+
+/* ===== Branded folder icon =====
+   Line art with an orange Huddle hex, one file per theme (like the logo), so
+   the strokes stay readable on both backgrounds. */
+.folder-img {
+  display: inline-block;
+  background-image: var(--asset-folder);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+/* ── Responsive: collapse the sidebar to an icon rail on a narrow (≈half-screen)
+   viewport — labels/branding hide, icons stay centered. Content gets the space. */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 60px; }
+  .sidebar__logo, .sidebar__igloo, .sidebar__pledge { display: none; }
+  .nav { padding-top: 10px; }
+  .nav__item { justify-content: center; gap: 0; padding: 10px 0; }
+  .nav__item span { display: none; }
+  .nav__item--sub, .nav__item--manage { padding-left: 0; font-size: 14px; }
+  .nav__section { display: none; }
+  .sidebar__footer { justify-content: center; padding: 12px 0; }
+  .sidebar__footer .meta { display: none; }
+}

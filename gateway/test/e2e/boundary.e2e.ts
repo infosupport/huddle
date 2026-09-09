@@ -271,16 +271,23 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
     //   1. via de egress-proxy (default: curlrc/http_proxy wijst naar huddle:80)
     //      → de self-traffic-gate van de proxy weigert alles behalve de
     //        audit-ingest met 403, de request bereikt de API nooit;
-    //   2. direct naar :3000 (iptables staat al het TCP-verkeer naar het
-    //      huddle-IP toe) → daar is het operator-token de barrière: 401.
+    //   2. direct naar :3000, langs de proxy om (iptables staat al het
+    //      TCP-verkeer naar het huddle-IP toe) → sinds de host/container-split
+    //      (docs/ADR-huddle-node-split.md) draait de management-API niet meer
+    //      in deze container; niets luistert daar nog op poort 3000 (zie
+    //      gateway/src/proxy.ts: "nothing listens on Huddle's API port in this
+    //      container"), en devcontainer-net routeert niet naar de host waar
+    //      Huddle Node nu wél op 127.0.0.1:3000 luistert. De operator-token-
+    //      barrière (401) is dus vervangen door onbereikbaarheid: de connectie
+    //      faalt hard (curl exit ≠ 0, geen http_code → '000').
     it('proxy blokkeert self-traffic naar de management-API (→ 403)', () => {
       const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules');
       expect(code).toBe('403');
     });
 
-    it('directe management-API-call zonder operator-token krijgt 401', () => {
+    it('directe management-API-call (proxy omzeild) is onbereikbaar (→ connectie-fout)', () => {
       const code = curlStatusIn(E2E_NAME, 'http://huddle:3000/api/rules', `--noproxy '*'`);
-      expect(code).toBe('401');
+      expect(code).toBe('000');
     });
 
     it('sudo-audit ingest is wél bereikbaar (→ 200)', () => {
