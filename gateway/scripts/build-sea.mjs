@@ -402,6 +402,27 @@ if (IS_WIN) {
   ok('icon + ProductName/FileDescription set to "Huddle"');
 }
 
+// ------------------------------------------------------------------ 7c. sign
+
+/**
+ * postject's injection above invalidates the code signature the official
+ * Node.js binary shipped with (same corruption Windows works around with
+ * ignoreCert above) — but unlike Windows, macOS enforces this at the kernel
+ * level: a binary with an invalid signature is killed on exec, silently,
+ * before it can print anything. Ad-hoc re-signing (no certificate, no
+ * identity) is enough to satisfy that check.
+ *
+ * Some macOS hosts are lenient enough to run an invalidly-signed binary
+ * anyway, which is exactly why this cannot be caught by "it worked on the
+ * machine that built it" — the smoke test below still has to run, but it is
+ * not a substitute for this step on a stricter host.
+ */
+if (IS_MAC) {
+  step('7c', 'Signing');
+  run('codesign', ['--force', '--sign', '-', STAGED]);
+  ok('ad-hoc signed');
+}
+
 // -------------------------------------------------------------- 8. smoke test
 
 step(8, 'Smoke test');
