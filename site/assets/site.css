@@ -136,13 +136,17 @@ img { max-width: 100%; }
 
 /* numbered steps */
 .steps { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; list-style: none; padding: 0; }
-.steps li { display: flex; gap: 13px; align-items: flex-start; }
-.steps b {
+.steps > li { display: flex; gap: 13px; align-items: flex-start; }
+/* Only the marker — the <b> that is a DIRECT child of the <li>. A plain
+   `.steps b` also caught every bold word inside the step text and rendered it
+   as a numbered circle, which tore the sentences apart. */
+.steps > li > b {
   width: 26px; height: 26px; flex: none; border-radius: 50%;
   background: var(--accent); color: #fff; font-size: 13px; font-weight: 700;
   display: grid; place-items: center;
 }
-.steps div { font-size: 15.5px; line-height: 1.5; color: var(--ink-2); }
+.steps > li > div { font-size: 15.5px; line-height: 1.5; color: var(--ink-2); }
+.steps > li > div > b { font-weight: 700; color: var(--ink); }
 
 /* callouts */
 .outcome { margin-top: 20px; background: var(--ok-tint); border-radius: var(--radius-sm); padding: 15px 17px; display: flex; gap: 12px; align-items: flex-start; }
