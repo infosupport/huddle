@@ -164,7 +164,7 @@
       </div>
     </div>
 
-    <p class="body-copy">That is all you need to follow the three steps. The <a href="#reference">reference at the bottom</a> has the rest: the networks table, why the port publish comes first, and the second place egress fails closed.</p>
+    <p class="body-copy">That is all you need to follow the three steps.</p>
   </div>
 
   <!-- ── THE THREE STEPS ─────────────────────────────────────────────────── -->
@@ -188,7 +188,7 @@
       <span class="kicker">STEP 1</span>
       <h2 class="section-title">An empty container</h2>
     </div>
-    <p class="body-copy">A dev container with no folder from your machine mounted: base image, proxy environment, filtered Docker socket — and you clone into it by hand. Nothing of yours is in the way, so the firewall loop is easy to see.</p>
+    <p class="body-copy">A dev container with no folder from your machine mounted: base image, proxy environment, filtered Docker socket — and nothing in it but the base image. Nothing of yours is in the way, so the firewall loop is easy to see.</p>
 
     <div class="pick" style="margin-top:18px">
       <input type="radio" name="pick-step1" id="s1-portal" class="pick-radio pick-a" checked>
@@ -256,7 +256,22 @@
     </div>
 
     <h3 class="figure-title" style="margin:24px 0 0">Connect to it</h3>
-    <p class="body-copy">Attach your IDE, then <code>git clone</code> something inside the container. That clone is your first firewall request: nothing is allow-listed up front except the gateway's own name, <code>huddle</code>.</p>
+    <p class="body-copy">Attach your IDE, open a terminal inside the container and run one <code>curl</code>. That single request is the whole loop: nothing is allow-listed up front except the gateway's own name, <code>huddle</code>, so this one has to be approved before it goes anywhere.</p>
+    <div class="term term-stack" style="margin-top:14px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>curl https://infosupport.github.io/huddle/api/hello.json</code>
+        <button type="button" class="copy-btn" data-copy="curl https://infosupport.github.io/huddle/api/hello.json" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>{</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;"ok": true,</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;"message": "You got your first curl working in Huddle.",</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;...</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>}</code></div>
+    </div>
+    <p class="body-copy" style="margin-top:12px">The first run does not answer — it waits, and fails if you leave it — until you approve <code>infosupport.github.io</code>. That is the point of the exercise. No <code>-x</code> and no <code>-k</code> are needed: the container already has <code>http_proxy</code> pointing at <code>huddle:80</code> and the gateway's CA in its trust store, so an ordinary <code>curl</code> is routed and trusted with no flags from you.</p>
     <div class="compare" style="margin-top:14px">
       <div class="figure">
         <div class="figure-title">Attach</div>
@@ -269,7 +284,7 @@
     </div>
     <div class="outcome">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-      <p><strong>Done when:</strong> you approved a request you caused yourself, and the clone went through.</p>
+      <p><strong>Done when:</strong> you approved a request you caused yourself, and the JSON came back.</p>
     </div>
   </div>
 
@@ -279,12 +294,7 @@
       <span class="kicker">STEP 2</span>
       <h2 class="section-title">Bring your own project in</h2>
     </div>
-    <p class="body-copy">Same container, pointed at a folder on your machine. One thing to know first, because it surprises people:</p>
-
-    <div class="note">
-      <div class="note-title">YOUR CHECKOUT IS NOT WHAT GETS MOUNTED</div>
-      <p>If the folder is a git repository, the gateway creates a <b>git worktree</b> at <code>&lt;your-repo&gt;/.worktrees/&lt;container-name&gt;</code> on a branch named <code>worktree/&lt;container-name&gt;</code>, and mounts <em>that</em>. It adds <code>.worktrees/</code> to your <code>.gitignore</code>. So the container works on its own branch and your own checkout stays untouched — commits you make inside land on that branch. If the folder is not a git repo, or git fails, it falls back to mounting the folder itself.</p>
-    </div>
+    <p class="body-copy">Same container, pointed at a folder on your machine.</p>
 
     <div class="pick" style="margin-top:18px">
       <input type="radio" name="pick-step2" id="s2-portal" class="pick-radio pick-a" checked>
@@ -447,50 +457,7 @@
     </div>
   </div>
 
-  <!-- ── REFERENCE ───────────────────────────────────────────────────────── -->
-  <div class="card" id="reference">
-    <h2 class="section-title">Reference — the boundary in detail</h2>
-    <p class="body-copy">Not needed to finish the three steps. Here because it explains why the setup looks the way it does.</p>
-
-    <h3 class="figure-title" style="margin:22px 0 0">Three networks, and who is on them</h3>
-    <div class="scroll-x">
-      <table class="table">
-        <thead>
-          <tr><th>Network</th><th>Created by</th><th>Internal?</th><th>Who is on it</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>devcontainer-net</code></td><td><code>huddle init</code></td><td>Yes</td><td>The gateway. Compose projects wired up by <code>huddle migrate</code> attach here.</td></tr>
-          <tr><td><code>dc-net-&lt;name&gt;</code></td><td>The gateway, per container</td><td>Yes</td><td>One dev container, plus the gateway. This is the only network your container is on.</td></tr>
-          <tr><td><code>bridge</code> (<code>podman</code> on Podman)</td><td>The engine</td><td>No</td><td>The gateway, and the route out. Your container is never on it.</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="body-copy">The gateway joins every <code>dc-net-*</code> as containers are created, and re-joins all of them when it restarts.</p>
-
-    <h3 class="figure-title" style="margin:22px 0 0">Why the port publish comes first</h3>
-    <p class="body-copy"><code>huddle init</code> starts the gateway on the bridge network <em>with</em> <code>-p 3000:3000</code>, and joins the internal network only afterwards. That order is deliberate: Docker skips the host port-forward entirely when a container is created directly on an internal network, so doing it the other way round would leave you with a portal you cannot reach.</p>
-
-    <h3 class="figure-title" style="margin:22px 0 0">It fails closed twice</h3>
-    <div class="compare" style="margin-top:14px">
-      <div class="figure">
-        <div class="figure-title">At the gateway</div>
-        <p class="body-copy" style="font-size:14.5px;margin-top:8px">A destination with no matching rule becomes a pending request and is denied until you answer it. The only rule a fresh database ships with is an allow for <code>huddle</code> itself.</p>
-      </div>
-      <div class="figure">
-        <div class="figure-title">At the container</div>
-        <p class="body-copy" style="font-size:14.5px;margin-top:8px">Its own iptables chain redirects TCP :80 to the gateway, accepts loopback and the gateway, and drops everything else. Even a process that ignores <code>http_proxy</code> gets nowhere.</p>
-      </div>
-    </div>
-
-    <h3 class="figure-title" style="margin:22px 0 0">Two more things the boundary needs</h3>
-    <dl class="spec">
-      <dt>TLS interception</dt>
-      <dd>To see the path inside an HTTPS request, the gateway terminates TLS with its own CA. That CA is installed in the container's trust store, and pointed at by <code>NODE_EXTRA_CA_CERTS</code>, <code>SSL_CERT_FILE</code> and <code>REQUESTS_CA_BUNDLE</code>, so tools with their own bundles trust it too.</dd>
-      <dt>A filtered Docker socket</dt>
-      <dd>Each container gets its own socket proxy, mounted as a directory at <code>/var/run/huddle</code> (a directory, not the socket file — a file bind would pin the inode and break on restart). The proxy tags every call with the container's identity so policy can be applied per container.</dd>
-    </dl>
-  </div>
-
+  <!-- ── FINDINGS ────────────────────────────────────────────────────────── -->
   <div class="card">
     <div class="findings" style="margin-top:0">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
