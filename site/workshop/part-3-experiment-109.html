@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Part 3 — Experiment 109 · Huddle Workshop</title>
-<meta name="description" content="Huddle Workshop, part 3: run the same flow with Docker sandboxes as the main runner instead of Docker containers.">
+<meta name="description" content="Huddle Workshop, part 3: two kinds of dev environment — a Docker sandbox (microVM) or a devcontainer — how each is wired, and how to create either one from the portal or the CLI.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
@@ -56,9 +56,84 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
       </button>
     </div>
-    <div class="note">
-      <div class="note-title">TO BE WRITTEN</div>
-      <p>Still to add here: what you need installed on the host for sandboxes, how to tell you're running on the sandbox foundation rather than containers, and how to get back.</p>
+
+    <p class="body-copy">That one command does three things, in order.</p>
+    <ol class="steps">
+      <li><b>1</b><div>Writes the channel into <code>~/.huddle/config.json</code> — <code>channel: experiment</code>, <code>experiment: 109</code>.</div></li>
+      <li><b>2</b><div>Reinstalls the CLI itself at <code>@infosupport/huddle-cli@experiment-109</code>, then restarts the process. The CLI version is baked in, so it has to hop channels before it can do anything else.</div></li>
+      <li><b>3</b><div>Runs <code>huddle init</code> with every image tagged <code>experiment-109</code> instead of <code>latest</code>.</div></li>
+    </ol>
+
+    <p class="body-copy">Two commands tell you where you are and get you back:</p>
+    <div class="term term-stack" style="margin-top:14px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle experiment status</code>
+        <button type="button" class="copy-btn" data-copy="huddle experiment status" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle experiment reset</code>
+        <button type="button" class="copy-btn" data-copy="huddle experiment reset" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <p class="body-copy"><code>status</code> prints the CLI version and the active channel (<code>Channel: experiment 109 (images: experiment-109)</code>), and warns when the running CLI does not belong to the configured channel. <code>reset</code> puts the config back on <code>stable</code> and reinstalls the stable CLI.</p>
+
+    <h3 class="figure-title" style="margin-top:24px">What you need on the host</h3>
+    <dl class="spec">
+      <dt>Docker or Podman</dt>
+      <dd>Same as parts 1 and 2. The gateway still runs as a container.</dd>
+      <dt>Docker Sandboxes</dt>
+      <dd>Only for the sandbox path: an <code>sbx</code> binary on your <code>PATH</code>. <code>huddle init</code> probes it with <code>sbx version</code>; if it is missing, init prints <em>“(sbx not found on PATH — install Docker Sandboxes to use sbx boxes)”</em> and carries on — devcontainers still work.</dd>
+      <dt>A working Docker login</dt>
+      <dd>The sbx daemon needs it. Huddle sniffs for that failure and turns it into one message: <em>“Docker login required on the host: run <code>docker login</code>”</em>.</dd>
+      <dt>An <code>experiment-109</code> build</dt>
+      <dd>Published per PR by a maintainer. If <code>huddle experiment use 109</code> cannot install the CLI, the build does not exist yet — that is a finding worth reporting, not something you can fix locally.</dd>
+    </dl>
+    <p class="body-copy">Check the sandbox half is usable before you try to create anything:</p>
+    <div class="term" style="margin-top:14px">
+      <span class="term-prompt">$</span>
+      <code>huddle sbx status</code>
+      <button type="button" class="copy-btn" data-copy="huddle sbx status" aria-label="Copy command" style="margin-left:auto">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+      </button>
+    </div>
+    <p class="body-copy">It prints the upstream proxy Huddle exposes to sbx, the port, and either <code>sbx: ready — &lt;version&gt;</code> or <code>sbx: unavailable</code> with the reason.</p>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">First surprise: Huddle is two processes now</h2>
+    <p class="body-copy">The page title says “sandboxes as the main runner”, and that is the visible half. The other half of #109 is a control-plane / data-plane split, and you will notice it before you get anywhere near a sandbox: <strong>the portal has moved to <code>http://localhost:24842</code></strong>.</p>
+    <p class="body-copy"><strong>Huddle Node</strong> runs directly on your machine — portal, REST API, SQLite, the CA, devcontainer orchestration, the Docker-socket filter, and everything sbx. <strong>huddle-gateway</strong> stays in a container and is only the enforcement point. The gateway gets exactly three things from <code>huddle init</code>: where Node is, a token to talk to Node with, and the CA directory read-only. No Docker socket, no database volume, no published portal.</p>
+
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">Where each listener lives</div>
+      <div class="scroll-x">
+        <table class="table" style="min-width:560px">
+          <thead>
+            <tr><th>Process</th><th>Port</th><th>What it is</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>huddle-gateway (container)</td><td><span class="pill">80</span></td><td>The filtering proxy devcontainers are DNAT'ed to.</td></tr>
+            <tr><td>huddle-gateway (container)</td><td><span class="pill">32768</span></td><td>A separate egress listener for sandboxes, published to host loopback only.</td></tr>
+            <tr><td>Huddle Node (host)</td><td><span class="pill">24842</span></td><td>Portal + API + WebSocket push. Binds <code>127.0.0.1</code> by design.</td></tr>
+            <tr><td>Huddle Node (host)</td><td><span class="pill">24843</span></td><td>The control channel the gateway polls. Its own token.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="body-copy">The gateway <em>pulls</em> policy and the IP→container map from Node and <em>posts</em> its decisions back. It decides locally, so Node is never in the hot path of a request. If Node is down the gateway keeps enforcing the last policy it received; before the first policy arrives it denies everything.</p>
+    <div class="findings" style="background:#FEF6F6;border-color:#F0A9A9">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C62E2E" stroke-width="1.7" stroke-linecap="round" style="flex:none;margin-top:2px" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"></path></svg>
+      <div>
+        <div class="findings-title">If everything is blocked, check this first</div>
+        <p>No policy means deny, never allow. If the gateway container cannot reach Huddle Node on <code>24843</code>, every environment is denied all egress and nothing appears in the portal to approve — a firewall that looks installed and blocks everything. <code>huddle init</code> probes the channel for real and says which address it picked; <code>docker logs huddle</code> says so too.</p>
+      </div>
     </div>
   </div>
 
@@ -88,13 +163,465 @@
         </div>
       </div>
     </div>
+    <p class="body-copy">“Instead of” is only half true on this branch. The two runtimes run <strong>in parallel</strong> and you pick one per environment: the portal's create dialog has an <strong>Environment type</strong> switch with <strong>Sandbox</strong> and <strong>Devcontainer</strong>, and the CLI has a separate command for each. Everything downstream — the firewall rules, the request→approve loop, the network log, the folder mappings — is shared.</p>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Two ways to get a dev environment</h2>
+    <p class="body-copy">A devcontainer is a Docker container on a network with no route off the host, with Huddle wired into it. A sandbox is a Docker Sandboxes microVM: its own kernel, its own filesystem, its own Docker daemon, and egress the host forces through a proxy before the guest gets a say. The trade runs the same way in both directions — the sandbox gives you a much harder isolation boundary and takes away everything Huddle could do <em>inside</em> a container.</p>
+
+    <div class="compare" style="margin-top:20px">
+      <div class="figure">
+        <div style="display:flex;align-items:center;gap:10px">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg>
+          <div>
+            <div class="figure-title">Sandbox</div>
+            <div class="node-sub" style="margin-top:2px">microVM · <code class="spec-code">sbx</code> on your host</div>
+          </div>
+        </div>
+        <dl class="spec">
+          <dt>Isolation</dt><dd>MicroVM. The create dialog states it plainly: <em>MicroVM isolation · Docker runs inside the VM · Runs as root</em>.</dd>
+          <dt>Your code</dt><dd>Host folders, mounted at <strong>the same path they have on the host</strong>. There is no container path to choose.</dd>
+          <dt>Docker inside</dt><dd>Its own daemon, inside the VM. Huddle's Docker-socket policy does not apply and is not needed — the VM is the boundary.</dd>
+          <dt>Egress</dt><dd>Forced by the host, outside the guest, before the guest can touch it. Then upstream to the gateway on <span class="pill">32768</span>.</dd>
+          <dt>Who you are</dt><dd><code>root</code> in the VM. Huddle's ephemeral-sudo machinery is irrelevant here.</dd>
+          <dt>You give up</dt><dd>Snapshots, the non-root default, the Docker-action grants, and a validated IDE attach.</dd>
+        </dl>
+      </div>
+
+      <div class="figure">
+        <div style="display:flex;align-items:center;gap:10px">
+          <svg width="34" height="34" viewBox="0 0 48 48" fill="none" style="flex:none" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+          <div>
+            <div class="figure-title">Devcontainer</div>
+            <div class="node-sub" style="margin-top:2px">container · the path from parts 1 and 2</div>
+          </div>
+        </div>
+        <dl class="spec">
+          <dt>Isolation</dt><dd>Container. The dialog's own bullets: <em>Container isolation · Docker-socket policy enforced · Always runs as non-root</em>.</dd>
+          <dt>Your code</dt><dd>Bind mounts, each at a container path you choose (<code>--mount host=container</code>).</dd>
+          <dt>Docker inside</dt><dd>A filtered socket at <code>/var/run/huddle/docker.sock</code>, per container, with time-boxed grants per action.</dd>
+          <dt>Egress</dt><dd>An <code>--internal</code> Docker network plus in-container iptables, DNAT to the gateway on <span class="pill">80</span>.</dd>
+          <dt>Who you are</dt><dd>A non-root user; <code>sudo</code> only through a Huddle grant that expires.</dd>
+          <dt>You give up</dt><dd>Nothing you had before — this is still the supported path.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="note-title">PICK THIS ONE WHEN</div>
+      <p>Take a <strong>sandbox</strong> when what runs in the environment is an agent you would rather not have on your machine, and you can live without snapshots and a fully wired IDE. Take a <strong>devcontainer</strong> when you want the part 1 experience — per-container Docker permissions, non-root, snapshots, an IDE that attaches.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Path A — how a devcontainer is wired</h2>
+    <p class="body-copy">Unchanged in shape from part 1, and worth having next to path B. The container is put on a per-container <code>--internal</code> network with no route to the internet of its own, and the gateway is the only other member. Inside the container, iptables DNATs all outbound tcp/80 to the gateway, accepts loopback and the gateway, and drops everything else — so it fails closed inside the container too.</p>
+
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">Devcontainer: two enforcement layers, then out</div>
+      <div class="scroll-x">
+        <div style="min-width:700px;margin-top:16px">
+          <div class="flow">
+            <div class="zone zone-internal" style="flex:1.15">
+              <span class="zone-label">dc-net-&lt;name&gt; · --internal</span>
+              <div class="node">
+                <svg width="42" height="42" viewBox="0 0 48 48" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                <div class="node-title">Devcontainer</div>
+                <div class="node-sub">iptables: DNAT :80 → gateway, then <span class="pill pill-deny">DROP</span> all other tcp</div>
+                <div class="node-sub" style="margin-top:6px"><code class="spec-code">http_proxy=http://huddle:80</code></div>
+                <div class="node-sub"><code class="spec-code">DOCKER_HOST=unix:///var/run/huddle/docker.sock</code></div>
+              </div>
+            </div>
+            <div class="flow-arrow">
+              <span class="flow-arrow-label">all egress</span>
+              <svg width="44" height="10" viewBox="0 0 44 10" fill="none" aria-hidden="true"><path d="M0 5h34" stroke="#26405F" stroke-width="1.6"></path><path d="m34 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+            </div>
+            <div class="zone zone-bridge">
+              <span class="zone-label">bridge network</span>
+              <div class="node">
+                <svg width="38" height="42" viewBox="0 0 30 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+                <div class="node-title">huddle-gateway</div>
+                <div class="node-sub">proxy on <span class="pill">80</span> · decides from the policy it polled</div>
+              </div>
+            </div>
+            <div class="flow-arrow">
+              <span class="flow-arrow-label">allowed only</span>
+              <svg width="44" height="10" viewBox="0 0 44 10" fill="none" aria-hidden="true"><path d="M0 5h34" stroke="#26405F" stroke-width="1.6"></path><path d="m34 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+            </div>
+            <div class="zone zone-host" style="flex:.8">
+              <span class="zone-label">internet</span>
+              <div class="node">
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+                <div class="node-title">Destination</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="figure" style="margin-top:14px;background:var(--surface)">
+            <div class="node-sub" style="text-align:center">The control plane sits outside that path on purpose. The gateway <strong>polls</strong> Huddle Node for policy and posts its decisions back; the devcontainer's network has no route to Node at all.</div>
+            <div class="flow" style="margin-top:12px;justify-content:center">
+              <div class="node-box node-box-dark" style="max-width:420px;margin:0 auto">
+                <div class="node-title">Huddle Node · on your machine</div>
+                <div class="node-sub">portal <span class="pill">24842</span> · control channel <span class="pill">24843</span> · the Docker-socket filter</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <dl class="spec">
+      <dt>Network</dt><dd>Per container: <code>dc-net-&lt;name&gt;</code>, created <code>--internal</code>. The gateway attaches itself to each one. <code>huddle init</code> also creates the shared <code>devcontainer-net</code>.</dd>
+      <dt>Defaults</dt><dd>8g memory, 2 CPUs, and <code>NET_ADMIN</code> so the container can install its own iptables rules.</dd>
+      <dt>Docker socket</dt><dd>The gateway serves a socket file under <code>/tmp/dc-sockets/&lt;name&gt;</code> — it is the half actually on the Docker engine host — and tunnels every connection to Node's filter over the control channel. Node decides; the gateway forwards bytes.</dd>
+      <dt>The container itself</dt><dd>Idles (<code>while sleep 1000; do :; done</code>). Your IDE attaches to it.</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Path B — how a sandbox is wired</h2>
+    <p class="body-copy">Nothing about the sandbox's own networking is Huddle's to build. Docker Sandboxes already forces every outbound connection from the microVM through a proxy on your host, deny-by-default, with non-HTTP protocols blocked — and it does that <em>outside</em> the guest, so root inside the VM cannot get around it. Huddle plugs in as that proxy's <strong>upstream</strong>.</p>
+
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">Sandbox: the host forces egress, Huddle is upstream</div>
+      <div class="scroll-x">
+        <div class="flow" style="min-width:760px;margin-top:16px">
+          <div class="zone zone-internal" style="flex:1.15">
+            <span class="zone-label">microVM · trust boundary</span>
+            <div class="node">
+              <svg width="46" height="44" viewBox="0 0 52 46" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="3" width="46" height="34" rx="5" fill="#EAF2FB" stroke="#7FA9CF" stroke-width="1.6"></rect><rect x="12" y="11" width="28" height="18" rx="3" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.4" stroke-dasharray="3 2.5"></rect><path d="M20 17h4.5v4.5H20zM27.5 17H32v4.5h-4.5z" fill="#2496ED"></path><path d="M10 41h32" stroke="#7FA9CF" stroke-width="1.6" stroke-linecap="round"></path></svg>
+              <div class="node-title">Sandbox</div>
+              <div class="node-sub">own kernel, own filesystem, own Docker daemon · you are <code class="spec-code">root</code></div>
+              <div class="node-sub" style="margin-top:6px">your folders, mounted at their host paths</div>
+            </div>
+          </div>
+          <div class="flow-arrow">
+            <span class="flow-arrow-label">forced,<br>outside the guest</span>
+            <svg width="40" height="10" viewBox="0 0 44 10" fill="none" aria-hidden="true"><path d="M0 5h34" stroke="#26405F" stroke-width="1.6"></path><path d="m34 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+          </div>
+          <div class="zone zone-host">
+            <span class="zone-label">your machine</span>
+            <div class="node">
+              <svg width="46" height="40" viewBox="0 0 52 42" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M11 12h9.5M11 18h14M11 24h7" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
+              <div class="node-title">sbx host proxy</div>
+              <div class="node-sub">terminates and rewrites · presents this box's credential upstream</div>
+            </div>
+          </div>
+          <div class="flow-arrow">
+            <span class="flow-arrow-label">Proxy-<br>Authorization</span>
+            <svg width="40" height="10" viewBox="0 0 44 10" fill="none" aria-hidden="true"><path d="M0 5h34" stroke="#26405F" stroke-width="1.6"></path><path d="m34 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+          </div>
+          <div class="zone zone-bridge">
+            <span class="zone-label">gateway container</span>
+            <div class="node">
+              <svg width="38" height="42" viewBox="0 0 30 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+              <div class="node-title">sbx egress listener</div>
+              <div class="node-sub"><span class="pill">32768</span> on host loopback · the only decision point</div>
+            </div>
+          </div>
+          <div class="flow-arrow">
+            <span class="flow-arrow-label">allowed only</span>
+            <svg width="40" height="10" viewBox="0 0 44 10" fill="none" aria-hidden="true"><path d="M0 5h34" stroke="#26405F" stroke-width="1.6"></path><path d="m34 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+          </div>
+          <div class="zone zone-host" style="flex:.7">
+            <span class="zone-label">internet</span>
+            <div class="node">
+              <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+              <div class="node-title">Destination</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="body-copy">Two consequences fall straight out of that picture, and they are the reason this path needed a design of its own.</p>
+    <ol class="steps">
+      <li><b>1</b><div><strong>Huddle never talks to the sandbox.</strong> It talks to the host-side sbx daemon, which terminates and rewrites everything the box sent. A header, an env var or a client cert set inside the box does not survive the trip, and every sandbox on the machine arrives on one socket from one address.</div></li>
+      <li><b>2</b><div><strong>The upstream proxy setting is global to the sbx daemon.</strong> There is no per-sandbox override: <code>sbx settings set proxy.sandbox &lt;url&gt;</code> is one setting for the whole machine.</div></li>
+    </ol>
+    <p class="body-copy">So how does the gateway know <em>which</em> box is calling? That is the next section, and the most interesting thing on this branch.</p>
+
+    <dl class="spec">
+      <dt>Mounts</dt><dd>Every folder is a positional on <code>sbx create</code> and lands at its own host path inside the VM. On Windows that means the MSYS form: <code>T:\projects\huddle</code> is <code>/t/projects/huddle</code> in the sandbox. At most 32 folders per sandbox.</dd>
+      <dt>Read-only</dt><dd>sbx's own <code>:ro</code> suffix, on extra folders only. The first folder — the one the agent starts in — can never be read-only, so the portal hides the toggle on that row.</dd>
+      <dt>Docker policy</dt><dd>None. The socket proxy and the per-action grants are a devcontainer mechanism; the VM boundary replaces them.</dd>
+      <dt>TLS</dt><dd>Huddle's CA is installed <strong>twice</strong>: inside the sandbox (so HTTPS and editor backends work) and on the <strong>host</strong>, because sbx terminates TLS itself for some destinations and then validates Huddle's certificate against the host trust store. Without the host half you get <code>Empty reply from server</code> / <code>ECONNRESET</code> and nothing useful in the log.</dd>
+      <dt>Snapshots</dt><dd>There is no sbx equivalent of <code>docker commit</code>, so the Snapshot action is not offered for a sandbox.</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">The interesting bit: how the gateway knows which sandbox is calling</h2>
+    <p class="body-copy">One thing survives the host daemon's rewriting: the credential in the upstream-proxy URL. Not by luck, but structurally — it is the hop's own authentication, what the daemon must present to get through the proxy at all. Something that has to survive for the connection to work cannot be stripped.</p>
+    <p class="body-copy">And the setting being global turns out not to matter, because of <em>when</em> sbx reads it: the URL is baked in when the sandbox is created. Setting it immediately before each create is therefore a per-sandbox injection.</p>
+
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">Create-time: mint, inject, bake, park</div>
+      <div class="scroll-x">
+        <div class="flow" style="min-width:700px;margin-top:16px">
+          <div class="node-box">
+            <div class="node-title">1 · Mint</div>
+            <div class="node-sub">Huddle Node makes a fresh 256-bit secret for this box and stores it with the name. The gateway is given only the SHA-256.</div>
+          </div>
+          <div class="flow-arrow"><svg width="30" height="10" viewBox="0 0 30 10" fill="none" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg></div>
+          <div class="node-box">
+            <div class="node-title">2 · Inject</div>
+            <div class="node-sub"><code class="spec-code">sbx settings set proxy.sandbox http://&lt;name&gt;:&lt;secret&gt;@localhost:32768</code></div>
+          </div>
+          <div class="flow-arrow"><svg width="30" height="10" viewBox="0 0 30 10" fill="none" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg></div>
+          <div class="node-box">
+            <div class="node-title">3 · Bake</div>
+            <div class="node-sub"><code class="spec-code">sbx create</code> — the box keeps the URL it was created with, measured to hold across a restart.</div>
+          </div>
+          <div class="flow-arrow"><svg width="30" height="10" viewBox="0 0 30 10" fill="none" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg></div>
+          <div class="node-box node-box-dark">
+            <div class="node-title">4 · Park</div>
+            <div class="node-sub">The global setting goes back to <code class="spec-code">huddle-unclaimed</code> — a credential that maps to no sandbox. Anything turning up holding it is denied by name instead of inheriting the last box's rights.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="body-copy">Creates are serialised for the same reason: one global setting plus set-then-create is a race, and two starts in flight could hand both boxes the same identity or swap them.</p>
+
+    <p class="body-copy">On every request, upgrade and CONNECT arriving on <span class="pill">32768</span>, the gateway reads <code>Proxy-Authorization</code>, matches the secret's hash in constant time, strips the header before forwarding, and then runs the same rule check a devcontainer takes — with the sandbox's name where a container id would be. That is what makes a sandbox a first-class rule scope: a blocked domain files a <em>requested</em> row against the box that asked for it, and <strong>path rules work per sandbox</strong>, which sbx's own policy engine cannot express.</p>
+
+    <p class="body-copy">Which is why the reconciler now does something surprisingly small. Huddle-managed sandboxes are set to <strong>allow-all</strong> in sbx — one <code>allow *</code> rule each — and every decision is taken at Huddle's proxy. One policy engine, one audit trail, one place to approve a domain. Sandboxes Huddle did not create are left alone; widening their policy is not Huddle's to do.</p>
+
+    <div class="findings" style="background:#FEF6F6;border-color:#F0A9A9">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C62E2E" stroke-width="1.7" stroke-linecap="round" style="flex:none;margin-top:2px" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"></path></svg>
+      <div>
+        <div class="findings-title">There is nothing behind the gateway any more</div>
+        <p>With sbx on allow-all, the gateway's “no” is the only thing between a sandbox and the internet — including when the gateway is down or its policy feed is stale. An unknown or absent credential is denied outright, and the 403 says which case it is: no credential at all, the unclaimed credential, or a name the gateway does not know. If you see one of those, the move is to recreate the sandbox from Huddle.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">What is identical, and what is genuinely different</h2>
+    <div class="scroll-x">
+      <table class="table" style="min-width:720px">
+        <thead>
+          <tr><th></th><th>Devcontainer</th><th>Sandbox</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Where rules are decided</strong></td><td>The gateway proxy on :80</td><td>The gateway proxy on :32768 — <em>same engine, same rules table</em></td></tr>
+          <tr><td><strong>Rule scope</strong></td><td>Per container + global</td><td>Per sandbox + global, keyed on the sandbox name</td></tr>
+          <tr><td><strong>Path rules</strong></td><td>Yes</td><td>Yes — the point of per-box identity</td></tr>
+          <tr><td><strong>Request→approve loop</strong></td><td>The proxy files a <em>requested</em> row</td><td>Identical. The older “poll <code class="spec-code">sbx policy log</code> and file what it saw” path was removed once identity landed</td></tr>
+          <tr><td><strong>Identity signal</strong></td><td>Source address → container, from Node's IP→container feed</td><td>The credential in the upstream-proxy URL, hashed and matched</td></tr>
+          <tr><td><strong>Egress plumbing</strong></td><td><code class="spec-code">--internal</code> network + in-container iptables DNAT/DROP</td><td>The sbx host proxy, outside the guest; Huddle is its upstream</td></tr>
+          <tr><td><strong>Layers behind the gateway</strong></td><td>Two more: the network has no route out, and iptables drops the rest</td><td>None — sbx is deliberately allow-all for Huddle's boxes</td></tr>
+          <tr><td><strong>Where your code lives</strong></td><td>Bind mounts at container paths you pick</td><td>Host folders at their own host paths; no remapping</td></tr>
+          <tr><td><strong>Docker inside</strong></td><td>Filtered socket, per-action time-boxed grants</td><td>Its own daemon in the VM; no Huddle policy</td></tr>
+          <tr><td><strong>User</strong></td><td>Non-root; <code class="spec-code">sudo</code> via an expiring grant</td><td><code class="spec-code">root</code></td></tr>
+          <tr><td><strong>Settings folders</strong></td><td>Docker mounts</td><td>Extra <code class="spec-code">sbx create</code> paths, then one <code class="spec-code">sbx exec</code> that links them where the agent looks. Existing content is never overwritten</td></tr>
+          <tr><td><strong>Snapshot</strong></td><td><code class="spec-code">docker commit</code></td><td>Not available</td></tr>
+          <tr><td><strong>Lifecycle commands</strong></td><td>All six, with a real attach watcher</td><td>All six accepted, best-effort; <code class="spec-code">postAttach</code> runs once at create because there is no attach to observe</td></tr>
+          <tr><td><strong>Terminal / IDE</strong></td><td><code class="spec-code">docker exec</code>; the IDE attaches to the container</td><td><code class="spec-code">sbx exec</code>; editors connect over the SSH bridge at <code class="spec-code">&lt;name&gt;.sbx</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Creating a sandbox</h2>
+
+    <div class="way">
+      <div class="way-head">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><rect x="2.8" y="4" width="18.4" height="14" rx="2"></rect><path d="M2.8 8h18.4M8 21h8"></path></svg>
+        <h3>In the portal</h3>
+      </div>
+      <div class="way-body">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Open <code>http://localhost:24842</code> — <code>huddle init</code> prints an auto-login link with the operator token in it.</div></li>
+          <li><b>2</b><div><strong>Dev Environments</strong> in the sidebar, then <strong>Create dev environment</strong>.</div></li>
+          <li><b>3</b><div>Under <strong>Environment type</strong>, pick <strong>Sandbox</strong>. The bullets under it change to <em>MicroVM isolation · Docker runs inside the VM · Runs as root</em>, so the consequence of the choice is on screen.</div></li>
+          <li><b>4</b><div><strong>Name</strong> is optional — leave it blank and you get an auto name (<code>huddle-sbx-…</code>).</div></li>
+          <li><b>5</b><div><strong>Project folders</strong>: add at least one, or the dialog refuses with <em>“Add at least one folder”</em>. The first folder is where the agent starts. The destination field is disabled for a sandbox, with the reason in its tooltip: <em>“Sandboxes mount every folder at its own host path — this can't be changed here.”</em> Use <strong>Add folder</strong>, or its chevron → <strong>Browse…</strong> to pick from a host folder dialog. The read-only toggle is the pen/eye icon button, and it is hidden on the first row.</div></li>
+          <li><b>6</b><div>Your <strong>folder mappings</strong> (Settings → Folder mappings) are listed as <em>“Settings folders mounted automatically”</em> before you create anything — and so is anything that <em>cannot</em> travel, under <em>“Not available in a sandbox”</em>. Docker volume mappings and <code>~</code>-paths end up in that second list.</div></li>
+          <li><b>7</b><div>Right-hand column, <strong>Dev environment settings</strong>: the <strong>Agent</strong> accordion (<code>claude</code> by default), <strong>Environment variables</strong> (<code>containerEnv</code> / <code>remoteEnv</code>), <strong>IDE</strong>, <strong>Customisations</strong>, <strong>Lifecycle commands</strong>. The same column a devcontainer gets.</div></li>
+          <li><b>8</b><div><strong>Start environment</strong>. On failure the dialog shows the first command that broke, verbatim — with the credentialed URL redacted in what it prints.</div></li>
+        </ol>
+        <p class="body-copy">The new environment then appears in the <strong>Dev Environments</strong> table with type <strong>Sandbox</strong>, its SSH host (<code>&lt;name&gt;.sbx</code>) under the name, its count of pending firewall requests, and a <strong>Detail</strong> button. <strong>Start</strong> and <strong>Snapshot</strong> are container-only; a sandbox row offers Detail and Delete.</p>
+        <div class="note">
+          <div class="note-title">ALSO STILL THERE</div>
+          <p>An older, plainer <strong>Sandboxes</strong> page lives at <code>/sandboxes</code> with its own inline create form plus <strong>Enable SSH</strong> and <strong>Sync rules</strong> buttons and clickable VS&nbsp;Code / JetBrains links. It is no longer linked from the sidebar or the dashboard, and its status line still describes the superseded rule-sync model (<em>“Domain rules sync per-sandbox; path rules stay fleet-wide”</em>). Reachable by URL if you want those buttons.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="way">
+      <div class="way-head">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><rect x="2.8" y="3.4" width="18.4" height="17.2" rx="2.4"></rect><path d="M6.5 8.5l3.2 3.2-3.2 3.2M12.5 15.5h5"></path></svg>
+        <h3>From the CLI</h3>
+      </div>
+      <div class="way-body">
+        <p class="body-copy" style="margin-top:0">One folder, then one folder plus a read-only second:</p>
+        <div class="term term-stack" style="margin-top:14px">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx start my-box --workspace /home/you/projects/myrepo</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx start my-box --workspace /home/you/projects/myrepo" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx start my-box --workspace /home/you/projects/myrepo --folder /home/you/projects/mylib:ro</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx start my-box --workspace /home/you/projects/myrepo --folder /home/you/projects/mylib:ro" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <dl class="spec">
+          <dt><code>[name]</code></dt><dd>Positional, or <code>--name &lt;name&gt;</code>. Omit it and the API generates <code>huddle-sbx-&lt;base36&gt;</code>.</dd>
+          <dt><code>--workspace &lt;path&gt;</code></dt><dd>The folder the agent starts in.</dd>
+          <dt><code>--folder &lt;path&gt;[:ro]</code></dt><dd>An extra folder. Repeatable. <code>:ro</code> mounts it read-only.</dd>
+          <dt><code>--agent &lt;name&gt;</code></dt><dd>The CLI agent that runs inside the sandbox; <code>claude</code> by default.</dd>
+        </dl>
+        <p class="body-copy">Output is one line per step — <em>set sandbox upstream proxy → Huddle</em>, <em>create sandbox</em>, <em>reset sandbox upstream proxy → unclaimed</em>, <em>install Huddle CA in sandbox (TLS trust)</em>, <em>link settings folders</em> — each with its exit code and the command that ran. That step list is the debugging surface for this path: read it top to bottom and stop at the first non-zero.</p>
+
+        <p class="body-copy">The rest of the group:</p>
+        <div class="term term-stack" style="margin-top:14px">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx list</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx list" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx ssh-setup</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx ssh-setup" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx trust-ca my-box</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx trust-ca my-box" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx trust-host</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx trust-host" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx reconcile --dry-run</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx reconcile --dry-run" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx log my-box</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx log my-box" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx rm my-box --force</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx rm my-box --force" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <dl class="spec">
+          <dt><code>ssh-setup</code></dt><dd>Runs sbx's SSH setup once, so an editor can connect to <code>&lt;name&gt;.sbx</code>. The <code>/sandboxes</code> page turns that into deep links for VS&nbsp;Code Remote-SSH and JetBrains Gateway.</dd>
+          <dt><code>trust-ca &lt;name&gt;</code></dt><dd>Reinstalls Huddle's CA inside one sandbox and refreshes its trust store. Reconnect your editor afterwards.</dd>
+          <dt><code>trust-host</code></dt><dd>Trusts Huddle's CA on the host, where the sbx daemon runs. <code>huddle init</code> already does this when sbx is installed; it is idempotent.</dd>
+          <dt><code>reconcile</code></dt><dd>Re-asserts the one <code>allow *</code> rule per Huddle-managed sandbox and clears what the old projection left behind. It also runs on its own — debounced on rule changes, and on a timer. <code>--dry-run</code> shows what it would do.</dd>
+          <dt><code>log &lt;name&gt;</code></dt><dd>Dumps sbx's own policy log as raw JSON plus whatever Huddle parsed out of it. A diagnostic — with sbx on allow-all it should have nothing to say about a Huddle box.</dd>
+          <dt><code>rm &lt;name&gt;</code></dt><dd>Removes the microVM. The identity row is dropped whatever the exit code — a box does not outlive its credential.</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Creating a devcontainer on this branch</h2>
+    <p class="body-copy">Same dialog, same environment, one switch away.</p>
+
+    <div class="way">
+      <div class="way-head">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><rect x="2.8" y="4" width="18.4" height="14" rx="2"></rect><path d="M2.8 8h18.4M8 21h8"></path></svg>
+        <h3>In the portal</h3>
+      </div>
+      <div class="way-body">
+        <p class="body-copy" style="margin-top:0">The same <strong>Create dev environment</strong> dialog, where <strong>Devcontainer</strong> is the default type — every entry point that opens it predates sandboxes, so choosing a sandbox stays an explicit act. What changes when you pick it:</p>
+        <dl class="spec">
+          <dt>Project folders</dt><dd>The destination field is editable and pre-filled from the host path. Every row gets its own read-only toggle, including the first.</dd>
+          <dt>Base image</dt><dd>Replaces the <strong>Agent</strong> accordion — the default image plus any snapshot you have taken, with its size.</dd>
+          <dt>Empty environment</dt><dd>There is no “Empty” checkbox any more. Leave every folder row blank and the environment starts empty; the dialog says so: <em>“No folders — this environment starts empty; clone manually after it's created.”</em></dd>
+          <dt>Everything else</dt><dd>Name, environment variables, IDE, customisations and lifecycle commands are the same fields the sandbox path uses.</dd>
+        </dl>
+        <p class="body-copy">Two controls in that dialog are deliberately inert and labelled <strong>Coming soon</strong>: <strong>Fill with devcontainer.json</strong> and the VS&nbsp;Code customisations section.</p>
+      </div>
+    </div>
+
+    <div class="way">
+      <div class="way-head">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><rect x="2.8" y="3.4" width="18.4" height="17.2" rx="2.4"></rect><path d="M6.5 8.5l3.2 3.2-3.2 3.2M12.5 15.5h5"></path></svg>
+        <h3>From the CLI</h3>
+      </div>
+      <div class="way-body">
+        <div class="term" style="margin-top:0">
+          <span class="term-prompt">$</span>
+          <code>huddle start --ide vscode --workspace /home/you/projects/myrepo</code>
+          <button type="button" class="copy-btn" data-copy="huddle start --ide vscode --workspace /home/you/projects/myrepo" aria-label="Copy command" style="margin-left:auto">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+          </button>
+        </div>
+        <dl class="spec">
+          <dt><code>--ide</code></dt><dd><code>intellij</code> (default), <code>rider</code> or <code>vscode</code>.</dd>
+          <dt><code>--workspace &lt;path&gt;</code></dt><dd>Defaults to the current directory. <code>huddle</code> with no arguments, or <code>huddle &lt;folder&gt;</code>, is the same thing.</dd>
+          <dt><code>--mount &lt;host&gt;=&lt;container&gt;</code></dt><dd>Mount a host folder at an absolute container path. Repeatable; cannot be combined with <code>--workspace</code> or <code>--empty</code>. This is the flag with no sandbox equivalent.</dd>
+          <dt><code>--workspace-root &lt;path&gt;</code></dt><dd>Which container path the IDE opens as project root when using <code>--mount</code>.</dd>
+          <dt><code>--name</code>, <code>--image</code>, <code>--empty</code></dt><dd>Container name (default <code>devcontainer-&lt;foldername&gt;</code>), a specific image, or no workspace at all.</dd>
+        </dl>
+        <p class="body-copy">The thing #109 really changes here is where the command lands: <code>huddle start</code> now talks to Huddle Node on <code>http://localhost:24842</code>, not to the container on <code>:3000</code>. If a <code>huddle</code> command reports that Huddle does not appear to be running, that is the split, not your project — check both halves:</p>
+        <div class="term" style="margin-top:14px">
+          <span class="term-prompt">$</span>
+          <code>huddle logs -f</code>
+          <button type="button" class="copy-btn" data-copy="huddle logs -f" aria-label="Copy command" style="margin-left:auto">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+          </button>
+        </div>
+        <p class="body-copy">Shows both — Node's log file on this host (<code>~/.huddle/node.log</code>) and the gateway container. <code>--node</code> or <code>--gateway</code> narrows it to one half, <code>-n &lt;lines&gt;</code> sets the count. To watch Node in the foreground instead, <code>huddle node</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Where it is rough</h2>
+    <p class="body-copy">The branch says so about itself, which is useful: you can tell a new finding from one that is already written down. Everything below comes from the branch — a <code>TODO</code> in the code, an open question in an ADR, or a control the UI disables on purpose.</p>
+
+    <dl class="spec">
+      <dt>IDE attach</dt><dd>Validating a JetBrains Gateway / VS&nbsp;Code attach into a sandbox is still an open item. The JetBrains plugins and settings you enter are <strong>written into the sandbox but never applied</strong> — there is no backend process in a bare sandbox to apply them to. The file is written in the shape a future attach would look for.</dd>
+      <dt><code>postAttachCommand</code></dt><dd>Runs once at create for a sandbox, because there is no attach event to observe.</dd>
+      <dt>sbx verbs Huddle guesses at</dt><dd>The SSH setup verb and the per-sandbox policy scope flag are both marked in the code as unconfirmed guesses against the real <code>sbx</code> CLI. If <code>ssh-setup</code> or <code>reconcile</code> fails with a usage error, that is why.</dd>
+      <dt>The policy-log parser</dt><dd>Best-effort. <code>huddle sbx log</code> says so outright: <em>“(parser matched nothing — paste the raw JSON above so the parser can be tuned)”</em>.</dd>
+      <dt>Restart paths</dt><dd>The credential surviving a restart is measured, not assumed — but sbx has <code>stop</code> and no <code>start</code>, and a machine reboot has not been exercised. That is what the park-on-unclaimed step exists to make safe: the failure mode is a readable denial, not a box passing for another one.</dd>
+      <dt>Name collisions</dt><dd>A sandbox and a devcontainer share one keyspace for rule scoping, and a sandbox name is drawn from roughly the same character class as a Docker container name. Nothing currently stops them colliding; the code flags it rather than hiding it.</dd>
+      <dt>Slimming the gateway</dt><dd>Partial. The mounts are gone and the process no longer loads the database, the Docker code or the API — but the image still ships every source file.</dd>
+      <dt>Stale labels</dt><dd><code>huddle sbx status</code> still prints <em>“host-agent socket”</em>, from the file-mailbox bridge this branch deleted. Cosmetic, but it will confuse you if you go looking for a socket.</dd>
+      <dt>Docs that disagree</dt><dd>The branch's own <code>AGENTS.md</code>, the <code>/sandboxes</code> page and the older ADR still describe the superseded model, where Huddle mirrored its ruleset into sbx and sbx enforced per box. The code does the opposite now: sbx is allow-all and Huddle decides everything. Trust the code.</dd>
+    </dl>
+
     <div class="note">
       <div class="note-title">TO BE WRITTEN</div>
-      <p>The walkthrough for this page still needs:</p>
+      <p>Still to add from an actual workshop run, rather than from the branch:</p>
       <ul>
-        <li>Walking the part 1 path again on this foundation, with your own project.</li>
-        <li>Where the sandbox foundation behaves differently from containers — and where it should feel identical.</li>
-        <li>The known-broken list, so you can tell a new finding from one we already have.</li>
+        <li>Walking the part 1 path end to end on a sandbox, with your own project — what the first blocked domain looks like, and how the approve loop feels from inside a microVM.</li>
+        <li>What an IDE attach to a sandbox actually does today, on Windows and on macOS.</li>
+        <li>The failure modes people hit in the room. Those are the ones worth listing first.</li>
       </ul>
     </div>
   </div>
