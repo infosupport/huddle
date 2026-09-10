@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "message": "You got your first curl working in Huddle.",
+  "what_just_happened": [
+    "curl read http_proxy from the container's environment and sent the request to huddle:80.",
+    "infosupport.github.io was not on any allow list, so the gateway raised a pending rule and refused this request with 403 \u2014 the run you had to repeat.",
+    "You approved it and ran the curl again. The gateway opened the connection on the bridge network and handed you this file.",
+    "TLS was terminated by the gateway \u2014 its CA is already in the container's trust store, which is why no -k was needed."
+  ],
+  "next": "Step 2 \u2014 mount your own project and find out which of your dependencies need rules of their own."
+}

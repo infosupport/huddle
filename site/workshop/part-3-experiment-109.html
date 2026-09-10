@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Part 3 — Experiment 109 · Huddle Workshop</title>
+<meta name="description" content="Huddle Workshop, part 3: create a Docker sandbox and connect to it. Very experimental — expect a lot of rough edges.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="page">
+<div class="wrap">
+
+  <div class="nav">
+    <a class="nav-brand" href="../index.html" aria-label="Huddle Workshop home">
+      <svg width="34" height="38" viewBox="0 0 30 34" fill="none" aria-hidden="true">
+        <path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="url(#hg)"></path>
+        <path d="M11.3 10.6h2.7v5h4.1v-5h2.7v12.8h-2.7v-5.2H14v5.2h-2.7z" fill="#fff"></path>
+        <defs><linearGradient id="hg" x1="2" y1="2" x2="28" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#FBA94C"></stop><stop offset="1" stop-color="#E4590C"></stop></linearGradient></defs>
+      </svg>
+      <span style="line-height:1">
+        <span class="nav-brand-name" style="display:block">HUDDLE</span>
+        <span class="nav-brand-sub" style="display:block">DMZ <span>PORTAL</span></span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="../index.html#part1">Overview</a>
+      <a href="part-1-get-it-working.html">Part 1</a>
+      <a href="part-2-experiment-98.html">Part 2</a>
+      <a href="part-3-experiment-109.html" aria-current="page">Part 3</a>
+      <a href="https://github.com/infosupport/huddle">GitHub</a>
+    </div>
+  </div>
+
+  <div class="page-head">
+    <div class="crumb"><a href="../index.html">Huddle Workshop</a> &nbsp;/&nbsp; Part 3</div>
+    <h1 class="page-title">Part 3 — <em>Experiment 109</em></h1>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-very-exp">Very experimental</span>
+      <span class="kicker" style="color:#C2510A">VERY EXPERIMENTAL · PUSH THE BOUNDARIES</span>
+    </div>
+    <div class="page-sub">Docker sandboxes as the main runner</div>
+    <p class="page-lede">A sandbox instead of a container as your dev environment. Two short steps: create one, connect to it.</p>
+  </div>
+
+  <!-- ── THE WARNING ─────────────────────────────────────────────────────── -->
+  <div class="card" style="border:1.5px solid #F0A9A9;box-shadow:0 18px 40px -28px rgba(226,59,59,.45)">
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" style="flex:none;margin-top:2px" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#E23B3B"></circle><path d="M12 6.6v7" stroke="#fff" stroke-width="2.2" stroke-linecap="round"></path><circle cx="12" cy="17.2" r="1.35" fill="#fff"></circle></svg>
+      <div>
+        <h2 class="section-title" style="font-size:22px">Read this first: this one is properly unfinished</h2>
+        <p class="body-copy">This is the least settled of the three parts by a wide margin. It is an open pull request, not a release, and it is not one small change — it swaps the foundation your dev environment runs on <em>and</em> moves half of Huddle to a different process. Things are missing, half-wired, and in places documented wrong on the branch itself.</p>
+        <p class="body-copy"><b>That is what you are here for.</b> Do not try to work around a problem quietly — a thing that breaks is the output of this part. Write it down and put it on the PR.</p>
+        <p class="body-copy">Do not do this on anything you care about, and do not expect to get real work done in a sandbox today.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── BOTH STILL WORK ─────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="section-title">Both kinds still work</h2>
+    <p class="body-copy">The sandbox does not replace the dev container. On this branch you choose per environment, and everything from <a href="part-1-get-it-working.html">part 1</a> still works the way it did.</p>
+    <div class="compare" style="margin-top:16px">
+      <div class="figure">
+        <div class="figure-title">Devcontainer</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">What you used in parts 1 and 2. Still the one that works properly.</p>
+      </div>
+      <div class="figure">
+        <div class="figure-title">Sandbox</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">The new option, from this PR. What you are here to try and break.</p>
+      </div>
+    </div>
+    <div class="figure" style="margin-top:14px">
+      <div class="figure-title">Same flow, new foundation</div>
+      <div class="scroll-x">
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-top:18px;min-width:520px">
+          <div style="flex:1;min-width:0;text-align:center">
+            <svg width="52" height="42" viewBox="0 0 52 42" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M12 24h10" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
+            <div style="font-size:12.5px;font-weight:700;margin-top:8px">Host runner</div>
+          </div>
+          <svg width="30" height="10" viewBox="0 0 30 10" fill="none" style="flex:none;margin-top:18px" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+          <div style="flex:1;min-width:0;text-align:center">
+            <svg width="40" height="44" viewBox="0 0 30 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+            <div style="font-size:12.5px;font-weight:700;margin-top:8px">Gateway</div>
+          </div>
+          <svg width="30" height="10" viewBox="0 0 30 10" fill="none" style="flex:none;margin-top:18px" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+          <div style="flex:1.25;min-width:0;border:1.5px dashed #F0A9A9;background:#FEF6F6;border-radius:10px;padding:10px;text-align:center">
+            <div style="display:flex;align-items:flex-start;justify-content:center;gap:4px">
+              <svg width="38" height="38" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+              <svg width="24" height="20" viewBox="0 0 30 24" fill="none" style="margin-top:2px" aria-hidden="true"><rect x="4" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="9.5" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="15" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="9.5" y="4.5" width="4.5" height="4.5" fill="#2496ED"></rect><path d="M2 16h20a6 6 0 0 1-6 4H8a6 6 0 0 1-6-4z" fill="#2496ED"></path></svg>
+            </div>
+            <div style="font-size:12.5px;font-weight:700;margin-top:6px;color:#243A57">Docker sandbox</div>
+            <div style="font-size:11px;color:#5B7796;margin-top:2px">(instead of containers)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 1 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step1">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker" style="color:#C2510A">STEP 1</span>
+      <h2 class="section-title">Switch to the experiment</h2>
+    </div>
+    <div class="term term-lg" style="margin-top:16px">
+      <span class="term-prompt">$</span>
+      <code>huddle experiment use 109</code>
+      <button type="button" class="copy-btn" data-copy="huddle experiment use 109" aria-label="Copy command">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+      </button>
+    </div>
+
+    <div class="note" style="border-color:#F0A9A9;background:#FEF6F6">
+      <div class="note-title" style="color:#B02525">THE PORTAL MOVES</div>
+      <p>This branch splits Huddle in two, so the portal is no longer on <code>:3000</code>. It is on <b><code>http://localhost:24842</code></b>. <code>huddle init</code> prints an auto-login link with the right address — use that link rather than a bookmark, or you will think it is broken.</p>
+    </div>
+
+    <p class="body-copy">Check where you are, and get back out, with:</p>
+    <div class="term term-stack">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle experiment status</code>
+        <button type="button" class="copy-btn" data-copy="huddle experiment status" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle experiment reset</code>
+        <button type="button" class="copy-btn" data-copy="huddle experiment reset" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle sbx status</code>
+        <button type="button" class="copy-btn" data-copy="huddle sbx status" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <p class="body-copy"><code>huddle sbx status</code> is the one to run before anything else: sandboxes need the <code>sbx</code> tool on your host, and this says whether Huddle can see it.</p>
+  </div>
+
+  <!-- ── STEP 2 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step2">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker" style="color:#C2510A">STEP 2</span>
+      <h2 class="section-title">Create a sandbox</h2>
+    </div>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step2" id="s2-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step2" id="s2-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s2-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s2-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Go to <b>Dev Environments</b> and press <b>Create dev environment</b>.</div></li>
+          <li><b>2</b><div>Set <b>Environment type</b> to <b>Sandbox</b> — that is the choice that matters here.</div></li>
+          <li><b>3</b><div>Give it a <b>Name</b>, and add your project under <b>Project folders</b> with <b>Add folder</b>.</div></li>
+          <li><b>4</b><div>Press <b>Start environment</b>.</div></li>
+        </ol>
+        <div class="dlg">
+          <div class="dlg-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 8.5h18"></path></svg>
+            Create dev environment
+          </div>
+          <div class="dlg-row"><b>Environment type</b><span><b>Sandbox</b> or Devcontainer. Both are offered.</span></div>
+          <div class="dlg-row"><b>Name</b><span>What the sandbox is called.</span></div>
+          <div class="dlg-row"><b>Project folders</b><span>Add one or more host folders. Leave it empty and the environment starts with nothing in it.</span></div>
+        </div>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Name the sandbox and point it at your project.</div></li>
+          <li><b>2</b><div>Add more folders with <code>--folder</code>, repeatably; append <code>:ro</code> for read-only.</div></li>
+          <li><b>3</b><div>Check it came up with <code>huddle sbx list</code>.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx start my-box --workspace /home/you/projects/myrepo</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx start my-box --workspace /home/you/projects/myrepo" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx list</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx list" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle sbx rm my-box --force</code>
+            <button type="button" class="copy-btn" data-copy="huddle sbx rm my-box --force" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">A devcontainer is still <code>huddle start</code>, exactly as in part 1.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 3 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step3">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker" style="color:#C2510A">STEP 3</span>
+      <h2 class="section-title">Connect to the sandbox</h2>
+    </div>
+    <p class="body-copy">Connecting goes over an SSH bridge, which has to be switched on once. After that the sandbox answers as <code>&lt;name&gt;.sbx</code> and your IDE connects to it as a remote host.</p>
+    <div class="term term-stack" style="margin-top:16px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle sbx ssh-setup</code>
+        <button type="button" class="copy-btn" data-copy="huddle sbx ssh-setup" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle sbx trust-ca my-box</code>
+        <button type="button" class="copy-btn" data-copy="huddle sbx trust-ca my-box" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>ssh my-box.sbx</code>
+        <button type="button" class="copy-btn" data-copy="ssh my-box.sbx" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <p class="body-copy"><code>trust-ca</code> installs Huddle's CA inside the sandbox, which the VS Code and JetBrains backends need before HTTPS works. The host side needs the same CA, for the <code>sbx</code> daemon that runs there — <code>huddle init</code> does that for you, but only if sbx was already installed when you ran it. Installed sbx afterwards? Run <code>huddle sbx trust-host</code> once; it is idempotent, so running it anyway costs nothing. Then connect from your IDE the way you would to any remote host over SSH.</p>
+    <p class="body-copy">Once you are in, it is the same workshop as part 1: run your project, watch requests arrive, approve them.</p>
+
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>An end-to-end run with a real project, and what an IDE attach actually does on Windows and macOS. The branch itself calls the IDE attach unfinished, so this needs someone to try it and write down what happened.</p>
+    </div>
+  </div>
+
+  <!-- ── KNOWN ISSUES ────────────────────────────────────────────────────── -->
+  <div class="card" id="issues">
+    <h2 class="section-title">Known issues — so you can tell a new one from an old one</h2>
+    <p class="body-copy">All of this is already known. If you hit something that is <em>not</em> on this list, that is the interesting one.</p>
+    <ul style="margin:16px 0 0;padding-left:22px;font-size:15px;line-height:1.65;color:var(--ink-2)">
+      <li><b>IDE attach is unfinished.</b> The branch says so itself. Expect the SSH route to be fiddly, and expect JetBrains to be worse off than VS Code.</li>
+      <li><b>A sandbox has one layer of enforcement, not two.</b> Huddle sets its own sandboxes to allow-everything in <code>sbx</code> and enforces the rules at its own proxy instead. If a sandbox reaches the internet without Huddle in the path, nothing stops it.</li>
+      <li><b>The portal address changed</b> to <code>:24842</code>, and anything pointing at <code>:3000</code> will look dead.</li>
+      <li><b>No snapshots for sandboxes.</b> The portal only offers that for devcontainers.</li>
+      <li><b>Restarting is not really a thing yet.</b> A sandbox can be stopped, but starting a stopped one back up is not wired, and surviving a reboot is untested. Expect to remove and recreate.</li>
+      <li><b>The old Sandboxes page is stale.</b> It is no longer linked from the sidebar or the dashboard but is still reachable, and the status it shows cannot be trusted. Use <b>Dev Environments</b>.</li>
+      <li><b>JetBrains customisations are recorded but not applied.</b></li>
+      <li><b>The docs on the branch contradict the code</b> in places — <code>AGENTS.md</code> and some ADRs still describe an earlier design. Trust the behaviour, not the prose.</li>
+      <li><b>The experiment build may not exist yet.</b> Publishing it is a manual, maintainer-only step, so <code>huddle experiment use 109</code> can fail through no fault of yours. Say so if it does.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="findings" style="margin-top:0">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+      <div>
+        <div class="findings-title">Findings</div>
+        <p>What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</p>
+        <a class="link-btn" href="https://github.com/infosupport/huddle/pull/109" target="_blank" rel="noopener">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+          Comment on PR #109
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="pager">
+    <a class="pager-link" href="part-2-experiment-98.html"><span>PREVIOUS</span>← Part 2 — Experiment 98</a>
+    <a class="cta cta-sm" href="../index.html#part1">
+      Back to the overview
+      <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+    </a>
+  </div>
+
+</div>
+</div>
+<script src="../assets/copy.js"></script>
+</body>
+</html>

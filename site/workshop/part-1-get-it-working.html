@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Part 1 — Get it working · Huddle Workshop</title>
+<meta name="description" content="Huddle Workshop, part 1: set up the CLI, then three steps — an empty container, your own project, and running it inside the dev container. Each step from the portal or the CLI.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="page">
+<div class="wrap">
+
+  <div class="nav">
+    <a class="nav-brand" href="../index.html" aria-label="Huddle Workshop home">
+      <svg width="34" height="38" viewBox="0 0 30 34" fill="none" aria-hidden="true">
+        <path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="url(#hg)"></path>
+        <path d="M11.3 10.6h2.7v5h4.1v-5h2.7v12.8h-2.7v-5.2H14v5.2h-2.7z" fill="#fff"></path>
+        <defs><linearGradient id="hg" x1="2" y1="2" x2="28" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#FBA94C"></stop><stop offset="1" stop-color="#E4590C"></stop></linearGradient></defs>
+      </svg>
+      <span style="line-height:1">
+        <span class="nav-brand-name" style="display:block">HUDDLE</span>
+        <span class="nav-brand-sub" style="display:block">DMZ <span>PORTAL</span></span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="../index.html#part1">Overview</a>
+      <a href="part-1-get-it-working.html" aria-current="page">Part 1</a>
+      <a href="part-2-experiment-98.html">Part 2</a>
+      <a href="part-3-experiment-109.html">Part 3</a>
+      <a href="https://github.com/infosupport/huddle">GitHub</a>
+    </div>
+  </div>
+
+  <div class="page-head">
+    <div class="crumb"><a href="../index.html">Huddle Workshop</a> &nbsp;/&nbsp; Part 1</div>
+    <h1 class="page-title">Part 1 — <em>Get it working</em></h1>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-stable">Latest release</span>
+      <span class="kicker">STABLE · GET THE BASICS WORKING</span>
+    </div>
+    <p class="page-lede">Set up once, then three steps: an empty container, your own project, and running that project inside the dev container. Every step works from the portal or from the CLI — pick either.</p>
+  </div>
+
+  <!-- ── SETUP ───────────────────────────────────────────────────────────── -->
+  <div class="card" id="setup">
+    <h2 class="section-title">Setup</h2>
+    <p class="body-copy">Two commands on your own machine. Then you are done with setup and the three steps begin.</p>
+    <div class="term term-stack" style="margin-top:16px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>npm install -g @infosupport/huddle-cli</code>
+        <button type="button" class="copy-btn" data-copy="npm install -g @infosupport/huddle-cli" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle init</code>
+        <button type="button" class="copy-btn" data-copy="huddle init" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>[OK] Huddle is running at http://localhost:3000</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Open the portal (auto-login link):</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;&nbsp;&nbsp;http://localhost:3000/?token=&lt;operator-token&gt;</code></div>
+    </div>
+    <p class="body-copy">Open that link and you are logged in — the portal reads the <code>?token=</code> and strips it from the address bar. The same token lands in <code>~/.huddle/config.json</code>, which is how later <code>huddle</code> commands authenticate.</p>
+
+    <dl class="spec">
+      <dt>You need</dt>
+      <dd>Node 18+, and Docker or Podman running. <code>huddle init</code> auto-detects the runtime; force it with <code>--runtime docker|podman</code> or <code>HUDDLE_RUNTIME</code>.</dd>
+      <dt>It creates</dt>
+      <dd>The volume <code>huddle-data</code>, the internal network <code>devcontainer-net</code> and the socket directory <code>/tmp/dc-sockets</code>. No IDE plugin, no manual setup.</dd>
+      <dt>Another port</dt>
+      <dd>Set <code>HUDDLE_PORT</code> before <code>huddle init</code> — and set <code>HUDDLE_URL=http://localhost:&lt;port&gt;</code> too, keeping it set for every later <code>huddle</code> command. <code>HUDDLE_PORT</code> only decides where the gateway is published; the CLI still talks to <code>http://localhost:3000</code> unless <code>HUDDLE_URL</code> or <code>--url</code> says otherwise, so setting just the one leaves every command afterwards pointed at the wrong port.</dd>
+    </dl>
+
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>The tested platform matrix. The code carries separate paths for native Docker on Linux, Docker Desktop, Rancher Desktop and a Podman machine — which combinations we have actually run the workshop on is not written down yet.</p>
+    </div>
+  </div>
+
+  <!-- ── ARCHITECTURE (small) ────────────────────────────────────────────── -->
+  <div class="card" id="architecture">
+    <h2 class="section-title">How it is put together</h2>
+    <p class="body-copy">Your dev container sits on an internal network with no route to the internet. The gateway sits on that network <em>and</em> on the engine's bridge network, which does have one. So the gateway is not the recommended way out — it is the only way out.</p>
+
+    <div class="figure" style="margin-top:18px">
+      <div class="scroll-x">
+        <div style="min-width:680px">
+          <div class="flow">
+            <div class="zone zone-internal">
+              <span class="zone-label">dc-net-&lt;name&gt; · internal</span>
+              <div class="node">
+                <svg width="42" height="42" viewBox="0 0 48 48" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                <div class="node-title">Your dev container</div>
+                <div class="node-sub">One internal network each. No route out of its own.</div>
+              </div>
+            </div>
+            <div class="flow-arrow">
+              <div class="flow-arrow-label">all TCP to <b>huddle:80</b></div>
+              <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+            </div>
+            <div>
+              <div class="node-box node-box-dark">
+                <svg width="40" height="42" viewBox="0 0 30 34" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+                <div class="node-title">huddle</div>
+                <div class="node-sub">proxy :80 · portal :3000</div>
+                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px;justify-content:center">
+                  <span class="pill">internal</span>
+                  <span class="pill pill-accent">bridge</span>
+                </div>
+              </div>
+              <div class="node-sub" style="text-align:center;margin-top:8px">The only container on both.</div>
+            </div>
+            <div class="flow-arrow">
+              <div class="flow-arrow-label">only what a rule allows</div>
+              <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+            </div>
+            <div class="zone zone-bridge">
+              <span class="zone-label">bridge · the route out</span>
+              <div class="node">
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+                <div class="node-title">The internet</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="figure" style="margin-top:14px">
+      <div class="figure-title">What happens to an unknown destination</div>
+      <div class="scroll-x">
+        <div style="display:flex;align-items:center;gap:8px;margin-top:16px;min-width:560px">
+          <div style="flex:1;min-width:0;text-align:center">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+            <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Unknown destination</div>
+          </div>
+          <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+          <div style="flex:1;min-width:0;text-align:center">
+            <svg width="30" height="34" viewBox="0 0 28 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 10h12M8 15h12M8 20h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+            <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Requested rule</div>
+          </div>
+          <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+          <div style="flex:1;min-width:0;text-align:center">
+            <div style="display:flex;gap:7px;justify-content:center">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#22A45D"></circle><path d="m7.5 12.3 3 3 6-6.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#E23B3B"></circle><path d="m8.2 8.2 7.6 7.6M15.8 8.2l-7.6 7.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round"></path></svg>
+            </div>
+            <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">You approve or deny</div>
+          </div>
+          <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+          <div style="flex:1.3;min-width:0;background:#FCE9E9;border:1px solid #F3C9C9;border-radius:10px;padding:12px 10px;text-align:center">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C62E2E" stroke-width="1.7" stroke-linecap="round" style="display:block;margin:0 auto" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"></path></svg>
+            <div style="font-size:11.5px;font-weight:700;color:#B02525;line-height:1.4;margin-top:7px">Until then: denied (fail closed).</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="body-copy">That is all you need to follow the three steps.</p>
+  </div>
+
+  <!-- ── THE THREE STEPS ─────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="section-title">The three steps</h2>
+    <p class="body-copy">Setup is done. From here it is three blocks of work, each one doable from the portal or the CLI.</p>
+    <ol class="steps">
+      <li><b>1</b><div><a href="#step1"><b>An empty container.</b></a> Create it, connect to it, and watch the first firewall requests arrive.</div></li>
+      <li><b>2</b><div><a href="#step2"><b>Bring your own project in.</b></a> Same thing, pointed at a folder on your machine.</div></li>
+      <li><b>3</b><div><a href="#step3"><b>Start your project inside the container.</b></a> Build it, run it, approve what it needs.</div></li>
+    </ol>
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Outcome:</strong> your actual work runs in Huddle, and you know which of your dependencies needed rules.</p>
+    </div>
+  </div>
+
+  <!-- ── STEP 1 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step1">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker">STEP 1</span>
+      <h2 class="section-title">An empty container</h2>
+    </div>
+    <p class="body-copy">A dev container with no folder from your machine mounted: base image, proxy environment, filtered Docker socket — and nothing in it but the base image. Nothing of yours is in the way, so the firewall loop is easy to see.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step1" id="s1-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step1" id="s1-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s1-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s1-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Press <b>Start devcontainer</b> — on the <b>Containers</b> page, in the dashboard banner, or the <b>+</b> in the top bar.</div></li>
+          <li><b>2</b><div>Fill the dialog as below. Set <b>IDE</b> first: it drives the image list.</div></li>
+          <li><b>3</b><div>Press <b>Start</b>. It shows <em>Starting container…</em>, then closes and the list reloads.</div></li>
+        </ol>
+        <div class="dlg">
+          <div class="dlg-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 8.5h18"></path></svg>
+            Start devcontainer
+          </div>
+          <div class="dlg-row"><b>IDE</b><span>IntelliJ IDEA, Rider or VS Code.</span></div>
+          <div class="dlg-row"><b>Image</b><span><code>[Default] ghcr.io/infosupport/base-devimage-&lt;ide&gt;</code> is pre-selected. Snapshots you made earlier appear as <code>[Snapshot]</code>.</span></div>
+          <div class="dlg-row"><b>Empty (clone manually)</b><span><b>Tick it.</b> This is what makes the container empty.</span></div>
+          <div class="dlg-row dlg-row-off"><b>Workspace directory</b><span>Cleared and disabled — ticking Empty does that for you.</span></div>
+          <div class="dlg-row"><b>Container name</b><span>Filled in as <code>devcontainer-empty</code>. Change it if you want more than one; the name has to be free.</span></div>
+        </div>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run the command. <code>--empty</code> is what makes it empty; <code>--ide</code> picks the IDE and its base image.</div></li>
+          <li><b>2</b><div>The name defaults to <code>devcontainer-empty</code> — add <code>--name</code> for more than one.</div></li>
+          <li><b>3</b><div>It prints how to attach when the container is up.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle start --empty</code>
+            <button type="button" class="copy-btn" data-copy="huddle start --empty" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Starting devcontainer-empty with intellij...</code></div>
+          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Image: ghcr.io/infosupport/base-devimage-intellij</code></div>
+          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>[OK] Container started: devcontainer-empty (a1b2c3d4e5f6)</code></div>
+        </div>
+        <dl class="spec">
+          <dt><code>--empty</code></dt>
+          <dd>No workspace. Your working directory is not looked at.</dd>
+          <dt><code>--ide</code></dt>
+          <dd><code>intellij</code> (default), <code>rider</code> or <code>vscode</code>.</dd>
+          <dt><code>--name</code></dt>
+          <dd>Defaults to <code>devcontainer-empty</code>. Must start alphanumeric, then letters, digits, <code>_</code>, <code>.</code>, <code>-</code>.</dd>
+          <dt><code>--image</code></dt>
+          <dd>A specific image instead of the IDE's base image.</dd>
+        </dl>
+        <p class="body-copy"><code>start</code> is optional — <code>huddle --empty</code> does the same, because a first argument that is not a known command falls through to start.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:24px 0 0">Connect to it</h3>
+    <p class="body-copy">Attach your IDE, open a terminal inside the container and run one <code>curl</code>. That single request is the whole loop: nothing is allow-listed up front except the gateway's own name, <code>huddle</code>, so this one has to be approved before it goes anywhere.</p>
+    <div class="term term-stack" style="margin-top:14px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>curl https://infosupport.github.io/huddle/api/hello.json</code>
+        <button type="button" class="copy-btn" data-copy="curl https://infosupport.github.io/huddle/api/hello.json" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>{</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;"ok": true,</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;"message": "You got your first curl working in Huddle.",</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;...</code></div>
+      <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>}</code></div>
+    </div>
+    <p class="body-copy" style="margin-top:12px">The first run fails straight away — <code>403</code> from the proxy on the CONNECT, because the rule it just raised is still pending. Nothing is waiting for you: approve <code>infosupport.github.io</code> on the <b>Firewall</b> page, then run the same <code>curl</code> again and it returns the JSON. That failure is the exercise, not a mistake.</p>
+    <p class="body-copy" style="margin-top:12px">No <code>-x</code> and no <code>-k</code> are needed: the container already has <code>http_proxy</code> pointing at <code>huddle:80</code> and the gateway's CA in its trust store, so an ordinary <code>curl</code> is routed and trusted with no flags from you.</p>
+    <div class="compare" style="margin-top:14px">
+      <div class="figure">
+        <div class="figure-title">Attach</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px"><b>VS Code:</b> <em>Dev Containers: Attach to Running Container</em>.<br><b>JetBrains:</b> Gateway → <em>Remote Development &gt; Dev Containers</em>. The CLI also prints a <code>Gateway-link:</code> when the backend is ready enough — best-effort, so its absence means nothing.</p>
+      </div>
+      <div class="figure">
+        <div class="figure-title">Approve</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">Requests land on the <b>Firewall</b> page under <b>Pending requests</b>, each row with <span class="pill">Allow</span> <span class="pill">Allow globally</span> <span class="pill">Temp 5 min</span> <span class="pill">Path mode</span> <span class="pill pill-deny">Deny</span>. Or walk the queue with <code>huddle fw list -i</code>.</p>
+      </div>
+    </div>
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Done when:</strong> you approved a request you caused yourself, and the JSON came back.</p>
+    </div>
+  </div>
+
+  <!-- ── STEP 2 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step2">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker">STEP 2</span>
+      <h2 class="section-title">Bring your own project in</h2>
+    </div>
+    <p class="body-copy">Same container, pointed at a folder on your machine.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step2" id="s2-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step2" id="s2-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s2-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s2-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Press <b>Start devcontainer</b> again and pick your <b>IDE</b> and <b>Image</b> as before.</div></li>
+          <li><b>2</b><div>Leave <b>Empty</b> unticked and type the host path into <b>Workspace directory</b>, e.g. <code>C:/projects/my-project</code>.</div></li>
+          <li><b>3</b><div>Press <b>Start</b>.</div></li>
+        </ol>
+        <div class="dlg">
+          <div class="dlg-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 8.5h18"></path></svg>
+            Start devcontainer
+          </div>
+          <div class="dlg-row dlg-row-off"><b>Empty (clone manually)</b><span>Leave it unticked this time.</span></div>
+          <div class="dlg-row"><b>Workspace directory</b><span>The host path to your project. Required — without it you get <em>“All fields are required”</em>.</span></div>
+          <div class="dlg-row"><b>Container name</b><span>Auto-fills as <code>devcontainer-&lt;last path segment&gt;</code> while you type, until you edit it yourself.</span></div>
+        </div>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run it from inside your project — with no <code>--workspace</code> the CLI uses the current directory.</div></li>
+          <li><b>2</b><div>Or name the folder explicitly, as a flag or as a bare argument.</div></li>
+          <li><b>3</b><div>The name defaults to <code>devcontainer-&lt;foldername&gt;</code>.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle start</code>
+            <button type="button" class="copy-btn" data-copy="huddle start" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle start --workspace /home/you/projects/my-project --ide vscode</code>
+            <button type="button" class="copy-btn" data-copy="huddle start --workspace /home/you/projects/my-project --ide vscode" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">A path that does not exist, or is not a directory, is refused before anything starts.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:24px 0 0">Where your code lands</h3>
+    <dl class="spec">
+      <dt>In the container</dt>
+      <dd><code>/workspaces/&lt;last segment of your path&gt;</code> — so <code>C:/projects/my-project</code> shows up as <code>/workspaces/my-project</code>.</dd>
+      <dt>On your machine</dt>
+      <dd>The worktree at <code>&lt;your-repo&gt;/.worktrees/&lt;container-name&gt;</code>, on branch <code>worktree/&lt;container-name&gt;</code>. Reused if it already exists.</dd>
+      <dt>Your checkout</dt>
+      <dd>Untouched. Same repo, different working tree.</dd>
+    </dl>
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Done when:</strong> your IDE opens your project from inside the container.</p>
+    </div>
+  </div>
+
+  <!-- ── STEP 3 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step3">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker">STEP 3</span>
+      <h2 class="section-title">Start your project inside the container</h2>
+    </div>
+    <p class="body-copy">Now run it: restore packages, build, test, start. This is the part that produces findings, because your project reaches for hosts nobody allow-listed yet — and each one stops until you approve it.</p>
+
+    <p class="body-copy">Expect the requests roughly in this order: your package registry first (npm, NuGet, Maven, PyPI), then whatever your build downloads at runtime, then anything your app talks to when it starts.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step3" id="s3-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step3" id="s3-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s3-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s3-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run your build in the container's terminal. It will stall on the first blocked host.</div></li>
+          <li><b>2</b><div>Open <b>Firewall</b> → <b>Pending requests</b> and approve from the row menu: <span class="pill">Allow</span> for this container, <span class="pill">Allow globally</span> for every container, <span class="pill">Temp 5 min</span> to try something out.</div></li>
+          <li><b>3</b><div>Re-run the build. Repeat until it is green — the list of rules you accumulated <em>is</em> the answer to “what does my project actually reach for”.</div></li>
+        </ol>
+        <p class="body-copy">For a shared registry, prefer <span class="pill">Path mode</span> over allowing the whole host: it blocks the host at the root and passes only the paths you list. That is the subject of <a href="part-2-experiment-98.html">part 2</a>.</p>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run your build in the container's terminal.</div></li>
+          <li><b>2</b><div>Walk the queue interactively from your own machine and answer each one.</div></li>
+          <li><b>3</b><div>Re-run the build. Repeat until green.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle fw list -i</code>
+            <button type="button" class="copy-btn" data-copy="huddle fw list -i" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall list --container devcontainer-my-project</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall list --container devcontainer-my-project" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall add registry.npmjs.org</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall add registry.npmjs.org" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy"><code>--status</code> filters the list (<code>requested</code> by default), and <code>--path</code> on <code>add</code> takes a pattern instead of the whole host.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:24px 0 0">When your project needs more than rules</h3>
+    <dl class="spec">
+      <dt>More memory or CPU</dt>
+      <dd>Containers get <code>8g</code> and <code>2</code> CPUs by default. Change it under <b>Resource limits</b> on the portal's <b>Settings</b> page — <b>Default memory</b> and <b>Default CPU</b>.</dd>
+      <dt>Caches from your machine</dt>
+      <dd><b>Folder mappings</b> on the <b>Settings</b> page mount extra folders into every container: a host path becomes a bind mount, a volume name becomes a Docker volume (<code>{containerName}</code> in the name expands per container). Handy for a package cache you would rather not download twice.</dd>
+      <dt>Docker from inside</dt>
+      <dd>Already wired: <code>DOCKER_HOST</code> points at the filtered socket, so <code>docker</code> and Compose work. Every call carries the container's identity, so Docker access stays policy-controlled.</dd>
+      <dt>A port to your browser</dt>
+      <dd>Your app listens inside the container — reach it the way your IDE's port forwarding exposes it.</dd>
+    </dl>
+
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>What to check when a request never appears, or a rule does not take effect — and the rough edges we already know about. That needs notes from an actual run, not a reading of the code.</p>
+    </div>
+
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Done when:</strong> your project builds and runs inside the container, and you can name every rule it needed.</p>
+    </div>
+  </div>
+
+  <!-- ── FINDINGS ────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="findings" style="margin-top:0">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+      <div>
+        <div class="findings-title">Findings</div>
+        <p>What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</p>
+        <a class="link-btn" href="https://github.com/infosupport/huddle/issues" target="_blank" rel="noopener">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+          Open an issue
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="pager">
+    <a class="pager-link" href="../index.html#part1"><span>BACK TO</span>← Workshop overview</a>
+    <a class="cta cta-sm" href="part-2-experiment-98.html">
+      Part 2 — Experiment 98
+      <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+    </a>
+  </div>
+
+</div>
+</div>
+<script src="../assets/copy.js"></script>
+</body>
+</html>

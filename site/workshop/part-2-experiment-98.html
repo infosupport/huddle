@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Part 2 — Experiment 98 · Huddle Workshop</title>
+<meta name="description" content="Huddle Workshop, part 2: share one firewall ruleset across your team, from the portal or the CLI, so nobody approves the same hosts twice.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="page">
+<div class="wrap">
+
+  <div class="nav">
+    <a class="nav-brand" href="../index.html" aria-label="Huddle Workshop home">
+      <svg width="34" height="38" viewBox="0 0 30 34" fill="none" aria-hidden="true">
+        <path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="url(#hg)"></path>
+        <path d="M11.3 10.6h2.7v5h4.1v-5h2.7v12.8h-2.7v-5.2H14v5.2h-2.7z" fill="#fff"></path>
+        <defs><linearGradient id="hg" x1="2" y1="2" x2="28" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#FBA94C"></stop><stop offset="1" stop-color="#E4590C"></stop></linearGradient></defs>
+      </svg>
+      <span style="line-height:1">
+        <span class="nav-brand-name" style="display:block">HUDDLE</span>
+        <span class="nav-brand-sub" style="display:block">DMZ <span>PORTAL</span></span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="../index.html#part1">Overview</a>
+      <a href="part-1-get-it-working.html">Part 1</a>
+      <a href="part-2-experiment-98.html" aria-current="page">Part 2</a>
+      <a href="part-3-experiment-109.html">Part 3</a>
+      <a href="https://github.com/infosupport/huddle">GitHub</a>
+    </div>
+  </div>
+
+  <div class="page-head">
+    <div class="crumb"><a href="../index.html">Huddle Workshop</a> &nbsp;/&nbsp; Part 2</div>
+    <h1 class="page-title">Part 2 — <em>Experiment 98</em></h1>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-exp">Experimental</span>
+      <span class="kicker" style="color:#D9600B">EXPERIMENTAL · TRY SOMETHING NEW</span>
+    </div>
+    <div class="page-sub">One ruleset, shared across the team</div>
+    <p class="page-lede">In part 1 you approved every host your project needed. Your teammates would have to do all of that again. This part makes that ruleset a thing your team owns, keeps in Git, and applies to any container.</p>
+  </div>
+
+  <!-- ── SWITCH ──────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="section-title">Switch to the experiment</h2>
+    <div class="term term-lg" style="margin-top:16px">
+      <span class="term-prompt">$</span>
+      <code>huddle experiment use 98</code>
+      <button type="button" class="copy-btn" data-copy="huddle experiment use 98" aria-label="Copy command">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+      </button>
+    </div>
+    <p class="body-copy">This is <a href="https://github.com/infosupport/huddle/pull/98" target="_blank" rel="noopener">PR&nbsp;#98</a> — a pull request, not a release, and it carries other work besides rule sharing. <code>huddle experiment status</code> shows where you are; <code>huddle experiment reset</code> puts you back on the stable build.</p>
+  </div>
+
+  <!-- ── HOW SHARING WORKS ───────────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="section-title">How the sharing works</h2>
+    <p class="body-copy">Rules become a <b>group</b>: a named set with a description, which exports to a single JSON file. That file is the unit you commit to Git. Point every teammate's Huddle at that folder and the group loads on its own.</p>
+
+    <div class="figure" style="margin-top:18px">
+      <div class="scroll-x">
+        <div style="min-width:660px">
+          <div class="flow">
+            <div class="zone zone-internal">
+              <span class="zone-label">your huddle</span>
+              <div class="node">
+                <svg width="30" height="34" viewBox="0 0 28 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 11h12M8 16h12M8 21h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+                <div class="node-title">The rules you approved</div>
+                <div class="node-sub">Grouped and named</div>
+              </div>
+            </div>
+            <div class="flow-arrow">
+              <div class="flow-arrow-label">export</div>
+              <svg width="52" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#3B82F6" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#3B82F6"></path></svg>
+            </div>
+            <div class="node-box">
+              <svg width="30" height="34" viewBox="0 0 28 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#fff" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 11h12M8 16h12M8 21h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+              <div class="node-title">one JSON file</div>
+              <div class="node-sub">in your team's repo</div>
+            </div>
+            <div class="flow-arrow">
+              <div class="flow-arrow-label">loads from the folder</div>
+              <svg width="52" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#F97316" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#F97316"></path></svg>
+            </div>
+            <div class="zone zone-bridge">
+              <span class="zone-label">every teammate</span>
+              <div class="node">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M2.8 19.5a6.2 6.2 0 0 1 12.4 0"></path><path d="M16.5 5.4a3 3 0 0 1 0 5.6"></path><path d="M18 19.5a6 6 0 0 0-2-4.3"></path></svg>
+                <div class="node-title">Same rules, no re-approving</div>
+                <div class="node-sub">Applied globally or per container</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="body-copy"><b>Applying</b> a group is what puts it in force — globally, or on one container. The rules stay part of the group, so it can be re-applied or removed as a unit.</p>
+  </div>
+
+  <!-- ── STEP 1 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step1">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker" style="color:#D9600B">STEP 1</span>
+      <h2 class="section-title">Group your rules and export them</h2>
+    </div>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step1" id="s1-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step1" id="s1-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s1-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s1-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Open <b>Firewall</b>. The panel is <b>Firewall rules &amp; groups</b>.</div></li>
+          <li><b>2</b><div>Press <b>New group</b> and name it after what it is for — <em>NPM Registry</em>, <em>GitHub</em>, your project.</div></li>
+          <li><b>3</b><div>Put the rules you approved in part 1 into it, then press <b>Export</b> to download the group as JSON.</div></li>
+        </ol>
+        <p class="body-copy">A group marked <b>Shared</b> is one meant for the team. <b>All rules</b> and <b>Ungrouped</b> export too, but those come out as a plain rules file rather than a group.</p>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>See what groups exist.</div></li>
+          <li><b>2</b><div>Export one to a file — that file is what you commit.</div></li>
+          <li><b>3</b><div>Or export the flat ruleset for one container, or for the global scope.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group list</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group list" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group export "NPM Registry" --out npm-registry.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group export &quot;NPM Registry&quot; --out npm-registry.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall export --container devcontainer-app --out app-rules.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall export --container devcontainer-app --out app-rules.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">Without <code>--out</code> the JSON goes to stdout, so you can pipe it. Use <code>--container __global__</code> for the global scope.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:24px 0 0">What a group file looks like</h3>
+    <p class="body-copy">Small enough to review in a pull request, which is the point.</p>
+    <div class="scroll-x" style="margin-top:12px">
+      <pre style="margin:0;background:var(--code-bg);color:var(--code-fg);border-radius:11px;padding:16px 18px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;line-height:1.6">{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": { "name": "NPM Registry", "description": "…", "shared": true },
+  "rules": [
+    { "domain": "registry.npmjs.org", "status": "deny",  "path_pattern": null,          "path_mode": 1, "container_id": null, "expires_at": null },
+    { "domain": "registry.npmjs.org", "status": "allow", "path_pattern": "/@angular/*", "path_mode": 0, "container_id": null, "expires_at": null }
+  ]
+}</pre>
+    </div>
+    <dl class="spec">
+      <dt><code>domain</code></dt>
+      <dd>The host. <code>*.</code> wildcards allowed.</dd>
+      <dt><code>path_pattern</code></dt>
+      <dd>A path, or <code>null</code> for the whole host. <code>*</code> matches within a segment; a trailing <code>*</code> spans deeper.</dd>
+      <dt><code>path_mode: 1</code></dt>
+      <dd>Marks the host a path-allowlist: blocked at the root, only the listed paths pass.</dd>
+      <dt><code>container_id</code></dt>
+      <dd><code>null</code> is global; otherwise one container.</dd>
+    </dl>
+  </div>
+
+  <!-- ── STEP 2 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step2">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker" style="color:#D9600B">STEP 2</span>
+      <h2 class="section-title">Put it where the team can reach it</h2>
+    </div>
+    <p class="body-copy">Commit the file to a folder in a repo everyone has — then point Huddle at that folder. Groups in it load on start and on every reload, with a <b>From folder</b> badge.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step2" id="s2-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step2" id="s2-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s2-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s2-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>On <b>Settings</b>, under <b>Team-managed defaults</b>, set the <b>Firewall rules folder</b> to your checkout.</div></li>
+          <li><b>2</b><div>Restart Huddle so it can actually see that folder.</div></li>
+          <li><b>3</b><div>Press <b>Reload</b> to re-read it, or <b>Sync to folder</b> on the Firewall page to write your groups back out as files.</div></li>
+        </ol>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Set the folder. This only records the path.</div></li>
+          <li><b>2</b><div>Restart, which mounts it into the gateway. Without this the folder is invisible to Huddle.</div></li>
+          <li><b>3</b><div><code>reload</code> reads files into Huddle; <code>sync</code> writes Huddle's groups back out as files.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall folder set /path/to/firewall-rules</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall folder set /path/to/firewall-rules" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle restart</code>
+            <button type="button" class="copy-btn" data-copy="huddle restart" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall folder reload</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall folder reload" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall folder sync</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall folder sync" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy"><code>sync</code> writes stable 2-space JSON with a trailing newline, so the diffs stay readable in Git.</p>
+      </div>
+    </div>
+
+    <dl class="spec">
+      <dt>The folder owns only what it loaded</dt>
+      <dd>Rules you added by hand survive a reload. It does not take over your own work.</dd>
+      <dt>One bad file breaks nothing</dt>
+      <dd>Reload validates every file before it touches live policy, and aborts wholesale if any of them is broken — so a bad commit cannot wipe the team's rules.</dd>
+    </dl>
+  </div>
+
+  <!-- ── STEP 3 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step3">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker" style="color:#D9600B">STEP 3</span>
+      <h2 class="section-title">Apply it to a container</h2>
+    </div>
+    <p class="body-copy">Loading a group makes it available. Applying it makes it take effect — pick global, or one container.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step3" id="s3-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step3" id="s3-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s3-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s3-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>On <b>Firewall</b>, find the group. A teammate's file shows a <b>From folder</b> badge; a file you were handed goes in with <b>Import</b>.</div></li>
+          <li><b>2</b><div>Choose a scope next to <b>Apply to</b> — <b>Global</b>, or a specific container.</div></li>
+          <li><b>3</b><div>Press <b>Apply</b>. Rules already in that scope are refreshed and adopted into the group.</div></li>
+        </ol>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Import a file you were handed, if it is not coming from the folder.</div></li>
+          <li><b>2</b><div>Apply the group globally, or to one container.</div></li>
+          <li><b>3</b><div>Check the result with <code>huddle firewall list --status allow</code>.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group import npm-registry.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group import npm-registry.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group apply "NPM Registry"</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group apply &quot;NPM Registry&quot;" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group apply "NPM Registry" --container devcontainer-app</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group apply &quot;NPM Registry&quot; --container devcontainer-app" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">Hand a group file to <code>huddle firewall import</code> by mistake and it routes it to the group importer for you, rather than silently dropping the group.</p>
+      </div>
+    </div>
+
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Done when:</strong> a teammate's container has your rules without anyone approving them a second time.</p>
+    </div>
+  </div>
+
+  <!-- ── THE TWO THINGS THAT BITE ────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="section-title">Two things worth knowing before they bite you</h2>
+    <div class="compare" style="margin-top:16px">
+      <div class="figure">
+        <div class="figure-title">Merge vs replace</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">Import merges by default: existing rules are updated, new ones added. <code>--replace</code> wipes the scopes you are importing first — not the whole table. Combined with <code>--container</code> it clears that scope even from an empty file, so “import nothing to clear it” genuinely clears it instead of quietly doing nothing.</p>
+      </div>
+      <div class="figure">
+        <div class="figure-title">Whole host, or paths</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">For something you talk to, allow the host. For a registry everyone pulls their own things from, use path mode: block the root, allow only the scopes you need. A compromised build then cannot pull arbitrary packages from the same host. The examples in <code>examples/firewall-rules/</code> show both.</p>
+      </div>
+    </div>
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>The workshop choreography — who exports, who imports, and which repo we use on the day. That is a decision for the room, not something the code can answer.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="findings" style="margin-top:0">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+      <div>
+        <div class="findings-title">Findings</div>
+        <p>What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</p>
+        <a class="link-btn" href="https://github.com/infosupport/huddle/pull/98" target="_blank" rel="noopener">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+          Comment on PR #98
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="pager">
+    <a class="pager-link" href="part-1-get-it-working.html"><span>PREVIOUS</span>← Part 1 — Get it working</a>
+    <a class="cta cta-sm" href="part-3-experiment-109.html">
+      Part 3 — Experiment 109
+      <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+    </a>
+  </div>
+
+</div>
+</div>
+<script src="../assets/copy.js"></script>
+</body>
+</html>
