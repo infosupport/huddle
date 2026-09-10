@@ -248,7 +248,9 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     // The written file is a valid envelope round-trip.
     const env = groups.validateGroupEnvelope(JSON.parse(fs.readFileSync(path.join(dir, 'openai.json'), 'utf8')));
     expect(env.group.name).toBe('OpenAI');
-    expect(env.rules).toHaveLength(2);
+    // The 2 envelope rules + the path-mode marker for files.openai.com, which is
+    // a group member since #98 — so the group exports self-contained.
+    expect(env.rules).toHaveLength(3);
     // The synced group is now folder-managed, so a follow-up reload updates it in
     // place instead of aborting on the "don't overwrite a manual group" guard.
     expect(dbMod.getGroupByName('OpenAI')!.source).toBe('startup-folder');
@@ -286,7 +288,9 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
   });
 
   it('validateGroupEnvelope is fail-closed', () => {
-    expect(() => groups.validateGroupEnvelope({ rules: [] } as any)).toThrow(/group.name/);
+    // A document with rules but no group is a plain rules export, not a broken
+    // group envelope: the message says so instead of naming a field it lacks (#98).
+    expect(() => groups.validateGroupEnvelope({ rules: [] } as any)).toThrow(/plain rules export/);
     expect(() => groups.validateGroupEnvelope({ group: { name: 'X' } } as any)).toThrow(/rules must be an array/);
     expect(() =>
       groups.validateGroupEnvelope({ group: { name: 'X' }, rules: [{ domain: 'a', status: 'bogus' }] } as any),

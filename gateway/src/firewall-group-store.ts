@@ -187,6 +187,54 @@ function ensurePathModeMarkers(
   }
 }
 
+// Only what this module does with a prepared statement. Structural, so it does
+// not depend on better-sqlite3's generic bind-parameter typing.
+interface RuleStatement {
+  run(...params: unknown[]): { lastInsertRowid: number | bigint };
+}
+
+type ImportedRuleOutcome = 'imported' | 'updated' | 'skipped';
+
+interface ImportRuleContext {
+  groupId: number;
+  source: string;
+  addedBy: string | null;
+  existing: Map<string, ExistingRule>;
+  seen: Set<string>;
+  insertRule: RuleStatement;
+  updateRule: RuleStatement;
+}
+
+// Decide what a single envelope rule does to the store, and carry it out.
+// Extracted from importGroupEnvelope's transaction: the duplicate check, the
+// startup-folder guard and the insert-or-update choice each read as one step
+// here, instead of stacking four levels of nesting inside the loop.
+function importEnvelopeRule(r: ShareableGroupRule, ctx: ImportRuleContext): ImportedRuleOutcome {
+  const key = ruleKey(r.domain, r.container_id, r.path_pattern);
+  if (ctx.seen.has(key)) return 'skipped';
+  ctx.seen.add(key);
+
+  const hit = ctx.existing.get(key);
+  if (!hit) {
+    const res = ctx.insertRule.run(
+      r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode,
+      ctx.groupId, ctx.addedBy, ctx.source,
+    );
+    // Keep the index in step with what we just wrote: the batch was read before
+    // the loop, so without this a second envelope entry for the same rule
+    // identity would insert again and trip the unique index.
+    ctx.existing.set(key, { id: Number(res.lastInsertRowid), source: ctx.source });
+    return 'imported';
+  }
+
+  // Folder reload must not adopt a manually-created rule (that would
+  // reclassify it as startup-folder and delete it on the next reload).
+  if (ctx.source === 'startup-folder' && hit.source !== 'startup-folder') return 'skipped';
+
+  ctx.updateRule.run(r.status, r.expires_at, r.path_mode, ctx.groupId, ctx.source, hit.id);
+  return 'updated';
+}
+
 export function importGroupEnvelope(
   env: GroupEnvelope,
   opts: { mode?: 'merge' | 'replace'; source?: string; addedBy?: string | null } = {},
@@ -204,9 +252,7 @@ export function importGroupEnvelope(
       WHERE id = ?`,
   );
 
-  let imported = 0;
-  let updated = 0;
-  let skipped = 0;
+  const counts: Record<ImportedRuleOutcome, number> = { imported: 0, updated: 0, skipped: 0 };
   let group!: FirewallGroup;
 
   const tx = db.transaction(() => {
@@ -224,28 +270,16 @@ export function importGroupEnvelope(
 
     // Read the batch AFTER the replace-delete, so the index can never hand out
     // the id of a row this import just removed.
-    const existing = existingRuleIndex(env.rules);
-    const seen = new Set<string>();
-    for (const r of env.rules) {
-      const key = ruleKey(r.domain, r.container_id, r.path_pattern);
-      if (seen.has(key)) { skipped++; continue; }
-      seen.add(key);
-      const hit = existing.get(key);
-      if (hit) {
-        // Folder reload must not adopt a manually-created rule (that would
-        // reclassify it as startup-folder and delete it on the next reload).
-        if (source === 'startup-folder' && hit.source !== 'startup-folder') { skipped++; continue; }
-        updateRule.run(r.status, r.expires_at, r.path_mode, groupId, source, hit.id);
-        updated++;
-      } else {
-        const res = insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode, groupId, addedBy, source);
-        // Keep the index in step with what we just wrote: the batch was read
-        // before the loop, so without this a second envelope entry for the same
-        // rule identity would insert again and trip the unique index.
-        existing.set(key, { id: Number(res.lastInsertRowid), source });
-        imported++;
-      }
-    }
+    const ctx: ImportRuleContext = {
+      groupId,
+      source,
+      addedBy,
+      existing: existingRuleIndex(env.rules),
+      seen: new Set<string>(),
+      insertRule,
+      updateRule,
+    };
+    for (const r of env.rules) counts[importEnvelopeRule(r, ctx)]++;
     ensurePathModeMarkers(env.rules, undefined, groupId);
     group = getGroup(groupId)!;
   });
@@ -255,10 +289,10 @@ export function importGroupEnvelope(
     containerId: null,
     domain: 'firewall',
     action: `admin:group-import-${mode}`,
-    path: `group=${env.group.name} imported=${imported} updated=${updated} skipped=${skipped}`,
+    path: `group=${env.group.name} imported=${counts.imported} updated=${counts.updated} skipped=${counts.skipped}`,
   });
   notifyStateChanged();
-  return { group, imported, updated, skipped };
+  return { group, ...counts };
 }
 
 // ── Apply a group to a scope (global or one container) ──────────────────────────
