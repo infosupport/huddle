@@ -8,9 +8,9 @@ The Huddle Workshop pages, published to GitHub Pages by
 site/
 ├── index.html                          the workshop overview
 ├── workshop/
-│   ├── part-1-get-it-working.html      deep dive — skeleton
-│   ├── part-2-experiment-98.html       deep dive — skeleton
-│   └── part-3-experiment-109.html      deep dive — skeleton
+│   ├── part-1-get-it-working.html      architecture + empty containers
+│   ├── part-2-experiment-98.html       firewall rule export/import (PR #98)
+│   └── part-3-experiment-109.html      sandboxes vs devcontainers (PR #109)
 └── assets/
     ├── site.css                        design tokens + shared components
     ├── copy.js                         copy-to-clipboard for command blocks
@@ -45,9 +45,34 @@ here — the workshop design deliberately departs from it (Plus Jakarta Sans,
 rounded cards, orange-on-steel-blue rather than Barlow wireframe blueprints), so
 these pages follow the design file, not that kit.
 
-## Still to write
+## Where the deep-dive content comes from
 
-Each deep-dive page carries the content the design already specified for its
-part, plus `TO BE WRITTEN` notes marking the sections the in-depth walkthroughs
-still need. Those notes are visible on the published page on purpose — they say
-what is missing rather than pretending the page is finished.
+The three walkthroughs were written from the code, not from the design's summary
+of it, so they go stale the way code does. If you change any of this, check the
+pages:
+
+| Page | Written from |
+| --- | --- |
+| Part 1 | `cli/src/init.ts`, `cli/src/start.ts`, `cli/src/runtime.ts`, `gateway/src/docker.ts`, the portal's start-container modal |
+| Part 2 | PR #98 (`pull/98/head`) — `cli/src/firewall.ts`, `gateway/src/firewall-group-*.ts`, `gateway/src/firewall-rules-folder.ts`, `examples/firewall-rules/` |
+| Part 3 | PR #109 (`pull/109/head`) — `gateway/src/sbx*.ts`, `gateway/src/sandbox/`, `cli/src/sbx.ts`, `gateway/src/runtime-env.ts`, the ADRs under `docs/` |
+
+Parts 2 and 3 document **pull requests, not releases**. When either merges or
+moves on, re-read the branch before trusting the page. Read the PR without
+switching your working branch:
+
+```bash
+git fetch origin pull/98/head:refs/remotes/pr/98
+git show pr/98:cli/src/firewall.ts
+```
+
+(GitHub's API is blocked from inside a Huddle devcontainer, so `gh pr view`
+returns a 403 there while `git fetch` works.)
+
+## `TO BE WRITTEN` notes
+
+Some sections are marked `TO BE WRITTEN` on the published page, on purpose:
+they need someone's notes from actually running the workshop — the tested
+platform matrix, the walkthrough for bringing your own project in, the workshop
+choreography for part 2, and an end-to-end sandbox run for part 3. Saying so
+beats guessing, and beats a page that looks finished when it isn't.
