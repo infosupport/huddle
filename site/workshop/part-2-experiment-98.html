@@ -43,7 +43,7 @@
       <span class="kicker" style="color:#D9600B">EXPERIMENTAL · TRY SOMETHING NEW</span>
     </div>
     <div class="page-sub">Export and import firewall rules</div>
-    <p class="page-lede">Export the ruleset you built up in part 1, then import it somewhere fresh.</p>
+    <p class="page-lede">Export the ruleset you built up in part 1, then import it somewhere fresh. Rules travel as a JSON document — either as a flat list, or as a named <em>group</em> your team keeps in Git.</p>
   </div>
 
   <div class="card">
@@ -56,9 +56,30 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
       </button>
     </div>
+    <p class="body-copy">That one command swaps out both halves of Huddle. It writes the channel and <code>experiment: 98</code> into <code>~/.huddle/config.json</code>, reinstalls itself globally as <code>@infosupport/huddle-cli@experiment-98</code>, restarts the process, and then runs <code>huddle init</code> with the <code>experiment-98</code> images. CLI and images therefore always run the same build.</p>
+    <p class="body-copy">If that install fails, the CLI puts the two config keys back the way they were — so your next <code>huddle init</code> is not stuck on a build that cannot be installed.</p>
+    <p class="body-copy">Confirm what you are on, and get back to the released CLI when you are done:</p>
+    <div class="term term-stack" style="margin-top:16px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle experiment status</code>
+        <button type="button" class="copy-btn" data-copy="huddle experiment status" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle experiment reset</code>
+        <button type="button" class="copy-btn" data-copy="huddle experiment reset" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <p class="body-copy"><code>status</code> prints the CLI version and the channel; on this experiment that reads <code>Channel: experiment 98 (images: experiment-98)</code>. It also warns when the running CLI does not belong to the configured channel — the next <code>huddle init</code> fixes that by itself. <code>reset</code> removes the experiment from the config, reinstalls the stable CLI and puts you back on the <code>latest</code> images. Until you run it the experiment stays active, including across <code>huddle init</code>.</p>
     <div class="note">
-      <div class="note-title">TO BE WRITTEN</div>
-      <p>Still to add here: what <code>experiment use</code> actually swaps out, how to confirm you're on the experiment build, and how to get back to the released CLI afterwards.</p>
+      <div class="note-title">A PULL REQUEST, NOT A RELEASE</div>
+      <p>Everything below is read off the PR branch. It can still change, or be rejected, before it lands — and the published <code>experiment-98</code> build follows the branch, so what you install may be a few commits ahead of what you read here.</p>
+      <p>The branch also carries work that has nothing to do with firewall rules: folder mappings and the default memory/CPU limits move out of the gateway's database into <code>~/.huddle/config.json</code>, host folders get indexed by <code>huddle indexfolder</code> so the portal can offer them in a folder picker, and there is a new folder-picker modal. Don't be surprised by it. This page is only about the rules.</p>
     </div>
   </div>
 
@@ -99,15 +120,439 @@
         </div>
       </div>
     </div>
+    <p class="body-copy">Only the shareable half of a rule travels. The row id, the request count, the last-seen time and the created/updated timestamps stay behind — they describe one install, not a policy. What is left is six fields, and those six are the whole contract between the two environments.</p>
+    <p class="body-copy">On the branch that contract shows up in four places at once: the API, the CLI, the portal, and a folder of JSON files your team keeps in version control.</p>
+    <div class="scroll-x">
+      <table class="table">
+        <thead>
+          <tr><th>What</th><th>Endpoint</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Export rules</b></td>
+            <td><span class="pill">GET /api/rules/export</span></td>
+            <td>Returns <code class="spec-code">{ version, exported_at, rules }</code> with only the six shareable fields, ordered by domain. <code class="spec-code">?container=&lt;name&gt;</code> or <code class="spec-code">?container=__global__</code> narrows the scope.</td>
+          </tr>
+          <tr>
+            <td><b>Import rules</b></td>
+            <td><span class="pill">POST /api/rules/import</span></td>
+            <td>Body <code class="spec-code">{ mode, rules }</code>, with <code class="spec-code">mode</code> either <code class="spec-code">merge</code> or <code class="spec-code">replace</code>. Answers with <code class="spec-code">{ imported, updated, skipped }</code>. <code class="spec-code">?container=</code> remaps every incoming rule into that one scope.</td>
+          </tr>
+          <tr>
+            <td><b>Export a group</b></td>
+            <td><span class="pill">GET /api/groups/:id/export</span></td>
+            <td>The same rules, wrapped in a named envelope with a description and a <code class="spec-code">shared</code> flag.</td>
+          </tr>
+          <tr>
+            <td><b>Import a group</b></td>
+            <td><span class="pill">POST /api/groups/import</span></td>
+            <td>Creates the group, or updates the one that already carries that name, then upserts its rules.</td>
+          </tr>
+          <tr>
+            <td><b>Apply a group</b></td>
+            <td><span class="pill">POST /api/groups/:id/apply</span></td>
+            <td>Stamps the group's rules into one scope — global, or a single container.</td>
+          </tr>
+          <tr>
+            <td><b>Team folder, in</b></td>
+            <td><span class="pill">POST /api/firewall-rules-folder/reload</span></td>
+            <td>Re-reads every <code class="spec-code">*.json</code> in the mounted rules folder as a group.</td>
+          </tr>
+          <tr>
+            <td><b>Team folder, out</b></td>
+            <td><span class="pill">POST /api/firewall-rules-folder/sync</span></td>
+            <td>Writes the portal's groups back out as files, and prunes the ones that are gone.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="body-copy">The CLI is a thin client over exactly those endpoints, so anything you can do in the portal you can also script — and the other way round.</p>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Two documents, one rule shape</h2>
+    <p class="body-copy">There are two envelopes on this branch, and telling them apart is the single most useful thing to know. A <b>flat rules export</b> is a bag of rules with no name. A <b>group envelope</b> is the same rules with an identity: a name, a description and a <code>shared</code> flag. Both use the same six-field rule.</p>
+    <div class="compare" style="margin-top:18px">
+      <div>
+        <div class="figure-title">Flat rules — <span class="pill">huddle firewall export</span></div>
+        <div class="scroll-x">
+          <pre style="background:var(--code-bg);color:var(--code-fg);border-radius:11px;padding:15px 18px;margin:12px 0 0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:1.6">{
+  "version": 1,
+  "exported_at": 1717430400,
+  "rules": [
+    {
+      "domain": "github.com",
+      "container_id": null,
+      "status": "allow",
+      "path_pattern": null,
+      "path_mode": 0,
+      "expires_at": null
+    }
+  ]
+}</pre>
+        </div>
+        <p class="body-copy">No name, so nothing owns these rules. They land as loose rules in whichever scope you import them into.</p>
+      </div>
+      <div>
+        <div class="figure-title">A group — <span class="pill">huddle firewall group export</span></div>
+        <div class="scroll-x">
+          <pre style="background:var(--code-bg);color:var(--code-fg);border-radius:11px;padding:15px 18px;margin:12px 0 0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:1.6">{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "OpenAI",
+    "description": "Domains required for OpenAI …",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "api.openai.com", "container_id": null,
+      "status": "allow", "path_pattern": null,
+      "path_mode": 0, "expires_at": null }
+  ]
+}</pre>
+        </div>
+        <p class="body-copy">Named, so it stays a unit: it can be re-applied, re-exported or removed as one thing. A bare <code>{ "name": …, "rules": [ … ] }</code> is accepted too.</p>
+      </div>
+    </div>
+    <p class="body-copy">The group envelope is the same format over the API <em>and</em> on disk in the team folder, so one file moves between installs, repos and teammates without translation.</p>
+    <h3 class="figure-title" style="margin-top:26px">The six fields</h3>
+    <div class="scroll-x">
+      <table class="table">
+        <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code class="spec-code">domain</code></td><td>The host. A leading <code class="spec-code">*.</code> wildcard is allowed, e.g. <code class="spec-code">*.pkgs.dev.azure.com</code>. Required, and matched case-insensitively everywhere.</td></tr>
+          <tr><td><code class="spec-code">status</code></td><td><span class="pill">allow</span> or <span class="pill pill-deny">deny</span>. The validator also accepts <code class="spec-code">requested</code> — the pending state from part 1.</td></tr>
+          <tr><td><code class="spec-code">path_pattern</code></td><td>Optional. <code class="spec-code">*</code> matches within one segment, a trailing <code class="spec-code">*</code> spans deeper segments — <code class="spec-code">/dist/*</code>. <code class="spec-code">null</code> means the whole host.</td></tr>
+          <tr><td><code class="spec-code">path_mode</code></td><td><code class="spec-code">1</code> marks the host a path-allowlist: blocked at the root, only the listed paths pass. <code class="spec-code">0</code> for a normal rule.</td></tr>
+          <tr><td><code class="spec-code">container_id</code></td><td><code class="spec-code">null</code> is global. Otherwise the devcontainer the rule belongs to.</td></tr>
+          <tr><td><code class="spec-code">expires_at</code></td><td>Optional unix timestamp for a temporary rule; <code class="spec-code">null</code> is permanent.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="body-copy">Validation is fail-closed on both paths. An unknown field rejects the whole request with a <code>400</code>, and every field is type-checked — so is an empty domain, and so is a status that is not one of the three. Nothing half-imports.</p>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Doing it</h2>
+    <p class="body-copy">Same operations, two front ends. Pick whichever suits the moment; a file written by one is readable by the other.</p>
+
+    <div class="way" style="margin-top:18px">
+      <div class="way-head">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l5-5-5-5"></path><path d="M12 19h8"></path></svg>
+        <h3>From the CLI</h3>
+      </div>
+      <div class="way-body">
+        <p class="body-copy">Export writes JSON to stdout, so it pipes. With <code>--out</code> it writes a file instead and the progress line goes to stderr, so a redirected run leaks nothing into your document.</p>
+        <div class="term term-stack" style="margin-top:14px">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall export</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall export" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall export --container __global__ --out rules.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall export --container __global__ --out rules.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall export --container devcontainer-app --out app-rules.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall export --container devcontainer-app --out app-rules.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">Import takes the file back, in the new environment:</p>
+        <div class="term term-stack" style="margin-top:14px">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall import rules.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall import rules.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall import rules.json --replace</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall import rules.json --replace" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall import rules.json --container devcontainer-app</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall import rules.json --container devcontainer-app" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">Import prints its own summary — how many were added, updated and skipped. To see the rules themselves, list them by status. <code>firewall list</code> defaults to the pending ones, so ask for the allowed set explicitly:</p>
+        <div class="term" style="margin-top:14px">
+          <span class="term-prompt">$</span>
+          <code>huddle firewall list --status allow</code>
+          <button type="button" class="copy-btn" data-copy="huddle firewall list --status allow" aria-label="Copy command" style="margin-left:auto">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+          </button>
+        </div>
+        <p class="body-copy">Groups have their own four verbs. <code>list</code> prints id, name, rule count, whether the group is shared, and its source — <code>manual</code> for one you made yourself, <code>startup-folder</code> for one the team folder loaded.</p>
+        <div class="term term-stack" style="margin-top:14px">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group list</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group list" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group export "NPM Registry" --out npm-registry.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group export &quot;NPM Registry&quot; --out npm-registry.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group import npm-registry.json</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group import npm-registry.json" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group import npm-registry.json --replace</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group import npm-registry.json --replace" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group apply "NPM Registry"</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group apply &quot;NPM Registry&quot;" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall group apply "NPM Registry" --container devcontainer-app</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall group apply &quot;NPM Registry&quot; --container devcontainer-app" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy">Group names are matched case-insensitively, and a name that matches nothing tells you to run <code>huddle firewall group list</code>. <code>apply</code> without <code>--container</code> means global. Creating, renaming and deleting a group are portal-only — the CLI has <code>list</code>, <code>export</code>, <code>import</code> and <code>apply</code>, nothing else.</p>
+      </div>
+    </div>
+
+    <div class="way">
+      <div class="way-head">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M3 9h18"></path></svg>
+        <h3>In the portal</h3>
+      </div>
+      <div class="way-body">
+        <p class="body-copy">The <b>Firewall</b> page keeps the pending-request triage at the top. Underneath it is one panel, <b>Firewall rules &amp; groups</b> — "every rule in scope, organised by group". The same panel appears on a container's detail page, scoped to that container plus global.</p>
+        <p class="body-copy">Down the left is a bucket list: <b>All rules</b>, then one entry per group, then <b>Ungrouped</b>, with a count each. Along the top right sit <b>Import</b>, <b>Export</b>, <b>Sync to folder</b>, <b>Add rule</b> and <b>New group</b>.</p>
+        <div class="note" style="border-style:solid;border-color:var(--line);background:var(--surface-tint)">
+          <ul>
+            <li><b>Export</b> — with a group selected it downloads that group's envelope as <code>huddle-group-&lt;name&gt;.json</code>. Under <b>All rules</b> or <b>Ungrouped</b> it downloads the current view as a flat export, <code>huddle-firewall-rules-all-&lt;date&gt;.json</code>. So exporting is never blocked just because nothing is grouped.</li>
+            <li><b>Import</b> — a file picker that takes both files the portal writes, and picks the endpoint from the document's shape: a group envelope restores the group and selects it, a flat export restores loose rules. Either way it merges.</li>
+            <li><b>Apply to</b> — appears on the toolbar once a group is selected: a scope dropdown (<b>Global</b>, or a container) plus <b>Apply</b>, next to <b>Rename / edit</b> and <b>Delete group</b>. The note it leaves afterwards spells out what changed and where, including that the rules stay part of the group.</li>
+            <li><b>Tick some rows</b> and a bulk bar appears — <b>Export</b>, <b>Add to group</b>, <b>Path mode</b>, <b>Flip allow/deny</b>, <b>Delete</b>, <b>Clear</b> — and its Export writes the same flat envelope for just those rows.</li>
+          </ul>
+        </div>
+        <p class="body-copy">A group shows a <b>Shared</b> pill when it is meant to travel, and a <b>From folder</b> pill when the team folder loaded it. The table has <b>Domain / path</b>, <b>Action</b>, <b>Container / Global</b> and <b>Group</b> columns; a path-mode host shows a <b>Specific paths (n)</b> selector that expands into an <b>Allowed paths</b> editor instead of an Allowed/Denied pill.</p>
+        <div class="outcome">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          <p><strong>Exports are self-contained:</strong> exporting a path-mode host pulls its allowed sub-paths in with it. Without that the host would import back blocked at the root, with nothing allowed.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Merge, replace, and the scope remap</h2>
+    <p class="body-copy">This is the part most likely to bite someone. Import runs in one of two modes, and the scope you aim it at decides how much gets deleted.</p>
+    <div class="scroll-x">
+      <table class="table">
+        <thead><tr><th>Mode</th><th>Flag</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="pill">merge</span></td>
+            <td>default</td>
+            <td>Upserts. An incoming rule that matches an existing one on <b>(domain, container, path)</b> has its status, expiry and path-mode updated; anything else is inserted. Nothing is ever deleted.</td>
+          </tr>
+          <tr>
+            <td><span class="pill pill-accent">replace</span></td>
+            <td><code class="spec-code">--replace</code></td>
+            <td>Deletes the existing rules in <b>exactly the scopes being imported</b>, then inserts. Not the whole table — a document full of global rules leaves every container's rules alone.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="body-copy">The identity used for matching is deliberately loose in the right places: the domain is compared case-insensitively, and a missing path counts as an empty one. A rule stored as <code>GitHub.com</code> is the rule your document calls <code>github.com</code>.</p>
+    <p class="body-copy">Two duplicate entries inside one document are not an error. The first wins and the second counts as <code>skipped</code> — that is what the third number in the summary is for.</p>
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">The scope remap: <span class="pill">--container</span> on import</div>
+      <div class="flow" style="margin-top:16px">
+        <div class="node-box">
+          <div class="node-title">rules.json</div>
+          <div class="node-sub"><code class="spec-code">container_id: null</code><br>global rules</div>
+        </div>
+        <div class="flow-arrow">
+          <div class="flow-arrow-label">--container<br>devcontainer-app</div>
+          <svg width="46" height="10" viewBox="0 0 46 10" fill="none" aria-hidden="true"><path d="M0 5h36" stroke="#26405F" stroke-width="1.6"></path><path d="m36 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+        </div>
+        <div class="node-box">
+          <div class="node-title">One container</div>
+          <div class="node-sub">every rule rewritten to<br><code class="spec-code">container_id: "devcontainer-app"</code></div>
+        </div>
+      </div>
+    </div>
+    <p class="body-copy">Without <code>--container</code>, each rule keeps whatever scope the document gave it. With it, <em>every</em> rule is rewritten to that one scope — useful for taking a global ruleset and confining it to a single container, and a good way to surprise yourself if you forget the flag is there. <code>__global__</code> is the name of the container-less scope, on both export and import.</p>
+    <p class="body-copy">One deliberate asymmetry worth knowing: <code>--replace</code> together with an explicit <code>--container</code> wipes that scope <em>even when the document contains no rules at all</em>. Importing an empty ruleset is how you clear a scope, and without this the delete would find nothing to do and <code>replace</code> would silently fail open.</p>
     <div class="note">
+      <div class="note-title">TWO THINGS THE CODE DOES FOR YOU</div>
+      <p><b>Path rules get their marker.</b> A path-scoped rule is inert over HTTPS unless its host is in path mode, so import establishes the host-level <code>path_mode: 1</code> marker for every domain-and-container pair that received a path rule. Otherwise your imported path rules would be denied at CONNECT and nobody would know why.</p>
+      <p><b>Wrong door, right room.</b> Hand a group envelope to <code>huddle firewall import</code> and it tells you it is a group and routes it to the group importer — unless you passed <code>--container</code>, which asks for a scope remap that only the flat importer can do, and then it imports the rules without the group. Hand a flat export to <code>huddle firewall group import</code> and you get an explicit error: this is a plain rules export, import it with <code>huddle firewall import</code> instead.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">The team-managed rules folder</h2>
+    <p class="body-copy">Files in a folder, one group per <code>*.json</code>, kept in Git. That is the whole idea: the folder is the source of truth for the groups it manages, and everyone pointed at it gets the same rules.</p>
+    <ol class="steps">
+      <li><b>1</b><div>Point Huddle at the folder. This only writes <code>firewallRulesFolder</code> into your CLI config — nothing is read yet.</div></li>
+      <li><b>2</b><div>Restart the gateway so the folder is actually mounted. The gateway reads it at a fixed mount point the CLI binds; it never resolves your host path itself.</div></li>
+      <li><b>3</b><div>The groups load on start, and whenever you reload.</div></li>
+    </ol>
+    <div class="term term-stack" style="margin-top:18px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle firewall folder set /path/to/firewall-rules</code>
+        <button type="button" class="copy-btn" data-copy="huddle firewall folder set /path/to/firewall-rules" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle restart</code>
+        <button type="button" class="copy-btn" data-copy="huddle restart" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle firewall folder</code>
+        <button type="button" class="copy-btn" data-copy="huddle firewall folder" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <p class="body-copy"><code>huddle restart</code> is new on this branch and it exists for exactly this: it recreates the gateway so a changed team folder gets mounted. <code>folder set</code> tells you to run it, and so does the portal when a sync fails on a folder that is still mounted read-only. <code>huddle firewall folder</code> on its own prints the configured path.</p>
+    <p class="body-copy">After that the folder moves in both directions, and the two commands are worth keeping straight:</p>
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">Files ↔ portal</div>
+      <div class="flow" style="margin-top:16px">
+        <div class="zone zone-internal">
+          <span class="zone-label">Your Git repo</span>
+          <div class="node">
+            <svg width="34" height="38" viewBox="0 0 28 34" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 11h12M8 16h12M8 21h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+            <div class="node-title">firewall-rules/</div>
+            <div class="node-sub">one <code class="spec-code">*.json</code> group per file</div>
+          </div>
+        </div>
+        <div class="flow-arrow">
+          <div class="flow-arrow-label">folder reload<br>files → app</div>
+          <svg width="46" height="10" viewBox="0 0 46 10" fill="none" aria-hidden="true"><path d="M0 5h36" stroke="#26405F" stroke-width="1.6"></path><path d="m36 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+          <div class="flow-arrow-label" style="margin-top:12px;margin-bottom:4px">folder sync<br>app → files</div>
+          <svg width="46" height="10" viewBox="0 0 46 10" fill="none" aria-hidden="true"><path d="M10 5h36" stroke="#EA6A0C" stroke-width="1.6"></path><path d="M10 .8 2 5l8 4.2z" fill="#EA6A0C"></path></svg>
+        </div>
+        <div class="zone zone-bridge">
+          <span class="zone-label">Gateway</span>
+          <div class="node">
+            <svg width="34" height="38" viewBox="0 0 30 34" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+            <div class="node-title">Firewall → Groups</div>
+            <div class="node-sub">loaded groups carry a<br><em>From folder</em> badge</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="term term-stack" style="margin-top:16px">
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle firewall folder reload</code>
+        <button type="button" class="copy-btn" data-copy="huddle firewall folder reload" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+      <div class="term-line">
+        <span class="term-prompt">$</span>
+        <code>huddle firewall folder sync</code>
+        <button type="button" class="copy-btn" data-copy="huddle firewall folder sync" aria-label="Copy command" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <p class="body-copy"><b>reload</b> reads every <code>*.json</code> in the folder and reports how many groups, rules and errors it saw. It validates all the files <em>before</em> it touches live policy, and if any of them fails it changes nothing and keeps the last good policy — one malformed file cannot wipe your team's rules. Groups that vanished from the folder are dropped, so the folder really is the source of truth for what it manages.</p>
+    <p class="body-copy"><b>sync</b> goes the other way: it writes the portal's groups back out as files, prunes the stale ones, and reports how many were written and removed. The output is stable 2-space JSON with a trailing newline, so a synced folder stays Git-diff friendly. A file it cannot parse as a group envelope is left completely alone — never rewritten, never pruned. If the folder is still mounted read-only, sync says so and tells you to run <code>huddle restart</code>.</p>
+    <p class="body-copy">In the portal the same path is <b>Settings → Team-managed defaults (extension &amp; firewall rules) → Firewall rules folder</b>, which has its own <b>Reload</b> button, plus the <b>Sync to folder</b> button on the Firewall page.</p>
+    <div class="note">
+      <div class="note-title">WHAT THE FOLDER DOES AND DOESN'T OWN</div>
+      <p>The folder only owns the rules it loaded itself. A group you made by hand is never overwritten from the folder — a reload refuses and reports it instead — and copies you applied to a container by hand survive a reload untouched. A group that disappears from the folder is deleted, and anything still pointing at it is ungrouped rather than orphaned.</p>
+      <p>Applying a group is what decides <em>where</em> it is in force. Its rules are stamped into the chosen scope and stay part of the group there, so it can still be exported, re-applied or removed as a unit. A rule that already exists in that scope is refreshed and adopted into the group.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Path mode: general URL vs dependency URL</h2>
+    <p class="body-copy">The branch ships four ready-made groups in <code>examples/firewall-rules/</code> — OpenAI, GitHub, Node.js and NPM Registry — and the rule of thumb behind them is the most portable thing on this page. Ask what kind of host you are allowing.</p>
+    <div class="compare" style="margin-top:18px">
+      <div class="node-box" style="text-align:left">
+        <div class="node-title" style="margin-top:0">General URL → allow the whole host</div>
+        <p class="body-copy">An API or app you talk to, where the host <em>is</em> the service: <code>api.openai.com</code>. A plain allow, <code>path_pattern: null</code>, <code>path_mode: 0</code>. There is nothing to narrow down.</p>
+        <div style="margin-top:10px"><span class="pill">status: allow</span> <span class="pill">path_mode: 0</span></div>
+      </div>
+      <div class="node-box" style="text-align:left">
+        <div class="node-title" style="margin-top:0">Dependency URL → path mode</div>
+        <p class="body-copy">A shared registry, download or source host where everybody fetches their own things by path: npm, PyPI, NuGet, Maven, a runtime's <code>/dist/</code>, GitHub repos. Block it at the root and allow only the paths you need.</p>
+        <div style="margin-top:10px"><span class="pill pill-deny">status: deny</span> <span class="pill pill-accent">path_mode: 1</span> <span class="pill">+ allow per path</span></div>
+      </div>
+    </div>
+    <p class="body-copy">The reason is worth saying out loud: on a whole-host allow, a compromised build can pull arbitrary code from that same host. Path mode is what stops <code>registry.npmjs.org</code> from becoming an open door because you needed one package from it.</p>
+    <div class="scroll-x">
+      <pre style="background:var(--code-bg);color:var(--code-fg);border-radius:11px;padding:15px 18px;margin:16px 0 0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:1.6">{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "NPM Registry",
+    "description": "npm registry in path mode: blocked at the root, only the listed package/scope paths pass.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "deny",  "path_pattern": null,            "path_mode": 1, "expires_at": null },
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "allow", "path_pattern": "/@types/*",     "path_mode": 0, "expires_at": null },
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "allow", "path_pattern": "/@angular/*",   "path_mode": 0, "expires_at": null },
+    { "domain": "registry.npmjs.org", "container_id": null, "status": "allow", "path_pattern": "/typescript/*", "path_mode": 0, "expires_at": null }
+  ]
+}</pre>
+    </div>
+    <p class="body-copy">The first rule is the marker: <code>deny</code> on the bare host, with <code>path_mode: 1</code>. Every rule after it is an exception. <code>github.json</code> does the same thing per org — <code>/infosupport/*</code> on <code>github.com</code>, <code>/repos/infosupport/*</code> on <code>api.github.com</code> — and <code>nodejs.json</code> allows only <code>/dist/*</code> and <code>/download/*</code> on <code>nodejs.org</code>. Swap the org and the package names for your own and you have your group.</p>
+    <div class="findings" style="background:var(--surface-tint);border-color:var(--line)">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><path d="M12 8v.01M12 11.5v4.5"></path></svg>
+      <div>
+        <div class="findings-title">One thing to watch</div>
+        <p><code>expires_at</code> travels in the envelope. An allow rule whose timestamp is already in the past is not honoured by the gateway, and import does not warn you about it — so a ruleset exported with temporary approvals in it can arrive carrying dead rules that still look present in the list. Worth a finding if it catches you.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="note" style="margin-top:0">
       <div class="note-title">TO BE WRITTEN</div>
-      <p>The walkthrough for this page still needs:</p>
-      <ul>
-        <li>The export command, and what the exported file looks like.</li>
-        <li>How to import it into a fresh environment, and how to verify the rules landed.</li>
-        <li>What happens on a conflict — an existing rule, or a rule the target environment can't apply.</li>
-        <li>What is deliberately <em>not</em> carried over, and why.</li>
-      </ul>
+      <p>The workshop side of this page still needs its exercise: which second environment you move your ruleset into — a colleague's machine, a second container, a fresh <code>huddle init</code> — and who does what when you pair on it. The mechanics above are complete; the choreography is not decided yet.</p>
     </div>
   </div>
 
