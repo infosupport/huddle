@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Huddle Workshop — Bring your first project into Huddle</title>
+<meta name="description" content="A hands-on Huddle workshop: start from an empty sandbox, work up to your own project in a dev container, then try two experiments.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<div style="min-height:100vh;background:radial-gradient(1200px 520px at 78% -6%,#DCEBFA 0%,rgba(220,235,250,0) 62%),radial-gradient(900px 420px at 8% 102%,#DCEBFA 0%,rgba(220,235,250,0) 60%),#EEF4FB">
+<div style="max-width:1160px;margin:0 auto;padding:22px 30px 0">
+
+  <!-- NAV -->
+  <div style="display:flex;align-items:center;gap:26px;padding:8px 0 30px">
+    <div style="display:flex;align-items:center;gap:11px">
+      <svg width="34" height="38" viewBox="0 0 30 34" fill="none" aria-hidden="true">
+        <path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="url(#hg)"></path>
+        <path d="M11.3 10.6h2.7v5h4.1v-5h2.7v12.8h-2.7v-5.2H14v5.2h-2.7z" fill="#fff"></path>
+        <defs><linearGradient id="hg" x1="2" y1="2" x2="28" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#FBA94C"></stop><stop offset="1" stop-color="#E4590C"></stop></linearGradient></defs>
+      </svg>
+      <div style="line-height:1">
+        <div style="font-size:18px;font-weight:800;letter-spacing:.14em">HUDDLE</div>
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:.2em;color:#F97316;margin-top:4px">DMZ <span style="color:#5B7796">PORTAL</span></div>
+      </div>
+    </div>
+    <div class="nav-links" style="display:flex;align-items:center;gap:22px;font-size:14.5px;font-weight:600;margin-left:14px">
+      <a href="#part1" style="color:#14243D">Workshop</a>
+      <a href="https://github.com/infosupport/huddle#readme" style="color:#5B7796">Docs</a>
+      <a href="https://github.com/infosupport/huddle" style="color:#5B7796">GitHub</a>
+      <a href="https://github.com/infosupport/huddle/blob/main/SUPPORT.md" style="color:#5B7796">Community</a>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <div class="hero" style="position:relative;display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,1fr);gap:26px;align-items:center;padding-bottom:34px">
+    <div class="hero-bg" style="position:absolute;top:-90px;right:-140px;bottom:-40px;left:34%;z-index:0;pointer-events:none;mask-image:linear-gradient(90deg,transparent 0,#000 20%,#000 80%,transparent 100%),linear-gradient(180deg,transparent 0,#000 16%,#000 84%,transparent 100%);-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 20%,#000 80%,transparent 100%),linear-gradient(180deg,transparent 0,#000 16%,#000 84%,transparent 100%);mask-composite:intersect;-webkit-mask-composite:source-in">
+      <img src="assets/hero-igloo-signs.png" alt="" aria-hidden="true" decoding="async" style="display:block;width:100%;height:100%;object-fit:cover">
+    </div>
+    <div style="position:relative;z-index:1">
+      <h1 style="font-size:clamp(42px,5.6vw,64px);line-height:1;font-weight:800;letter-spacing:-.035em;margin:0">Huddle <span style="color:#F97316">Workshop</span></h1>
+      <div style="font-size:clamp(21px,2.4vw,27px);font-weight:800;letter-spacing:-.02em;margin-top:14px">Bring your first project into Huddle.</div>
+      <p style="font-size:16.5px;line-height:1.55;color:#5B7796;margin:12px 0 0;max-width:46ch;text-wrap:pretty">Start from an empty sandbox, work up to your own project in a dev container, then try two experiments.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:26px;margin-top:26px">
+        <div style="display:flex;align-items:center;gap:11px">
+          <span style="width:42px;height:42px;flex:none;border-radius:50%;background:#DFEBF7;display:grid;place-items:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20.5 7v10L12 21.2 3.5 17V7z"></path><path d="M3.5 7 12 11.5 20.5 7"></path><path d="M12 11.5v9.7"></path></svg>
+          </span>
+          <div style="font-size:13.5px;font-weight:600;line-height:1.35">Isolated<br>dev environments</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:11px">
+          <span style="width:42px;height:42px;flex:none;border-radius:50%;background:#DFEBF7;display:grid;place-items:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 5.8v6c0 4.8 3.2 7.5 7.5 8.5 4.3-1 7.5-3.7 7.5-8.5v-6z"></path></svg>
+          </span>
+          <div style="font-size:13.5px;font-weight:600;line-height:1.35">Firewall by default</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:11px">
+          <span style="width:42px;height:42px;flex:none;border-radius:50%;background:#DFEBF7;display:grid;place-items:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M2.8 19.5a6.2 6.2 0 0 1 12.4 0"></path><path d="M16.5 5.4a3 3 0 0 1 0 5.6"></path><path d="M18 19.5a6 6 0 0 0-2-4.3"></path></svg>
+          </span>
+          <div style="font-size:13.5px;font-weight:600;line-height:1.35">Build safely<br>together</div>
+        </div>
+      </div>
+    </div>
+    <div style="position:relative;z-index:1;display:grid;grid-template-columns:196px minmax(0,1fr);gap:18px;align-items:center;min-height:250px" class="hero-cap">
+      <div></div>
+    </div>
+  </div>
+
+  <!-- GROUND RULE -->
+  <div style="position:relative;background:#fff;border:1.5px solid #F79E4B;border-radius:16px;box-shadow:0 18px 40px -28px rgba(234,106,12,.5);padding:22px 26px;display:flex;gap:20px;align-items:flex-start">
+    <span style="flex:none;width:56px;height:56px;display:grid;place-items:center">
+      <svg width="56" height="60" viewBox="0 0 30 34" fill="none" aria-hidden="true">
+        <path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="url(#hg2)"></path>
+        <path d="M15 9.4 10.4 11v5.2c0 3.4 2 5.4 4.6 6.2 2.6-.8 4.6-2.8 4.6-6.2V11z" fill="#fff"></path>
+        <defs><linearGradient id="hg2" x1="2" y1="2" x2="28" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#FBA94C"></stop><stop offset="1" stop-color="#E4590C"></stop></linearGradient></defs>
+      </svg>
+    </span>
+    <div>
+      <div style="font-size:19.5px;font-weight:800;letter-spacing:-.015em">One ground rule before we start</div>
+      <p style="margin:8px 0 0;font-size:15px;line-height:1.6;color:#3F5C7C;text-wrap:pretty">Huddle is under active development. We use it in our team across several projects and setups, but yours will hit combinations nobody has tried yet.</p>
+      <p style="margin:6px 0 0;font-size:15px;line-height:1.6;color:#3F5C7C;text-wrap:pretty">If something breaks, confuses you, or behaves differently than you expected — that's a finding, not your fault. Write it down, that's the actual output of today.</p>
+    </div>
+  </div>
+
+  <!-- PARTS -->
+  <div style="position:relative;margin-top:34px;padding-bottom:20px">
+    <div class="rail-line" style="position:absolute;left:59px;top:36px;bottom:120px;width:2px;background:linear-gradient(180deg,#9FBFDC 0%,#C6C9DA 30%,#F9A03F 58%,#EA6A0C 100%);z-index:0"></div>
+
+    <!-- PART 1 -->
+    <div class="part-row" id="part1" style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;align-items:start;scroll-margin-top:24px">
+      <div class="rail" style="display:flex;flex-direction:column;align-items:center;gap:10px;position:relative;z-index:1;padding-top:18px">
+        <span style="width:38px;height:38px;border-radius:50%;background:#7EA6C9;border:3px solid #fff;color:#fff;font-size:15px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px #7EA6C9,0 0 0 8px #EEF4FB,0 6px 14px -8px rgba(20,36,61,.5)">1</span>
+        <div style="position:relative;z-index:1;background:#EEF4FB;padding:4px 2px 6px;text-align:center">
+          <div style="font-size:11.5px;font-weight:800;letter-spacing:.13em;color:#3A6C9B">STABLE</div>
+          <div style="font-size:12.5px;color:#2C4E71;line-height:1.35;margin-top:4px">Get the basics working</div>
+        </div>
+      </div>
+      <div style="background:#fff;border-radius:16px;box-shadow:0 1px 2px rgba(20,36,61,.05),0 24px 44px -34px rgba(20,36,61,.35);padding:24px 26px">
+        <div class="split" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);gap:24px;align-items:start">
+          <div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h2 style="font-size:clamp(24px,2.9vw,30px);font-weight:800;letter-spacing:-.025em;margin:0">Part 1 — Get it working</h2>
+              <span style="font-size:12.5px;font-weight:700;color:#2563EB;background:#E3EDFC;border-radius:999px;padding:5px 12px">Latest release</span>
+            </div>
+            <div style="margin-top:18px;border:1px solid #DDEAF6;background:#F7FBFF;border-radius:12px;padding:15px 16px">
+              <div style="font-size:13px;font-weight:700;color:#2C4E71">Setup</div>
+              <div style="background:#16233A;border-radius:9px;padding:12px 14px;margin-top:10px;display:flex;flex-direction:column;gap:7px">
+                <div style="display:flex;gap:9px;align-items:baseline"><span style="font-family:'JetBrains Mono';color:#F97316;font-size:13px">$</span><code style="font-family:'JetBrains Mono';font-size:13.5px;color:#EDF3FA;overflow-wrap:anywhere">npm install -g @infosupport/huddle-cli</code></div>
+                <div style="display:flex;gap:9px;align-items:baseline"><span style="font-family:'JetBrains Mono';color:#F97316;font-size:13px">$</span><code style="font-family:'JetBrains Mono';font-size:13.5px;color:#EDF3FA;overflow-wrap:anywhere">huddle init</code></div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:14px;margin-top:20px">
+              <div style="display:flex;gap:13px;align-items:flex-start"><span style="width:26px;height:26px;flex:none;border-radius:50%;background:#F97316;color:#fff;font-size:13px;font-weight:700;display:grid;place-items:center">1</span><div style="font-size:15.5px;line-height:1.5;color:#243A57">Empty container. Connect, and watch how firewall requests surface and get approved.</div></div>
+              <div style="display:flex;gap:13px;align-items:flex-start"><span style="width:26px;height:26px;flex:none;border-radius:50%;background:#F97316;color:#fff;font-size:13px;font-weight:700;display:grid;place-items:center">2</span><div style="font-size:15.5px;line-height:1.5;color:#243A57">Bring your own project in.</div></div>
+              <div style="display:flex;gap:13px;align-items:flex-start"><span style="width:26px;height:26px;flex:none;border-radius:50%;background:#F97316;color:#fff;font-size:13px;font-weight:700;display:grid;place-items:center">3</span><div style="font-size:15.5px;line-height:1.5;color:#243A57">Start your project inside the dev container.</div></div>
+            </div>
+            <div style="margin-top:20px;background:#EAF7EE;border-radius:12px;padding:15px 17px;display:flex;gap:12px;align-items:flex-start">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <div style="font-size:14.5px;line-height:1.5;color:#1F5138"><strong style="color:#166534">Outcome:</strong> your actual work runs in Huddle, and you know which of your dependencies needed rules.</div>
+            </div>
+            <a class="cta cta-sm" href="workshop/part-1-get-it-working.html" style="margin-top:20px">
+              Read the full walkthrough
+              <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+            </a>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <!-- ARCHITECTURE -->
+            <div style="background:#F3F8FD;border:1px solid #DDEAF6;border-radius:12px;padding:18px">
+              <div style="font-size:14.5px;font-weight:700">How it fits together</div>
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-top:16px;flex-wrap:nowrap">
+                <div style="flex:1;min-width:0;text-align:center">
+                  <svg width="52" height="42" viewBox="0 0 52 42" fill="none" style="margin:0 auto" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M18 12l-4 5.5 4 5.5" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M34 12l4 5.5-4 5.5" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M28 11l-4 13" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
+                  <div style="font-size:12.5px;font-weight:700;margin-top:8px">Host runner</div>
+                  <div style="font-size:11px;color:#5B7796;line-height:1.35;margin-top:3px">(Node, holds ephemeral operator token)</div>
+                </div>
+                <div style="flex:none;padding-top:14px;text-align:center;width:74px">
+                  <div style="font-size:10.5px;color:#5B7796;line-height:1.3;margin-bottom:4px">Egress passes through</div>
+                  <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+                </div>
+                <div style="flex:1;min-width:0;text-align:center">
+                  <svg width="44" height="46" viewBox="0 0 30 34" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+                  <div style="font-size:12.5px;font-weight:700;margin-top:8px">Gateway container</div>
+                  <div style="font-size:11px;color:#5B7796;line-height:1.35;margin-top:3px">(enforces firewall rules)</div>
+                </div>
+                <div style="flex:none;padding-top:28px;width:56px">
+                  <svg width="52" height="10" viewBox="0 0 62 10" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+                </div>
+                <div style="flex:1;min-width:0;text-align:center">
+                  <svg width="46" height="46" viewBox="0 0 48 48" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                  <div style="font-size:12.5px;font-weight:700;margin-top:8px">Devcontainer</div>
+                  <div style="font-size:11px;color:#5B7796;line-height:1.35;margin-top:3px">(your dev environment)</div>
+                </div>
+              </div>
+            </div>
+            <!-- FIREWALL LOOP -->
+            <div style="background:#F3F8FD;border:1px solid #DDEAF6;border-radius:12px;padding:18px">
+              <div style="font-size:14.5px;font-weight:700">The firewall request loop</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:16px">
+                <div style="flex:1;min-width:0;text-align:center">
+                  <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+                  <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Unknown destination</div>
+                </div>
+                <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+                <div style="flex:1;min-width:0;text-align:center">
+                  <svg width="34" height="38" viewBox="0 0 28 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 10h12M8 15h12M8 20h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+                  <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Requested rule</div>
+                </div>
+                <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+                <div style="flex:1;min-width:0;text-align:center">
+                  <div style="display:flex;gap:7px;justify-content:center">
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#22A45D"></circle><path d="m7.5 12.3 3 3 6-6.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#E23B3B"></circle><path d="m8.2 8.2 7.6 7.6M15.8 8.2l-7.6 7.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round"></path></svg>
+                  </div>
+                  <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Approve / Deny</div>
+                </div>
+                <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+                <div style="flex:1.35;min-width:0;background:#FCE9E9;border:1px solid #F3C9C9;border-radius:10px;padding:12px 10px;text-align:center">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C62E2E" stroke-width="1.7" stroke-linecap="round" style="display:block;margin:0 auto" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"></path></svg>
+                  <div style="font-size:11.5px;font-weight:700;color:#B02525;line-height:1.4;margin-top:7px">Unapproved requests are auto-denied (fail closed).</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:20px;background:#FFF4EA;border:1px solid #FBDCBE;border-radius:12px;padding:16px 18px;display:flex;gap:14px;align-items:flex-start">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+          <div>
+            <div style="font-size:16.5px;font-weight:800;letter-spacing:-.01em">Findings</div>
+            <div style="font-size:14px;line-height:1.5;color:#5B7796;margin-top:4px">What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</div>
+            <a class="link-btn" href="https://github.com/infosupport/huddle/issues" target="_blank" rel="noopener">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+              Open an issue
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PART 2 -->
+    <div class="part-row" id="part2" style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;align-items:start;margin-top:24px;scroll-margin-top:24px">
+      <div class="rail" style="display:flex;flex-direction:column;align-items:center;gap:10px;position:relative;z-index:1;padding-top:18px">
+        <span style="width:38px;height:38px;border-radius:50%;background:#F97316;border:3px solid #fff;color:#fff;font-size:15px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px #F97316,0 0 0 8px #EEF4FB,0 6px 14px -8px rgba(20,36,61,.5)">2</span>
+        <div style="position:relative;z-index:1;background:#EEF4FB;padding:4px 2px 6px;text-align:center">
+          <div style="font-size:11.5px;font-weight:800;letter-spacing:.13em;color:#D9600B">EXPERIMENTAL</div>
+          <div style="font-size:12.5px;color:#2C4E71;line-height:1.35;margin-top:4px">Try something new</div>
+        </div>
+      </div>
+      <div style="background:#fff;border-radius:16px;box-shadow:0 1px 2px rgba(20,36,61,.05),0 24px 44px -34px rgba(20,36,61,.35);padding:24px 26px">
+        <div class="split" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);gap:24px;align-items:start">
+          <div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h2 style="font-size:clamp(24px,2.9vw,30px);font-weight:800;letter-spacing:-.025em;margin:0">Part 2 — Experiment 98</h2>
+              <span style="font-size:12.5px;font-weight:700;color:#D9600B;background:#FDE8D6;border-radius:999px;padding:5px 12px">Experimental</span>
+            </div>
+            <div style="font-size:18px;font-weight:600;color:#3F5C7C;margin-top:8px">Export and import firewall rules</div>
+            <div style="margin-top:18px;background:#16233A;border-radius:11px;padding:15px 18px;display:flex;align-items:center;gap:12px">
+              <span style="font-family:'JetBrains Mono';color:#F97316;font-size:15px">$</span>
+              <code style="font-family:'JetBrains Mono';font-size:15.5px;color:#EDF3FA;flex:1;min-width:0;overflow-wrap:anywhere">huddle experiment use 98</code>
+              <button type="button" class="copy-btn" data-copy="huddle experiment use 98" aria-label="Copy command">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+              </button>
+            </div>
+            <p style="font-size:15.5px;line-height:1.55;color:#243A57;margin:16px 0 0">Export the ruleset you built up in part 1, then import it somewhere fresh.</p>
+            <a class="cta cta-sm" href="workshop/part-2-experiment-98.html" style="margin-top:20px">
+              Read the full walkthrough
+              <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+            </a>
+          </div>
+          <div style="background:#F3F8FD;border:1px solid #DDEAF6;border-radius:12px;padding:18px">
+            <div style="font-size:14.5px;font-weight:700">Move your rules to a new environment</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:16px">
+              <div style="flex:1.15;min-width:0;border:1.5px dashed #A9C8E4;border-radius:10px;background:#F7FBFF;padding:12px 10px;text-align:center">
+                <div style="font-size:12px;font-weight:700;color:#2C4E71;line-height:1.35">Your current environment</div>
+                <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px">
+                  <svg width="38" height="38" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                  <div style="text-align:center">
+                    <svg width="26" height="30" viewBox="0 0 28 34" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 11h12M8 16h12M8 21h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+                    <div style="font-size:10.5px;color:#5B7796;margin-top:4px">Firewall rules</div>
+                  </div>
+                </div>
+              </div>
+              <div style="flex:none;text-align:center">
+                <div style="font-size:11px;color:#3F5C7C;font-weight:600">Export</div>
+                <svg width="34" height="10" viewBox="0 0 34 10" fill="none" style="display:block;margin:5px auto 0" aria-hidden="true"><path d="M0 5h24" stroke="#3B82F6" stroke-width="1.8"></path><path d="m24 .8 8 4.2-8 4.2z" fill="#3B82F6"></path></svg>
+              </div>
+              <svg width="30" height="34" viewBox="0 0 28 34" fill="none" style="flex:none" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#fff" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 11h12M8 16h12M8 21h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+              <div style="flex:none;text-align:center">
+                <div style="font-size:11px;color:#3F5C7C;font-weight:600">Import</div>
+                <svg width="34" height="10" viewBox="0 0 34 10" fill="none" style="display:block;margin:5px auto 0" aria-hidden="true"><path d="M0 5h24" stroke="#F97316" stroke-width="1.8"></path><path d="m24 .8 8 4.2-8 4.2z" fill="#F97316"></path></svg>
+              </div>
+              <div style="flex:1.15;min-width:0;border:1.5px dashed #F5B778;border-radius:10px;background:#FFFAF4;padding:12px 10px;text-align:center">
+                <div style="font-size:12px;font-weight:700;color:#B45309;line-height:1.35">A fresh environment</div>
+                <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px">
+                  <svg width="38" height="38" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                  <div style="text-align:center">
+                    <svg width="26" height="30" viewBox="0 0 28 34" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#FDEBDA" stroke="#E9A768" stroke-width="1.5"></rect><path d="M8 11h12M8 16h12M8 21h8" stroke="#C2701C" stroke-width="1.6" stroke-linecap="round"></path></svg>
+                    <div style="font-size:10.5px;color:#5B7796;margin-top:4px">Firewall rules</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:20px;background:#FFF4EA;border:1px solid #FBDCBE;border-radius:12px;padding:16px 18px;display:flex;gap:14px;align-items:flex-start">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+          <div>
+            <div style="font-size:16.5px;font-weight:800;letter-spacing:-.01em">Findings</div>
+            <div style="font-size:14px;line-height:1.5;color:#5B7796;margin-top:4px">What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</div>
+            <a class="link-btn" href="https://github.com/infosupport/huddle/pull/98" target="_blank" rel="noopener">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+              Comment on PR #98
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PART 3 -->
+    <div class="part-row" id="part3" style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;align-items:start;margin-top:24px;scroll-margin-top:24px">
+      <div class="rail" style="display:flex;flex-direction:column;align-items:center;gap:10px;position:relative;z-index:1;padding-top:18px">
+        <span style="width:38px;height:38px;border-radius:50%;background:#EA6A0C;border:3px solid #fff;color:#fff;font-size:15px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px #EA6A0C,0 0 0 8px #EEF4FB,0 6px 14px -8px rgba(20,36,61,.5)">3</span>
+        <div style="position:relative;z-index:1;background:#EEF4FB;padding:4px 2px 6px;text-align:center">
+          <div style="font-size:11.5px;font-weight:800;letter-spacing:.13em;color:#C2510A">VERY EXPERIMENTAL</div>
+          <div style="font-size:12.5px;color:#2C4E71;line-height:1.35;margin-top:4px">Push the boundaries</div>
+        </div>
+      </div>
+      <div style="background:#fff;border-radius:16px;box-shadow:0 1px 2px rgba(20,36,61,.05),0 24px 44px -34px rgba(20,36,61,.35);padding:24px 26px">
+        <div class="split" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);gap:24px;align-items:start">
+          <div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h2 style="font-size:clamp(24px,2.9vw,30px);font-weight:800;letter-spacing:-.025em;margin:0">Part 3 — Experiment 109</h2>
+              <span style="font-size:12.5px;font-weight:700;color:#C2273F;background:#FCE3E8;border-radius:999px;padding:5px 12px">Very experimental</span>
+            </div>
+            <div style="font-size:18px;font-weight:600;color:#3F5C7C;margin-top:8px">Docker sandboxes as the main runner</div>
+            <div style="margin-top:18px;background:#16233A;border-radius:11px;padding:15px 18px;display:flex;align-items:center;gap:12px">
+              <span style="font-family:'JetBrains Mono';color:#F97316;font-size:15px">$</span>
+              <code style="font-family:'JetBrains Mono';font-size:15.5px;color:#EDF3FA;flex:1;min-width:0;overflow-wrap:anywhere">huddle experiment use 109</code>
+              <button type="button" class="copy-btn" data-copy="huddle experiment use 109" aria-label="Copy command">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+              </button>
+            </div>
+            <p style="font-size:15.5px;line-height:1.55;color:#243A57;margin:16px 0 0">Swaps Docker containers for Docker sandboxes. The least settled of the three. Same path as before, with your own project.</p>
+            <a class="cta cta-sm" href="workshop/part-3-experiment-109.html" style="margin-top:20px">
+              Read the full walkthrough
+              <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+            </a>
+          </div>
+          <div style="background:#F3F8FD;border:1px solid #DDEAF6;border-radius:12px;padding:18px">
+            <div style="font-size:14.5px;font-weight:700">Same flow, new foundation</div>
+            <div style="display:flex;align-items:flex-start;gap:8px;margin-top:18px">
+              <div style="flex:1;min-width:0;text-align:center">
+                <svg width="52" height="42" viewBox="0 0 52 42" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M12 24h10" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
+                <div style="font-size:12.5px;font-weight:700;margin-top:8px">Host runner</div>
+              </div>
+              <svg width="30" height="10" viewBox="0 0 30 10" fill="none" style="flex:none;margin-top:18px" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+              <div style="flex:1;min-width:0;text-align:center">
+                <svg width="40" height="44" viewBox="0 0 30 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+                <div style="font-size:12.5px;font-weight:700;margin-top:8px">Gateway</div>
+              </div>
+              <svg width="30" height="10" viewBox="0 0 30 10" fill="none" style="flex:none;margin-top:18px" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+              <div style="flex:1.25;min-width:0;border:1.5px dashed #F0A9A9;background:#FEF6F6;border-radius:10px;padding:10px;text-align:center">
+                <div style="display:flex;align-items:flex-start;justify-content:center;gap:4px">
+                  <svg width="38" height="38" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                  <svg width="24" height="20" viewBox="0 0 30 24" fill="none" style="margin-top:2px" aria-hidden="true"><rect x="4" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="9.5" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="15" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="9.5" y="4.5" width="4.5" height="4.5" fill="#2496ED"></rect><path d="M2 16h20a6 6 0 0 1-6 4H8a6 6 0 0 1-6-4z" fill="#2496ED"></path></svg>
+                </div>
+                <div style="font-size:12.5px;font-weight:700;margin-top:6px;color:#243A57">Docker sandbox</div>
+                <div style="font-size:11px;color:#5B7796;margin-top:2px">(instead of containers)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:20px;background:#FFF4EA;border:1px solid #FBDCBE;border-radius:12px;padding:16px 18px;display:flex;gap:14px;align-items:flex-start">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+          <div>
+            <div style="font-size:16.5px;font-weight:800;letter-spacing:-.01em">Findings</div>
+            <div style="font-size:14px;line-height:1.5;color:#5B7796;margin-top:4px">What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</div>
+            <a class="link-btn" href="https://github.com/infosupport/huddle/pull/109" target="_blank" rel="noopener">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+              Comment on PR #109
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="foot" id="prereqs" style="position:relative;display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:20px;align-items:center;padding:26px 0 44px;scroll-margin-top:24px">
+    <div class="hero-bg" style="position:absolute;top:-30px;bottom:-10px;left:-120px;right:52%;z-index:0;pointer-events:none;mask-image:linear-gradient(90deg,transparent 0,#000 20%,#000 80%,transparent 100%),linear-gradient(180deg,transparent 0,#000 16%,#000 84%,transparent 100%);-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 20%,#000 80%,transparent 100%),linear-gradient(180deg,transparent 0,#000 16%,#000 84%,transparent 100%);mask-composite:intersect;-webkit-mask-composite:source-in">
+      <img src="assets/footer-penguins.png" alt="" aria-hidden="true" loading="lazy" decoding="async" style="display:block;width:100%;height:100%;object-fit:cover">
+    </div>
+    <div style="position:relative;z-index:1;grid-column:2;display:flex;flex-wrap:wrap;gap:24px;align-items:center;justify-content:flex-end;text-align:right">
+      <div>
+        <div style="font-size:clamp(28px,3.6vw,38px);font-weight:800;letter-spacing:-.03em">Let's build <span style="color:#F97316">safely.</span></div>
+        <div style="font-size:15.5px;color:#5B7796;margin-top:6px">Better developer environments for a more open future.</div>
+      </div>
+      <a class="cta" href="#part1" style="position:relative;z-index:1;flex:none">
+        Start the workshop
+        <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+      </a>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script src="assets/copy.js"></script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Part 3 — Experiment 109 · Huddle Workshop</title>
+<meta name="description" content="Huddle Workshop, part 3: run the same flow with Docker sandboxes as the main runner instead of Docker containers.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="page">
+<div class="wrap">
+
+  <div class="nav">
+    <a class="nav-brand" href="../index.html" aria-label="Huddle Workshop home">
+      <svg width="34" height="38" viewBox="0 0 30 34" fill="none" aria-hidden="true">
+        <path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="url(#hg)"></path>
+        <path d="M11.3 10.6h2.7v5h4.1v-5h2.7v12.8h-2.7v-5.2H14v5.2h-2.7z" fill="#fff"></path>
+        <defs><linearGradient id="hg" x1="2" y1="2" x2="28" y2="32" gradientUnits="userSpaceOnUse"><stop stop-color="#FBA94C"></stop><stop offset="1" stop-color="#E4590C"></stop></linearGradient></defs>
+      </svg>
+      <span style="line-height:1">
+        <span class="nav-brand-name" style="display:block">HUDDLE</span>
+        <span class="nav-brand-sub" style="display:block">DMZ <span>PORTAL</span></span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="../index.html#part1">Overview</a>
+      <a href="part-1-get-it-working.html">Part 1</a>
+      <a href="part-2-experiment-98.html">Part 2</a>
+      <a href="part-3-experiment-109.html" aria-current="page">Part 3</a>
+      <a href="https://github.com/infosupport/huddle">GitHub</a>
+    </div>
+  </div>
+
+  <div class="page-head">
+    <div class="crumb"><a href="../index.html">Huddle Workshop</a> &nbsp;/&nbsp; Part 3</div>
+    <h1 class="page-title">Part 3 — <em>Experiment 109</em></h1>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-very-exp">Very experimental</span>
+      <span class="kicker" style="color:#C2510A">VERY EXPERIMENTAL · PUSH THE BOUNDARIES</span>
+    </div>
+    <div class="page-sub">Docker sandboxes as the main runner</div>
+    <p class="page-lede">Swaps Docker containers for Docker sandboxes. The least settled of the three. Same path as before, with your own project.</p>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Switch to the experiment</h2>
+    <p class="body-copy">This one is <a href="https://github.com/infosupport/huddle/pull/109" target="_blank" rel="noopener">PR&nbsp;#109</a>. Expect rough edges — that is the point of running it.</p>
+    <div class="term term-lg" style="margin-top:16px">
+      <span class="term-prompt">$</span>
+      <code>huddle experiment use 109</code>
+      <button type="button" class="copy-btn" data-copy="huddle experiment use 109" aria-label="Copy command">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+      </button>
+    </div>
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>Still to add here: what you need installed on the host for sandboxes, how to tell you're running on the sandbox foundation rather than containers, and how to get back.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Same flow, new foundation</h2>
+    <p class="body-copy">Nothing about the workshop path changes: host runner, gateway, your dev environment, your project. What changes is what your dev environment <em>is</em> — a Docker sandbox instead of a Docker container.</p>
+    <div class="figure" style="margin-top:18px">
+      <div class="figure-title">Same flow, new foundation</div>
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-top:18px">
+        <div style="flex:1;min-width:0;text-align:center">
+          <svg width="52" height="42" viewBox="0 0 52 42" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M12 24h10" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
+          <div style="font-size:12.5px;font-weight:700;margin-top:8px">Host runner</div>
+        </div>
+        <svg width="30" height="10" viewBox="0 0 30 10" fill="none" style="flex:none;margin-top:18px" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+        <div style="flex:1;min-width:0;text-align:center">
+          <svg width="40" height="44" viewBox="0 0 30 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+          <div style="font-size:12.5px;font-weight:700;margin-top:8px">Gateway</div>
+        </div>
+        <svg width="30" height="10" viewBox="0 0 30 10" fill="none" style="flex:none;margin-top:18px" aria-hidden="true"><path d="M0 5h20" stroke="#26405F" stroke-width="1.6"></path><path d="m20 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
+        <div style="flex:1.25;min-width:0;border:1.5px dashed #F0A9A9;background:#FEF6F6;border-radius:10px;padding:10px;text-align:center">
+          <div style="display:flex;align-items:flex-start;justify-content:center;gap:4px">
+            <svg width="38" height="38" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+            <svg width="24" height="20" viewBox="0 0 30 24" fill="none" style="margin-top:2px" aria-hidden="true"><rect x="4" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="9.5" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="15" y="10" width="4.5" height="4.5" fill="#2496ED"></rect><rect x="9.5" y="4.5" width="4.5" height="4.5" fill="#2496ED"></rect><path d="M2 16h20a6 6 0 0 1-6 4H8a6 6 0 0 1-6-4z" fill="#2496ED"></path></svg>
+          </div>
+          <div style="font-size:12.5px;font-weight:700;margin-top:6px;color:#243A57">Docker sandbox</div>
+          <div style="font-size:11px;color:#5B7796;margin-top:2px">(instead of containers)</div>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>The walkthrough for this page still needs:</p>
+      <ul>
+        <li>Walking the part 1 path again on this foundation, with your own project.</li>
+        <li>Where the sandbox foundation behaves differently from containers — and where it should feel identical.</li>
+        <li>The known-broken list, so you can tell a new finding from one we already have.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="findings" style="margin-top:0">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#EA6A0C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px" aria-hidden="true"><path d="M16.5 2.8h-9a1.7 1.7 0 0 0-1.7 1.7v15a1.7 1.7 0 0 0 1.7 1.7h9a1.7 1.7 0 0 0 1.7-1.7v-15a1.7 1.7 0 0 0-1.7-1.7z"></path><path d="M9.2 8h5.6M9.2 12h5.6M9.2 16h3.2"></path></svg>
+      <div>
+        <div class="findings-title">Findings</div>
+        <p>What broke, confused you, or behaved differently than expected? That's a finding, not your fault. Write it down.</p>
+        <a class="link-btn" href="https://github.com/infosupport/huddle/pull/109" target="_blank" rel="noopener">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.35 4.7-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2z"></path></svg>
+          Comment on PR #109
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="pager">
+    <a class="pager-link" href="part-2-experiment-98.html"><span>PREVIOUS</span>← Part 2 — Experiment 98</a>
+    <a class="cta cta-sm" href="../index.html#part1">
+      Back to the overview
+      <svg width="18" height="14" viewBox="0 0 18 14" fill="none" aria-hidden="true"><path d="M0 7h13" stroke="#fff" stroke-width="1.9"></path><path d="m12 2.4 5 4.6-5 4.6z" fill="#fff"></path></svg>
+    </a>
+  </div>
+
+</div>
+</div>
+<script src="../assets/copy.js"></script>
+</body>
+</html>
