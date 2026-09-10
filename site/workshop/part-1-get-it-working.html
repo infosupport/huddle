@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Part 1 — Get it working · Huddle Workshop</title>
-<meta name="description" content="Huddle Workshop, part 1: install the CLI, understand the network architecture, create an empty container from the portal or the CLI, watch the firewall request loop, then bring your own project in.">
+<meta name="description" content="Huddle Workshop, part 1: set up the CLI, then three steps — an empty container, your own project, and running it inside the dev container. Each step from the portal or the CLI.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
@@ -42,13 +42,13 @@
       <span class="badge badge-stable">Latest release</span>
       <span class="kicker">STABLE · GET THE BASICS WORKING</span>
     </div>
-    <p class="page-lede">Install the CLI, connect to an empty container and watch how firewall requests surface and get approved. Then bring your own project in and start it inside the dev container.</p>
-    <p class="body-copy" style="max-width:62ch">Everything on this page is the latest release. Nothing here needs an experiment channel — that is what parts 2 and 3 are for.</p>
+    <p class="page-lede">Set up once, then three steps: an empty container, your own project, and running that project inside the dev container. Every step works from the portal or from the CLI — pick either.</p>
   </div>
 
-  <div class="card">
+  <!-- ── SETUP ───────────────────────────────────────────────────────────── -->
+  <div class="card" id="setup">
     <h2 class="section-title">Setup</h2>
-    <p class="body-copy">Two commands on your own machine. The CLI is the host runner — it starts the gateway and holds an ephemeral operator token.</p>
+    <p class="body-copy">Two commands on your own machine. Then you are done with setup and the three steps begin.</p>
     <div class="term term-stack" style="margin-top:16px">
       <div class="term-line">
         <span class="term-prompt">$</span>
@@ -64,176 +64,69 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
         </button>
       </div>
-    </div>
-
-    <h3 class="figure-title" style="margin:24px 0 0">Before you run it</h3>
-    <dl class="spec">
-      <dt>Node</dt>
-      <dd>18 or newer — the CLI package declares <code>node &gt;=18</code>.</dd>
-      <dt>Container runtime</dt>
-      <dd>Docker or Podman, running and reachable. <code>huddle init</code> auto-detects: it looks behind the <code>docker</code> command first (which may be a Podman shim), then at <code>podman</code>. Force one with <code>--runtime docker</code>, <code>--runtime podman</code> or the <code>HUDDLE_RUNTIME</code> env var.</dd>
-      <dt>Host port</dt>
-      <dd>The portal is published on <code>3000</code>. Set <code>HUDDLE_PORT</code> before <code>huddle init</code> to publish it on another host port.</dd>
-      <dt>Nothing else</dt>
-      <dd>No IDE plugin, no manual network or volume setup. <code>huddle init</code> creates the volume <code>huddle-data</code>, the internal network <code>devcontainer-net</code> and the socket directory <code>/tmp/dc-sockets</code> itself.</dd>
-    </dl>
-
-    <p class="body-copy" style="margin-top:18px">If no runtime is up you get told so, and told what to do: <em>“No working container runtime found. Install and start Docker or Podman, or pick one explicitly with <code>--runtime &lt;docker|podman&gt;</code> or the <code>HUDDLE_RUNTIME</code> env var.”</em></p>
-
-    <h3 class="figure-title" style="margin:24px 0 0">What it looks like when it worked</h3>
-    <p class="body-copy">Check the install with <code>huddle --version</code>. Then <code>huddle init</code> pulls the images, starts the gateway and ends with a link that logs you straight in — the portal reads the <code>?token=</code>, logs in, and removes it from the address bar.</p>
-    <div class="term term-stack" style="margin-top:14px">
-      <div class="term-line">
-        <span class="term-prompt">$</span>
-        <code>huddle --version</code>
-        <button type="button" class="copy-btn" data-copy="huddle --version" aria-label="Copy command" style="margin-left:auto">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
-        </button>
-      </div>
       <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>[OK] Huddle is running at http://localhost:3000</code></div>
       <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Open the portal (auto-login link):</code></div>
       <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;&nbsp;&nbsp;http://localhost:3000/?token=&lt;operator-token&gt;</code></div>
     </div>
-    <p class="body-copy">The same token is written to <code>~/.huddle/config.json</code>, which is how later <code>huddle</code> commands authenticate. Re-running <code>huddle init</code> reuses the token from that file, so an open browser tab keeps working across a re-init.</p>
+    <p class="body-copy">Open that link and you are logged in — the portal reads the <code>?token=</code> and strips it from the address bar. The same token lands in <code>~/.huddle/config.json</code>, which is how later <code>huddle</code> commands authenticate.</p>
+
+    <dl class="spec">
+      <dt>You need</dt>
+      <dd>Node 18+, and Docker or Podman running. <code>huddle init</code> auto-detects the runtime; force it with <code>--runtime docker|podman</code> or <code>HUDDLE_RUNTIME</code>.</dd>
+      <dt>It creates</dt>
+      <dd>The volume <code>huddle-data</code>, the internal network <code>devcontainer-net</code> and the socket directory <code>/tmp/dc-sockets</code>. No IDE plugin, no manual setup.</dd>
+      <dt>Another port</dt>
+      <dd>Set <code>HUDDLE_PORT</code> before <code>huddle init</code>.</dd>
+    </dl>
 
     <div class="note">
       <div class="note-title">TO BE WRITTEN</div>
-      <p>The tested platform matrix. The code carries separate paths for native Docker on Linux, Docker Desktop, Rancher Desktop (socket at <code>~/.rd/docker.sock</code>) and a Podman machine — but which combinations we have actually run the workshop on is not written down yet.</p>
+      <p>The tested platform matrix. The code carries separate paths for native Docker on Linux, Docker Desktop, Rancher Desktop and a Podman machine — which combinations we have actually run the workshop on is not written down yet.</p>
     </div>
   </div>
 
-  <div class="card">
-    <h2 class="section-title">The three steps</h2>
-    <ol class="steps">
-      <li><b>1</b><div>Empty container. Connect, and watch how firewall requests surface and get approved.</div></li>
-      <li><b>2</b><div>Bring your own project in.</div></li>
-      <li><b>3</b><div>Start your project inside the dev container.</div></li>
-    </ol>
-    <div class="outcome">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-      <p><strong>Outcome:</strong> your actual work runs in Huddle, and you know which of your dependencies needed rules.</p>
-    </div>
-    <p class="body-copy" style="margin-top:20px">Step 1 is <a href="#empty">Create an empty container</a>, further down this page. Nothing is allow-listed up front: the only rule a fresh database ships with is an allow for the gateway's own name, <code>huddle</code>. So the first host anything in the container reaches for shows up as a pending request — on an empty container that is usually <code>github.com</code>, from your first clone.</p>
-    <p class="body-copy">Requests land on the <b>Firewall</b> page in the portal sidebar, under <b>Pending requests</b>. Each row carries a radial menu: <span class="pill">Allow</span> <span class="pill">Allow globally</span> <span class="pill">Temp 5 min</span> <span class="pill">Path mode</span> <span class="pill pill-deny">Deny</span> <span class="pill pill-deny">Deny globally</span>. From a terminal the same queue is <code>huddle firewall list</code>, or <code>huddle fw list -i</code> to walk it interactively.</p>
-
-    <div class="note">
-      <div class="note-title">TO BE WRITTEN</div>
-      <p>Steps 2 and 3 still need their own walkthrough here:</p>
-      <ul>
-        <li>Bringing your own project in, and what the worktree behind the container's workspace path actually is.</li>
-        <li>Starting your project inside the container: what needed a rule, and in which order the requests arrived.</li>
-        <li>What to check when a request never appears, or a rule doesn't take effect.</li>
-        <li>The rough edges we already know about.</li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 class="section-title">How it fits together</h2>
-    <p class="body-copy">Everything your dev environment sends outward passes through the gateway. The gateway is what enforces the rules; nothing reaches the internet around it.</p>
-    <div class="figure" style="margin-top:18px">
-      <div class="figure-title">How it fits together</div>
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-top:16px;flex-wrap:nowrap">
-        <div style="flex:1;min-width:0;text-align:center">
-          <svg width="52" height="42" viewBox="0 0 52 42" fill="none" style="margin:0 auto" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M18 12l-4 5.5 4 5.5" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M34 12l4 5.5-4 5.5" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M28 11l-4 13" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
-          <div style="font-size:12.5px;font-weight:700;margin-top:8px">Host runner</div>
-          <div style="font-size:11px;color:#5B7796;line-height:1.35;margin-top:3px">(Node, holds ephemeral operator token)</div>
-        </div>
-        <div style="flex:none;padding-top:14px;text-align:center;width:74px">
-          <div style="font-size:10.5px;color:#5B7796;line-height:1.3;margin-bottom:4px">Egress passes through</div>
-          <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
-        </div>
-        <div style="flex:1;min-width:0;text-align:center">
-          <svg width="44" height="46" viewBox="0 0 30 34" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
-          <div style="font-size:12.5px;font-weight:700;margin-top:8px">Gateway container</div>
-          <div style="font-size:11px;color:#5B7796;line-height:1.35;margin-top:3px">(enforces firewall rules)</div>
-        </div>
-        <div style="flex:none;padding-top:28px;width:56px">
-          <svg width="52" height="10" viewBox="0 0 62 10" fill="none" style="display:block;margin:0 auto" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
-        </div>
-        <div style="flex:1;min-width:0;text-align:center">
-          <svg width="46" height="46" viewBox="0 0 48 48" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
-          <div style="font-size:12.5px;font-weight:700;margin-top:8px">Devcontainer</div>
-          <div style="font-size:11px;color:#5B7796;line-height:1.35;margin-top:3px">(your dev environment)</div>
-        </div>
-      </div>
-    </div>
-    <div class="figure" style="margin-top:14px">
-      <div class="figure-title">The firewall request loop</div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:16px">
-        <div style="flex:1;min-width:0;text-align:center">
-          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
-          <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Unknown destination</div>
-        </div>
-        <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
-        <div style="flex:1;min-width:0;text-align:center">
-          <svg width="34" height="38" viewBox="0 0 28 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 10h12M8 15h12M8 20h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
-          <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Requested rule</div>
-        </div>
-        <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
-        <div style="flex:1;min-width:0;text-align:center">
-          <div style="display:flex;gap:7px;justify-content:center">
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#22A45D"></circle><path d="m7.5 12.3 3 3 6-6.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#E23B3B"></circle><path d="m8.2 8.2 7.6 7.6M15.8 8.2l-7.6 7.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round"></path></svg>
-          </div>
-          <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Approve / Deny</div>
-        </div>
-        <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
-        <div style="flex:1.35;min-width:0;background:#FCE9E9;border:1px solid #F3C9C9;border-radius:10px;padding:12px 10px;text-align:center">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C62E2E" stroke-width="1.7" stroke-linecap="round" style="display:block;margin:0 auto" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"></path></svg>
-          <div style="font-size:11.5px;font-weight:700;color:#B02525;line-height:1.4;margin-top:7px">Unapproved requests are auto-denied (fail closed).</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
+  <!-- ── ARCHITECTURE (small) ────────────────────────────────────────────── -->
   <div class="card" id="architecture">
-    <h2 class="section-title">The architecture, in detail</h2>
-    <p class="body-copy">The whole design rests on one property: <b>the gateway is the only container that is a member of two kinds of network at once.</b> Your dev container sits on an internal network, which has no route to the internet of its own. The gateway sits on that same internal network <em>and</em> on the engine's default bridge network, which does have a route out. So the gateway is not the recommended way out — it is the only way out.</p>
+    <h2 class="section-title">How it is put together</h2>
+    <p class="body-copy">Your dev container sits on an internal network with no route to the internet. The gateway sits on that network <em>and</em> on the engine's bridge network, which does have one. So the gateway is not the recommended way out — it is the only way out.</p>
 
     <div class="figure" style="margin-top:18px">
-      <div class="figure-title">Where the boundary sits</div>
-      <div class="scroll-x" style="margin-top:16px">
-        <div style="min-width:760px">
+      <div class="scroll-x">
+        <div style="min-width:680px">
           <div class="flow">
             <div class="zone zone-internal">
               <span class="zone-label">dc-net-&lt;name&gt; · internal</span>
               <div class="node">
-                <svg width="46" height="46" viewBox="0 0 48 48" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
-                <div class="node-title">Your devcontainer</div>
-                <div class="node-sub">One network per container. No route to the internet of its own.</div>
-                <div style="margin-top:9px;display:flex;flex-wrap:wrap;gap:5px;justify-content:center">
-                  <span class="pill">http_proxy=http://huddle:80</span>
-                  <span class="pill pill-deny">DROP all other tcp</span>
-                </div>
+                <svg width="42" height="42" viewBox="0 0 48 48" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M24 5 42 14.5v19L24 43 6 33.5v-19z" fill="#CFE4F6" stroke="#7FA9CF" stroke-width="1.6"></path><path d="M6 14.5 24 24l18-9.5M24 24v19" stroke="#7FA9CF" stroke-width="1.6"></path></svg>
+                <div class="node-title">Your dev container</div>
+                <div class="node-sub">One internal network each. No route out of its own.</div>
               </div>
             </div>
             <div class="flow-arrow">
-              <div class="flow-arrow-label">All TCP to <b>huddle:80</b></div>
+              <div class="flow-arrow-label">all TCP to <b>huddle:80</b></div>
               <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
             </div>
             <div>
               <div class="node-box node-box-dark">
-                <svg width="44" height="46" viewBox="0 0 30 34" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
+                <svg width="40" height="42" viewBox="0 0 30 34" fill="none" style="margin:0 auto" aria-hidden="true"><path d="M15 1.2 28.1 8.8v15.4L15 31.8 1.9 24.2V8.8z" fill="#2B3A52"></path><path d="M15 6.6 8.6 9.9v6.6c0 4.2 2.7 6.7 6.4 7.7 3.7-1 6.4-3.5 6.4-7.7V9.9z" fill="#F97316"></path></svg>
                 <div class="node-title">huddle</div>
-                <div class="node-sub">Proxy on :80, portal and API on :3000</div>
-                <div style="margin-top:9px;display:flex;flex-wrap:wrap;gap:5px;justify-content:center">
-                  <span class="pill">on dc-net-&lt;name&gt;</span>
-                  <span class="pill pill-accent">on bridge</span>
+                <div class="node-sub">proxy :80 · portal :3000</div>
+                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px;justify-content:center">
+                  <span class="pill">internal</span>
+                  <span class="pill pill-accent">bridge</span>
                 </div>
               </div>
-              <div class="node-sub" style="text-align:center;margin-top:9px">The only container on both.<br>Take it away and there is no way out.</div>
+              <div class="node-sub" style="text-align:center;margin-top:8px">The only container on both.</div>
             </div>
             <div class="flow-arrow">
-              <div class="flow-arrow-label">Only what a rule allows</div>
+              <div class="flow-arrow-label">only what a rule allows</div>
               <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
             </div>
             <div class="zone zone-bridge">
               <span class="zone-label">bridge · the route out</span>
               <div class="node">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
                 <div class="node-title">The internet</div>
-                <div class="node-sub">Over the engine's default network: <code>bridge</code> on Docker, <code>podman</code> on Podman.</div>
               </div>
             </div>
           </div>
@@ -241,138 +134,101 @@
       </div>
     </div>
 
-    <h3 class="figure-title" style="margin:24px 0 0">Three networks, and who is on them</h3>
-    <p class="body-copy"><code>huddle init</code> creates one shared internal network up front. The gateway then creates one more internal network per dev container, and joins that one itself as well.</p>
-    <div class="scroll-x">
-      <table class="table">
-        <thead>
-          <tr><th>Network</th><th>Created by</th><th>Internal?</th><th>Who is on it</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>bridge</code> (Docker) / <code>podman</code> (Podman)</td>
-            <td>The engine itself</td>
-            <td>No — this is the route out</td>
-            <td>The gateway, plus whatever else you run on your machine.</td>
-          </tr>
-          <tr>
-            <td><code>devcontainer-net</code></td>
-            <td><code>huddle init</code>, with <code>network create --internal</code></td>
-            <td>Yes</td>
-            <td>The gateway. This is the network <code>huddle migrate</code> points an existing Compose devcontainer at.</td>
-          </tr>
-          <tr>
-            <td><code>dc-net-&lt;container-name&gt;</code></td>
-            <td>The gateway, on every container start (<code>Internal: true</code>)</td>
-            <td>Yes</td>
-            <td>One dev container, plus the gateway. Each container gets its own, so containers cannot see each other either.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="body-copy" style="margin-top:14px">Because the gateway is on the container's own network, ordinary container DNS resolves the name <code>huddle</code> from inside it. That is why every proxy setting can just say <code>http://huddle:80</code> and no IP address is ever baked in.</p>
-
-    <div class="figure" style="margin-top:20px">
-      <div class="figure-title">Why the port publish comes first</div>
-      <div class="scroll-x" style="margin-top:16px">
-        <div style="min-width:720px">
-          <div class="flow">
-            <div class="node">
-              <svg width="52" height="42" viewBox="0 0 52 42" fill="none" style="margin:0 auto" aria-hidden="true"><rect x="4" y="3" width="44" height="29" rx="4" fill="#1F2E48"></rect><path d="M2 34h48l-3 5H5z" fill="#334A6B"></path><path d="M18 12l-4 5.5 4 5.5" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M34 12l4 5.5-4 5.5" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M28 11l-4 13" stroke="#8FB6DC" stroke-width="1.8" stroke-linecap="round"></path></svg>
-              <div class="node-title">Your browser and the CLI</div>
-              <div class="node-sub">Talk to <code>http://localhost:3000</code> on the host.</div>
+    <div class="figure" style="margin-top:14px">
+      <div class="figure-title">What happens to an unknown destination</div>
+      <div class="scroll-x">
+        <div style="display:flex;align-items:center;gap:8px;margin-top:16px;min-width:560px">
+          <div style="flex:1;min-width:0;text-align:center">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#F97316" stroke-width="1.6" stroke-linecap="round" style="margin:0 auto;display:block" aria-hidden="true"><circle cx="12" cy="12" r="9.2"></circle><path d="M2.8 12h18.4"></path><path d="M12 2.8a15 15 0 0 1 0 18.4 15 15 0 0 1 0-18.4"></path></svg>
+            <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Unknown destination</div>
+          </div>
+          <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+          <div style="flex:1;min-width:0;text-align:center">
+            <svg width="30" height="34" viewBox="0 0 28 34" fill="none" style="margin:0 auto;display:block" aria-hidden="true"><rect x="3" y="2" width="22" height="30" rx="3" fill="#DCEBF8" stroke="#7FA9CF" stroke-width="1.5"></rect><path d="M8 10h12M8 15h12M8 20h8" stroke="#4E7CA6" stroke-width="1.6" stroke-linecap="round"></path></svg>
+            <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">Requested rule</div>
+          </div>
+          <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+          <div style="flex:1;min-width:0;text-align:center">
+            <div style="display:flex;gap:7px;justify-content:center">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#22A45D"></circle><path d="m7.5 12.3 3 3 6-6.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#E23B3B"></circle><path d="m8.2 8.2 7.6 7.6M15.8 8.2l-7.6 7.6" stroke="#fff" stroke-width="2.1" stroke-linecap="round"></path></svg>
             </div>
-            <div class="flow-arrow">
-              <div class="flow-arrow-label"><span class="pill">-p 3000:3000</span></div>
-              <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
-            </div>
-            <div class="node-box">
-              <div class="node-title">1 · run on <code>bridge</code></div>
-              <div class="node-sub">The gateway is created on the engine's default network, with the published port.</div>
-            </div>
-            <div class="flow-arrow">
-              <div class="flow-arrow-label">then, and only then</div>
-              <svg width="62" height="10" viewBox="0 0 62 10" fill="none" style="display:block" aria-hidden="true"><path d="M0 5h50" stroke="#26405F" stroke-width="1.6"></path><path d="m50 .8 8 4.2-8 4.2z" fill="#26405F"></path></svg>
-            </div>
-            <div class="node-box">
-              <div class="node-title">2 · network connect</div>
-              <div class="node-sub"><code>network connect devcontainer-net huddle</code>, and later one <code>dc-net-*</code> per container.</div>
-            </div>
+            <div style="font-size:11.5px;color:#3F5C7C;line-height:1.35;margin-top:7px">You approve or deny</div>
+          </div>
+          <svg width="20" height="10" viewBox="0 0 20 10" fill="none" style="flex:none;margin-bottom:16px" aria-hidden="true"><path d="M0 5h12" stroke="#26405F" stroke-width="1.5"></path><path d="m12 1.2 6 3.8-6 3.8z" fill="#26405F"></path></svg>
+          <div style="flex:1.3;min-width:0;background:#FCE9E9;border:1px solid #F3C9C9;border-radius:10px;padding:12px 10px;text-align:center">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C62E2E" stroke-width="1.7" stroke-linecap="round" style="display:block;margin:0 auto" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"></path></svg>
+            <div style="font-size:11.5px;font-weight:700;color:#B02525;line-height:1.4;margin-top:7px">Until then: denied (fail closed).</div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="note">
-      <div class="note-title">WHY THE ORDER MATTERS</div>
-      <p>Docker skips the host port-forward entirely when a container is created directly on an <code>--internal</code> network (<a href="https://github.com/moby/moby/issues/36174" target="_blank" rel="noopener">moby/moby#36174</a>). So the gateway is started on the engine's default network <em>with</em> <code>-p</code>, and joins the internal networks afterwards. Do it the other way around and the portal is simply unreachable on <code>localhost:3000</code>. Which source IP the gateway then sees for forwarded traffic no longer matters, because the control plane authenticates with the operator token rather than by source IP.</p>
-    </div>
-
-    <h3 class="figure-title" style="margin:24px 0 0">It fails closed twice</h3>
-    <p class="body-copy">The network boundary is the first mechanism. The container's own network stack is the second: the gateway installs iptables rules inside each container when it starts, so even a process that ignores <code>http_proxy</code> gets nowhere.</p>
-    <div class="compare" style="margin-top:16px">
-      <div class="figure">
-        <div class="figure-title">At the gateway</div>
-        <p class="body-copy" style="font-size:14.5px">The proxy on <code>:80</code> looks the destination up in the rule table. No matching rule means the host is filed as <code>requested</code> and the connection does not go through. Nothing is allow-listed by default — a fresh database holds exactly one allow rule, for the gateway's own name.</p>
-        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:5px">
-          <span class="pill">allow</span><span class="pill pill-deny">deny</span><span class="pill pill-accent">requested → blocked</span>
-        </div>
-      </div>
-      <div class="figure">
-        <div class="figure-title">At the container</div>
-        <p class="body-copy" style="font-size:14.5px">The container is started with <code>NET_ADMIN</code> so the config script can write its own OUTPUT chain. Port 80 is redirected to the gateway, loopback and the gateway are accepted, and every other TCP packet is dropped.</p>
-        <div class="term term-stack" style="margin-top:12px">
-          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')</code></div>
-          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"</code></div>
-          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>iptables -A OUTPUT -o lo -j ACCEPT</code></div>
-          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT</code></div>
-          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>iptables -A OUTPUT -p tcp -j DROP</code></div>
-        </div>
-      </div>
-    </div>
-    <p class="body-copy" style="margin-top:14px">Those rules name the gateway by IP, so they go stale if the gateway container is recreated. That is why the gateway rebuilds them itself, for every container it finds, on startup.</p>
-
-    <h3 class="figure-title" style="margin:24px 0 0">Two more things the boundary needs</h3>
-    <dl class="spec">
-      <dt>TLS interception</dt>
-      <dd>The gateway terminates HTTPS with its own CA, so it can see host and path instead of an opaque tunnel. (A domain named in the gateway's <code>NO_INTERCEPT_DOMAINS</code> keeps a raw tunnel instead, for clients that pin certificates; that list is empty unless you set it.) Interception only works if the container trusts that CA, so the CA lands in the system trust store <em>and</em> in three env vars set on the container itself — <code>NODE_EXTRA_CA_CERTS</code>, <code>SSL_CERT_FILE</code> and <code>REQUESTS_CA_BUNDLE</code>. On the container rather than in <code>/etc/profile.d</code> alone, because tools the IDE starts do not run a login shell.</dd>
-      <dt>The Docker socket</dt>
-      <dd>A dev container that can talk to the real Docker socket could start a container outside the boundary. So each container gets its own filtered socket instead: the gateway runs a per-container socket proxy under <code>/tmp/dc-sockets/&lt;container-name&gt;</code>, bind-mounts that <em>directory</em> to <code>/var/run/huddle</code>, and points <code>DOCKER_HOST</code> at it. The proxy stamps every request with an <code>X-Container-Id</code> header, which is what the policy layer decides on. The directory rather than the socket file is deliberate: a file bind pins the inode, so after a gateway restart it would point forever at a dead socket.</dd>
-    </dl>
+    <p class="body-copy">That is all you need to follow the three steps. The <a href="#reference">reference at the bottom</a> has the rest: the networks table, why the port publish comes first, and the second place egress fails closed.</p>
   </div>
 
-  <div class="card" id="empty">
-    <h2 class="section-title">Create an empty container</h2>
-    <p class="body-copy">An empty container is a dev container without a workspace: no folder from your machine is mounted, and no worktree is created for it. You get a running container with the base image, the proxy environment and the filtered Docker socket — and you clone into it by hand. It is the cleanest way to see the firewall loop, because nothing of yours is in the way.</p>
-    <p class="body-copy">There are two ways in, and they do the same thing: both end in a <code>POST /api/docker/start</code> with <code>empty: true</code>. Use whichever you prefer.</p>
-
-    <div class="way" style="margin-top:20px">
-      <div class="way-head">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
-        <h3>Option A — in the portal</h3>
-        <span class="pill" style="margin-left:auto">Start devcontainer</span>
-      </div>
-      <div class="way-body">
-        <ol class="steps">
-          <li><b>1</b><div>Open the portal. The auto-login link <code>huddle init</code> printed logs you straight in; otherwise go to <code>http://localhost:3000</code> and paste the operator token.</div></li>
-          <li><b>2</b><div>Press <b>Start devcontainer</b>. There are three of those buttons: on the <b>Containers</b> page (top right), on the <b>Dashboard</b> in the orange “Huddle! We've got your back.” banner, and as the <b>+</b> icon in the top bar.</div></li>
-          <li><b>3</b><div>In the <b>Start devcontainer</b> dialog, pick your <b>IDE</b>: <code>IntelliJ IDEA</code>, <code>Rider</code> or <code>VS Code</code>. This choice drives everything below it, so set it first.</div></li>
-          <li><b>4</b><div>Pick an <b>Image</b>. The list holds the default base image for that IDE, shown as <code>[Default] ghcr.io/infosupport/base-devimage-&lt;ide&gt;</code>, plus any snapshots you made earlier as <code>[Snapshot] &lt;name&gt; (&lt;size&gt;)</code>. The default is pre-selected.</div></li>
-          <li><b>5</b><div>Tick <b>Empty (clone manually)</b>. The <b>Workspace directory</b> field is cleared and disabled, and — as long as you have not typed a name yourself — <b>Container name</b> is filled in with <code>devcontainer-empty</code>.</div></li>
-          <li><b>6</b><div>Change <b>Container name</b> if you want more than one empty container. The name has to be free: a name that is already taken comes back as <em>“Container '&lt;name&gt;' already exists”</em>.</div></li>
-          <li><b>7</b><div>Press <b>Start</b>. The dialog shows <em>Starting container…</em>, then closes and the container list reloads. Image and container name are required, and the workspace is required unless <b>Empty</b> is ticked — otherwise you get <em>“All fields are required”</em>.</div></li>
-        </ol>
-        <p class="body-copy">Without <b>Empty</b>, typing a workspace path auto-fills the container name as <code>devcontainer-&lt;last path segment&gt;</code>, and it keeps doing that until you edit the name yourself. That is the same naming rule the CLI uses.</p>
-      </div>
+  <!-- ── THE THREE STEPS ─────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="section-title">The three steps</h2>
+    <p class="body-copy">Setup is done. From here it is three blocks of work, each one doable from the portal or the CLI.</p>
+    <ol class="steps">
+      <li><b>1</b><div><a href="#step1"><b>An empty container.</b></a> Create it, connect to it, and watch the first firewall requests arrive.</div></li>
+      <li><b>2</b><div><a href="#step2"><b>Bring your own project in.</b></a> Same thing, pointed at a folder on your machine.</div></li>
+      <li><b>3</b><div><a href="#step3"><b>Start your project inside the container.</b></a> Build it, run it, approve what it needs.</div></li>
+    </ol>
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Outcome:</strong> your actual work runs in Huddle, and you know which of your dependencies needed rules.</p>
     </div>
+  </div>
 
-    <div class="way">
-      <div class="way-head">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3A6C9B" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
-        <h3>Option B — from the CLI</h3>
-        <span class="pill" style="margin-left:auto">huddle start --empty</span>
+  <!-- ── STEP 1 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step1">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker">STEP 1</span>
+      <h2 class="section-title">An empty container</h2>
+    </div>
+    <p class="body-copy">A dev container with no folder from your machine mounted: base image, proxy environment, filtered Docker socket — and you clone into it by hand. Nothing of yours is in the way, so the firewall loop is easy to see.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step1" id="s1-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step1" id="s1-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s1-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s1-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
       </div>
-      <div class="way-body">
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Press <b>Start devcontainer</b> — on the <b>Containers</b> page, in the dashboard banner, or the <b>+</b> in the top bar.</div></li>
+          <li><b>2</b><div>Fill the dialog as below. Set <b>IDE</b> first: it drives the image list.</div></li>
+          <li><b>3</b><div>Press <b>Start</b>. It shows <em>Starting container…</em>, then closes and the list reloads.</div></li>
+        </ol>
+        <div class="dlg">
+          <div class="dlg-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 8.5h18"></path></svg>
+            Start devcontainer
+          </div>
+          <div class="dlg-row"><b>IDE</b><span>IntelliJ IDEA, Rider or VS Code.</span></div>
+          <div class="dlg-row"><b>Image</b><span><code>[Default] ghcr.io/infosupport/base-devimage-&lt;ide&gt;</code> is pre-selected. Snapshots you made earlier appear as <code>[Snapshot]</code>.</span></div>
+          <div class="dlg-row"><b>Empty (clone manually)</b><span><b>Tick it.</b> This is what makes the container empty.</span></div>
+          <div class="dlg-row dlg-row-off"><b>Workspace directory</b><span>Cleared and disabled — ticking Empty does that for you.</span></div>
+          <div class="dlg-row"><b>Container name</b><span>Filled in as <code>devcontainer-empty</code>. Change it if you want more than one; the name has to be free.</span></div>
+        </div>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run the command. <code>--empty</code> is what makes it empty; <code>--ide</code> picks the IDE and its base image.</div></li>
+          <li><b>2</b><div>The name defaults to <code>devcontainer-empty</code> — add <code>--name</code> for more than one.</div></li>
+          <li><b>3</b><div>It prints how to attach when the container is up.</div></li>
+        </ol>
         <div class="term term-stack">
           <div class="term-line">
             <span class="term-prompt">$</span>
@@ -384,89 +240,255 @@
           <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Starting devcontainer-empty with intellij...</code></div>
           <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Image: ghcr.io/infosupport/base-devimage-intellij</code></div>
           <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>[OK] Container started: devcontainer-empty (a1b2c3d4e5f6)</code></div>
-          <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>Open in JetBrains Gateway: Remote Development &gt; Dev Containers -&gt; devcontainer-empty</code></div>
         </div>
-        <p class="body-copy">With <code>--empty</code> the CLI does not look at your working directory at all. The container name defaults to <code>devcontainer-empty</code>, and the image comes from <code>GET /api/docker/base-image?ide=&lt;ide&gt;</code> unless you passed <code>--image</code>.</p>
-        <p class="body-copy">The options that apply here, straight from <code>huddle --help</code>:</p>
         <dl class="spec">
           <dt><code>--empty</code></dt>
-          <dd>Empty container without a workspace.</dd>
-          <dt><code>--ide &lt;intellij|rider|vscode&gt;</code></dt>
-          <dd>IDE (default: intellij).</dd>
-          <dt><code>--name &lt;name&gt;</code></dt>
-          <dd>Container name (default: <code>devcontainer-&lt;foldername&gt;</code>, so <code>devcontainer-empty</code> here). It has to start with a letter or digit and may then contain letters, digits, <code>_</code>, <code>.</code> and <code>-</code>; anything else is refused with <em>“Invalid container name”</em>.</dd>
-          <dt><code>--image &lt;image&gt;</code></dt>
-          <dd>Use a specific image instead of the IDE's base image.</dd>
-          <dt><code>--url &lt;url&gt;</code></dt>
-          <dd>Huddle URL (default <code>http://localhost:3000</code>, or the <code>HUDDLE_URL</code> env var) — for when you published the portal on another port.</dd>
+          <dd>No workspace. Your working directory is not looked at.</dd>
+          <dt><code>--ide</code></dt>
+          <dd><code>intellij</code> (default), <code>rider</code> or <code>vscode</code>.</dd>
+          <dt><code>--name</code></dt>
+          <dd>Defaults to <code>devcontainer-empty</code>. Must start alphanumeric, then letters, digits, <code>_</code>, <code>.</code>, <code>-</code>.</dd>
+          <dt><code>--image</code></dt>
+          <dd>A specific image instead of the IDE's base image.</dd>
         </dl>
-        <p class="body-copy">A fuller example, and the short form: <code>start</code> may be left out entirely, because a first argument that is not a known command falls through to start.</p>
+        <p class="body-copy"><code>start</code> is optional — <code>huddle --empty</code> does the same, because a first argument that is not a known command falls through to start.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:24px 0 0">Connect to it</h3>
+    <p class="body-copy">Attach your IDE, then <code>git clone</code> something inside the container. That clone is your first firewall request: nothing is allow-listed up front except the gateway's own name, <code>huddle</code>.</p>
+    <div class="compare" style="margin-top:14px">
+      <div class="figure">
+        <div class="figure-title">Attach</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px"><b>VS Code:</b> <em>Dev Containers: Attach to Running Container</em>.<br><b>JetBrains:</b> Gateway → <em>Remote Development &gt; Dev Containers</em>. The CLI also prints a <code>Gateway-link:</code> when the backend is ready enough — best-effort, so its absence means nothing.</p>
+      </div>
+      <div class="figure">
+        <div class="figure-title">Approve</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">Requests land on the <b>Firewall</b> page under <b>Pending requests</b>, each row with <span class="pill">Allow</span> <span class="pill">Allow globally</span> <span class="pill">Temp 5 min</span> <span class="pill">Path mode</span> <span class="pill pill-deny">Deny</span>. Or walk the queue with <code>huddle fw list -i</code>.</p>
+      </div>
+    </div>
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Done when:</strong> you approved a request you caused yourself, and the clone went through.</p>
+    </div>
+  </div>
+
+  <!-- ── STEP 2 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step2">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker">STEP 2</span>
+      <h2 class="section-title">Bring your own project in</h2>
+    </div>
+    <p class="body-copy">Same container, pointed at a folder on your machine. One thing to know first, because it surprises people:</p>
+
+    <div class="note">
+      <div class="note-title">YOUR CHECKOUT IS NOT WHAT GETS MOUNTED</div>
+      <p>If the folder is a git repository, the gateway creates a <b>git worktree</b> at <code>&lt;your-repo&gt;/.worktrees/&lt;container-name&gt;</code> on a branch named <code>worktree/&lt;container-name&gt;</code>, and mounts <em>that</em>. It adds <code>.worktrees/</code> to your <code>.gitignore</code>. So the container works on its own branch and your own checkout stays untouched — commits you make inside land on that branch. If the folder is not a git repo, or git fails, it falls back to mounting the folder itself.</p>
+    </div>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step2" id="s2-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step2" id="s2-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s2-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s2-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Press <b>Start devcontainer</b> again and pick your <b>IDE</b> and <b>Image</b> as before.</div></li>
+          <li><b>2</b><div>Leave <b>Empty</b> unticked and type the host path into <b>Workspace directory</b>, e.g. <code>C:/projects/my-project</code>.</div></li>
+          <li><b>3</b><div>Press <b>Start</b>.</div></li>
+        </ol>
+        <div class="dlg">
+          <div class="dlg-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 8.5h18"></path></svg>
+            Start devcontainer
+          </div>
+          <div class="dlg-row dlg-row-off"><b>Empty (clone manually)</b><span>Leave it unticked this time.</span></div>
+          <div class="dlg-row"><b>Workspace directory</b><span>The host path to your project. Required — without it you get <em>“All fields are required”</em>.</span></div>
+          <div class="dlg-row"><b>Container name</b><span>Auto-fills as <code>devcontainer-&lt;last path segment&gt;</code> while you type, until you edit it yourself.</span></div>
+        </div>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run it from inside your project — with no <code>--workspace</code> the CLI uses the current directory.</div></li>
+          <li><b>2</b><div>Or name the folder explicitly, as a flag or as a bare argument.</div></li>
+          <li><b>3</b><div>The name defaults to <code>devcontainer-&lt;foldername&gt;</code>.</div></li>
+        </ol>
         <div class="term term-stack">
           <div class="term-line">
             <span class="term-prompt">$</span>
-            <code>huddle start --empty --ide vscode --name devcontainer-scratch</code>
-            <button type="button" class="copy-btn" data-copy="huddle start --empty --ide vscode --name devcontainer-scratch" aria-label="Copy command" style="margin-left:auto">
+            <code>huddle start</code>
+            <button type="button" class="copy-btn" data-copy="huddle start" aria-label="Copy command" style="margin-left:auto">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
             </button>
           </div>
           <div class="term-line">
             <span class="term-prompt">$</span>
-            <code>huddle --empty</code>
-            <button type="button" class="copy-btn" data-copy="huddle --empty" aria-label="Copy command" style="margin-left:auto">
+            <code>huddle start --workspace /home/you/projects/my-project --ide vscode</code>
+            <button type="button" class="copy-btn" data-copy="huddle start --workspace /home/you/projects/my-project --ide vscode" aria-label="Copy command" style="margin-left:auto">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
             </button>
           </div>
         </div>
-        <p class="body-copy">If the CLI cannot reach the API it says so, and points at the fix: <em>“Huddle does not appear to be running. Start it with: huddle init”</em>.</p>
+        <p class="body-copy">A path that does not exist, or is not a directory, is refused before anything starts.</p>
       </div>
     </div>
 
-    <h3 class="figure-title" style="margin:24px 0 0">Then attach your IDE</h3>
-    <p class="body-copy">The container itself runs nothing: its entrypoint is <code>/bin/sh -c 'while sleep 1000; do :; done'</code>. It idles, and your IDE attaches to it and installs its own backend.</p>
-    <div class="compare" style="margin-top:16px">
-      <div class="figure">
-        <div class="figure-title">VS Code</div>
-        <p class="body-copy" style="font-size:14.5px">Run <b>Dev Containers: Attach to Running Container</b> and pick the container by name.</p>
-      </div>
-      <div class="figure">
-        <div class="figure-title">IntelliJ IDEA / Rider</div>
-        <p class="body-copy" style="font-size:14.5px">In JetBrains Gateway: <b>Remote Development &gt; Dev Containers</b>, then the container by name. The CLI also waits three seconds and prints a <code>Gateway-link:</code> line if the backend is far enough along to hand one out. That is best-effort, so its absence does not mean anything is wrong.</p>
-      </div>
-    </div>
-
-    <h3 class="figure-title" style="margin:24px 0 0">What you end up with</h3>
-    <p class="body-copy">All of this comes from the container start, whichever of the two ways you used.</p>
+    <h3 class="figure-title" style="margin:24px 0 0">Where your code lands</h3>
     <dl class="spec">
-      <dt>Name</dt>
-      <dd><code>devcontainer-empty</code>, unless you named it something else.</dd>
-      <dt>Network</dt>
-      <dd><code>dc-net-devcontainer-empty</code>, internal, created on the spot; the gateway joins it too.</dd>
-      <dt>Image</dt>
-      <dd><code>ghcr.io/infosupport/base-devimage-&lt;ide&gt;</code>, or your snapshot. If the image is not present locally, the gateway first builds it from the bundled Dockerfile for that IDE.</dd>
-      <dt>Entrypoint</dt>
-      <dd><code>/bin/sh -c 'while sleep 1000; do :; done'</code> — it idles until an IDE attaches.</dd>
-      <dt>Memory / CPU</dt>
-      <dd><code>8g</code> and <code>2</code> CPUs by default (a CPU quota against a 100&thinsp;000&nbsp;µs period). Change the defaults under <b>Resource limits</b> on the portal's <b>Settings</b> page — <b>Default memory (e.g. 4g, 2048m)</b> and <b>Default CPU (e.g. 2, 0.5)</b>.</dd>
-      <dt>Capabilities</dt>
-      <dd><code>NET_ADMIN</code>, so the config script can install the container's own iptables rules.</dd>
-      <dt>Proxy env</dt>
-      <dd><code>http_proxy</code>, <code>https_proxy</code>, <code>HTTP_PROXY</code> and <code>HTTPS_PROXY</code>, all set to <code>http://huddle:80</code>.</dd>
-      <dt>No-proxy env</dt>
-      <dd><code>no_proxy</code> and <code>NO_PROXY</code> set to <code>localhost,127.0.0.1,::1,[::1]</code>. The bracketed <code>[::1]</code> is in there on purpose: .NET/Aspire's DCP addresses its targets as <code>http://[::1]:&lt;port&gt;</code> and matches <code>NO_PROXY</code> literally against that bracketed host.</dd>
-      <dt>CA env</dt>
-      <dd><code>NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt</code>, <code>SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt</code> and <code>REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt</code>.</dd>
-      <dt>Docker access</dt>
-      <dd><code>DOCKER_HOST=unix:///var/run/huddle/docker.sock</code>, backed by the bind mount <code>/tmp/dc-sockets/&lt;name&gt;</code> → <code>/var/run/huddle</code>. The config script also symlinks the default socket path to it, for tools that ignore <code>DOCKER_HOST</code>.</dd>
-      <dt>Mounts</dt>
-      <dd>That socket directory, whatever is switched on under <b>Folder mappings</b> on the <b>Settings</b> page (a host path gives a bind mount, a volume name gives a Docker volume), and for the JetBrains IDEs the shared RemoteDev volume. <b>No</b> workspace bind mount — that is the whole point of empty.</dd>
-      <dt>Workspace</dt>
-      <dd>None. No worktree is created, and the IntelliJ sources-path label is left empty, so the IDE does not open a project for you.</dd>
+      <dt>In the container</dt>
+      <dd><code>/workspaces/&lt;last segment of your path&gt;</code> — so <code>C:/projects/my-project</code> shows up as <code>/workspaces/my-project</code>.</dd>
+      <dt>On your machine</dt>
+      <dd>The worktree at <code>&lt;your-repo&gt;/.worktrees/&lt;container-name&gt;</code>, on branch <code>worktree/&lt;container-name&gt;</code>. Reused if it already exists.</dd>
+      <dt>Your checkout</dt>
+      <dd>Untouched. Same repo, different working tree.</dd>
     </dl>
+    <div class="outcome">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <p><strong>Done when:</strong> your IDE opens your project from inside the container.</p>
+    </div>
+  </div>
+
+  <!-- ── STEP 3 ──────────────────────────────────────────────────────────── -->
+  <div class="card" id="step3">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="kicker">STEP 3</span>
+      <h2 class="section-title">Start your project inside the container</h2>
+    </div>
+    <p class="body-copy">Now run it: restore packages, build, test, start. This is the part that produces findings, because your project reaches for hosts nobody allow-listed yet — and each one stops until you approve it.</p>
+
+    <p class="body-copy">Expect the requests roughly in this order: your package registry first (npm, NuGet, Maven, PyPI), then whatever your build downloads at runtime, then anything your app talks to when it starts.</p>
+
+    <div class="pick" style="margin-top:18px">
+      <input type="radio" name="pick-step3" id="s3-portal" class="pick-radio pick-a" checked>
+      <input type="radio" name="pick-step3" id="s3-cli" class="pick-radio pick-b">
+      <div class="pick-bar">
+        <label for="s3-portal" class="pick-tab-a">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="M2.6 8.4h18.8"></path></svg>
+          In the portal
+        </label>
+        <label for="s3-cli" class="pick-tab-b">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4" width="18.8" height="15" rx="2.2"></rect><path d="m6.6 9.4 2.6 2.2-2.6 2.2"></path><path d="M11.6 14.2h5"></path></svg>
+          From the CLI
+        </label>
+      </div>
+
+      <div class="pick-panel pick-panel-a">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run your build in the container's terminal. It will stall on the first blocked host.</div></li>
+          <li><b>2</b><div>Open <b>Firewall</b> → <b>Pending requests</b> and approve from the row menu: <span class="pill">Allow</span> for this container, <span class="pill">Allow globally</span> for every container, <span class="pill">Temp 5 min</span> to try something out.</div></li>
+          <li><b>3</b><div>Re-run the build. Repeat until it is green — the list of rules you accumulated <em>is</em> the answer to “what does my project actually reach for”.</div></li>
+        </ol>
+        <p class="body-copy">For a shared registry, prefer <span class="pill">Path mode</span> over allowing the whole host: it blocks the host at the root and passes only the paths you list. That is the subject of <a href="part-2-experiment-98.html">part 2</a>.</p>
+      </div>
+
+      <div class="pick-panel pick-panel-b">
+        <ol class="steps" style="margin-top:0">
+          <li><b>1</b><div>Run your build in the container's terminal.</div></li>
+          <li><b>2</b><div>Walk the queue interactively from your own machine and answer each one.</div></li>
+          <li><b>3</b><div>Re-run the build. Repeat until green.</div></li>
+        </ol>
+        <div class="term term-stack">
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle fw list -i</code>
+            <button type="button" class="copy-btn" data-copy="huddle fw list -i" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall list --container devcontainer-my-project</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall list --container devcontainer-my-project" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+          <div class="term-line">
+            <span class="term-prompt">$</span>
+            <code>huddle firewall add registry.npmjs.org</code>
+            <button type="button" class="copy-btn" data-copy="huddle firewall add registry.npmjs.org" aria-label="Copy command" style="margin-left:auto">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h8"></path></svg>
+            </button>
+          </div>
+        </div>
+        <p class="body-copy"><code>--status</code> filters the list (<code>requested</code> by default), and <code>--path</code> on <code>add</code> takes a pattern instead of the whole host.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:24px 0 0">When your project needs more than rules</h3>
+    <dl class="spec">
+      <dt>More memory or CPU</dt>
+      <dd>Containers get <code>8g</code> and <code>2</code> CPUs by default. Change it under <b>Resource limits</b> on the portal's <b>Settings</b> page — <b>Default memory</b> and <b>Default CPU</b>.</dd>
+      <dt>Caches from your machine</dt>
+      <dd><b>Folder mappings</b> on the <b>Settings</b> page mount extra folders into every container: a host path becomes a bind mount, a volume name becomes a Docker volume (<code>{containerName}</code> in the name expands per container). Handy for a package cache you would rather not download twice.</dd>
+      <dt>Docker from inside</dt>
+      <dd>Already wired: <code>DOCKER_HOST</code> points at the filtered socket, so <code>docker</code> and Compose work. Every call carries the container's identity, so Docker access stays policy-controlled.</dd>
+      <dt>A port to your browser</dt>
+      <dd>Your app listens inside the container — reach it the way your IDE's port forwarding exposes it.</dd>
+    </dl>
+
+    <div class="note">
+      <div class="note-title">TO BE WRITTEN</div>
+      <p>What to check when a request never appears, or a rule does not take effect — and the rough edges we already know about. That needs notes from an actual run, not a reading of the code.</p>
+    </div>
 
     <div class="outcome">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="flex:none" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22A45D"></circle><path d="m8 12.3 2.6 2.6L16 9.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-      <p><strong>Outcome:</strong> an idling container behind the boundary, with nothing allow-listed. Your first <code>git clone</code> in it is the first firewall request you approve.</p>
+      <p><strong>Done when:</strong> your project builds and runs inside the container, and you can name every rule it needed.</p>
     </div>
+  </div>
+
+  <!-- ── REFERENCE ───────────────────────────────────────────────────────── -->
+  <div class="card" id="reference">
+    <h2 class="section-title">Reference — the boundary in detail</h2>
+    <p class="body-copy">Not needed to finish the three steps. Here because it explains why the setup looks the way it does.</p>
+
+    <h3 class="figure-title" style="margin:22px 0 0">Three networks, and who is on them</h3>
+    <div class="scroll-x">
+      <table class="table">
+        <thead>
+          <tr><th>Network</th><th>Created by</th><th>Internal?</th><th>Who is on it</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>devcontainer-net</code></td><td><code>huddle init</code></td><td>Yes</td><td>The gateway. Compose projects wired up by <code>huddle migrate</code> attach here.</td></tr>
+          <tr><td><code>dc-net-&lt;name&gt;</code></td><td>The gateway, per container</td><td>Yes</td><td>One dev container, plus the gateway. This is the only network your container is on.</td></tr>
+          <tr><td><code>bridge</code> (<code>podman</code> on Podman)</td><td>The engine</td><td>No</td><td>The gateway, and the route out. Your container is never on it.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="body-copy">The gateway joins every <code>dc-net-*</code> as containers are created, and re-joins all of them when it restarts.</p>
+
+    <h3 class="figure-title" style="margin:22px 0 0">Why the port publish comes first</h3>
+    <p class="body-copy"><code>huddle init</code> starts the gateway on the bridge network <em>with</em> <code>-p 3000:3000</code>, and joins the internal network only afterwards. That order is deliberate: Docker skips the host port-forward entirely when a container is created directly on an internal network, so doing it the other way round would leave you with a portal you cannot reach.</p>
+
+    <h3 class="figure-title" style="margin:22px 0 0">It fails closed twice</h3>
+    <div class="compare" style="margin-top:14px">
+      <div class="figure">
+        <div class="figure-title">At the gateway</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">A destination with no matching rule becomes a pending request and is denied until you answer it. The only rule a fresh database ships with is an allow for <code>huddle</code> itself.</p>
+      </div>
+      <div class="figure">
+        <div class="figure-title">At the container</div>
+        <p class="body-copy" style="font-size:14.5px;margin-top:8px">Its own iptables chain redirects TCP :80 to the gateway, accepts loopback and the gateway, and drops everything else. Even a process that ignores <code>http_proxy</code> gets nowhere.</p>
+      </div>
+    </div>
+
+    <h3 class="figure-title" style="margin:22px 0 0">Two more things the boundary needs</h3>
+    <dl class="spec">
+      <dt>TLS interception</dt>
+      <dd>To see the path inside an HTTPS request, the gateway terminates TLS with its own CA. That CA is installed in the container's trust store, and pointed at by <code>NODE_EXTRA_CA_CERTS</code>, <code>SSL_CERT_FILE</code> and <code>REQUESTS_CA_BUNDLE</code>, so tools with their own bundles trust it too.</dd>
+      <dt>A filtered Docker socket</dt>
+      <dd>Each container gets its own socket proxy, mounted as a directory at <code>/var/run/huddle</code> (a directory, not the socket file — a file bind would pin the inode and break on restart). The proxy tags every call with the container's identity so policy can be applied per container.</dd>
+    </dl>
   </div>
 
   <div class="card">
