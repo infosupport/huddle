@@ -54,6 +54,9 @@ img { max-width: 100%; }
 .copy-btn { transition: color .15s ease; }
 .copy-btn:hover, .copy-btn:focus-visible { color: var(--accent); }
 .copy-btn[data-copied="1"] { color: var(--ok); }
+/* No Clipboard API (file:// and other non-secure contexts): the button says so
+   instead of doing nothing, and copy.js selects the command to be copied by hand. */
+.copy-btn[data-copied="manual"] { color: #B02525; }
 .link-btn { transition: border-color .15s ease, color .15s ease; }
 .link-btn:hover { border-color: var(--accent); color: var(--accent-darker); }
 
@@ -70,7 +73,16 @@ img { max-width: 100%; }
   .part-row { grid-template-columns: 1fr !important; }
   .rail { flex-direction: row !important; align-items: center !important; gap: 12px !important; }
   .rail-line { display: none !important; }
+  /* The footer image is .hero-bg, which the 960px block above pulls out of its
+     absolute placement and into the flow — so at one column it becomes the first
+     grid item. Without resetting the copy's inline grid-column:2, grid would add
+     an implicit second column and push the CTA off-screen. */
   .foot { grid-template-columns: 1fr !important; text-align: center; }
+  .foot > div:last-child {
+    grid-column: 1 !important;
+    justify-content: center !important;
+    text-align: center !important;
+  }
 }
 
 /* ======================================================================

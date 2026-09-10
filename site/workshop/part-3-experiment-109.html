@@ -249,7 +249,7 @@
         </button>
       </div>
     </div>
-    <p class="body-copy"><code>trust-ca</code> installs Huddle's CA inside the sandbox, which the VS Code and JetBrains backends need before HTTPS works. Then connect from your IDE the way you would to any remote host over SSH.</p>
+    <p class="body-copy"><code>trust-ca</code> installs Huddle's CA inside the sandbox, which the VS Code and JetBrains backends need before HTTPS works. The host side needs the same CA, for the <code>sbx</code> daemon that runs there — <code>huddle init</code> does that for you, but only if sbx was already installed when you ran it. Installed sbx afterwards? Run <code>huddle sbx trust-host</code> once; it is idempotent, so running it anyway costs nothing. Then connect from your IDE the way you would to any remote host over SSH.</p>
     <p class="body-copy">Once you are in, it is the same workshop as part 1: run your project, watch requests arrive, approve them.</p>
 
     <div class="note">

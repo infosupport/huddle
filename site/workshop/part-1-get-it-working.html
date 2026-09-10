@@ -76,7 +76,7 @@
       <dt>It creates</dt>
       <dd>The volume <code>huddle-data</code>, the internal network <code>devcontainer-net</code> and the socket directory <code>/tmp/dc-sockets</code>. No IDE plugin, no manual setup.</dd>
       <dt>Another port</dt>
-      <dd>Set <code>HUDDLE_PORT</code> before <code>huddle init</code>.</dd>
+      <dd>Set <code>HUDDLE_PORT</code> before <code>huddle init</code> — and set <code>HUDDLE_URL=http://localhost:&lt;port&gt;</code> too, keeping it set for every later <code>huddle</code> command. <code>HUDDLE_PORT</code> only decides where the gateway is published; the CLI still talks to <code>http://localhost:3000</code> unless <code>HUDDLE_URL</code> or <code>--url</code> says otherwise, so setting just the one leaves every command afterwards pointed at the wrong port.</dd>
     </dl>
 
     <div class="note">
@@ -271,7 +271,8 @@
       <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>&nbsp;&nbsp;...</code></div>
       <div class="term-line"><span class="term-prompt" style="visibility:hidden">$</span><code>}</code></div>
     </div>
-    <p class="body-copy" style="margin-top:12px">The first run does not answer — it waits, and fails if you leave it — until you approve <code>infosupport.github.io</code>. That is the point of the exercise. No <code>-x</code> and no <code>-k</code> are needed: the container already has <code>http_proxy</code> pointing at <code>huddle:80</code> and the gateway's CA in its trust store, so an ordinary <code>curl</code> is routed and trusted with no flags from you.</p>
+    <p class="body-copy" style="margin-top:12px">The first run fails straight away — <code>403</code> from the proxy on the CONNECT, because the rule it just raised is still pending. Nothing is waiting for you: approve <code>infosupport.github.io</code> on the <b>Firewall</b> page, then run the same <code>curl</code> again and it returns the JSON. That failure is the exercise, not a mistake.</p>
+    <p class="body-copy" style="margin-top:12px">No <code>-x</code> and no <code>-k</code> are needed: the container already has <code>http_proxy</code> pointing at <code>huddle:80</code> and the gateway's CA in its trust store, so an ordinary <code>curl</code> is routed and trusted with no flags from you.</p>
     <div class="compare" style="margin-top:14px">
       <div class="figure">
         <div class="figure-title">Attach</div>
