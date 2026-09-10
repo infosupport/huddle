@@ -261,3 +261,67 @@ img { max-width: 100%; }
 .way-head h3 { margin: 0; font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; }
 .way-body { padding: 16px; }
 .way-body > :first-child { margin-top: 0; }
+
+/* ======================================================================
+   .pick — one set of steps, shown either in the portal or from the CLI.
+   A segmented control the reader chooses with; both panels carry the SAME
+   steps, so nobody has to read the route they are not taking.
+   CSS-only (hidden radios), so it works with no JS and no build step.
+   Each group on a page needs its own radio `name`.
+   ====================================================================== */
+
+.pick { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.pick-radio { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.pick-bar {
+  display: flex; gap: 6px; padding: 8px; background: var(--surface-tint);
+  border-bottom: 1px solid var(--line); border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  overflow-x: auto;
+}
+.pick-bar label {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; cursor: pointer;
+  padding: 9px 15px; border-radius: 9px; border: 1px solid transparent;
+  font-size: 14.5px; font-weight: 700; color: var(--muted);
+  transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+}
+.pick-bar label:hover { color: var(--ink); }
+.pick-bar svg { flex: none; }
+
+/* the selected tab */
+.pick-a:checked ~ .pick-bar .pick-tab-a,
+.pick-b:checked ~ .pick-bar .pick-tab-b {
+  background: var(--surface); border-color: var(--line); color: var(--ink);
+  box-shadow: 0 1px 2px rgba(20, 36, 61, .06);
+}
+/* keyboard focus must show on the label — the radio itself is off-screen */
+.pick-a:focus-visible ~ .pick-bar .pick-tab-a,
+.pick-b:focus-visible ~ .pick-bar .pick-tab-b { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.pick-panel { display: none; padding: 18px; }
+.pick-panel > :first-child { margin-top: 0; }
+.pick-a:checked ~ .pick-panel-a { display: block; }
+.pick-b:checked ~ .pick-panel-b { display: block; }
+
+/* Print has no radios to click: show both panels rather than only one. */
+@media print {
+  .pick-bar { display: none; }
+  .pick-panel { display: block !important; border-top: 1px solid var(--line); }
+}
+
+/* a compact dialog mock — field on the left, what to set on the right */
+.dlg { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 14px; }
+.dlg-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  background: var(--code-bg); color: var(--code-fg); font-size: 13.5px; font-weight: 700;
+}
+.dlg-row {
+  display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 1.7fr); gap: 14px;
+  padding: 10px 14px; border-top: 1px solid var(--line); font-size: 14px;
+}
+.dlg-row > b { font-weight: 700; color: var(--steel-2); }
+.dlg-row > span { color: var(--ink-2); line-height: 1.45; }
+.dlg-row-off { background: var(--surface-tint); }
+.dlg-row-off > b, .dlg-row-off > span { color: var(--muted); }
+@media (max-width: 560px) {
+  .dlg-row { grid-template-columns: 1fr; gap: 4px; }
+}
