@@ -1,9 +1,9 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
-import { ResolvedImages, gatewayEnvFlags } from './images';
-import { readConfig, writeConfig } from './config';
+import { ResolvedImages, gatewayEnvArgs } from './images';
+import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
@@ -28,13 +28,17 @@ export interface InitOptions {
   runtime?: string;
 }
 
-function run(cmd: string): void {
-  execSync(cmd, { stdio: 'inherit' });
+// Run a binary with an argv array — NO shell. Values that originate from config
+// (team-folder paths, which are writable via `huddle firewall folder set` and the
+// authenticated settings API) must never be interpolated into a shell string, or
+// a path containing `$()`/quotes would execute on the host. Used for `docker run`.
+function runArgs(file: string, args: string[]): void {
+  execFileSync(file, args, { stdio: 'inherit' });
 }
 
-function runSilent(cmd: string): boolean {
+function runArgsSilent(file: string, args: string[]): boolean {
   try {
-    execSync(cmd, { stdio: 'ignore' });
+    execFileSync(file, args, { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -52,7 +56,7 @@ function pullBaseImages(rt: string, images: string[]): void {
   for (const image of images) {
     console.log(dim(`  Pulling ${image}`));
     try {
-      run(`${rt} pull ${image}`);
+      runArgs(rt, ['pull', image]);
     } catch {
       failed.push(image);
       console.log(yellow(`  [!] Could not pull ${image} — the gateway will build it later if needed.`));
@@ -84,18 +88,18 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     console.log(dim(`HUDDLE_NO_PULL=1 → skipping pull, using local image ${IMAGE}`));
   } else {
     console.log(dim(`Pulling ${IMAGE}`));
-    run(`${rt} pull ${IMAGE}`);
+    runArgs(rt, ['pull', IMAGE]);
     pullBaseImages(rt, images.baseImages.map((b) => b.image));
   }
 
   console.log(dim(`Volume: ${VOLUME}`));
-  runSilent(`${rt} volume inspect ${VOLUME}`) || run(`${rt} volume create ${VOLUME}`);
+  runArgsSilent(rt, ['volume', 'inspect', VOLUME]) || runArgs(rt, ['volume', 'create', VOLUME]);
 
   console.log(dim(`Network: ${INTERNAL_NET}`));
-  runSilent(`${rt} network inspect ${INTERNAL_NET}`) || run(`${rt} network create --internal ${INTERNAL_NET}`);
+  runArgsSilent(rt, ['network', 'inspect', INTERNAL_NET]) || runArgs(rt, ['network', 'create', '--internal', INTERNAL_NET]);
 
   console.log(dim(`Removing old container if it exists`));
-  runSilent(`${rt} rm -f ${CONTAINER}`);
+  runArgsSilent(rt, ['rm', '-f', CONTAINER]);
 
   console.log(dim(`Socket directory: /tmp/dc-sockets`));
   // The mount SOURCE must be the path on the Docker ENGINE host (on Windows:
@@ -111,7 +115,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
       // Desktop) and fails with "statfs: no such file or directory". So create
       // the directory explicitly in the machine VM; the socket lives there too.
       console.log(dim(`  (Podman: creating ${hostTmpSockets} in the machine VM)`));
-      if (!runSilent(`podman machine ssh "mkdir -p ${hostTmpSockets}"`)) {
+      if (!runArgsSilent('podman', ['machine', 'ssh', `mkdir -p ${hostTmpSockets}`])) {
         console.log(yellow(`[!] Could not create ${hostTmpSockets} in the Podman VM.`));
       }
     } else {
@@ -130,8 +134,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // The gateway is engine-agnostic (talks the Docker-compatible API on the
   // mounted socket), but does need to know it's Podman: it then sets
   // `--security-opt label=disable` on every devcontainer so it can reach the
-  // SELinux-labeled proxy socket.
-  const securityOptFlags = runtime.securityOpts.map((opt) => ` --security-opt ${opt}`).join('');
+  // SELinux-labeled proxy socket. (Applied as argv below via runtime.securityOpts.)
 
   // Operator token for control-plane auth. Reuse the token from the config (so an
   // existing browser session/CLI keeps working across re-inits), otherwise
@@ -143,7 +146,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
     (cfg.operatorToken && cfg.operatorToken.trim()) ||
     crypto.randomBytes(32).toString('base64url');
   if (cfg.operatorToken !== operatorToken) {
-    writeConfig({ ...cfg, operatorToken });
+    updateConfig({ operatorToken });
   }
   // The container is created on the engine's default network first (with -p),
   // then joins devcontainer-net (--internal) afterwards: Docker skips the host
@@ -151,26 +154,39 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // network (moby/moby#36174). Which source IP the gateway sees for forwarded
   // traffic no longer matters — the control plane authenticates with the
   // operator token instead of source-IP filtering.
-  run(
-    `${rt} run -d` +
-    ` --name ${CONTAINER}` +
-    ` --network ${runtime.defaultNetwork}` +
-    securityOptFlags +
-    ` -e HUDDLE_RUNTIME=${runtime.name}` +
-    ` -e HUDDLE_OPERATOR_TOKEN=${operatorToken}` +
-    ` -p ${HOST_PORT}:3000` +
-    ` -v ${VOLUME}:/data` +
-    ` -v "${runtime.socketPath}:/var/run/docker.sock"` +
-    ` -v "${hostTmpSockets}:/tmp/dc-sockets"` +
-    gatewayEnvFlags(images) +
-    ` ${IMAGE}`,
-  );
+  // Team-managed folders (#69). Bind the CLI config dir (~/.huddle) read-write so
+  // the gateway/portal read and write the folder paths there (config.json is the
+  // single source of truth), then bind each configured team folder to a FIXED
+  // path so the gateway reads it without knowing the host path. The firewall-rules
+  // folder is bound read-write so the portal's "Sync to folder" can write the
+  // groups back out; extensions stay read-only (loaded, never written).
+  const fwFolder = cfg.firewallRulesFolder?.trim();
+  const extFolder = cfg.extensionsFolder?.trim();
+  if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
+  if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
+  // Build the container command as an argv array (runArgs → execFileSync, no
+  // shell). The folder paths below come from config and are operator-writable via
+  // the settings API, so they must never reach a shell as a string.
+  const dockerArgs: string[] = ['run', '-d', '--name', CONTAINER, '--network', runtime.defaultNetwork];
+  for (const opt of runtime.securityOpts) dockerArgs.push('--security-opt', opt);
+  dockerArgs.push('-e', `HUDDLE_RUNTIME=${runtime.name}`);
+  dockerArgs.push('-e', `HUDDLE_OPERATOR_TOKEN=${operatorToken}`);
+  dockerArgs.push('-p', `${HOST_PORT}:3000`);
+  dockerArgs.push('-v', `${VOLUME}:/data`);
+  dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
+  dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
+  dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
+  if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
+  if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
+  dockerArgs.push(...gatewayEnvArgs(images));
+  dockerArgs.push(IMAGE);
+  runArgs(rt, dockerArgs);
 
   // Attaching devcontainer-net after the container has started pollutes
   // resolv.conf on Podman with that network's internal aardvark-DNS; the
   // gateway cleans that up itself (see dns-egress.ts / the startup sanitize in
   // index.ts).
-  runSilent(`${rt} network connect ${INTERNAL_NET} ${CONTAINER}`);
+  runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));

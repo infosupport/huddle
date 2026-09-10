@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
-import { getSetting, listFolderMappings } from './db';
+import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
@@ -95,10 +95,21 @@ export interface DevcontainerInfo {
   image: string;
   status: string;
   workspacePath: string;
+  mounts?: { hostPath: string; containerPath: string }[];
   presentableName: string;
   created: number;
   inNetwork: boolean;
   huddleInNetwork: boolean;
+}
+
+function parseMountsLabel(raw: string | undefined): { hostPath: string; containerPath: string }[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Set of dc-net-* networks the huddle container itself is on. Used to detect per
@@ -130,6 +141,7 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
       image: c.Image,
       status: c.Status,
       workspacePath: c.Labels?.['com.intellij.devcontainer.sources.path'] ?? '',
+      mounts: parseMountsLabel(c.Labels?.['com.intellij.devcontainer.mounts']),
       presentableName: c.Labels?.['com.intellij.devcontainer.presentable.name'] ?? '',
       created: c.Created,
       inNetwork: Boolean(dcNet?.IPAddress),
@@ -626,7 +638,7 @@ IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i $
 IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
 BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
 CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
-PROJ="${containerWorkspace}"
+PROJ=${shQuote(containerWorkspace)}
 mkdir -p /.jbdevcontainer/config/JetBrains
 if [ -n "$IDEA_DIR" ]; then
   printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":{}}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" > /.jbdevcontainer/config/JetBrains/host-config.json
@@ -706,10 +718,11 @@ fi
 
 ${NOOT_LOCKED_SETUP}
 
-# Fix workspace permissions
-mkdir -p "${containerWorkspace}" 2>/dev/null || true
-chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
-chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+# Fix workspace permissions. Uses "$PROJ" (set above) rather than interpolating
+# the path again, so the value is shell-quoted in exactly one place.
+mkdir -p "$PROJ" 2>/dev/null || true
+chown -R vscode:vscode "$PROJ" 2>/dev/null || true
+chmod -R u+rwX "$PROJ" 2>/dev/null || true
 
 ${seedScript}
 
@@ -728,8 +741,10 @@ touch /tmp/sudo-audit.log
   done ) &
 
 # Start IDE backend in background; skip if the IDE is not yet in dist/
+# Its output goes to /tmp, never into "$PROJ": a log file dropped in the project
+# root shows up in the user's git status (and in commits) on every start.
 if [ -n "$IDEA_DIR" ]; then
-nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > "$PROJ/rider-client-diagnose.log" 2>&1 &
+nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > /tmp/huddle-ide-backend.log 2>&1 &
 fi
 
 `;
@@ -781,6 +796,7 @@ function buildVscodeConfigScript(containerWorkspace: string, containerName: stri
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
+PROJ=${shQuote(containerWorkspace)}
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
 
@@ -806,10 +822,11 @@ ${IDE_CRED_SCRUB}
 
 ${NOOT_LOCKED_SETUP}
 
-# Fix workspace permissions
-mkdir -p "${containerWorkspace}" 2>/dev/null || true
-chown -R vscode:vscode "${containerWorkspace}" 2>/dev/null || true
-chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
+# Fix workspace permissions. Uses "$PROJ" (set at the top) rather than
+# interpolating the path again, so the value is shell-quoted in exactly one place.
+mkdir -p "$PROJ" 2>/dev/null || true
+chown -R vscode:vscode "$PROJ" 2>/dev/null || true
+chmod -R u+rwX "$PROJ" 2>/dev/null || true
 
 ${seedScript}
 
@@ -871,6 +888,22 @@ export async function detectWindowsMountStyle(): Promise<WindowsMountStyle> {
   }
 }
 
+/**
+ * Quote a value for safe substitution into the `sh -c` setup scripts below.
+ * Single quotes make the shell treat every character literally, so the only
+ * character needing care is `'` itself — closed, escaped, reopened. Callers pass
+ * the result WITHOUT adding quotes of their own (`VAR=${shQuote(v)}`, not
+ * `VAR="${shQuote(v)}"`).
+ *
+ * The API layer already refuses paths containing shell metacharacters
+ * (containerPathError in ./workspace-root); this is the second, independent
+ * layer, so a future caller that reaches these builders without going through
+ * that validation still cannot inject a command into a script that runs as root.
+ */
+export function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export function toLinuxPath(p: string, style: WindowsMountStyle = 'wsl2-native'): string {
   if (p.startsWith('/')) return p;
   const normalized = p.replace(/\\/g, '/');
@@ -883,17 +916,22 @@ export function toLinuxPath(p: string, style: WindowsMountStyle = 'wsl2-native')
 
 interface FolderMount { Type: 'bind' | 'volume'; Source: string; Target: string; ReadOnly?: boolean; }
 
-function buildFolderMounts(containerName: string): FolderMount[] {
+// The mount style is passed in rather than detected here: a host path in a
+// folder mapping needs exactly the same Windows translation as the workspace
+// mount (`T:/tools` -> `/mnt/t/tools`), and the engine is the same one for both.
+// Without it a Windows folder mapping was handed to the engine verbatim, which
+// silently created a bind at a nonexistent path instead of the mapped folder.
+function buildFolderMounts(containerName: string, mountStyle: WindowsMountStyle): FolderMount[] {
   const mappings = listFolderMappings();
   const result: FolderMount[] = [];
   for (const m of mappings) {
     if (!m.enabled) continue;
-    const target = m.container_path;
-    const readOnly = m.read_only === 1;
-    if (m.host_path && m.host_path.trim()) {
-      result.push({ Type: 'bind', Source: m.host_path.trim(), Target: target, ReadOnly: readOnly });
-    } else if (m.volume_name && m.volume_name.trim()) {
-      const volName = m.volume_name.trim().replace('{containerName}', containerName);
+    const target = m.containerPath;
+    const readOnly = m.readOnly;
+    if (m.hostPath && m.hostPath.trim()) {
+      result.push({ Type: 'bind', Source: toLinuxPath(m.hostPath.trim(), mountStyle), Target: target, ReadOnly: readOnly });
+    } else if (m.volumeName && m.volumeName.trim()) {
+      const volName = m.volumeName.trim().replace('{containerName}', containerName);
       result.push({ Type: 'volume', Source: volName, Target: target, ReadOnly: readOnly });
     }
   }
@@ -902,9 +940,10 @@ function buildFolderMounts(containerName: string): FolderMount[] {
 
 export interface StartParams {
   imageName: string;
-  workspaceDir: string;     // host path, forward slashes; empty string when empty=true
+  workspaceDir: string;     // host path, forward slashes; empty string when empty=true or mounts is set
+  mounts?: { hostPath: string; containerPath: string }[]; // multiple folder mounts, each host path bound at its own container path; takes precedence over workspaceDir when set
   containerName: string;
-  containerWorkspace: string; // /workspaces/<leaf>
+  containerWorkspace: string; // container path the IDE opens as project root: /workspaces/<leaf> for a single mount, the explicit "open at" path for multiple
   presentableName: string;
   ideName?: IdeName;
   empty?: boolean;
@@ -932,9 +971,10 @@ function parseCpuQuota(s: string): number {
 }
 
 export async function createAndStartContainer(params: StartParams): Promise<string> {
-  const { imageName, workspaceDir, containerName, containerWorkspace, presentableName } = params;
+  const { imageName, workspaceDir, mounts: mountParams, containerName, containerWorkspace, presentableName } = params;
   const ideName = params.ideName ?? 'intellij';
   const empty = params.empty === true;
+  const isMultiMount = !empty && !!mountParams?.length;
   // VS Code installs its own backend (VS Code Server) on attach: no JB host-config,
   // no RemoteDev distro volume, no remote-dev-server launch.
   const isVscode = ideName === 'vscode';
@@ -1022,11 +1062,32 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     ]),
   ];
 
-  const effectiveSource = empty
-    ? ''
-    : await ensureWorktree(toLinuxPath(workspaceDir, await detectWindowsMountStyle()), containerName);
+  // Each mount is its own git repo (or not a repo — ensureWorktree then falls
+  // back to the path itself), so every mount gets its own worktree call. With a
+  // single mount that is the classic behaviour; with multiple mounts each host
+  // path is bound at the container path the user chose (m.containerPath) and the
+  // IDE opens `containerWorkspace` (the explicit "open at" path) as project root.
+  // Resolved once per start: the bind Source prefix depends on the engine, not on
+  // the individual mount (issue #93). Needed for the folder mappings below too,
+  // which exist even for an empty container — hence outside the `!empty` block.
+  const mountStyle = await detectWindowsMountStyle();
+  const workspaceMounts: FolderMount[] = [];
+  let sourcesPathLabel = '';
+  if (!empty) {
+    if (isMultiMount) {
+      for (const m of mountParams!) {
+        const effectiveSource = await ensureWorktree(toLinuxPath(m.hostPath, mountStyle), containerName);
+        workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: m.containerPath });
+      }
+      sourcesPathLabel = mountParams![0].hostPath;
+    } else {
+      const effectiveSource = await ensureWorktree(toLinuxPath(workspaceDir, mountStyle), containerName);
+      workspaceMounts.push({ Type: 'bind', Source: effectiveSource, Target: containerWorkspace });
+      sourcesPathLabel = workspaceDir;
+    }
+  }
 
-  const folderMounts = buildFolderMounts(containerName);
+  const folderMounts = buildFolderMounts(containerName, mountStyle);
 
   // The RemoteDev distro volume is JB-only; VS Code does not need it.
   const mounts = [
@@ -1036,11 +1097,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       Source: 'jb_devcontainers_shared_volume',
       Target: '/.jbdevcontainer/JetBrains/RemoteDev/dist',
     }]),
-    ...(empty ? [] : [{
-      Type: 'bind',
-      Source: effectiveSource,
-      Target: containerWorkspace,
-    }]),
+    ...workspaceMounts,
     {
       // Mount the per-container socket DIRECTORY, not the socket file itself: a
       // file bind pins the inode and after a huddle restart (unlink + new socket)
@@ -1053,6 +1110,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     },
   ];
 
+  // Read once per create: the resource defaults live in the mounted CLI config
+  // (~/.huddle/config.json, #98), so an operator edit applies to the next
+  // container without restarting Huddle.
+  const resourceDefaults = getResourceDefaults();
+
   const createBody = {
     Image: imageName,
     Entrypoint: ['/bin/sh'],
@@ -1061,7 +1123,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     Labels: {
       'com.intellij.devcontainer.id': devcontainerId,
       'com.intellij.devcontainer.presentable.name': presentableName,
-      'com.intellij.devcontainer.sources.path': empty ? '' : workspaceDir,
+      // With multiple mounts this holds only the primary (first) host path, for
+      // backwards-compat with everything that reads this label as a single string.
+      // The full host→container list lives in the separate 'mounts' label below.
+      'com.intellij.devcontainer.sources.path': empty ? '' : sourcesPathLabel,
+      ...(isMultiMount ? { 'com.intellij.devcontainer.mounts': JSON.stringify(mountParams!) } : {}),
       'com.intellij.devcontainer.workspace.path': containerWorkspace,
       'com.intellij.devcontainer.model': modelJson,
       'com.devcontainer.ide': ideName,
@@ -1072,8 +1138,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       NetworkMode: netName,
       CapAdd: ['NET_ADMIN'],
       ...(RUNTIME_SECURITY_OPT.length ? { SecurityOpt: RUNTIME_SECURITY_OPT } : {}),
-      Memory: parseMemoryBytes(params.memory || getSetting('defaultMemory') || '8g'),
-      CpuQuota: parseCpuQuota(params.cpus || getSetting('defaultCpus') || '2'),
+      Memory: parseMemoryBytes(params.memory || resourceDefaults.defaultMemory || '8g'),
+      CpuQuota: parseCpuQuota(params.cpus || resourceDefaults.defaultCpus || '2'),
       CpuPeriod: 100000,
     },
   };

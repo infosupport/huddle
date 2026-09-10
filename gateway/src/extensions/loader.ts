@@ -224,12 +224,23 @@ function unloadModule(id: string): void {
   }
 }
 
-export async function loadExtension(id: string): Promise<void> {
-  const dir = path.join(EXT_DIR, id);
+// Team-managed extensions folder (#69): the CLI binds the configured host
+// folder here, alongside the uploaded extensions in EXT_DIR.
+export const TEAM_EXT_DIR = process.env.HUDDLE_EXTENSIONS_MOUNT ?? '/extensions';
+
+export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
+  // Defense-in-depth: the id indexes a directory under baseDir, so it must be a
+  // single safe path component (no separators, no `..`). Callers already pass a
+  // validated manifest.id or a readdir basename; this guard makes the path-join
+  // sink safe regardless of the source and closes the traversal class outright.
+  if (!/^[a-z0-9-]+$/.test(id)) {
+    throw new Error(`invalid extension id: ${id}`);
+  }
+  const dir = path.join(baseDir, id);
   const manifestPath = path.join(dir, 'manifest.json');
   const indexPath = path.join(dir, 'index.js');
   if (!fs.existsSync(manifestPath) || !fs.existsSync(indexPath)) {
-    throw new Error(`Extension '${id}' not found in ${EXT_DIR}`);
+    throw new Error(`Extension '${id}' not found in ${baseDir}`);
   }
 
   const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf8'));
@@ -246,15 +257,26 @@ export async function loadExtension(id: string): Promise<void> {
   console.log(`[ext] loaded: ${id} v${manifest.version ?? '?'}`);
 }
 
-export async function loadAllExtensions(): Promise<void> {
-  if (!fs.existsSync(EXT_DIR)) return;
-  for (const entry of fs.readdirSync(EXT_DIR, { withFileTypes: true })) {
+// Load every extension directory in one base dir, best-effort (one failure does
+// not stop the rest). Extracted so loadAllExtensions stays flat.
+async function loadExtensionsFrom(baseDir: string): Promise<void> {
+  if (!fs.existsSync(baseDir)) return;
+  for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     try {
-      await loadExtension(entry.name);
+      await loadExtension(entry.name, baseDir);
     } catch (err: any) {
       console.error(`[ext:${entry.name}] loading failed:`, err.message);
     }
+  }
+}
+
+export async function loadAllExtensions(): Promise<void> {
+  // Uploaded extensions (EXT_DIR volume) + the team-managed folder the CLI
+  // mounts at TEAM_EXT_DIR. Team folder loads last so a team extension can
+  // override an uploaded one with the same id.
+  for (const baseDir of [EXT_DIR, TEAM_EXT_DIR]) {
+    await loadExtensionsFrom(baseDir);
   }
 }
 

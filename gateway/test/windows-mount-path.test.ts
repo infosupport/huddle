@@ -18,7 +18,6 @@ import { EventEmitter } from 'events';
 // so it is mocked here purely to allow the module to load.
 vi.mock('../src/db', () => ({
   getSetting: () => null,
-  listFolderMappings: () => [],
   isHostPortApproved: () => false,
   getGrant: () => null,
   getActionPolicy: () => null,

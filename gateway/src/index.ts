@@ -1,4 +1,5 @@
 import { initDb } from './db';
+import { runSettingsMigration } from './settings-migration';
 import { createProxyServer } from './proxy';
 import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
@@ -19,6 +20,8 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 const SOCKET_DIR = '/tmp/dc-sockets';
 
 initDb();
+// Resource limits + folder mappings moved from the DB into config.json (#98).
+runSettingsMigration();
 initCa();
 createProxyServer();
 createApiServer().catch(err => {

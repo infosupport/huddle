@@ -8,10 +8,14 @@ import { Grant, GrantMap } from '../models/grant.model';
 import { DockerActionCatalog, DockerActionPolicies, DockerActionPolicyResult } from '../models/docker-action.model';
 import { AuditLog } from '../models/audit-log.model';
 import { Extension } from '../extensions/extension.model';
+import { FirewallGroup, GroupDetail, ImportGroupResult } from '../models/group.model';
 
 export interface HuddleSettings {
   defaultMemory: string;
   defaultCpus: string;
+  extensionsFolder: string;
+  firewallRulesFolder: string;
+  hostConfigMounted?: boolean;
 }
 
 export interface ApprovedHostPort {
@@ -22,6 +26,27 @@ export interface ApprovedHostPort {
   protocol: string;
   description: string;
   created_at: number;
+}
+
+// A host folder indexed by `huddle indexfolder` on the host. The portal cannot
+// browse the host filesystem, so this index is the only list of real host folders
+// it can offer the operator.
+export interface IndexedFolder {
+  id: number;
+  path: string;
+  label: string;
+  source: string;
+  created_at: number;
+}
+
+export interface IndexResult {
+  added: number;
+  updated: number;
+  skipped: number;
+  removed: number;
+  invalid: { path: string; error: string }[];
+  total: number;
+  max: number;
 }
 
 export interface FolderMapping {
@@ -42,7 +67,10 @@ export class ApiService {
   private handle<T>(obs: Observable<T>): Observable<T> {
     return obs.pipe(
       catchError((err) => {
-        const msg = err?.error?.error ?? err?.message ?? 'Unknown error';
+        // Prefer the API's human-readable `message` over its machine `error`
+        // code: a rejected path should read "host_path must be an absolute
+        // path", not "invalid_host_path".
+        const msg = err?.error?.message ?? err?.error?.error ?? err?.message ?? 'Unknown error';
         return throwError(() => new Error(msg));
       })
     );
@@ -94,13 +122,75 @@ export class ApiService {
     return this.handle(this.http.post<Rule>('/api/rules', body));
   }
 
+  // ── Rules export / import (#69) ────────────────────────────────────────────
+  exportRules(container?: string): Observable<unknown> {
+    const params: Record<string, string> = {};
+    if (container) params['container'] = container;
+    return this.handle(this.http.get('/api/rules/export', { params }));
+  }
+
+  importRules(body: unknown): Observable<{ imported: number; updated: number; skipped: number }> {
+    return this.handle(
+      this.http.post<{ imported: number; updated: number; skipped: number }>('/api/rules/import', body),
+    );
+  }
+
+  // ── Firewall groups (#69) ──────────────────────────────────────────────────
+  getGroups(): Observable<FirewallGroup[]> {
+    return this.handle(this.http.get<FirewallGroup[]>('/api/groups'));
+  }
+
+  getGroup(id: number): Observable<GroupDetail> {
+    return this.handle(this.http.get<GroupDetail>(`/api/groups/${id}`));
+  }
+
+  createGroup(name: string, description = '', shared = false): Observable<FirewallGroup> {
+    return this.handle(this.http.post<FirewallGroup>('/api/groups', { name, description, shared }));
+  }
+
+  updateGroup(id: number, patch: { name?: string; description?: string; shared?: boolean }): Observable<FirewallGroup> {
+    return this.handle(this.http.put<FirewallGroup>(`/api/groups/${id}`, patch));
+  }
+
+  deleteGroup(id: number): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${id}`));
+  }
+
+  assignRuleToGroup(groupId: number, ruleId: number): Observable<{ ok: true }> {
+    return this.handle(this.http.post<{ ok: true }>(`/api/groups/${groupId}/rules`, { rule_id: ruleId }));
+  }
+
+  removeRuleFromGroup(groupId: number, ruleId: number): Observable<{ ok: true }> {
+    return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${groupId}/rules/${ruleId}`));
+  }
+
+  applyGroup(groupId: number, container: string | null): Observable<{ ok: true; applied: number; updated: number }> {
+    return this.handle(this.http.post<{ ok: true; applied: number; updated: number }>(`/api/groups/${groupId}/apply`, { container }));
+  }
+
+  exportGroup(groupId: number): Observable<unknown> {
+    return this.handle(this.http.get(`/api/groups/${groupId}/export`));
+  }
+
+  importGroup(envelope: unknown, mode: 'merge' | 'replace' = 'merge'): Observable<ImportGroupResult> {
+    return this.handle(this.http.post<ImportGroupResult>('/api/groups/import', { mode, envelope }));
+  }
+
+  reloadFirewallRulesFolder(): Observable<{ folder: string | null; mounted: boolean; files: number; groups: number; imported: number; updated: number; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/firewall-rules-folder/reload', {}));
+  }
+
+  syncFirewallRulesFolder(): Observable<{ folder: string | null; mounted: boolean; writable: boolean; written: number; pruned: number; files: { file: string; group: string }[]; errors: { file: string; message: string }[] }> {
+    return this.handle(this.http.post<any>('/api/firewall-rules-folder/sync', {}));
+  }
+
   getContainerDetail(name: string): Observable<ContainerDetail> {
     return this.handle(this.http.get<ContainerDetail>(`/api/docker/containers/${name}`));
   }
 
-  // Ephemeral sudo grant: 'noot' starts locked without a password. These endpoints
-  // grant/show/revoke temporary admin access. The password is returned only once
-  // (from grantSudo); status never returns a password.
+  // Ephemeral sudo grant: 'noot' starts locked without a password. These
+  // endpoints grant/show/revoke temporary admin access. The password is
+  // returned only once (on grantSudo); status never returns a password.
   getSudoGrant(name: string): Observable<{ active: boolean; until: number | null }> {
     return this.handle(this.http.get<{ active: boolean; until: number | null }>(`/api/docker/containers/${name}/sudo-grant`));
   }
@@ -126,10 +216,15 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
+  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
     return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
       imageName: params.image,
-      workspaceDir: params.workspace,
+      // No containerWorkspace: the gateway derives the IDE project root from the
+      // mounts (deepest common parent, else /workspaces). The CLI can still send
+      // one via `--workspace-root`.
+      ...(params.mounts?.length
+        ? { mounts: params.mounts }
+        : { workspaceDir: params.workspace }),
       containerName: params.containerName,
       ideName: params.ide,
       empty: params.empty === true,
@@ -212,8 +307,8 @@ export class ApiService {
     return this.handle(this.http.get<HuddleSettings>('/api/settings'));
   }
 
-  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean }> {
-    return this.handle(this.http.post<{ ok: boolean }>('/api/settings', values));
+  saveSettings(values: Partial<HuddleSettings>): Observable<{ ok: boolean; restartRequired?: boolean; persisted?: boolean }> {
+    return this.handle(this.http.post<{ ok: boolean; restartRequired?: boolean; persisted?: boolean }>('/api/settings', values));
   }
 
   getAuditLogs(params?: { container?: string; domain?: string; action?: string; path?: string; limit?: number }): Observable<AuditLog[]> {
@@ -241,6 +336,28 @@ export class ApiService {
 
   deleteFolderMapping(id: number): Observable<{ ok: boolean }> {
     return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
+  }
+
+  // ── Indexed host folders ────────────────────────────────────────────────────
+  getIndexedFolders(): Observable<{ folders: IndexedFolder[]; max: number }> {
+    return this.handle(this.http.get<{ folders: IndexedFolder[]; max: number }>('/api/indexed-folders'));
+  }
+
+  addIndexedFolder(path: string): Observable<IndexResult> {
+    return this.handle(this.http.post<IndexResult>('/api/indexed-folders', { path, source: 'manual' }));
+  }
+
+  deleteIndexedFolder(id: number): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/indexed-folders/${id}`));
+  }
+
+  // Without a root this empties the whole index; with one it removes that folder
+  // and everything below it, which is what pruning a branch in the tree means.
+  clearIndexedFolders(root?: string): Observable<{ removed: number }> {
+    const url = root
+      ? `/api/indexed-folders?root=${encodeURIComponent(root)}`
+      : '/api/indexed-folders';
+    return this.handle(this.http.delete<{ removed: number }>(url));
   }
 
   // ── Approved Host Ports ──────────────────────────────────────────────────────
