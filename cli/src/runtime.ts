@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 
-export type RuntimeName = 'docker' | 'podman';
+export type RuntimeName = 'docker' | 'podman' | 'wslc';
 
 export interface ContainerRuntime {
   name: RuntimeName;
@@ -34,8 +34,11 @@ function commandOutput(cmd: string): string | undefined {
 }
 
 function isAvailable(runtime: RuntimeName): boolean {
-  // 'info' only succeeds if the daemon/machine is actually reachable.
-  return commandOutput(`${runtime} info`) !== undefined;
+  // 'info' only succeeds if the daemon/machine is actually reachable. wslc has
+  // no 'info' subcommand at all (it exits with "Unrecognized command"), so use
+  // 'list' there instead — it equally requires a reachable daemon to succeed.
+  const probe = runtime === 'wslc' ? 'list' : 'info';
+  return commandOutput(`${runtime} ${probe}`) !== undefined;
 }
 
 /**
@@ -50,7 +53,7 @@ function detectEngine(command: RuntimeName): RuntimeName | undefined {
   if (commandOutput(`${command} info --format "{{.Host.ServiceIsRemote}}"`) !== undefined) {
     return 'podman';
   }
-  if (isAvailable(command)) return 'docker';
+  if (isAvailable(command)) return command;
   return undefined;
 }
 
@@ -153,14 +156,14 @@ function buildRuntime(name: RuntimeName): ContainerRuntime {
 
 export function parseRuntimeName(value: string): RuntimeName {
   const normalized = value.toLowerCase().trim();
-  if (normalized === 'docker' || normalized === 'podman') return normalized;
-  throw new Error(`Unknown container runtime: ${value}. Choose docker or podman.`);
+  if (normalized === 'docker' || normalized === 'podman' || normalized === 'wslc') return normalized;
+  throw new Error(`Unknown container runtime: ${value}. Choose docker, podman or wslc.`);
 }
 
 /**
  * Determines which container runtime to use.
  * An explicit choice (via --runtime or HUDDLE_RUNTIME) wins; otherwise it is
- * auto-detected: Docker first, then Podman.
+ * auto-detected: Docker first, then Podman, then wslc.
  */
 export function resolveRuntime(explicit?: string): ContainerRuntime {
   const requested = explicit ?? process.env.HUDDLE_RUNTIME;
@@ -172,14 +175,15 @@ export function resolveRuntime(explicit?: string): ContainerRuntime {
     return buildRuntime(name);
   }
 
-  // Auto-detection: first look behind the `docker` command (which may be a
-  // Podman shim), then at `podman`. This way a real Docker engine wins if there
-  // is one, but we also recognize Podman when it poses as `docker`.
-  const detected = detectEngine('docker') ?? detectEngine('podman');
+  // Auto-detection: first look behind the docker command (which may be a
+  // Podman shim or Docker), then at podman, and finally at wslc. This way a
+  // real Docker engine wins if there is one, while we also recognize Podman when
+  // it poses as docker and fall back to wslc when neither is available.
+  const detected = detectEngine('docker') ?? detectEngine('podman') ?? detectEngine('wslc');
   if (detected) return buildRuntime(detected);
 
   throw new Error(
-    'No working container runtime found. Install and start Docker or Podman,\n' +
-    'or pick one explicitly with --runtime <docker|podman> or the HUDDLE_RUNTIME env var.',
+    'No working container runtime found. Install and start Docker, Podman or wslc,\n' +
+    'or pick one explicitly with --runtime <docker|podman|wslc> or the HUDDLE_RUNTIME env var.',
   );
 }

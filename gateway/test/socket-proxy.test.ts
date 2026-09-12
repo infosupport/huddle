@@ -73,7 +73,11 @@ describe('withLabelFilter', () => {
   });
 });
 
-describe('createContainerProxy socket-layout', () => {
+// Deze tests binden een echte AF_UNIX-socket (server.listen op een pad). Dat is
+// een Linux-primitief; de gateway draait in productie in een Linux-container.
+// Op native Windows faalt de bind met EACCES, dus we slaan het blok daar over
+// (draai de suite in WSL/Linux voor dekking).
+describe.skipIf(process.platform === 'win32')('createContainerProxy socket-layout', () => {
   let createContainerProxy: typeof import('../src/socket-proxy').createContainerProxy;
   let dir: string;
   const servers: net.Server[] = [];
@@ -119,6 +123,22 @@ describe('createContainerProxy socket-layout', () => {
     expect(fs.statSync(sockPath).isSocket()).toBe(true);
     await connect(sockPath);
     await connect(path.join(dir, 'dc-c.sock'));
+  });
+});
+
+// De naam-guard staat los van het binden van een socket, dus deze test draait
+// ook op native Windows (geen AF_UNIX-bind nodig — zie het blok hierboven).
+describe('createContainerProxy naam-validatie', () => {
+  let createContainerProxy: typeof import('../src/socket-proxy').createContainerProxy;
+  let dir: string;
+
+  beforeAll(async () => {
+    createContainerProxy = (await import('../src/socket-proxy')).createContainerProxy;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-sock-'));
+  });
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // containerName vloeit via path.join() in de socket-paden. De naam komt uit

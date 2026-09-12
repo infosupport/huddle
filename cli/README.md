@@ -16,7 +16,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with Docker and Podman: the runtime is detected automatically (Docker first, then Podman), or pick one explicitly with `huddle init --runtime <docker|podman>` or the `HUDDLE_RUNTIME` env var. If you run `huddle` while Huddle isn't running, you automatically get a hint to run this command.
+Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with Docker, Podman and WSLc: the runtime is detected automatically (Docker first, then Podman, then WSLc), or pick one explicitly with `huddle init --runtime <docker|podman|wslc>` or the `HUDDLE_RUNTIME` env var. If you run `huddle` while Huddle isn't running, you automatically get a hint to run this command.
 
 ## Starting devcontainers
 

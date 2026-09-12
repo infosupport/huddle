@@ -117,7 +117,7 @@ Usage:
   huddle experiment status           Show the active channel and CLI version
 
 Init options:
-  --runtime <docker|podman>          Container runtime (default: auto-detected;
+  --runtime <docker|podman|wslc>     Container runtime (default: auto-detected;
                                      also via the HUDDLE_RUNTIME env var)
   --experiment <nr>                  Use the experimental build of issue/PR <nr>
                                      (same as "huddle experiment use <nr>")
