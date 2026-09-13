@@ -3,9 +3,9 @@ import {
   E2E_ENABLED, E2E_NAME, E2E_IMAGE,
   dockerAvailable, assertHuddleReachable,
   spawnDevcontainer, removeDevcontainer,
-  execIn, curlStatusIn, run,
+  execIn, execInAs, curlStatusIn, run,
   clearRulesForDomain, allowDomain, createRule, enablePathMode,
-  setGrant, revokeGrant, setActionPolicy, sleep,
+  setGrant, revokeGrant, grantSudoAccess, revokeSudoAccess, setActionPolicy, sleep,
 } from './helpers';
 
 // ── LIVE security-boundary suite (T1–T11 stijl) ─────────────────────────────
@@ -23,6 +23,7 @@ import {
 //     grant- en policy-state), daarna de escape-tests concurrent.
 
 const TEST_DOMAIN = 'example.com';
+const SUDO_TEST_DOMAIN = 'example.net';
 
 describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   beforeAll(async () => {
@@ -34,7 +35,9 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
 
   afterAll(async () => {
     await revokeGrant(E2E_NAME);
+    await revokeSudoAccess(E2E_NAME);
     await clearRulesForDomain(TEST_DOMAIN);
+    await clearRulesForDomain(SUDO_TEST_DOMAIN);
     await removeDevcontainer();
   });
 
@@ -290,6 +293,45 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
         `-d '{"container":"${E2E_NAME}","entry":"e2e-test"}' http://huddle:3000/api/audit/sudo`,
       );
       expect(r.stdout.trim()).toBe('200');
+    });
+  });
+
+  describe('sudo proxy environment', () => {
+    it('preserves only Huddle proxy variables for noot sudo commands', async () => {
+      const password = await grantSudoAccess(E2E_NAME, 5);
+      const result = execInAs(
+        E2E_NAME,
+        'noot',
+        'UNRELATED_SENTINEL=drop-me sudo -S -p "" env',
+        `${password}\n`,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const env = new Map(
+        result.stdout.trim().split('\n').map(line => {
+          const separator = line.indexOf('=');
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+      );
+      for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
+        expect(env.get(key)).toBe('http://huddle:80');
+      }
+      for (const key of ['NO_PROXY', 'no_proxy']) {
+        expect(env.get(key)).toBe('localhost,127.0.0.1,::1,[::1]');
+      }
+      expect(env.has('UNRELATED_SENTINEL')).toBe(false);
+
+      await clearRulesForDomain(SUDO_TEST_DOMAIN);
+      await allowDomain(SUDO_TEST_DOMAIN, E2E_NAME);
+      await sleep(1000);
+      const curl = execInAs(
+        E2E_NAME,
+        'noot',
+        `sudo -S -p "" curl -s -o /dev/null -w '%{http_code}' http://${SUDO_TEST_DOMAIN}/`,
+        `${password}\n`,
+      );
+      expect(curl.status, curl.stderr).toBe(0);
+      expect(curl.stdout.trim()).toBe('200');
     });
   });
 });

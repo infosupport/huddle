@@ -24,6 +24,19 @@ export function execIn(container: string, shellCmd: string): RunResult {
   return run('docker', ['exec', container, 'sh', '-lc', shellCmd]);
 }
 
+export function execInAs(container: string, user: string, shellCmd: string, stdin = ''): RunResult {
+  const r = spawnSync('docker', ['exec', '-i', '--user', user, container, 'sh', '-lc', shellCmd], {
+    encoding: 'utf8',
+    input: stdin,
+    timeout: 120_000,
+  });
+  return {
+    status: r.status ?? -1,
+    stdout: r.stdout ?? '',
+    stderr: r.stderr ?? (r.error ? String(r.error.message) : ''),
+  };
+}
+
 // curl in de container; print alleen de HTTP-statuscode (of "000" bij weigering).
 export function curlStatusIn(container: string, url: string, extra = ''): string {
   const r = execIn(container, `curl -s -o /dev/null -w '%{http_code}' ${extra} ${url} || true`);
@@ -143,6 +156,15 @@ export async function setGrant(container: string, minutes: number): Promise<void
 
 export async function revokeGrant(container: string): Promise<void> {
   try { await api('DELETE', `/api/authz/grants/${encodeURIComponent(container)}`); } catch { /* none */ }
+}
+
+export async function grantSudoAccess(container: string, minutes: number): Promise<string> {
+  const result = await api('POST', `/api/docker/containers/${encodeURIComponent(container)}/sudo-grant`, { minutes });
+  return result.password as string;
+}
+
+export async function revokeSudoAccess(container: string): Promise<void> {
+  try { await api('DELETE', `/api/docker/containers/${encodeURIComponent(container)}/sudo-grant`); } catch { /* none */ }
 }
 
 // Zet een fijnmazige actie-toggle (bv. 'container.list') aan of uit.

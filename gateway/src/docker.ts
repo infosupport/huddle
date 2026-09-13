@@ -560,6 +560,17 @@ usermod -L noot 2>/dev/null || true
 passwd -l noot 2>/dev/null || true
 passwd -e noot 2>/dev/null || true`;
 
+export const NOOT_SUDOERS_POLICY = `Defaults logfile=/tmp/sudo-audit.log
+Defaults:noot env_keep += "HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy"`;
+
+// Keep the sudo policy shared so JetBrains and VS Code containers cannot drift.
+const NOOT_SUDOERS_SETUP = `# Configure sudo audit logging and preserve Huddle's proxy-only egress for noot
+mkdir -p /etc/sudoers.d
+cat > /etc/sudoers.d/99-huddle-audit <<'EOF'
+${NOOT_SUDOERS_POLICY}
+EOF
+chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true`;
+
 // Finding #15 (IDE channel, VS Code Remote + JetBrains Gateway): the attach
 // channel goes over `docker exec`/stdio and is seen by NEITHER the egress proxy
 // NOR the socket proxy. The real host token NEVER arrives as a file; VS Code has
@@ -618,7 +629,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
+export function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -713,10 +724,7 @@ chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
 ${seedScript}
 
-# Configure sudo audit logging
-mkdir -p /etc/sudoers.d
-printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
-chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+${NOOT_SUDOERS_SETUP}
 
 # Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
@@ -777,7 +785,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
+export function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -822,10 +830,7 @@ for VSCODE_HOME in /home/vscode/.vscode-server /home/vscode/.vscode-server-insid
 done
 chown -R vscode:vscode /home/vscode/.vscode-server /home/vscode/.vscode-server-insiders 2>/dev/null || true
 
-# Configure sudo audit logging
-mkdir -p /etc/sudoers.d
-printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
-chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+${NOOT_SUDOERS_SETUP}
 
 # Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
