@@ -16,10 +16,10 @@ const docker = sqliteAvailable
 
 d('noot proxy environment (#110)', () => {
   const expectedProfile = [
-    'export http_proxy=http://huddle:80',
-    'export https_proxy=http://huddle:80',
-    'export HTTP_PROXY=http://huddle:80',
-    'export HTTPS_PROXY=http://huddle:80',
+    "export http_proxy='http://huddle:80'",
+    "export https_proxy='http://huddle:80'",
+    "export HTTP_PROXY='http://huddle:80'",
+    "export HTTPS_PROXY='http://huddle:80'",
     "export no_proxy='localhost,127.0.0.1,::1,[::1]'",
     "export NO_PROXY='localhost,127.0.0.1,::1,[::1]'",
   ].join('\n');

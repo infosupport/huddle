@@ -542,12 +542,20 @@ const DOCKER_SOCK_SYMLINK = `# Docker access goes via the socket in the mounted 
 # (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
-export const HUDDLE_PROXY_PROFILE = `export http_proxy=http://huddle:80
-export https_proxy=http://huddle:80
-export HTTP_PROXY=http://huddle:80
-export HTTPS_PROXY=http://huddle:80
-export no_proxy='localhost,127.0.0.1,::1,[::1]'
-export NO_PROXY='localhost,127.0.0.1,::1,[::1]'`;
+const HUDDLE_PROXY_URL = 'http://huddle:80';
+const HUDDLE_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
+const HUDDLE_PROXY_ENV = {
+  http_proxy: HUDDLE_PROXY_URL,
+  https_proxy: HUDDLE_PROXY_URL,
+  HTTP_PROXY: HUDDLE_PROXY_URL,
+  HTTPS_PROXY: HUDDLE_PROXY_URL,
+  no_proxy: HUDDLE_NO_PROXY,
+  NO_PROXY: HUDDLE_NO_PROXY,
+};
+
+export const HUDDLE_PROXY_PROFILE = Object.entries(HUDDLE_PROXY_ENV)
+  .map(([name, value]) => `export ${name}='${value}'`)
+  .join('\n');
 
 // Create the admin user `noot` in the sudo/wheel group, but LOCKED and without a
 // usable password. Deliberately no password is set here: that only happens per
@@ -1007,16 +1015,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     '_CONTAINER_USER_HOME=/home/vscode',
     '_REMOTE_USER=vscode',
     '_REMOTE_USER_HOME=/home/vscode',
-    'http_proxy=http://huddle:80',
-    'https_proxy=http://huddle:80',
-    'HTTP_PROXY=http://huddle:80',
-    'HTTPS_PROXY=http://huddle:80',
     // Loopback must never go via the proxy: it cannot reach the container's own
     // loopback. The bracketed form `[::1]` is included explicitly because
     // .NET/Aspire's DCP addresses its targets as `http://[::1]:<port>` and
     // NO_PROXY matches literally against that bracketed host (issue #12).
-    'no_proxy=localhost,127.0.0.1,::1,[::1]',
-    'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
+    ...Object.entries(HUDDLE_PROXY_ENV).map(([name, value]) => `${name}=${value}`),
     // CA trust at the container level so EVERY process trusts the MITM CA — not
     // only login shells that source /etc/profile.d. Without this, tools started by
     // the IDE/non-login shell validate against their own bundle, reject the leaf
