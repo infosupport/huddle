@@ -14,7 +14,15 @@ const docker = sqliteAvailable
   ? await import('../src/docker')
   : null;
 
-d('noot sudoers proxy policy (#110)', () => {
+d('noot proxy environment (#110)', () => {
+  const expectedProfile = [
+    'export http_proxy=http://huddle:80',
+    'export https_proxy=http://huddle:80',
+    'export HTTP_PROXY=http://huddle:80',
+    'export HTTPS_PROXY=http://huddle:80',
+    "export no_proxy='localhost,127.0.0.1,::1,[::1]'",
+    "export NO_PROXY='localhost,127.0.0.1,::1,[::1]'",
+  ].join('\n');
   const expectedPolicy = [
     'Defaults logfile=/tmp/sudo-audit.log',
     'Defaults:noot env_keep += "HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy"',
@@ -25,11 +33,17 @@ d('noot sudoers proxy policy (#110)', () => {
     expect(docker!.NOOT_SUDOERS_POLICY).not.toContain('Defaults env_keep');
   });
 
+  it('restores the proxy variables discarded by a noot login shell', () => {
+    expect(docker!.HUDDLE_PROXY_PROFILE).toBe(expectedProfile);
+  });
+
   it.each([
     ['VS Code', docker!.buildVscodeConfigScript('/workspaces/test', 'test', 'ca', '')],
     ['JetBrains', docker!.buildJbConfigScript('/workspaces/test', 'test', 'intellij', 'ca', '')],
   ])('includes the shared policy in the %s setup script', (_ide, script) => {
     expect(script.match(/Defaults:noot env_keep/g)).toHaveLength(1);
     expect(script).toContain(expectedPolicy);
+    expect(script.match(/99-huddle-proxy\.sh/g)).toHaveLength(2);
+    expect(script).toContain(expectedProfile);
   });
 });

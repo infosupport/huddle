@@ -542,6 +542,13 @@ const DOCKER_SOCK_SYMLINK = `# Docker access goes via the socket in the mounted 
 # (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
+export const HUDDLE_PROXY_PROFILE = `export http_proxy=http://huddle:80
+export https_proxy=http://huddle:80
+export HTTP_PROXY=http://huddle:80
+export HTTPS_PROXY=http://huddle:80
+export no_proxy='localhost,127.0.0.1,::1,[::1]'
+export NO_PROXY='localhost,127.0.0.1,::1,[::1]'`;
+
 // Create the admin user `noot` in the sudo/wheel group, but LOCKED and without a
 // usable password. Deliberately no password is set here: that only happens per
 // grant (ephemeral, see sudo-grant.ts) and is locked again afterwards. Idempotent
@@ -554,6 +561,12 @@ export DEBIAN_FRONTEND=noninteractive
 command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
 id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
 usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+# Docker's container environment is discarded by a su login. Restore Huddle's fixed
+# proxy route for login shells before sudo's scoped env_keep policy takes over.
+cat > /etc/profile.d/99-huddle-proxy.sh <<'EOF'
+${HUDDLE_PROXY_PROFILE}
+EOF
+chmod 644 /etc/profile.d/99-huddle-proxy.sh
 # Lock + expiry: a freshly created account is already locked ('!'), but this also
 # covers upgrades of containers that previously had a standing password.
 usermod -L noot 2>/dev/null || true

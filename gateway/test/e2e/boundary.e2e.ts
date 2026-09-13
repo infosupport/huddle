@@ -297,26 +297,33 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
   });
 
   describe('sudo proxy environment', () => {
-    it('preserves only Huddle proxy variables for noot sudo commands', async () => {
+    it('restores and preserves Huddle proxy variables through su login and sudo', async () => {
       const password = await grantSudoAccess(E2E_NAME, 5);
+      const login = execInAs(E2E_NAME, 'root', "su - noot -c 'env'");
+      expect(login.status, login.stderr).toBe(0);
+
       const result = execInAs(
         E2E_NAME,
-        'noot',
-        'UNRELATED_SENTINEL=drop-me sudo -S -p "" env',
+        'root',
+        `su - noot -c 'UNRELATED_SENTINEL=drop-me sudo -S -p "" env'`,
         `${password}\n`,
       );
 
       expect(result.status, result.stderr).toBe(0);
-      const env = new Map(
-        result.stdout.trim().split('\n').map(line => {
+      const parseEnv = (output: string) => new Map(
+        output.trim().split('\n').map(line => {
           const separator = line.indexOf('=');
           return [line.slice(0, separator), line.slice(separator + 1)];
         }),
       );
+      const loginEnv = parseEnv(login.stdout);
+      const env = parseEnv(result.stdout);
       for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
+        expect(loginEnv.get(key)).toBe('http://huddle:80');
         expect(env.get(key)).toBe('http://huddle:80');
       }
       for (const key of ['NO_PROXY', 'no_proxy']) {
+        expect(loginEnv.get(key)).toBe('localhost,127.0.0.1,::1,[::1]');
         expect(env.get(key)).toBe('localhost,127.0.0.1,::1,[::1]');
       }
       expect(env.has('UNRELATED_SENTINEL')).toBe(false);
@@ -326,8 +333,8 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       await sleep(1000);
       const curl = execInAs(
         E2E_NAME,
-        'noot',
-        `sudo -S -p "" curl -s -o /dev/null -w '%{http_code}' http://${SUDO_TEST_DOMAIN}/`,
+        'root',
+        `su - noot -c 'sudo -S -p "" curl -s -o /dev/null -w "%{http_code}" http://${SUDO_TEST_DOMAIN}/'`,
         `${password}\n`,
       );
       expect(curl.status, curl.stderr).toBe(0);
