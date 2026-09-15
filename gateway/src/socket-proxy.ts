@@ -55,14 +55,24 @@ async function hasOwnLabel(type: 'container' | 'image', targetId: string, contai
 }
 
 // Ownership lookup for networks and volumes: returns the huddle.parent label and
-// the real name (the path may also contain an ID).
-async function lookupParentLabel(kind: 'network' | 'volume', id: string): Promise<{ parent: string | null; name: string }> {
+// the real name (the path may also contain an ID). For networks `internal` says
+// whether the daemon gave the network an outward route (masquerade + gateway);
+// networkAttachDenial needs that to keep spawned containers off routable
+// networks. Fail-closed: a failed inspect looks unowned and non-internal.
+async function lookupParentLabel(
+  kind: 'network' | 'volume',
+  id: string
+): Promise<{ parent: string | null; name: string; internal: boolean }> {
   try {
     const data = await dockerGet(
       kind === 'network' ? `/networks/${encodeURIComponent(id)}` : `/volumes/${encodeURIComponent(id)}`
     );
-    return { parent: data.Labels?.['huddle.parent'] ?? null, name: data.Name ?? '' };
-  } catch { return { parent: null, name: '' }; }
+    return {
+      parent: data.Labels?.['huddle.parent'] ?? null,
+      name: data.Name ?? '',
+      internal: data.Internal === true,
+    };
+  } catch { return { parent: null, name: '', internal: false }; }
 }
 
 function lookupContainerId(containerName: string): Promise<{ id: string; shortId: string }> {
@@ -445,6 +455,65 @@ export function validateVolumeCreate(rawBody: any): string | null {
   return null;
 }
 
+// ── Network attach policy: keep spawned containers single-homed ─────────────
+// The devcontainer's egress firewall ACCEPTs its own dc-net subnet so that
+// compose siblings (postgres on :5432, ...) are reachable. That exemption only
+// holds as long as every reachable sibling is a dead end: a sibling that is ALSO
+// attached to a routable network (the default bridge, a macvlan, another
+// tenant's dc-net) is a ready-made relay around the MITM proxy — the
+// devcontainer reaches it over the exempted subnet and it forwards anywhere.
+//
+// So network.connect/disconnect may only target a network that is both owned by
+// this devcontainer (its own dc-net, or one it created itself) and `internal`,
+// i.e. one the daemon gave no gateway or masquerade rule. Combined with the
+// forced NetworkMode on container-create and the forced Internal on
+// network-create, a spawned container can never obtain a second route out.
+//
+// `name`/`parent`/`internal` come from a network inspect; an inspect that failed
+// yields name '' and internal false and therefore lands in the deny branch.
+export function networkAttachDenial(
+  containerName: string,
+  network: { parent: string | null; name: string; internal: boolean }
+): string | null {
+  const owned = network.name === `dc-net-${containerName}` || network.parent === containerName;
+  if (!owned) return 'cannot attach containers to a network not owned by this devcontainer';
+  if (!network.internal)
+    return 'cannot attach containers to a non-internal network (that would route around the huddle proxy)';
+  return null;
+}
+
+// Rewrite a /networks/create body into something a devcontainer may own, or
+// return a denial. Mutates `body` in place (the caller re-serializes it).
+export function sanitizeNetworkCreate(body: any, containerName: string): string | null {
+  if (!body || typeof body !== 'object') return 'invalid network create body';
+  // Canonicalize the keys we inject into so that a lowercase
+  // `labels`/`options`/`internal` does not remain as a second, merged key (a
+  // spoofed `labels.huddle.parent` could otherwise forge ownership, and a
+  // lowercase `internal: false` could undo the forcing below).
+  const amb = findAmbiguousKey(body);
+  if (amb) return `ambiguous duplicate key not permitted: ${amb}`;
+  renameKeyCI(body, 'Options');
+  renameKeyCI(body, 'Labels');
+  renameKeyCI(body, 'Driver');
+  renameKeyCI(body, 'Internal');
+  // Only plain bridge networks. macvlan/ipvlan hang straight off a host
+  // interface and host/overlay leave the namespace altogether, so `Internal`
+  // buys us nothing there — deny those drivers outright instead.
+  const driver = typeof body.Driver === 'string' ? body.Driver.toLowerCase() : '';
+  if (driver && driver !== 'bridge' && driver !== 'default')
+    return `network driver not permitted: ${body.Driver}`;
+  // Force Internal: a devcontainer-created network must never get a gateway or
+  // masquerade rule. Without this, attaching a spawned container to it
+  // (network.connect) would hand that container a second, unfiltered route out
+  // — and the devcontainer reaches it over the dc-net subnet its egress
+  // firewall exempts. networkAttachDenial only admits internal networks, so
+  // this is what keeps network.create usable at all.
+  body.Internal = true;
+  body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
+  body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+  return null;
+}
+
 // Collect the named-volume sources from a HostConfig (Binds + Mounts). Host-
 // path binds and bind-type mounts are already denied by validateHostConfig;
 // anonymous volumes (no Source) are skipped. Used for the
@@ -524,6 +593,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
       let bodyContentLength = 0;
       let savedHeaderPart = '';
       let bodyHandler: (() => void) | null = null;
+      // Network id/name from the URL of a pending /networks/<id>/connect|disconnect;
+      // processNetworkAttach needs it once the body (the container target) is in.
+      let pendingNetworkId = '';
 
       client.on('error', () => upstream?.destroy());
       client.on('end', () => upstream?.end());
@@ -694,21 +766,57 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid network create body');
           return;
         }
-        // Canonicalize the keys we inject into so that a lowercase
-        // `labels`/`options` does not remain as a second, merged key (a
-        // spoofed `labels.huddle.parent` could otherwise forge ownership).
-        const netAmb = findAmbiguousKey(body);
-        if (netAmb) { deny403(client, `ambiguous duplicate key not permitted: ${netAmb}`); return; }
-        renameKeyCI(body, 'Options');
-        renameKeyCI(body, 'Labels');
-        body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
-        body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
+        const netDenial = sanitizeNetworkCreate(body, containerName);
+        if (netDenial) { deny403(client, netDenial); return; }
         const newBodyBuf = Buffer.from(JSON.stringify(body));
         const newHeader = savedHeaderPart.replace(
           /content-length:\s*\d+/i,
           `Content-Length: ${newBodyBuf.length}`
         ) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
+      }
+
+      // network.connect / network.disconnect: the target container must be one
+      // this devcontainer spawned, and the network must be its own and internal
+      // (networkAttachDenial). Without both checks a devcontainer could attach a
+      // sibling to the default bridge and use it as a relay past the egress
+      // proxy — the devcontainer's firewall ACCEPTs its whole dc-net subnet.
+      function processNetworkAttach(): void {
+        const bodyBytes = bodyBuf.slice(0, bodyContentLength);
+        const rest = bodyBuf.slice(bodyContentLength);
+        let body: any;
+        try {
+          body = JSON.parse(bodyBytes.toString());
+        } catch {
+          // An unparseable body must not skip the ownership checks.
+          deny403(client, 'invalid network connect body');
+          return;
+        }
+        const amb = findAmbiguousKey(body);
+        if (amb) { deny403(client, `ambiguous duplicate key not permitted: ${amb}`); return; }
+        // The daemon matches `Container` case-insensitively; read it the same way
+        // so a lowercase `container` cannot smuggle a different target past us.
+        renameKeyCI(body, 'Container');
+        const target = typeof body.Container === 'string' ? body.Container.replace(/^\//, '') : '';
+        if (!target) { deny403(client, 'network connect without container target'); return; }
+        if (devcontainerIds.has(target)) {
+          deny403(client, 'operation on devcontainer not permitted');
+          return;
+        }
+        client.pause();
+        Promise.all([
+          hasOwnLabel('container', target, containerName),
+          lookupParentLabel('network', pendingNetworkId),
+        ]).then(([owned, network]) => {
+          if (!owned) {
+            deny403(client, 'container was not created by this devcontainer');
+          } else {
+            const denial = networkAttachDenial(containerName, network);
+            if (denial) deny403(client, denial);
+            else openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
+          }
+          client.resume();
+        });
       }
 
       function processVolumeCreate(): void {
@@ -1106,8 +1214,16 @@ export async function createContainerProxy(containerName: string, socketDir: str
             if (bodyBuf.length >= bodyContentLength) bodyHandler();
             return;
           }
-          if (/^\/networks\/[^/]+\/(connect|disconnect)$/.test(p)) {
-            openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
+          const attachNetId = p.match(/^\/networks\/([^/]+)\/(?:connect|disconnect)$/)?.[1];
+          if (attachNetId) {
+            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
+            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            savedHeaderPart = headerPart;
+            pendingNetworkId = attachNetId;
+            bodyHandler = processNetworkAttach;
+            phase = 'body';
+            bodyBuf = remainder;
+            if (bodyBuf.length >= bodyContentLength) bodyHandler();
             return;
           }
 
