@@ -24,7 +24,7 @@ interface ParsedArgs {
 }
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'no-vscode-config']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'experiment', 'migrate', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -128,6 +128,8 @@ Start options:
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
+  --no-vscode-config                 Do not write the per-container attach config
+                                     that makes VS Code open the workspace folder
 
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
@@ -197,6 +199,7 @@ async function main(): Promise<void> {
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),
+      vscodeConfig: !flagBool(flags, 'no-vscode-config'),
     });
     return;
   }

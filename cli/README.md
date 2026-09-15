@@ -62,6 +62,7 @@ Main flags:
 --name <name>
 --image <image>
 --empty
+--no-vscode-config
 -i, --interactive
 --container <name>
 --status <requested|allow|deny>
