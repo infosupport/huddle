@@ -253,6 +253,19 @@
   background: var(--surface-2);
 }
 
+/* ── Pending: per-type sections + bulk selection ── */
+.req-row__chk { flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+.req-row.is-selected { background: var(--accent-soft); }
+.req-group + .req-group { margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+.req-group__head { display: flex; align-items: center; gap: 10px; padding: 4px 10px 8px; }
+.req-group__sel { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.req-group__sel input { cursor: pointer; width: 16px; height: 16px; }
+.req-group__title { font-size: 0.95em; font-weight: 600; color: var(--text); }
+.req-group__title .em { color: var(--accent); font-style: normal; }
+.req-group__n { font-size: 0.78em; font-weight: 600; color: var(--text-dim); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.req-group__bulk { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.req-bulk__n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); }
+
 .req-row__icon {
   width: 34px;
   height: 34px;
@@ -318,6 +331,12 @@
 }
 
 .req-row app-pie-menu {
+  flex-shrink: 0;
+  margin-right: 56px;
+}
+/* Keep the radial fan-out inside the card: the bulk pie sits flush right, so give
+   it the same right margin the per-row pie has above. */
+.req-group__bulk app-pie-menu {
   flex-shrink: 0;
   margin-right: 56px;
 }
@@ -626,3 +645,9 @@
 }
 .ports-form input[type=number] { width: 130px; }
 .ports-form input[type=text] { flex: 1; min-width: 140px; }
+
+/* Rule being applied: spinner replaces the pie-menu; row dims + locks. */
+.req-row.is-busy { opacity: .7; }
+.req-busy { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.req-busy .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--border-strong, rgba(128,128,128,.4)); border-top-color: var(--accent, #5865f2); border-radius: 50%; animation: cd-spin .7s linear infinite; }
+@keyframes cd-spin { to { transform: rotate(360deg); } }

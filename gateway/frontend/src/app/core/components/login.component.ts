@@ -31,27 +31,37 @@ import { AuthService } from '../services/auth.service';
     </div>
   `,
   styles: [`
+    /* Was hand-rolled with its own --card/--muted/--input variable names that
+     * this app's actual theme (styles.css) never defines — those silently fell
+     * through to their hardcoded (dark-only) fallback constants regardless of
+     * theme, while the few names that DID happen to match a real token
+     * (--bg, --border, --accent) correctly followed light/dark. Net effect: a
+     * popup that was half-themed and half stuck in dark mode. Every value below
+     * now uses an actual token from styles.css, no fallback constants needed.
+     */
     .login-backdrop {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-      background: var(--bg, #12141a); z-index: 1000;
+      background: var(--bg); z-index: 1000;
     }
     .login-card {
       display: flex; flex-direction: column; gap: 12px; width: 340px; max-width: 90vw;
-      padding: 28px; border-radius: 12px; background: var(--card, #1b1e26);
-      box-shadow: 0 8px 40px rgba(0,0,0,.4); border: 1px solid var(--border, #2a2e3a);
+      padding: 28px; border-radius: var(--radius); background: var(--surface);
+      box-shadow: var(--shadow-pop); border: 1px solid var(--border); color: var(--text);
     }
     .login-card h1 { margin: 0; font-size: 22px; }
-    .login-hint { margin: 0; font-size: 13px; color: var(--muted, #8a90a2); line-height: 1.5; }
-    .login-hint code { background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
+    .login-hint { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+    .login-hint code { background: var(--surface-hover); padding: 1px 5px; border-radius: 4px; }
     .login-card input {
-      padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border, #2a2e3a);
-      background: var(--input, #12141a); color: inherit; font-size: 14px;
+      padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-strong);
+      background: var(--surface); color: var(--text); font-size: 14px;
     }
-    .login-error { margin: 0; font-size: 13px; color: #ff6b6b; }
+    .login-card input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .login-error { margin: 0; font-size: 13px; color: var(--danger); }
     .login-card button {
       padding: 10px 12px; border-radius: 8px; border: none; cursor: pointer;
-      background: var(--accent, #4a7dff); color: #fff; font-size: 14px; font-weight: 600;
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
     }
+    .login-card button:hover:not(:disabled) { background: var(--accent-strong); }
     .login-card button:disabled { opacity: .6; cursor: default; }
   `],
 })

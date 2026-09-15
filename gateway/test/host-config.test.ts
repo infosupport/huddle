@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// socket-proxy imports db.ts only for the grant checks; mocking keeps the
-// native better-sqlite3 binding out of this test (which is missing in a fresh
-// DMZ devcontainer, see rules.test.ts / grants.test.ts). The tested functions
-// are pure and do not touch the db.
+// socket-proxy imports db.ts only for the grant checks; mocking keeps db.ts —
+// which opens a database at import — out of this test. The tested functions are
+// pure and do not touch the db.
 vi.mock('../src/db', () => ({
   getGrant: () => null,
   isHostPortApproved: () => false,

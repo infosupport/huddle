@@ -15,7 +15,8 @@ import { buildPathDomains, excludePathModeRules } from '../../shared/components/
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
-import { BehaviorSubject, skip } from 'rxjs';
+import { FirewallGroupsPanelComponent } from '../firewall/firewall-groups-panel.component';
+import { BehaviorSubject, skip, forkJoin, Observable } from 'rxjs';
 
 interface DetailData {
   inspect: any;
@@ -39,7 +40,7 @@ interface PathRequestRow {
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent, FirewallGroupsPanelComponent],
   templateUrl: './container-detail.component.html',
   styleUrl: './container-detail.component.css',
 })
@@ -98,25 +99,26 @@ export class ContainerDetailComponent implements OnInit {
           path_pattern: r.path_pattern!,
           last_path: (r as any).last_path ?? null,
         })),
-    );
+    ).sort((a, b) => b.rule.last_seen - a.rule.last_seen);
   }
 
   onPathPieAction(actionId: string, row: PathRequestRow): void {
     const { rule } = row;
+    const done = { next: () => { this.reload(); this.setBusy([rule.id], false); }, error: () => this.setBusy([rule.id], false) };
     switch (actionId) {
       case 'path-allow':
-        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, row.path_pattern)
-          .subscribe(() => this.reload());
+        this.setBusy([rule.id], true);
+        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, row.path_pattern).subscribe(done);
         break;
       case 'path-prefix': {
         const prefix = this.toPrefix(row.path_pattern);
-        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, prefix)
-          .subscribe(() => this.reload());
+        this.setBusy([rule.id], true);
+        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, prefix).subscribe(done);
         break;
       }
       case 'path-deny':
-        this.api.resolveRule(rule.id, 'deny', 'rule', undefined, row.path_pattern)
-          .subscribe(() => this.reload());
+        this.setBusy([rule.id], true);
+        this.api.resolveRule(rule.id, 'deny', 'rule', undefined, row.path_pattern).subscribe(done);
         break;
       case 'path-later':
         this.deleteRule(rule);
@@ -144,6 +146,16 @@ export class ContainerDetailComponent implements OnInit {
 
   pathDomains(rules: Rule[]) { return buildPathDomains(rules); }
   excludePathMode(rules: Rule[]) { return excludePathModeRules(rules); }
+
+  parseMounts(raw: string | undefined): { hostPath: string; containerPath: string }[] {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
 
   enablePathMode(rule: Rule): void {
     this.api.setPathMode(rule.id, true).subscribe(() => { this.state.loadAll(); this.load(); });
@@ -174,6 +186,29 @@ export class ContainerDetailComponent implements OnInit {
   reconnectStatus = '';
   ideLinkStatus = '';
 
+  // Sandbox mode: the same detail serves an sbx microVM (type=sandbox in the URL).
+  // Firewall + Terminal(=connect) are shown; Docker + admin tabs are container-only.
+  isSandbox = false;
+  sbxMsg = '';
+  private static readonly SANDBOX_STUB = { Config: { Labels: {} }, NetworkSettings: { Networks: {} }, Created: null, Image: '' };
+  get sshHost(): string { return `${this.name}.sbx`; }
+  get vscodeLink(): string { return `vscode://vscode-remote/ssh-remote+root@${this.sshHost}/root`; }
+  get jetbrainsLink(): string { return `jetbrains://gateway/ssh/environment?h=${encodeURIComponent(this.sshHost)}&u=root&p=22&launchIde=true`; }
+  sbxTrustCa(): void {
+    this.sbxMsg = 'Installing Huddle CA…';
+    this.api.sbxTrustCa(this.name).subscribe({
+      next: (r) => { this.sbxMsg = r.ok ? '✓ CA installed — reconnect your editor' : `✗ CA install failed (exit ${r.code})`; },
+      error: (e) => { this.sbxMsg = '✗ ' + (e?.error?.error || 'CA install failed'); },
+    });
+  }
+  sbxSshSetup(): void {
+    this.sbxMsg = 'Enabling SSH bridge…';
+    this.api.sbxSshSetup().subscribe({
+      next: (r) => { this.sbxMsg = r.ok ? '✓ SSH bridge ready' : `✗ ssh setup failed (exit ${r.exitCode ?? r.code})`; },
+      error: (e) => { this.sbxMsg = '✗ ' + (e?.error?.error || 'ssh setup failed'); },
+    });
+  }
+
   ports = signal<ApprovedHostPort[]>([]);
   portsError = signal<string | null>(null);
   newPortHost = '';
@@ -183,8 +218,9 @@ export class ContainerDetailComponent implements OnInit {
 
   ngOnInit(): void {
     this.name = this.route.snapshot.paramMap.get('name') ?? '';
+    this.isSandbox = this.route.snapshot.queryParamMap.get('type') === 'sandbox';
     this.load();
-    this.loadPorts();
+    if (!this.isSandbox) this.loadPorts();
     // This page shows its own detail$ (getContainerDetail), separate from the
     // global state.rules$. Without this link a new firewall request only appeared
     // after a manual refresh. rules$ is refreshed by the WS, the foreground poll
@@ -196,7 +232,7 @@ export class ContainerDetailComponent implements OnInit {
     this.state.rules$
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
-    this.loadSudoGrant();
+    if (!this.isSandbox) this.loadSudoGrant();
     this.destroyRef.onDestroy(() => this.clearSudoExpiryTimer());
   }
 
@@ -286,6 +322,23 @@ export class ContainerDetailComponent implements OnInit {
   }
 
   load(): void {
+    if (this.isSandbox) {
+      // No docker inspect for a sandbox — derive rules from the firewall store,
+      // split into per-sandbox (container_id === name) and global. A stub inspect
+      // keeps the shared template's @let bindings happy; container-only sections
+      // are hidden via isSandbox in the template.
+      this.api.getRules().subscribe({
+        next: (all: Rule[]) => this.detail$.next({
+          inspect: ContainerDetailComponent.SANDBOX_STUB,
+          rules: all.filter((r) => r.container_id === this.name), // this sandbox's own rules
+          globalRules: all.filter((r) => !r.container_id),
+          huddleInNetwork: true,
+          airlocked: false,
+        }),
+        error: (err) => this.error$.next(err.message),
+      });
+      return;
+    }
     this.api.getContainerDetail(this.name).subscribe({
       next: (data: any) => this.detail$.next(data),
       error: (err) => this.error$.next(err.message),
@@ -294,25 +347,130 @@ export class ContainerDetailComponent implements OnInit {
 
   allowRules(rules: Rule[]) { return rules.filter(r => r.status === 'allow'); }
   denyRules(rules: Rule[]) { return rules.filter(r => r.status === 'deny'); }
-  requestedRules(rules: Rule[]) { return rules.filter(r => r.status === 'requested'); }
+  requestedRules(rules: Rule[]) { return rules.filter(r => r.status === 'requested').sort((a, b) => b.last_seen - a.last_seen); }
   tempAllowRules(rules: Rule[]) {
     const now = Math.floor(Date.now() / 1000);
     return rules.filter(r => r.status === 'allow' && r.expires_at && r.expires_at > now);
   }
   permanentAllowRules(rules: Rule[]) { return rules.filter(r => r.status === 'allow' && !r.expires_at); }
 
+  // Rules being applied right now — the row shows a spinner and is locked until
+  // the change is persisted + the list refreshed (so a click can't be lost or
+  // double-fired while Huddle writes the rule and syncs it to sbx).
+  busyRuleIds = signal<Set<number>>(new Set<number>());
+  isRuleBusy(id: number): boolean { return this.busyRuleIds().has(id); }
+  private setBusy(ids: number[], on: boolean): void {
+    const s = new Set(this.busyRuleIds());
+    for (const id of ids) { if (on) s.add(id); else s.delete(id); }
+    this.busyRuleIds.set(s);
+  }
+
   allowRule(rule: Rule): void {
-    this.api.resolveRule(rule.id, 'allow').subscribe(() => { this.state.loadAll(); this.load(); });
+    this.setBusy([rule.id], true);
+    this.api.resolveRule(rule.id, 'allow').subscribe({
+      next: () => { this.state.loadAll(); this.load(); this.setBusy([rule.id], false); },
+      error: () => this.setBusy([rule.id], false),
+    });
   }
   denyRule(rule: Rule): void {
-    this.api.resolveRule(rule.id, 'deny').subscribe(() => { this.state.loadAll(); this.load(); });
+    this.setBusy([rule.id], true);
+    this.api.resolveRule(rule.id, 'deny').subscribe({
+      next: () => { this.state.loadAll(); this.load(); this.setBusy([rule.id], false); },
+      error: () => this.setBusy([rule.id], false),
+    });
   }
   deleteRule(rule: Rule): void {
-    this.api.deleteRule(rule.id).subscribe(() => { this.state.loadAll(); this.load(); });
+    this.setBusy([rule.id], true);
+    this.api.deleteRule(rule.id).subscribe({
+      next: () => { this.state.loadAll(); this.load(); this.setBusy([rule.id], false); },
+      error: () => this.setBusy([rule.id], false),
+    });
   }
   allowTimed(rule: Rule, minutes: number): void {
     const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
-    this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
+    this.setBusy([rule.id], true);
+    this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe({
+      next: () => { this.state.loadAll(); this.load(); this.setBusy([rule.id], false); },
+      error: () => this.setBusy([rule.id], false),
+    });
+  }
+
+  // ── Pending selection (per section: domain requests vs path requests) ────────
+  pendingSel = new Set<number>();
+  pendingChecked(id: number): boolean { return this.pendingSel.has(id); }
+  togglePending(id: number): void {
+    this.pendingSel.has(id) ? this.pendingSel.delete(id) : this.pendingSel.add(id);
+  }
+  private allChecked(ids: number[]): boolean { return ids.length > 0 && ids.every((i) => this.pendingSel.has(i)); }
+  private toggleAll(ids: number[]): void {
+    if (ids.every((i) => this.pendingSel.has(i))) ids.forEach((i) => this.pendingSel.delete(i));
+    else ids.forEach((i) => this.pendingSel.add(i));
+  }
+  private selectedCount(ids: number[]): number { return ids.filter((i) => this.pendingSel.has(i)).length; }
+
+  domainAllChecked(rs: Rule[]): boolean { return this.allChecked(rs.map((r) => r.id)); }
+  toggleDomainAll(rs: Rule[]): void { this.toggleAll(rs.map((r) => r.id)); }
+  domainSelectedCount(rs: Rule[]): number { return this.selectedCount(rs.map((r) => r.id)); }
+  pathAllChecked(rows: PathRequestRow[]): boolean { return this.allChecked(rows.map((p) => p.rule.id)); }
+  togglePathAll(rows: PathRequestRow[]): void { this.toggleAll(rows.map((p) => p.rule.id)); }
+  pathSelectedCount(rows: PathRequestRow[]): number { return this.selectedCount(rows.map((p) => p.rule.id)); }
+
+  private afterBulk(ids: number[]): void {
+    ids.forEach((i) => this.pendingSel.delete(i));
+    this.state.loadAll();
+    this.load();
+    this.setBusy(ids, false);
+  }
+
+  // Bulk pie for domain requests — same config/actions as a single row (pieConfig).
+  onBulkPie(actionId: string, requested: Rule[]): void {
+    const rules = requested.filter((r) => this.pendingSel.has(r.id));
+    if (!rules.length) return;
+    // Global allow/deny changes policy for ALL containers, beyond this one. Match
+    // the confirmation the single-item global actions use.
+    if (actionId === 'approve-all' || actionId === 'deny-all') {
+      const verb = actionId === 'approve-all' ? 'Allow' : 'Deny';
+      if (!confirm(`${verb} ${rules.length} request${rules.length !== 1 ? 's' : ''} globally — for ALL containers? This changes global firewall policy.`)) return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const call = (r: Rule): Observable<unknown> => {
+      switch (actionId) {
+        case 'approve':     return this.api.resolveRule(r.id, 'allow', 'rule');
+        case 'approve-all': return this.api.resolveRule(r.id, 'allow', 'global');
+        case 'temp':        return this.api.resolveRule(r.id, 'allow', 'rule', now + 5 * 60);
+        case 'temp-10':     return this.api.resolveRule(r.id, 'allow', 'rule', now + 10 * 60);
+        case 'later':       return this.api.deleteRule(r.id) as unknown as Observable<unknown>;
+        case 'deny':        return this.api.resolveRule(r.id, 'deny', 'rule');
+        case 'deny-all':    return this.api.resolveRule(r.id, 'deny', 'global');
+        case 'pathmode':    return this.api.setPathMode(r.id, true);
+        default:            return this.api.resolveRule(r.id, 'allow', 'rule');
+      }
+    };
+    this.setBusy(rules.map((r) => r.id), true);
+    forkJoin(rules.map(call)).subscribe({
+      next: () => this.afterBulk(rules.map((r) => r.id)),
+      error: () => this.setBusy(rules.map((r) => r.id), false),
+    });
+  }
+
+  // Bulk pie for path sub-requests — mirrors pieConfigPath / onPathPieAction.
+  onBulkPathPie(actionId: string, pathReq: PathRequestRow[]): void {
+    const rows = pathReq.filter((p) => this.pendingSel.has(p.rule.id));
+    if (!rows.length) return;
+    const call = (row: PathRequestRow): Observable<unknown> => {
+      switch (actionId) {
+        case 'path-allow':  return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);
+        case 'path-prefix': return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, this.toPrefix(row.path_pattern));
+        case 'path-deny':   return this.api.resolveRule(row.rule.id, 'deny', 'rule', undefined, row.path_pattern);
+        case 'path-later':  return this.api.deleteRule(row.rule.id) as unknown as Observable<unknown>;
+        default:            return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);
+      }
+    };
+    this.setBusy(rows.map((p) => p.rule.id), true);
+    forkJoin(rows.map(call)).subscribe({
+      next: () => this.afterBulk(rows.map((p) => p.rule.id)),
+      error: () => this.setBusy(rows.map((p) => p.rule.id), false),
+    });
   }
 
   copyPassword(): void {

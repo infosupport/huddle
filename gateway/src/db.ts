@@ -1,9 +1,12 @@
-import Database from 'better-sqlite3';
+import crypto from 'crypto';
+import type { AuditEntry, AuditResponse } from './db-types';
+import { HuddleDatabase } from './sqlite';
+import { runtimeEnv } from './runtime-env';
 
-const DB_PATH = process.env.DB_PATH || '/data/huddle.db';
+const DB_PATH = runtimeEnv.dbPath;
 
-export const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+export const db = new HuddleDatabase(DB_PATH);
+db.exec('PRAGMA journal_mode = WAL');
 
 export function initDb(): void {
   db.exec(`
@@ -87,16 +90,6 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
-    CREATE TABLE IF NOT EXISTS folder_mappings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      host_path TEXT NOT NULL DEFAULT '',
-      volume_name TEXT NOT NULL DEFAULT '',
-      container_path TEXT NOT NULL,
-      read_only INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -107,7 +100,57 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE(container_id, host_port, protocol)
     );
+    -- Firewall groups (#69): a named, reusable bundle of firewall rules for a
+    -- product/service (OpenAI, GitHub, ...). Rules point at a group via
+    -- rules.group_id. The shared flag marks a group meant to travel between
+    -- installs; source records whether it was created in the UI (manual) or
+    -- loaded from the team-managed rules folder (startup-folder).
+    CREATE TABLE IF NOT EXISTS firewall_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      shared INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_groups_name
+      ON firewall_groups (name COLLATE NOCASE);
+    -- Per-sandbox identity (docs/ADR-sbx-identity.md). A sandbox cannot be
+    -- recognised by its source address the way a devcontainer is, so Huddle Node
+    -- mints a secret per box and puts it in the upstream-proxy URL sbx bakes in
+    -- at create. Node keeps the secret because it writes that URL; the control
+    -- feed hands the gateway only the name and the hash, which is all it needs
+    -- to recognise an identity without possessing one.
+    CREATE TABLE IF NOT EXISTS sandbox_identity (
+      name TEXT PRIMARY KEY,
+      secret TEXT NOT NULL,
+      secret_hash TEXT NOT NULL,
+      created INTEGER NOT NULL
+    );
+    -- Container names \`huddle migrate --docker-socket\` asked Node to serve a
+    -- filtered Docker socket for, ahead of the container ever existing (blocker
+    -- 15, docs/ADR-huddle-node-split.md). Node did not create these
+    -- containers, so it has no other way to learn their names before they
+    -- start — unlike a Huddle-created devcontainer, which the IDE label in
+    -- containerSnapshot() already covers. buildContainerFeed() unions this
+    -- table into ContainerFeed.devcontainers so the gateway's socket relay
+    -- (../socket-relay.ts) creates the socket regardless of whether the
+    -- container is running yet, which it has to be for the compose bind mount
+    -- to see a live socket instead of an empty directory.
+    CREATE TABLE IF NOT EXISTS socket_registrations (
+      name TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      revision TEXT NOT NULL DEFAULT '',
+      ready_at INTEGER
+    );
   `);
+
+  // The folder index (#69) is gone: the portal browses the host live now that
+  // Huddle Node runs there, so a snapshot of folder names is at best redundant
+  // and at worst wrong. Drop it rather than leave a table nothing reads —
+  // machine-local scan output, so there is nothing here worth migrating.
+  db.exec('DROP TABLE IF EXISTS indexed_folders');
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
   if (!cols.some(c => c.name === 'expires_at')) {
@@ -115,6 +158,16 @@ export function initDb(): void {
   }
   if (!cols.some(c => c.name === 'path_pattern')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_pattern TEXT');
+  }
+  // The first implementation of socket registrations only stored a name.
+  // Upgrade it in place if a development build created that short-lived schema
+  // before readiness acknowledgements were added.
+  const socketCols = db.prepare("PRAGMA table_info(socket_registrations)").all() as {name:string}[];
+  if (!socketCols.some(c => c.name === 'revision')) {
+    db.exec("ALTER TABLE socket_registrations ADD COLUMN revision TEXT NOT NULL DEFAULT ''");
+  }
+  if (!socketCols.some(c => c.name === 'ready_at')) {
+    db.exec('ALTER TABLE socket_registrations ADD COLUMN ready_at INTEGER');
   }
   // path_mode marks a host-only rule as a "path allowlist": the bare domain is
   // then closed (status deny), but unknown subpaths are raised as 'requested' so
@@ -127,6 +180,19 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'last_path')) {
     db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
   }
+  // Firewall groups (#69): a rule may belong to one group (NULL = ungrouped).
+  // added_by records the operator identity that created it (shown as "you" in
+  // the UI); source is 'manual' or 'startup-folder' (loaded from the team folder).
+  if (!cols.some(c => c.name === 'group_id')) {
+    db.exec('ALTER TABLE rules ADD COLUMN group_id INTEGER');
+  }
+  if (!cols.some(c => c.name === 'added_by')) {
+    db.exec('ALTER TABLE rules ADD COLUMN added_by TEXT');
+  }
+  if (!cols.some(c => c.name === 'source')) {
+    db.exec("ALTER TABLE rules ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_rules_group ON rules(group_id)');
 
   // Drop the legacy unique indexes FIRST. The lowercase migration below rewrites
   // `GIST.github.com` -> `gist.github.com`, which would collide with an existing
@@ -169,6 +235,22 @@ export function initDb(): void {
   db.prepare(
     `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES ('huddle', NULL, 'allow')`
   ).run();
+
+  // Keep Huddle's own self-traffic rule in a dedicated "huddle" group so it is
+  // clearly separated from user/team rules in the portal. Idempotent: the group
+  // is created once (unique name) and the seeded rule is filed under it.
+  db.prepare(
+    `INSERT OR IGNORE INTO firewall_groups (name, description, shared, source)
+     VALUES ('huddle', 'Huddle self-traffic (gateway and portal). Managed by Huddle.', 0, 'manual')`
+  ).run();
+  const huddleGroup = db
+    .prepare(`SELECT id FROM firewall_groups WHERE name = 'huddle' COLLATE NOCASE`)
+    .get() as { id: number } | undefined;
+  if (huddleGroup) {
+    db.prepare(
+      `UPDATE rules SET group_id = ? WHERE domain = 'huddle' AND container_id IS NULL AND group_id IS NULL`
+    ).run(huddleGroup.id);
+  }
 
   db.exec("DELETE FROM audit_log WHERE ts < unixepoch() - 604800");
 
@@ -302,20 +384,11 @@ function insertAudit() {
   return _insertAudit;
 }
 
-export interface AuditEntry {
-  containerId: string | null;
-  domain: string;
-  port?: number | null;
-  action: string;
-  ruleId?: number | null;
-  method?: string | null;
-  path?: string | null;
-  reqHeaders?: string | null;
-  reqBody?: string | null;
-  resStatus?: number | null;
-  resHeaders?: string | null;
-  resBody?: string | null;
-}
+
+// The audit row shapes live in ./db-types so the gateway can name them without
+// importing a native database binding. Re-exported here: every caller so far
+// imports them from './db', and that is still where they are written.
+export type { AuditEntry, AuditResponse } from './db-types';
 
 // Insert a single audit row. Returns the new row id (or null on error) so an
 // in-flight request can be logged immediately and later completed with the
@@ -342,12 +415,6 @@ export function logAudit(entry: AuditEntry): number | null {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _updateAudit: any = null;
-export interface AuditResponse {
-  reqBody?: string | null;
-  resStatus?: number | null;
-  resHeaders?: string | null;
-  resBody?: string | null;
-}
 
 // Fill in the response fields (and the now fully buffered req_body) on a
 // previously inserted in-flight audit row.
@@ -460,9 +527,13 @@ export function deleteMcpValues(id: string): void {
   db.prepare(`DELETE FROM ext_kv WHERE ext_id = ?`).run('mcp-' + id);
 }
 
-// ── Folder Mappings ───────────────────────────────────────────────────────────
+// ── Legacy folder mappings (pre-#98) ─────────────────────────────────────────
 
-export interface FolderMapping {
+// Folder mappings now live in the CLI config file (~/.huddle/config.json) so the
+// team can review and hand-edit them — see host-config.ts. The table is no longer
+// created for fresh installs; this reader exists only so an install that predates
+// #98 can migrate its rows once (settings-migration.ts).
+export interface LegacyFolderMappingRow {
   id: number;
   name: string;
   host_path: string;
@@ -473,55 +544,113 @@ export interface FolderMapping {
   sort_order: number;
 }
 
-export function listFolderMappings(): FolderMapping[] {
-  return db.prepare('SELECT * FROM folder_mappings ORDER BY sort_order ASC, id ASC').all() as FolderMapping[];
+export function readLegacyFolderMappings(): LegacyFolderMappingRow[] {
+  const table = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'folder_mappings'"
+  ).get();
+  if (!table) return [];
+  // Columns listed explicitly: the row shape below is what the migration maps,
+  // and a `SELECT *` would silently hand it whatever a future column adds.
+  return db.prepare(
+    `SELECT id, name, host_path, volume_name, container_path, read_only, enabled, sort_order
+       FROM folder_mappings ORDER BY sort_order ASC, id ASC`
+  ).all() as LegacyFolderMappingRow[];
 }
 
-export function getFolderMapping(id: number): FolderMapping | undefined {
-  return db.prepare('SELECT * FROM folder_mappings WHERE id = ?').get(id) as FolderMapping | undefined;
+// Validate the update keys of any table against its column allowlist. Pure (no
+// DB) so the SQL-injection defense (finding #9) is testable in isolation.
+// Returns the allowed keys; throws on any unknown key (fail-closed). Every
+// dynamic `UPDATE` in this module funnels its caller-supplied keys through here,
+// so the allowlist is the single place that decides what may reach the SQL text.
+export function validateUpdateKeys<K extends string>(
+  m: object,
+  allowed: ReadonlyArray<K>,
+  what: string,
+): K[] {
+  const permitted = allowed as ReadonlyArray<string>;
+  const keys = Object.keys(m);
+  const unknown = keys.filter(k => !permitted.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(`unknown ${what} field(s): ${unknown.join(', ')}`);
+  }
+  return keys.filter((k): k is K => permitted.includes(k));
 }
 
-export function createFolderMapping(m: Omit<FolderMapping, 'id'>): number {
+// ── Firewall Groups (#69) ─────────────────────────────────────────────────────
+
+export interface FirewallGroup {
+  id: number;
+  name: string;
+  description: string;
+  shared: number;
+  source: string; // 'manual' | 'startup-folder'
+  created_at: number;
+  updated_at: number;
+}
+
+export interface FirewallGroupWithCount extends FirewallGroup {
+  rule_count: number;
+}
+
+export function listGroups(): FirewallGroupWithCount[] {
+  return db.prepare(
+    `SELECT g.id, g.name, g.description, g.shared, g.source, g.created_at, g.updated_at,
+            (SELECT COUNT(*) FROM rules r WHERE r.group_id = g.id) AS rule_count
+       FROM firewall_groups g
+      ORDER BY g.name COLLATE NOCASE ASC`
+  ).all() as FirewallGroupWithCount[];
+}
+
+export function getGroup(id: number): FirewallGroup | undefined {
+  return db.prepare(
+    'SELECT id, name, description, shared, source, created_at, updated_at FROM firewall_groups WHERE id = ?'
+  ).get(id) as FirewallGroup | undefined;
+}
+
+export function getGroupByName(name: string): FirewallGroup | undefined {
+  // Columns listed explicitly (as in getGroup above) so the row shape stays tied
+  // to FirewallGroup instead of to whatever the table happens to hold.
+  return db.prepare(
+    'SELECT id, name, description, shared, source, created_at, updated_at FROM firewall_groups WHERE name = ? COLLATE NOCASE'
+  ).get(name) as FirewallGroup | undefined;
+}
+
+export function createGroup(g: { name: string; description?: string; shared?: number; source?: string }): number {
   const result = db.prepare(
-    `INSERT INTO folder_mappings (name, host_path, volume_name, container_path, read_only, enabled, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(m.name, m.host_path, m.volume_name, m.container_path, m.read_only, m.enabled, m.sort_order);
+    `INSERT INTO firewall_groups (name, description, shared, source) VALUES (?, ?, ?, ?)`
+  ).run(g.name, g.description ?? '', g.shared ?? 0, g.source ?? 'manual');
   return Number(result.lastInsertRowid);
 }
 
-// The columns that may be changed via update. The TS `Partial<>` is only a
-// compile-time guarantee — at runtime `m` comes straight from the request body.
-// Without this allowlist the JSON keys were interpolated unfiltered as SQL
-// identifiers, which made SQL injection via a crafted key possible (finding #9,
-// e.g. `container_path = (SELECT ...), name`).
-const FOLDER_MAPPING_COLUMNS: ReadonlyArray<keyof Omit<FolderMapping, 'id'>> = [
-  'name', 'host_path', 'volume_name', 'container_path', 'read_only', 'enabled', 'sort_order',
+// Column allowlist for dynamic updates — keys never come from request input into
+// the SQL text (same SQL-injection defense as folder mappings, finding #9).
+const FIREWALL_GROUP_COLUMNS: ReadonlyArray<'name' | 'description' | 'shared' | 'source'> = [
+  'name', 'description', 'shared', 'source',
 ];
 
-// Validate the update keys against the column allowlist. Pure (no DB) so the
-// SQL-injection defense (finding #9) is testable in isolation. Returns the
-// allowed keys; throws on any unknown key (fail-closed).
-export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
-  const allowed = FOLDER_MAPPING_COLUMNS as ReadonlyArray<string>;
-  const unknown = Object.keys(m).filter(k => !allowed.includes(k));
-  if (unknown.length > 0) {
-    throw new Error(`unknown folder-mapping field(s): ${unknown.join(', ')}`);
-  }
-  return Object.keys(m).filter((k): k is keyof Omit<FolderMapping, 'id'> => allowed.includes(k));
+export function validateGroupKeys(m: object): Array<'name' | 'description' | 'shared' | 'source'> {
+  return validateUpdateKeys(m, FIREWALL_GROUP_COLUMNS, 'group');
 }
 
-export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
-  // Only accept known columns; this way keys are never placed into the SQL text
-  // from caller input.
-  const keys = validateFolderMappingKeys(m);
+export function updateGroup(
+  id: number,
+  m: Partial<Pick<FirewallGroup, 'name' | 'description' | 'shared' | 'source'>>,
+): void {
+  const keys = validateGroupKeys(m);
   if (keys.length === 0) return;
-  const fields = keys.map(k => `${k} = ?`).join(', ');
-  const values = [...keys.map(k => (m as Record<string, unknown>)[k]), id];
-  db.prepare(`UPDATE folder_mappings SET ${fields} WHERE id = ?`).run(...values);
+  const fields = [...keys.map((k) => `${k} = ?`), 'updated_at = unixepoch()'].join(', ');
+  const values = [...keys.map((k) => (m as Record<string, unknown>)[k]), id];
+  db.prepare(`UPDATE firewall_groups SET ${fields} WHERE id = ?`).run(...values);
 }
 
-export function deleteFolderMapping(id: number): void {
-  db.prepare('DELETE FROM folder_mappings WHERE id = ?').run(id);
+// Deleting a group ungroups its rules (group_id → NULL); the rules themselves
+// are kept so an accidental group delete never silently opens/closes traffic.
+export function deleteGroup(id: number): void {
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE rules SET group_id = NULL WHERE group_id = ?').run(id);
+    db.prepare('DELETE FROM firewall_groups WHERE id = ?').run(id);
+  });
+  tx();
 }
 
 // ── Approved Host Ports ───────────────────────────────────────────────────────
@@ -559,4 +688,155 @@ export function isHostPortApproved(containerId: string, hostPort: number, protoc
   return !!db.prepare(
     'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
   ).get(containerId, hostPort, protocol);
+}
+
+// ── Docker-socket registrations (blocker 15) ─────────────────────────────────
+// See socket_registrations' CREATE TABLE comment above for why this exists.
+
+/**
+ * Register (or re-register) a name, and return the revision this call just
+ * wrote.
+ *
+ * The revision is generated here in JS, not in the SQL statement, so the
+ * caller can hang onto the exact value this call produced — see
+ * `unregisterSocketNameIfCurrent` below, which is what a caller needs that
+ * value for.
+ */
+export function registerSocketName(name: string): string {
+  // Reset readiness for every explicit request.  The gateway must acknowledge
+  // this registration again before the CLI tells the user it is safe to start
+  // Compose; an old acknowledgement cannot prove a restarted gateway listens.
+  const revision = crypto.randomBytes(16).toString('hex');
+  db.prepare(`INSERT INTO socket_registrations (name, revision, ready_at)
+              VALUES (?, ?, NULL)
+              ON CONFLICT(name) DO UPDATE SET revision = excluded.revision, ready_at = NULL`)
+    .run(name, revision);
+  return revision;
+}
+
+/**
+ * Undo a registration unconditionally — the counterpart `registerSocketName`
+ * never had.
+ *
+ * `pruneDeadSocketRegistrations` below does the equivalent delete itself
+ * inline (it needs to match a whole set of dead names in one statement, not
+ * just one), rather than looping over this — but it is the same operation,
+ * and worth spelling out here why THAT delete gets away without
+ * revision-scoping despite this function existing: its own
+ * `ready_at IS NOT NULL` condition already keeps it from touching a row a
+ * fresh concurrent `registerSocketName` just reset to `ready_at = NULL` (a
+ * brand-new registration is never "ready" yet), so it can only ever hit a
+ * row nobody is mid-registration on. Kept as the general unconditional
+ * primitive for any future caller that has the same guarantee some other
+ * way and does not need `unregisterSocketNameIfCurrent`'s revision check.
+ * Safe to call for a name that was never registered (0 rows affected, no
+ * error) so callers do not need to check first.
+ */
+export function unregisterSocketName(name: string): void {
+  db.prepare('DELETE FROM socket_registrations WHERE name = ?').run(name);
+}
+
+/**
+ * Undo a registration, but only if it is still the exact one this call made.
+ *
+ * `createAndStartContainer` (docker.ts) uses this to roll back its own
+ * registration when anything after it fails before the container is
+ * actually up. Two requests can race on the same name (two authenticated
+ * starts, or a start racing `huddle migrate`): `registerSocketName` replaces
+ * the row and mints a new revision on every call, so if a second request
+ * re-registered this name while the first was still waiting or creating, the
+ * row now belongs to the second request. Scoping the delete to the revision
+ * the first call's own `registerSocketName` returned means that race turns
+ * this rollback into a safe no-op instead of deleting the second request's
+ * live registration out from under it (the regression this guards against —
+ * see the Aikido finding on this fix).
+ */
+export function unregisterSocketNameIfCurrent(name: string, revision: string): void {
+  db.prepare('DELETE FROM socket_registrations WHERE name = ? AND revision = ?').run(name, revision);
+}
+
+/**
+ * Drop registrations that are stale rather than merely not-yet-running.
+ *
+ * `ready_at IS NOT NULL` is the signal that separates the two: it means the
+ * gateway already served this name's socket at least once, so the container
+ * genuinely existed. If that name is now missing from `liveNames` (Docker's
+ * current running list, from containerSnapshot()), the container is gone —
+ * removed directly against the engine, since there is no delete route in
+ * Huddle to have unregistered it. A row with `ready_at IS NULL` is left
+ * alone no matter what: that is exactly the state `huddle migrate
+ * --docker-socket` (and createAndStartContainer, briefly) put it in on
+ * purpose, ahead of the container ever running — pruning on "not running yet"
+ * would break that registration before it had a chance to be served.
+ *
+ * Called from buildContainerFeed(), which runs on every gateway poll (~1s,
+ * see boot-gateway.ts) — kept to one indexed DELETE so that stays cheap.
+ *
+ * A `ready_at IS NULL` row is left alone above so a registration is not
+ * pruned before its container has had a chance to start — but nothing else
+ * ever clears one of these if that start never happens: `huddle migrate
+ * --docker-socket` registers ahead of a `docker compose up` the operator may
+ * never run, and a devcontainer create that fails before this poll ever sees
+ * it (or whose rollback is otherwise bypassed) leaves the same shape behind.
+ * Left unbounded, such a row is a permanent phantom registration — the relay
+ * keeps a socket directory open for a name nothing will ever use.
+ * PENDING_REGISTRATION_MAX_AGE_SEC is the line between "early" and "stale":
+ * once a still-pending registration is older than that AND its name is not
+ * currently live, it self-heals on the next poll regardless of whether the
+ * caller that created it ever explicitly unregisters.
+ */
+const PENDING_REGISTRATION_MAX_AGE_SEC = 60 * 60;
+
+export function pruneDeadSocketRegistrations(liveNames: string[]): void {
+  if (liveNames.length === 0) {
+    db.prepare(
+      `DELETE FROM socket_registrations WHERE ready_at IS NOT NULL OR created_at < unixepoch() - ?`
+    ).run(PENDING_REGISTRATION_MAX_AGE_SEC);
+    return;
+  }
+  const placeholders = liveNames.map(() => '?').join(',');
+  db.prepare(
+    `DELETE FROM socket_registrations
+      WHERE (ready_at IS NOT NULL OR created_at < unixepoch() - ?)
+        AND name NOT IN (${placeholders})`
+  ).run(PENDING_REGISTRATION_MAX_AGE_SEC, ...liveNames);
+}
+
+export function listRegisteredSocketNames(): string[] {
+  return (db.prepare('SELECT name FROM socket_registrations ORDER BY name').all() as { name: string }[])
+    .map((r) => r.name);
+}
+
+/** Included in the feed hash so re-registering an existing name repolls it. */
+export function socketRegistrationRevisions(): Record<string, string> {
+  const rows = db.prepare('SELECT name, revision FROM socket_registrations ORDER BY name').all() as { name: string; revision: string }[];
+  return Object.fromEntries(rows.map((r) => [r.name, r.revision]));
+}
+
+/**
+ * Acknowledge that a name's Unix listener is bound and serving.
+ *
+ * `revision`, when given, scopes the ack the same way
+ * `unregisterSocketNameIfCurrent` scopes a rollback: a late "ready" ack
+ * answering an OLD registration must not mark a NEWER one (of the same name,
+ * a fresh revision from a `registerSocketName` call that raced ahead of this
+ * ack) ready — nothing has verified that newer registration's socket yet,
+ * only the one this ack was actually issued for. Optional so callers that
+ * predate this parameter keep working unscoped; passing it is what actually
+ * closes the staleness window described above.
+ */
+export function markSocketReady(name: string, revision?: string): boolean {
+  if (revision !== undefined) {
+    return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ? AND revision = ?')
+      .run(name, revision).changes > 0;
+  }
+  return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ?').run(name).changes > 0;
+}
+
+export function socketNamesReady(names: string[]): boolean {
+  if (names.length === 0) return true;
+  const placeholders = names.map(() => '?').join(',');
+  const row = db.prepare(`SELECT count(*) AS total, sum(ready_at IS NOT NULL) AS ready
+                          FROM socket_registrations WHERE name IN (${placeholders})`).get(...names) as { total: number; ready: number };
+  return row.total === names.length && row.ready === names.length;
 }

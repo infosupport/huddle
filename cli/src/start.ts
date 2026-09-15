@@ -6,6 +6,8 @@ import { bold, green, cyan, dim } from './utils';
 export interface StartOptions {
   ide: string;
   workspace?: string;
+  mounts?: { hostPath: string; containerPath: string }[];
+  workspaceRoot?: string;
   name?: string;
   image?: string;
   empty: boolean;
@@ -24,12 +26,47 @@ interface StartResponse {
 
 export async function runStart(opts: StartOptions): Promise<void> {
   const ide = parseIde(opts.ide);
-  const workspaceDir = opts.empty ? undefined : resolveWorkspace(opts.workspace);
-  const baseName = opts.empty ? 'empty' : path.basename(workspaceDir!);
+  const hasMounts = !!opts.mounts && opts.mounts.length > 0;
+  if (hasMounts && opts.workspace) {
+    throw new Error('Cannot combine --workspace with --mount; use --mount for every folder instead.');
+  }
+  if (hasMounts && opts.empty) {
+    throw new Error('Cannot combine --empty with --mount.');
+  }
+
+  const resolvedMounts = hasMounts
+    ? opts.mounts!.map((m) => ({ hostPath: resolveWorkspace(m.hostPath), containerPath: validateContainerPath(m.containerPath) }))
+    : undefined;
+  if (resolvedMounts) {
+    const seen = new Set<string>();
+    for (const m of resolvedMounts) {
+      if (seen.has(m.containerPath)) throw new Error(`Duplicate --mount container path: ${m.containerPath}`);
+      seen.add(m.containerPath);
+    }
+  }
+
+  const workspaceRoot = opts.workspaceRoot?.trim() || undefined;
+  if (workspaceRoot && !hasMounts) {
+    throw new Error('--workspace-root requires at least one --mount.');
+  }
+  if (workspaceRoot && !workspaceRoot.startsWith('/')) {
+    throw new Error(`--workspace-root must be an absolute container path: "${workspaceRoot}".`);
+  }
+
+  const workspaceDir = opts.empty || hasMounts ? undefined : resolveWorkspace(opts.workspace);
+  const baseName = opts.empty
+    ? 'empty'
+    : hasMounts
+      ? (resolvedMounts![0].containerPath.split('/').filter(Boolean).pop() ?? 'workspace')
+      : path.basename(workspaceDir!);
   const containerName = opts.name ? validateContainerName(opts.name) : defaultContainerName(baseName);
 
   console.log(`Starting ${bold(containerName)} with ${bold(ide)}...`);
   if (workspaceDir) console.log(dim(`Workspace: ${workspaceDir}`));
+  if (resolvedMounts) {
+    for (const m of resolvedMounts) console.log(dim(`Mount ${m.hostPath} -> ${m.containerPath}`));
+    if (workspaceRoot) console.log(dim(`Open IDE at: ${workspaceRoot}`));
+  }
 
   let imageName = opts.image;
   if (!imageName) {
@@ -44,6 +81,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
     ideName: IdeName;
     empty?: boolean;
     workspaceDir?: string;
+    mounts?: { hostPath: string; containerPath: string }[];
+    containerWorkspace?: string;
   } = {
     imageName,
     containerName,
@@ -52,6 +91,9 @@ export async function runStart(opts: StartOptions): Promise<void> {
 
   if (opts.empty) {
     body.empty = true;
+  } else if (resolvedMounts) {
+    body.mounts = resolvedMounts;
+    if (workspaceRoot) body.containerWorkspace = workspaceRoot;
   } else {
     body.workspaceDir = workspaceDir;
   }
@@ -103,6 +145,14 @@ function validateContainerName(name: string): string {
   const trimmed = name.trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(trimmed)) {
     throw new Error(`Invalid container name: ${name}`);
+  }
+  return trimmed;
+}
+
+function validateContainerPath(path: string): string {
+  const trimmed = (path ?? '').replace(/\\/g, '/').replace(/\/+$/, '').trim();
+  if (!trimmed.startsWith('/')) {
+    throw new Error(`Invalid --mount container path: "${path}". Use an absolute path, e.g. /workspace/backend.`);
   }
   return trimmed;
 }

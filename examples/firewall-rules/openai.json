@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "OpenAI",
+    "description": "Domains required for OpenAI / ChatGPT API and file access.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "api.openai.com",     "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "chat.openai.com",    "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "cdn.openai.com",     "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "files.openai.com",   "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "oaiusercontent.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}

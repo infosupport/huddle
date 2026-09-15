@@ -6,8 +6,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // classifyRequest moet elk pad dat de proxy-dispatch kent op precies één actie
 // afbeelden; onbekende paden → null → deny.
 
-// db.ts gemockt (native better-sqlite3-binding ontbreekt in verse DMZ-dev-
-// containers, zie rules.test.ts) — met muteerbare state per test.
+// db.ts gemockt (het opent bij import een database) — met muteerbare state per
+// test.
 const state = {
   grant: null as { until: number } | null,
   policies: new Map<string, boolean>(),

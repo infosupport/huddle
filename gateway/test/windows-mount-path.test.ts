@@ -13,12 +13,11 @@ import { EventEmitter } from 'events';
 //    the /mnt/<drive> form there fails container creation with "bind source
 //    path does not exist" (#93).
 //
-// docker.ts imports ./db (native better-sqlite3 binding, absent in a fresh
-// devcontainer — see rules.test.ts) transitively via socket-proxy/sudo-grant,
-// so it is mocked here purely to allow the module to load.
+// docker.ts imports ./db (which opens a database at import) transitively via
+// socket-proxy/sudo-grant, so it is mocked here purely to allow the module to
+// load.
 vi.mock('../src/db', () => ({
   getSetting: () => null,
-  listFolderMappings: () => [],
   isHostPortApproved: () => false,
   getGrant: () => null,
   getActionPolicy: () => null,
