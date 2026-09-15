@@ -74,6 +74,15 @@ jobs:
         run: npm pack --dry-run --ignore-scripts
         working-directory: packages/${{ matrix.package }}
 
+      # The staged binary is what npm publishes. macOS kills an unsigned or
+      # invalidly-signed arm64 executable on exec before it prints anything, and
+      # a lenient runner can still boot one during the smoke test, so assert the
+      # signature on the artefact itself (build-sea.mjs step 7c).
+      - name: Verify macOS code signature
+        if: matrix.platform == 'darwin'
+        run: codesign --verify --strict --verbose=2 bin/Huddle.app/Contents/MacOS/huddle-node
+        working-directory: packages/${{ matrix.package }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: huddle-node-${{ matrix.target }}
