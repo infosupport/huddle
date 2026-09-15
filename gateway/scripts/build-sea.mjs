@@ -420,7 +420,13 @@ if (IS_WIN) {
 if (IS_MAC) {
   step('7c', 'Signing');
   run('codesign', ['--force', '--sign', '-', STAGED]);
-  ok('ad-hoc signed');
+  // Verify, do not trust: the smoke test below passed on a CI runner with an
+  // UNSIGNED binary once (experiment-109.61.1), and that build shipped. A
+  // lenient build host must not be able to produce an artefact a strict one
+  // kills on exec, so the signature is asserted here regardless of whether
+  // the binary happens to run.
+  run('codesign', ['--verify', '--strict', STAGED]);
+  ok('ad-hoc signed and verified');
 }
 
 // -------------------------------------------------------------- 8. smoke test
