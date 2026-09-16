@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, getSetting, setSetting, listFolderMappings, getFolderMapping, createFolderMapping, updateFolderMapping, deleteFolderMapping, FolderMapping, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort } from './db';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
+import { containerWorkspacePath, normalizeWorkspaceDir } from './workspace-path';
 import {
   listDevcontainers,
   inspectContainer,
@@ -584,16 +585,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!empty && !workspaceDir) {
         return reply.code(400).send({ error: 'workspaceDir required when empty is not set' });
       }
-      const fwd = (workspaceDir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
-      const leaf = empty
-        ? containerName.replace(/^devcontainer-/, '') || containerName
-        : (fwd.split('/').pop() ?? containerName);
+      const fwd = normalizeWorkspaceDir(workspaceDir);
+      const containerWorkspace = containerWorkspacePath(fwd, containerName, empty === true);
+      const leaf = containerWorkspace.slice('/workspaces/'.length);
       const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,
         containerName,
-        containerWorkspace: `/workspaces/${leaf}`,
+        containerWorkspace,
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
@@ -602,7 +602,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
       };
       try {
         const id = await createAndStartContainer(params);
-        return { id, containerName };
+        // containerWorkspace is echoed back so a client (the CLI) can point an
+        // IDE at the mount without re-deriving the path itself.
+        return { id, containerName, containerWorkspace };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
       }
