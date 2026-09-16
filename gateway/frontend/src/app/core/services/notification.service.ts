@@ -6,6 +6,8 @@ import { Rule } from '../models/rule.model';
 
 @Injectable({ providedIn: 'root' })
 export class NotificationService {
+  private static readonly ENABLED_STORAGE_KEY = 'huddle-notifications-enabled';
+
   private state = inject(StateService);
   private destroyRef = inject(DestroyRef);
 
@@ -19,7 +21,12 @@ export class NotificationService {
       navigator.serviceWorker.register('/notification-sw.js').catch(() => {});
     }
 
-    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    const savedPreference = localStorage.getItem(NotificationService.ENABLED_STORAGE_KEY);
+    if (
+      typeof Notification !== 'undefined' &&
+      Notification.permission === 'granted' &&
+      savedPreference !== 'false'
+    ) {
       this.enabled$.next(true);
     }
 
@@ -72,15 +79,20 @@ export class NotificationService {
     if (typeof Notification === 'undefined') return;
 
     if (this.enabled$.value) {
-      this.enabled$.next(false);
+      this.setEnabled(false);
       return;
     }
 
     if (Notification.permission === 'granted') {
-      this.enabled$.next(true);
+      this.setEnabled(true);
     } else if (Notification.permission !== 'denied') {
       const perm = await Notification.requestPermission();
-      this.enabled$.next(perm === 'granted');
+      this.setEnabled(perm === 'granted');
     }
+  }
+
+  private setEnabled(enabled: boolean): void {
+    localStorage.setItem(NotificationService.ENABLED_STORAGE_KEY, String(enabled));
+    this.enabled$.next(enabled);
   }
 }
