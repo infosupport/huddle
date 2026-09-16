@@ -173,6 +173,7 @@ function ensurePathModeMarkers(
   rules: Array<Pick<ShareableGroupRule, 'domain' | 'path_pattern'> & { container_id?: string | null }>,
   containerOverride: string | null | undefined,
   groupId: number,
+  source: string,
 ): void {
   const seen = new Set<string>();
   for (const r of rules) {
@@ -183,7 +184,7 @@ function ensurePathModeMarkers(
     seen.add(key);
     // The marker joins the group as well, so a path-mode domain the group brings
     // along is not left sitting in "Ungrouped" (#98).
-    ensurePathModeMarker(r.domain, container, groupId);
+    ensurePathModeMarker(r.domain, container, groupId, source);
   }
 }
 
@@ -280,7 +281,7 @@ export function importGroupEnvelope(
       updateRule,
     };
     for (const r of env.rules) counts[importEnvelopeRule(r, ctx)]++;
-    ensurePathModeMarkers(env.rules, undefined, groupId);
+    ensurePathModeMarkers(env.rules, undefined, groupId, source);
     group = getGroup(groupId)!;
   });
   tx();
@@ -345,7 +346,9 @@ export function applyGroup(
     }
     // Ensure the host-only path-mode marker exists in the TARGET scope for every
     // applied path rule, so path-scoped rules are admitted over HTTPS CONNECT.
-    ensurePathModeMarkers(members, container, groupId);
+    // Applying always stamps 'manual' copies (see insertRule above), regardless
+    // of the group's own source.
+    ensurePathModeMarkers(members, container, groupId, 'manual');
   });
   tx();
 

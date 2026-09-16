@@ -747,7 +747,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/groups/import',
     async (req, reply) => {
       const body = req.body ?? {};
-      const mode = body.mode === 'replace' ? 'replace' : 'merge';
+      const mode = body.mode ?? 'merge';
+      if (mode !== 'merge' && mode !== 'replace') {
+        return reply.code(400).send({ error: 'mode must be "merge" or "replace"' });
+      }
       // Accept either { mode, envelope: {...} } or a bare envelope in the body.
       const rawEnvelope = body.envelope ?? body;
       let env;
@@ -1496,22 +1499,33 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (replace && !normalizedRoot) {
         return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
       }
-      let removed = 0;
-      if (replace) removed = clearIndexedFolders(normalizedRoot);
-
       let added = 0;
       let updated = 0;
       let skipped = 0;
       const invalid: { path: string; error: string }[] = [];
-      // Dedupe inside the batch too: the caller may well send two spellings of
-      // the same folder, and 'skipped' should not depend on insertion order.
-      const seen = new Set<string>();
-      let total = countIndexedFolders();
+      const validPaths: string[] = [];
       for (const candidate of raw) {
         if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
         const normalized = normalizeHostPath(candidate);
         const err = hostPathError(normalized);
         if (err) { invalid.push({ path: candidate, error: err }); continue; }
+        validPaths.push(normalized);
+      }
+      // A replace must be all-or-nothing: validating the whole batch before
+      // clearing anything means a malformed entry rejects the request instead
+      // of deleting the old subtree and leaving it that way (finding: replace
+      // deletes before the batch is validated).
+      if (replace && invalid.length > 0) {
+        return reply.code(400).send({ error: 'invalid_paths', invalid });
+      }
+      let removed = 0;
+      if (replace) removed = clearIndexedFolders(normalizedRoot);
+
+      // Dedupe inside the batch too: the caller may well send two spellings of
+      // the same folder, and 'skipped' should not depend on insertion order.
+      const seen = new Set<string>();
+      let total = countIndexedFolders();
+      for (const normalized of validPaths) {
         const key = normalized.toLowerCase();
         if (seen.has(key)) { skipped++; continue; }
         seen.add(key);

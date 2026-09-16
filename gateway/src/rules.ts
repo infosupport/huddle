@@ -410,7 +410,13 @@ export function isPathMode(domain: string, containerId: string | null): boolean 
 // importing a firewall group: the marker is that group's "blocked at the root"
 // row in this scope, so leaving it ungrouped would show the group's path-mode
 // domain under "Ungrouped" in the portal (#98).
-export function ensurePathModeMarker(domain: string, containerId: string | null, groupId?: number): void {
+// `source` must match whatever the caller is inserting its own rows as (e.g.
+// 'startup-folder' for a team-folder import). Folder reload only ever deletes
+// source='startup-folder' rows (clearFolderManagedRules); a marker created here
+// without that source would survive reload after its path rule is removed from
+// the JSON, leaving the domain stuck blocked/intercepted with no way to clear it
+// from the folder.
+export function ensurePathModeMarker(domain: string, containerId: string | null, groupId?: number, source = 'manual'): void {
   const marker = db
     .prepare(
       `SELECT id, status, path_mode, group_id FROM rules WHERE domain = ? COLLATE NOCASE AND COALESCE(container_id, '') = COALESCE(?, '') AND path_pattern IS NULL`
@@ -418,8 +424,8 @@ export function ensurePathModeMarker(domain: string, containerId: string | null,
     .get(domain, containerId) as { id: number; status: RuleStatus; path_mode: number; group_id: number | null } | undefined;
   if (!marker) {
     db.prepare(
-      `INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, group_id) VALUES (?, ?, 'deny', NULL, 1, ?)`
-    ).run(domain, containerId, groupId ?? null);
+      `INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, group_id, source) VALUES (?, ?, 'deny', NULL, 1, ?, ?)`
+    ).run(domain, containerId, groupId ?? null, source);
     return;
   }
   if (marker.path_mode !== 1) {

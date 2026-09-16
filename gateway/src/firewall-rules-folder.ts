@@ -101,10 +101,21 @@ export interface FolderReloadSummary {
 // intact — and reports what to fix.
 function parseEnvelopeFiles(mount: string, entries: string[], summary: FolderReloadSummary): { file: string; env: GroupEnvelope }[] {
   const parsed: { file: string; env: GroupEnvelope }[] = [];
+  // Two files declaring the same group name would otherwise both import fine on
+  // their own and only collide once applyParsedEnvelopes replaces them in
+  // sorted-filename order — the later file silently wins and deletes the earlier
+  // one's rules. Catch the ambiguity here instead, per file, so it is reported
+  // like any other malformed file and aborts the reload (last-good policy kept).
+  const seenNames = new Map<string, string>();
   for (const file of entries) {
     summary.files++;
     try {
-      parsed.push({ file, env: readEnvelopeFile(mount, file) });
+      const env = readEnvelopeFile(mount, file);
+      const key = env.group.name.trim().toLowerCase();
+      const prior = seenNames.get(key);
+      if (prior) throw new Error(`duplicate group name "${env.group.name}" (already declared in ${prior})`);
+      seenNames.set(key, file);
+      parsed.push({ file, env });
     } catch (err) {
       summary.errors.push({ file, message: (err as Error).message });
     }
