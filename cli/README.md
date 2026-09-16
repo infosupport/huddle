@@ -21,13 +21,21 @@ Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with D
 ## Starting devcontainers
 
 ```bash
-huddle                 # start an IntelliJ devcontainer for the current directory
-huddle ./project       # start for a specific directory
-huddle --ide rider
-huddle --ide vscode --name devcontainer-demo
+huddle start [options] [folder]
+```
+
+```bash
+huddle start                 # start an IntelliJ devcontainer for the current directory
+huddle start ./project       # start for a specific directory
+huddle start --ide rider
+huddle start --ide vscode --name devcontainer-demo
 huddle fw list
 huddle firewall list -i
 ```
+
+Start options: `--ide <intellij|rider|vscode>` (default: `intellij`), `--workspace <path>`,
+`--name <name>`, `--image <image>`, `--empty`. `start` is the default command, so
+`huddle --ide rider ./project` works too.
 
 Default API URL: `http://localhost:3000`. Override it with `--url` or `HUDDLE_URL`.
 
