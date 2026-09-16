@@ -542,6 +542,21 @@ const DOCKER_SOCK_SYMLINK = `# Docker access goes via the socket in the mounted 
 # (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
+const HUDDLE_PROXY_URL = 'http://huddle:80';
+const HUDDLE_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
+const HUDDLE_PROXY_ENV = {
+  http_proxy: HUDDLE_PROXY_URL,
+  https_proxy: HUDDLE_PROXY_URL,
+  HTTP_PROXY: HUDDLE_PROXY_URL,
+  HTTPS_PROXY: HUDDLE_PROXY_URL,
+  no_proxy: HUDDLE_NO_PROXY,
+  NO_PROXY: HUDDLE_NO_PROXY,
+};
+
+export const HUDDLE_PROXY_PROFILE = Object.entries(HUDDLE_PROXY_ENV)
+  .map(([name, value]) => `export ${name}='${value}'`)
+  .join('\n');
+
 // Create the admin user `noot` in the sudo/wheel group, but LOCKED and without a
 // usable password. Deliberately no password is set here: that only happens per
 // grant (ephemeral, see sudo-grant.ts) and is locked again afterwards. Idempotent
@@ -554,11 +569,28 @@ export DEBIAN_FRONTEND=noninteractive
 command -v sudo >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y --no-install-recommends sudo passwd; }
 id noot >/dev/null 2>&1 || useradd -m -s /bin/bash noot
 usermod -aG sudo noot 2>/dev/null || usermod -aG wheel noot 2>/dev/null || true
+# Docker's container environment is discarded by a su login. Restore Huddle's fixed
+# proxy route for login shells before sudo's scoped env_keep policy takes over.
+cat > /etc/profile.d/99-huddle-proxy.sh <<'EOF'
+${HUDDLE_PROXY_PROFILE}
+EOF
+chmod 644 /etc/profile.d/99-huddle-proxy.sh
 # Lock + expiry: a freshly created account is already locked ('!'), but this also
 # covers upgrades of containers that previously had a standing password.
 usermod -L noot 2>/dev/null || true
 passwd -l noot 2>/dev/null || true
 passwd -e noot 2>/dev/null || true`;
+
+export const NOOT_SUDOERS_POLICY = `Defaults logfile=/tmp/sudo-audit.log
+Defaults:noot env_keep += "HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy"`;
+
+// Keep the sudo policy shared so JetBrains and VS Code containers cannot drift.
+const NOOT_SUDOERS_SETUP = `# Configure sudo audit logging and preserve Huddle's proxy-only egress for noot
+mkdir -p /etc/sudoers.d
+cat > /etc/sudoers.d/99-huddle-audit <<'EOF'
+${NOOT_SUDOERS_POLICY}
+EOF
+chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true`;
 
 // Finding #15 (IDE channel, VS Code Remote + JetBrains Gateway): the attach
 // channel goes over `docker exec`/stdio and is seen by NEITHER the egress proxy
@@ -618,7 +650,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
+export function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -713,10 +745,7 @@ chmod -R u+rwX "${containerWorkspace}" 2>/dev/null || true
 
 ${seedScript}
 
-# Configure sudo audit logging
-mkdir -p /etc/sudoers.d
-printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
-chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+${NOOT_SUDOERS_SETUP}
 
 # Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
@@ -777,7 +806,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
+export function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -822,10 +851,7 @@ for VSCODE_HOME in /home/vscode/.vscode-server /home/vscode/.vscode-server-insid
 done
 chown -R vscode:vscode /home/vscode/.vscode-server /home/vscode/.vscode-server-insiders 2>/dev/null || true
 
-# Configure sudo audit logging
-mkdir -p /etc/sudoers.d
-printf 'Defaults logfile=/tmp/sudo-audit.log\\n' > /etc/sudoers.d/99-huddle-audit
-chmod 440 /etc/sudoers.d/99-huddle-audit 2>/dev/null || true
+${NOOT_SUDOERS_SETUP}
 
 # Start sudo log forwarder (posts new lines to Huddle API via the proxy)
 touch /tmp/sudo-audit.log
@@ -989,16 +1015,11 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     '_CONTAINER_USER_HOME=/home/vscode',
     '_REMOTE_USER=vscode',
     '_REMOTE_USER_HOME=/home/vscode',
-    'http_proxy=http://huddle:80',
-    'https_proxy=http://huddle:80',
-    'HTTP_PROXY=http://huddle:80',
-    'HTTPS_PROXY=http://huddle:80',
     // Loopback must never go via the proxy: it cannot reach the container's own
     // loopback. The bracketed form `[::1]` is included explicitly because
     // .NET/Aspire's DCP addresses its targets as `http://[::1]:<port>` and
     // NO_PROXY matches literally against that bracketed host (issue #12).
-    'no_proxy=localhost,127.0.0.1,::1,[::1]',
-    'NO_PROXY=localhost,127.0.0.1,::1,[::1]',
+    ...Object.entries(HUDDLE_PROXY_ENV).map(([name, value]) => `${name}=${value}`),
     // CA trust at the container level so EVERY process trusts the MITM CA — not
     // only login shells that source /etc/profile.d. Without this, tools started by
     // the IDE/non-login shell validate against their own bundle, reject the leaf
