@@ -98,7 +98,8 @@ function configureVscodeAttach(containerName: string, containerWorkspace: string
     console.log(yellow(`! Left ${file} untouched: ${reason}`));
   }
   if (!result.written.length && !result.skipped.length) {
-    console.log(dim('No VS Code installation found to configure; attach opens an empty window.'));
+    console.log(dim('No VS Code config changes were made; if attach opens an empty window, use File > Open Folder on the container workspace.'));
+  }
   }
 
   // The name-level config above wins for THIS container, but a leftover
