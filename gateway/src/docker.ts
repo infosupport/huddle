@@ -147,10 +147,23 @@ HUDDLE_IP=$(getent hosts huddle 2>/dev/null | awk '{print $1}')
 iptables -t nat -L OUTPUT --line-numbers -n 2>/dev/null \
   | awk '/DNAT.*dpt:80/{print $1}' | sort -rn \
   | while read LINE; do iptables -t nat -D OUTPUT "$LINE" 2>/dev/null || true; done
+# Determine the dc-net subnet(s): the interface that carries the route to huddle.
+# Deliberately NOT every global-scope interface — a second, routable NIC must
+# never end up in the ACCEPT/RETURN exemptions below. No interface found means no
+# exemption at all (fail closed).
+DC_IF=$(ip -o route get "$HUDDLE_IP" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev") {print $(i+1); exit}}')
+DC_CIDRS=$(ip -o -f inet addr show dev "$DC_IF" scope global 2>/dev/null | awk '{print $4}')
 iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || true
+for CIDR in $DC_CIDRS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null \
+    || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null || true
+done
 iptables -F OUTPUT 2>/dev/null || true
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+for CIDR in $DC_CIDRS; do
+  iptables -A OUTPUT -d "$CIDR" -j ACCEPT
+done
 iptables -A OUTPUT -p tcp -j DROP
 `;
   try {
@@ -699,8 +712,32 @@ ${DOCKER_SOCK_SYMLINK}
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+# Determine the dc-net subnet(s): the interface that carries the route to huddle.
+# Deliberately NOT every global-scope interface — a second, routable NIC must
+# never end up in the ACCEPT/RETURN exemptions below. No interface found means no
+# exemption at all (fail closed).
+DC_IF=$(ip -o route get "$HUDDLE_IP" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev") {print $(i+1); exit}}')
+DC_CIDRS=$(ip -o -f inet addr show dev "$DC_IF" scope global 2>/dev/null | awk '{print $4}')
+# Sluit dc-net-siblings uit van de poort-80 DNAT: verkeer naar een sibling op :80
+# moet die sibling bereiken, niet omgeleid worden naar de huddle-proxy. -I OUTPUT 1
+# zet de RETURN vóór de DNAT, ook als die er bij een re-attach al staat.
+for CIDR in $DC_CIDRS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$CIDR" -j RETURN
+done
 iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+# Sta verkeer naar sibling-containers op het eigen dc-net toe: docker compose zet
+# zijn services op dc-net-<naam>, hetzelfde netwerk als deze devcontainer. Zonder
+# deze regel dropt de OUTPUT-chain al het niet-huddle TCP, dus bv. postgres op
+# :5432 is dan onbereikbaar. -I OUTPUT 1 zet de ACCEPT vóór de DROP, ook als die
+# er bij een re-attach al staat.
+#
+# Dit is alleen veilig zolang siblings single-homed op dc-net blijven: een sibling
+# met een tweede, routeerbare NIC zou hiermee een relay om de egress-proxy heen
+# zijn. socket-proxy.ts (networkAttachDenial + sanitizeNetworkCreate) borgt dat.
+for CIDR in $DC_CIDRS; do
+  iptables -C OUTPUT -d "$CIDR" -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -d "$CIDR" -j ACCEPT
+done
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
@@ -818,8 +855,32 @@ ${DOCKER_SOCK_SYMLINK}
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+# Determine the dc-net subnet(s): the interface that carries the route to huddle.
+# Deliberately NOT every global-scope interface — a second, routable NIC must
+# never end up in the ACCEPT/RETURN exemptions below. No interface found means no
+# exemption at all (fail closed).
+DC_IF=$(ip -o route get "$HUDDLE_IP" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev") {print $(i+1); exit}}')
+DC_CIDRS=$(ip -o -f inet addr show dev "$DC_IF" scope global 2>/dev/null | awk '{print $4}')
+# Sluit dc-net-siblings uit van de poort-80 DNAT: verkeer naar een sibling op :80
+# moet die sibling bereiken, niet omgeleid worden naar de huddle-proxy. -I OUTPUT 1
+# zet de RETURN vóór de DNAT, ook als die er bij een re-attach al staat.
+for CIDR in $DC_CIDRS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$CIDR" -j RETURN
+done
 iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+# Sta verkeer naar sibling-containers op het eigen dc-net toe: docker compose zet
+# zijn services op dc-net-<naam>, hetzelfde netwerk als deze devcontainer. Zonder
+# deze regel dropt de OUTPUT-chain al het niet-huddle TCP, dus bv. postgres op
+# :5432 is dan onbereikbaar. -I OUTPUT 1 zet de ACCEPT vóór de DROP, ook als die
+# er bij een re-attach al staat.
+#
+# Dit is alleen veilig zolang siblings single-homed op dc-net blijven: een sibling
+# met een tweede, routeerbare NIC zou hiermee een relay om de egress-proxy heen
+# zijn. socket-proxy.ts (networkAttachDenial + sanitizeNetworkCreate) borgt dat.
+for CIDR in $DC_CIDRS; do
+  iptables -C OUTPUT -d "$CIDR" -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -d "$CIDR" -j ACCEPT
+done
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
