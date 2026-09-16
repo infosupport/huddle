@@ -100,7 +100,6 @@ function configureVscodeAttach(containerName: string, containerWorkspace: string
   if (!result.written.length && !result.skipped.length) {
     console.log(dim('No VS Code config changes were made; if attach opens an empty window, use File > Open Folder on the container workspace.'));
   }
-  }
 
   // The name-level config above wins for THIS container, but a leftover
   // image-level one still misdirects every other container on the same image.
