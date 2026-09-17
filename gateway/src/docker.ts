@@ -141,7 +141,11 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
 export async function refreshContainerIptables(containerId: string, containerName: string): Promise<void> {
   // After a huddle restart the container's iptables rules still point to the old huddle IP.
   // Rebuild both the nat DNAT rule and the filter DROP rules with the new huddle IP.
-  const gateways = await getNetworkGateways(`dc-net-${containerName}`);
+  const networks = (await inspectContainer(containerName))?.NetworkSettings?.Networks ?? {};
+  const dcNetName = networks[`dc-net-${containerName}`]
+    ? `dc-net-${containerName}`
+    : 'devcontainer-net';
+  const gateways = await getNetworkGateways(dcNetName);
   const script = `
 HUDDLE_IP=$(getent hosts huddle 2>/dev/null | awk '{print $1}')
 [ -z "$HUDDLE_IP" ] && exit 0
