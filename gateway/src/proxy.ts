@@ -10,7 +10,7 @@ import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
-import { substituteEnvSecrets } from './env-mappings';
+import { substituteEnvSecrets, redactEnvSecrets, type EnvSecretSubstitution } from './env-mappings';
 
 const PROXY_PORT = 80;
 
@@ -25,7 +25,26 @@ const NO_INTERCEPT_DOMAINS: Set<string> = new Set(
 
 const CAP = 20 * 1024; // 20 KB per field
 function cap(s: string): string { return s.length > CAP ? s.slice(0, CAP) + '\n[truncated]' : s; }
-function headersToJson(h: Record<string, any>): string { try { return cap(JSON.stringify(h)); } catch { return '{}'; } }
+
+// Rewrites an audit field on its way into the database. Applied BEFORE cap(), so
+// a secret straddling the 20 KB boundary cannot leave a usable prefix behind.
+type AuditRedactor = (s: string) => string;
+const NO_REDACTION: AuditRedactor = (s) => s;
+
+// Env-mapping secrets (#108) must never reach audit_log. The redeemed value goes
+// upstream, but everything the upstream sends back is persisted and served from
+// /api/audit — so an allowlisted service that echoes a request header, sets a
+// cookie from it, or names it in an error would otherwise hand the secret right
+// back. Revert the substitutions of THIS request on the audit copy only; the
+// bytes relayed to the container are untouched. Identity when nothing was
+// redeemed, which is the overwhelmingly common case.
+function auditRedactor(subs: readonly EnvSecretSubstitution[]): AuditRedactor {
+  return subs.length === 0 ? NO_REDACTION : (s) => redactEnvSecrets(s, subs);
+}
+
+function headersToJson(h: Record<string, any>, redact: AuditRedactor = NO_REDACTION): string {
+  try { return cap(redact(JSON.stringify(h))); } catch { return '{}'; }
+}
 
 // Hop-by-hop proxy headers that must never reach upstream: proxy-connection and
 // the reusable proxy credential proxy-authorization.
@@ -51,7 +70,7 @@ function sanitizeResHeaders(h: http.IncomingHttpHeaders): http.IncomingHttpHeade
   return out;
 }
 
-function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string | null {
+function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders, redact: AuditRedactor = NO_REDACTION): string | null {
   if (chunks.length === 0) return null;
   const buf = Buffer.concat(chunks);
   const enc = ((headers['content-encoding'] as string) ?? '').toLowerCase();
@@ -61,7 +80,7 @@ function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string
     else if (enc === 'deflate') decoded = zlib.inflateSync(buf);
     else if (enc === 'br') decoded = zlib.brotliDecompressSync(buf);
     else decoded = buf;
-    return cap(decoded.toString('utf8'));
+    return cap(redact(decoded.toString('utf8')));
   } catch {
     return '[binary / not decodable]';
   }
@@ -424,7 +443,10 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // Env-mapping secrets (#108): the container only ever holds a placeholder.
     // Swap it here, on the upstream COPY — the audit entry below serializes
     // req.headers and must keep showing the placeholder, not the secret.
-    substituteEnvSecrets(outgoingHeaders, host, containerId);
+    const envSubs = substituteEnvSecrets(outgoingHeaders, host, containerId);
+    // ...and what the upstream sends back may echo that secret, so the audit
+    // copy of the response gets the placeholders put back.
+    const redactAudit = auditRedactor(envSubs);
 
     const reqChunks: Buffer[] = [];
     let reqBytes = 0;
@@ -450,8 +472,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       updateAuditResponse(auditId, {
         reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
         resStatus,
-        resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-        resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
+        resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>, redactAudit) : null,
+        resBody: resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}, redactAudit) : null,
       });
     };
 
@@ -575,6 +597,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
     stripProxyHeaders(outgoingHeaders);
     // A WebSocket handshake can carry the credential in a header too (#108).
+    // No redaction hook needed here: forwardUpgrade records only the handshake
+    // status on the audit row, never a response body or headers.
     substituteEnvSecrets(outgoingHeaders, host, containerId);
     const upstreamPort = target.port || 80;
     forwardUpgrade(
@@ -770,8 +794,10 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       delete upstreamHeaders['proxy-connection'];
 
       // Env-mapping secrets (#108) — see the plain-HTTP path. Runs on the copy,
-      // so the audit entry below records only the placeholder.
-      substituteEnvSecrets(upstreamHeaders, hostname, containerId);
+      // so the audit entry below records only the placeholder; the redactor puts
+      // the placeholders back into whatever the upstream echoes at us.
+      const envSubs = substituteEnvSecrets(upstreamHeaders, hostname, containerId);
+      const redactAudit = auditRedactor(envSubs);
 
       // Token replacement: replace placeholder with the real token for api.anthropic.com
       if (hostname === 'api.anthropic.com') {
@@ -817,6 +843,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       let completed = false;
       // resBody: pass explicitly for scrubbed paths (token-exchange) so the
       // real secret never ends up in the audit log. Omit = derive from resChunks.
+      // Either way it goes through redactAudit — a token-exchange body is just as
+      // able to echo an env-mapping secret as any other response.
       const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders, resBody?: string | null) => {
         if (completed) return;
         completed = true;
@@ -824,8 +852,10 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         updateAuditResponse(auditId, {
           reqBody: reqBytes > 0 ? cap(Buffer.concat(reqChunks).toString('utf8')) : null,
           resStatus,
-          resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>) : null,
-          resBody: resBody !== undefined ? resBody : resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}) : null,
+          resHeaders: resHeaders ? headersToJson(resHeaders as Record<string, any>, redactAudit) : null,
+          resBody: resBody !== undefined
+            ? (resBody === null ? null : redactAudit(resBody))
+            : resBytes > 0 ? decodeBody(resChunks, resHeaders ?? {}, redactAudit) : null,
         });
       };
 
@@ -937,6 +967,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const upstreamHeaders = { ...innerReq.headers };
       stripProxyHeaders(upstreamHeaders);
+      // As on the ws:// path: only the handshake status is audited, so there is
+      // no response body the redeemed secret could be echoed into.
       substituteEnvSecrets(upstreamHeaders, hostname, containerId);
       forwardUpgrade(
         true,

@@ -131,16 +131,24 @@ export const lookupEnvSecret: SecretLookup = (placeholder, containerId) => {
   return { value: bound.value, hosts: mapping.secretHosts };
 };
 
+/** A placeholder that was actually redeemed on one request, and for what. */
+export interface EnvSecretSubstitution {
+  placeholder: string;
+  secret: string;
+}
+
 function substituteInValue(
   raw: string,
   host: string,
   containerId: string,
   lookup: SecretLookup,
+  applied: Map<string, string>,
 ): string {
   return raw.replace(PLACEHOLDER_RE, (placeholder) => {
     const entry = lookup(placeholder, containerId);
     if (!entry) return placeholder;
     if (!secretHostAllowed(parseSecretHosts(entry.hosts), host)) return placeholder;
+    applied.set(placeholder, entry.value);
     return entry.value;
   });
 }
@@ -154,27 +162,55 @@ function substituteInValue(
  * the caller is unidentified, does not own it, or the target host is not on that
  * mapping's allowlist. The unmodified placeholder then simply fails to
  * authenticate upstream, which is the safe outcome.
+ *
+ * Returns the substitutions it actually applied, so the caller can put the
+ * placeholders back before anything derived from the upstream exchange is
+ * persisted — see redactEnvSecrets().
  */
 export function substituteEnvSecrets(
   headers: http.OutgoingHttpHeaders,
   host: string,
   containerId: string | null,
   lookup: SecretLookup = lookupEnvSecret,
-): void {
+): EnvSecretSubstitution[] {
   // An unidentified caller can never own a placeholder — bail before touching
   // anything, so an unknown source cannot harvest secrets.
-  if (!containerId) return;
+  if (!containerId) return [];
+  const applied = new Map<string, string>();
   for (const [key, value] of Object.entries(headers)) {
     if (typeof value === 'string') {
       if (!value.includes(ENV_PLACEHOLDER_PREFIX)) continue;
-      headers[key] = substituteInValue(value, host, containerId, lookup);
+      headers[key] = substituteInValue(value, host, containerId, lookup, applied);
     } else if (Array.isArray(value)) {
       if (!value.some(v => typeof v === 'string' && v.includes(ENV_PLACEHOLDER_PREFIX))) continue;
       headers[key] = value.map(v =>
-        typeof v === 'string' ? substituteInValue(v, host, containerId, lookup) : v
+        typeof v === 'string' ? substituteInValue(v, host, containerId, lookup, applied) : v
       );
     }
   }
+  return [...applied].map(([placeholder, secret]) => ({ placeholder, secret }));
+}
+
+/**
+ * Put the placeholders back into anything the upstream sent us, before it is
+ * persisted. The audit trail is supposed to contain placeholders only, but an
+ * allowlisted service is free to echo a request header back (a debug endpoint, a
+ * `Set-Cookie`, an error message naming the credential) — and that response body
+ * lands in audit_log and is served from /api/audit. Redeeming a secret towards
+ * the upstream must not turn the network log into a place to read it back.
+ *
+ * Only the substitutions actually applied to THIS request are reverted, so an
+ * empty list costs nothing and one container's secret is never searched for in
+ * another container's traffic.
+ */
+export function redactEnvSecrets(text: string, subs: readonly EnvSecretSubstitution[]): string {
+  let out = text;
+  for (const { placeholder, secret } of subs) {
+    // Guard the empty string: split('') would explode the text into characters.
+    if (!secret || !out.includes(secret)) continue;
+    out = out.split(secret).join(placeholder);
+  }
+  return out;
 }
 
 // ── Building the container's Env entries ─────────────────────────────────────

@@ -638,9 +638,21 @@ export class SettingsComponent implements OnInit {
       .filter((p) => selection.has(p.toLowerCase()));
     // Removing a folder takes its subtree with it, so a child of another
     // selected folder is already covered — sending it too would report it twice.
-    const paths = selected.filter(
-      (p) => !selected.some((other) => other !== p && p.toLowerCase().startsWith(this.subtreePrefix(other)))
-    );
+    // Code-unit order, not localeCompare: a proper prefix must sort before the
+    // longer path, so an ancestor is always recorded before its descendants are
+    // tested. Each path then costs a walk up its own segments instead of a scan
+    // over the whole selection.
+    const covered = new Set<string>();
+    const paths: string[] = [];
+    const sorted = [...selected].sort((a, b) => {
+      const [x, y] = [a.toLowerCase(), b.toLowerCase()];
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+    for (const p of sorted) {
+      if (this.hasCoveredAncestor(p, covered)) continue;
+      paths.push(p);
+      covered.add(this.subtreePrefix(p));
+    }
     if (!paths.length) return;
     this.indexNote.set(null);
     this.error.set(null);
@@ -661,6 +673,17 @@ export class SettingsComponent implements OnInit {
   private subtreePrefix(path: string): string {
     const p = path.toLowerCase();
     return p.endsWith('/') ? p : `${p}/`;
+  }
+
+  /** Is any ancestor of `path` already in `covered` (a set of subtree prefixes)? */
+  private hasCoveredAncestor(path: string, covered: ReadonlySet<string>): boolean {
+    let ancestor = path.toLowerCase();
+    for (;;) {
+      const separator = ancestor.lastIndexOf('/');
+      if (separator < 0) return false;
+      ancestor = ancestor.slice(0, separator);
+      if (covered.has(this.subtreePrefix(ancestor))) return true;
+    }
   }
 
   toggleIndexNode(node: FolderNode): void {

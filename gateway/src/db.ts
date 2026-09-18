@@ -614,8 +614,15 @@ export interface IndexedFolder {
 // silently truncating.
 export const MAX_INDEXED_FOLDERS = 2000;
 
+// Spelled out rather than `SELECT *`, so the rows handed to the API keep the
+// shape of IndexedFolder above and a column added to the table later is not
+// silently exposed over /api/indexed-folders.
+const INDEXED_FOLDER_COLUMNS = 'id, path, label, source, created_at';
+
 export function listIndexedFolders(): IndexedFolder[] {
-  return db.prepare('SELECT * FROM indexed_folders ORDER BY path COLLATE NOCASE ASC').all() as IndexedFolder[];
+  return db
+    .prepare(`SELECT ${INDEXED_FOLDER_COLUMNS} FROM indexed_folders ORDER BY path COLLATE NOCASE ASC`)
+    .all() as IndexedFolder[];
 }
 
 export function countIndexedFolders(): number {
@@ -623,7 +630,9 @@ export function countIndexedFolders(): number {
 }
 
 export function getIndexedFolderByPath(path: string): IndexedFolder | undefined {
-  return db.prepare('SELECT * FROM indexed_folders WHERE path = ? COLLATE NOCASE').get(path) as IndexedFolder | undefined;
+  return db
+    .prepare(`SELECT ${INDEXED_FOLDER_COLUMNS} FROM indexed_folders WHERE path = ? COLLATE NOCASE`)
+    .get(path) as IndexedFolder | undefined;
 }
 
 // Insert, or refresh the label/source of an existing entry. Returns 'added' or

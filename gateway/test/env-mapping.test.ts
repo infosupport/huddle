@@ -71,6 +71,7 @@ const {
   parseSecretHosts,
   secretHostAllowed,
   substituteEnvSecrets,
+  redactEnvSecrets,
   buildEnvEntries,
   newEnvPlaceholder,
   isEnvPlaceholder,
@@ -193,6 +194,57 @@ d('substituteEnvSecrets', () => {
     const headers: Record<string, unknown> = { 'x-api-key': 'huddle_env_short' };
     substituteEnvSecrets(headers, 'api.example.com', OWNER, lookup);
     expect(headers['x-api-key']).toBe('huddle_env_short');
+  });
+
+  it('reports the substitutions it applied, and nothing when it applied none', () => {
+    const redeemed: Record<string, unknown> = { authorization: `Bearer ${PLACEHOLDER}` };
+    expect(substituteEnvSecrets(redeemed, 'api.example.com', OWNER, lookup)).toEqual([
+      { placeholder: PLACEHOLDER, secret: 'real-secret' },
+    ]);
+
+    const refused: Record<string, unknown> = { authorization: `Bearer ${PLACEHOLDER}` };
+    expect(substituteEnvSecrets(refused, 'attacker.example.org', OWNER, lookup)).toEqual([]);
+  });
+
+  it('reports one entry per placeholder, not per header it occurs in', () => {
+    const headers: Record<string, unknown> = {
+      authorization: `Bearer ${PLACEHOLDER}`,
+      'x-api-key': PLACEHOLDER,
+      cookie: [`a=${PLACEHOLDER}`],
+    };
+    expect(substituteEnvSecrets(headers, 'api.example.com', OWNER, lookup)).toHaveLength(1);
+  });
+});
+
+d('redactEnvSecrets', () => {
+  // The audit trail may only ever contain placeholders. An allowlisted upstream
+  // is free to echo the request header back — a debug endpoint, a Set-Cookie, an
+  // error message naming the credential — and that response is persisted in
+  // audit_log and served from /api/audit.
+  const PLACEHOLDER = 'huddle_env_' + 'a1b2c3d4'.repeat(8);
+  const subs = [{ placeholder: PLACEHOLDER, secret: 'real-secret' }];
+
+  it('puts the placeholder back everywhere the secret was echoed', () => {
+    const echoed = JSON.stringify({ headers: { authorization: 'Bearer real-secret' }, seen: 'real-secret' });
+    const redacted = redactEnvSecrets(echoed, subs);
+    expect(redacted).not.toContain('real-secret');
+    expect(redacted).toBe(
+      JSON.stringify({ headers: { authorization: `Bearer ${PLACEHOLDER}` }, seen: PLACEHOLDER }),
+    );
+  });
+
+  it('is a no-op when nothing was redeemed on this request', () => {
+    const body = 'nothing to see, real-secret belongs to another container';
+    expect(redactEnvSecrets(body, [])).toBe(body);
+  });
+
+  it('is idempotent, so redacting an already-redacted field changes nothing', () => {
+    const once = redactEnvSecrets('token=real-secret', subs);
+    expect(redactEnvSecrets(once, subs)).toBe(once);
+  });
+
+  it('ignores an empty secret instead of shredding the text', () => {
+    expect(redactEnvSecrets('abc', [{ placeholder: PLACEHOLDER, secret: '' }])).toBe('abc');
   });
 });
 
