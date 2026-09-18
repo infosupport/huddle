@@ -814,24 +814,34 @@ export function purgeEnvMapping(mappingId: number): void {
 }
 
 /**
- * The same cleanup, driven from the other side: drop the runtime rows of every
- * mapping that is NOT in `keepIds`. `~/.huddle/config.json` is hand-editable, so
- * a mapping can disappear without the API's delete path ever running, leaving its
- * secret and its issued placeholders behind. Those orphans are what make a
- * recycled id dangerous — a container's old placeholder would resolve against
- * whatever mapping later claims that id.
+ * The same cleanup, driven from the other side: drop the placeholder BINDINGS of
+ * every mapping that is NOT in `keepIds`. `~/.huddle/config.json` is
+ * hand-editable, so a mapping can disappear without the API's delete path ever
+ * running, leaving its issued placeholders behind — and a container's old
+ * placeholder resolving against whatever mapping later claims that id is the leak
+ * this closes.
+ *
+ * Deliberately does NOT touch env_secrets. resolveEnvPlaceholder() reaches a
+ * secret only THROUGH env_mapping_containers, so clearing the bindings already
+ * makes a stale placeholder unresolvable; deleting the secrets as well would buy
+ * nothing and make this reconciliation — which runs unattended at every boot —
+ * capable of irreversibly destroying credentials over a typo in a file operators
+ * are invited to edit by hand. An orphaned secret row is inert, and gets
+ * overwritten if its id is ever issued again. purgeEnvMapping() still removes
+ * everything, because there the operator asked for exactly that.
  *
  * Returns the number of rows removed. Call only when the config was actually
- * readable: an empty `keepIds` from a failed read would wipe every live mapping.
+ * readable: an empty `keepIds` from a failed read would unbind every live
+ * container.
  */
-export function purgeOrphanedEnvMappingRows(keepIds: number[]): number {
+export function purgeOrphanedEnvMappingBindings(keepIds: number[]): number {
   // Integers only, and bound as parameters — the id list is interpolated into the
   // statement as placeholders, never as values.
   const ids = [...new Set(keepIds.filter(n => Number.isInteger(n)))];
   const where = ids.length ? ` WHERE mapping_id NOT IN (${ids.map(() => '?').join(',')})` : '';
   const tx = db.transaction(() => {
     let removed = 0;
-    for (const table of ['env_secrets', 'env_mapping_containers', 'env_mapping_workspaces']) {
+    for (const table of ['env_mapping_containers', 'env_mapping_workspaces']) {
       removed += db.prepare(`DELETE FROM ${table}${where}`).run(...ids).changes;
     }
     return removed;

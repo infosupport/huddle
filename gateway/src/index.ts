@@ -24,7 +24,8 @@ initDb();
 // Resource limits + folder mappings moved from the DB into config.json (#98).
 runSettingsMigration();
 // config.json is hand-editable, so a mapping can vanish without the API's delete
-// path running. Clear what it left behind before anything can redeem it (#108).
+// path running. Unbind the placeholders it left behind before anything can
+// redeem them (#108). Never touches the stored secrets.
 purgeOrphanedEnvMappings();
 initCa();
 createProxyServer();

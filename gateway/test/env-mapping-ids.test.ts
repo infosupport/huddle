@@ -87,32 +87,62 @@ describe.skipIf(!sqliteAvailable)('env-mapping id allocation', () => {
 
 describe.skipIf(!sqliteAvailable)('purgeOrphanedEnvMappings', () => {
   // Second line of defense, for a config edited so heavily the counter went too.
+  const PLACEHOLDER = (mappingId: number) => 'huddle_env_' + String(mappingId).padStart(64, '0');
   const seedRows = (mappingId: number, containerId: string) => {
     dbMod.setEnvSecret(mappingId, `secret-${mappingId}`);
     // Placeholders are unique-constrained, so vary them per mapping.
-    const placeholder = 'huddle_env_' + String(mappingId).padStart(64, '0');
-    dbMod.setContainerEnvMappings(containerId, [{ mapping_id: mappingId, placeholder }]);
+    dbMod.setContainerEnvMappings(containerId, [{ mapping_id: mappingId, placeholder: PLACEHOLDER(mappingId) }]);
   };
 
-  it('clears the rows of a mapping the config no longer defines, keeping the rest', () => {
+  it('unbinds the placeholders of a mapping the config no longer defines, keeping the rest', () => {
     writeConfig({ envMappings: [{ ...mapping('KEPT'), id: 2 }] });
     seedRows(1, 'devcontainer-old');
     seedRows(2, 'devcontainer-live');
 
     expect(envMappings.purgeOrphanedEnvMappings()).toBeGreaterThan(0);
 
-    expect(dbMod.getEnvSecret(1)).toBeNull();
-    expect(dbMod.getEnvSecret(2)).toBe('secret-2');
+    // The stale placeholder can no longer reach any secret — which is the whole
+    // point, since a recycled id would otherwise hand it the wrong one.
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(1), 'devcontainer-old')).toBeNull();
+    // The live mapping is untouched.
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(2), 'devcontainer-live')?.value).toBe('secret-2');
+  });
+
+  // This cleanup runs unattended at every boot, against a file operators are
+  // invited to hand-edit. It must never be the thing that destroys a credential.
+  it('never deletes stored secrets, only the bindings', () => {
+    writeConfig({ envMappings: [] });
+    seedRows(1, 'devcontainer-old');
+
+    envMappings.purgeOrphanedEnvMappings();
+
+    expect(dbMod.getEnvSecret(1)).toBe('secret-1');
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(1), 'devcontainer-old')).toBeNull();
   });
 
   // The dangerous failure mode: readHostConfig() flattens a broken file to {},
   // which looks exactly like "the operator deleted every mapping".
-  it('refuses to act on a malformed config instead of wiping every secret', () => {
+  it('refuses to act on a malformed config instead of unbinding everything', () => {
     fs.writeFileSync(CONFIG_FILE, '{ this is not json');
     seedRows(1, 'devcontainer-live');
 
     expect(envMappings.purgeOrphanedEnvMappings()).toBe(0);
-    expect(dbMod.getEnvSecret(1)).toBe('secret-1');
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(1), 'devcontainer-live')?.value).toBe('secret-1');
+  });
+
+  // Parseable, but envMappings has the wrong shape — envMappingsOf() collapses
+  // that to an empty list, indistinguishable from a genuine "no mappings".
+  it.each([
+    ['an object', {}],
+    ['a string', 'ANTHROPIC_API_KEY'],
+    ['a number', 3],
+    ['null', null],
+  ])('refuses to act when envMappings is %s rather than a list', (_label, value) => {
+    writeConfig({ envMappings: value });
+    seedRows(1, 'devcontainer-live');
+
+    expect(envMappings.purgeOrphanedEnvMappings()).toBe(0);
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(1), 'devcontainer-live')?.value).toBe('secret-1');
   });
 
   it('refuses to act when the config file is missing', () => {
@@ -120,6 +150,16 @@ describe.skipIf(!sqliteAvailable)('purgeOrphanedEnvMappings', () => {
     seedRows(1, 'devcontainer-live');
 
     expect(envMappings.purgeOrphanedEnvMappings()).toBe(0);
-    expect(dbMod.getEnvSecret(1)).toBe('secret-1');
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(1), 'devcontainer-live')?.value).toBe('secret-1');
+  });
+
+  // A config that simply has no mappings yet is not an error: there is nothing to
+  // keep, so every binding really is an orphan.
+  it('still unbinds when the config legitimately defines no mappings', () => {
+    writeConfig({});
+    seedRows(1, 'devcontainer-old');
+
+    expect(envMappings.purgeOrphanedEnvMappings()).toBeGreaterThan(0);
+    expect(dbMod.resolveEnvPlaceholder(PLACEHOLDER(1), 'devcontainer-old')).toBeNull();
   });
 });

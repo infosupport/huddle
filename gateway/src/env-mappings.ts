@@ -12,7 +12,7 @@ import {
   getEnvSecret,
   resolveEnvPlaceholder,
   setContainerEnvMappings,
-  purgeOrphanedEnvMappingRows,
+  purgeOrphanedEnvMappingBindings,
   type ContainerEnvMapping,
 } from './db';
 
@@ -298,26 +298,35 @@ export function createSecretStreamRedactor(subs: readonly EnvSecretSubstitution[
 // ── Reconciling the config file with the runtime rows ────────────────────────
 
 /**
- * Drop the SQLite rows of every mapping the config no longer defines.
+ * Unbind the placeholders of every mapping the config no longer defines.
  *
- * A mapping's secret and the placeholders issued for it are keyed on its id, and
- * the API's delete path is the only thing that cleans them up. `config.json` is
- * meant to be hand-editable, so an operator can also remove a mapping by deleting
- * the entry — leaving those rows orphaned. Combined with a recycled id that is a
- * real credential leak (see createEnvMapping), so ids are never reused AND the
- * orphans are cleared here at startup.
+ * A mapping's issued placeholders are keyed on its id, and the API's delete path
+ * is the only thing that cleans them up. `config.json` is meant to be
+ * hand-editable, so an operator can also remove a mapping by deleting the entry —
+ * leaving those bindings orphaned. Combined with a recycled id that is a real
+ * credential leak (see createEnvMapping), so ids are never reused AND the stale
+ * bindings are cleared here at startup.
  *
- * Refuses to act on a config it could not read: `readHostConfigStrict()` returns
- * null for a missing or malformed file, where readHostConfig()'s `{}` would look
- * exactly like "the operator deleted every mapping" and take the live secrets
- * with it.
+ * This runs unattended at every boot against a file people edit by hand, so it is
+ * deliberately hard to make it destroy anything:
+ *   • `readHostConfigStrict()` returns null for a missing or unparseable file,
+ *     where readHostConfig()'s `{}` would read as "every mapping was deleted";
+ *   • a parseable file whose `envMappings` is not an array (`{}`, a string, a
+ *     typo'd shape) is refused too — envMappingsOf() collapses those to an empty
+ *     list, which is indistinguishable from a real "no mappings";
+ *   • only the bindings are removed, never the stored secrets (see
+ *     purgeOrphanedEnvMappingBindings).
  */
 export function purgeOrphanedEnvMappings(): number {
   const config = readHostConfigStrict();
   if (!config) return 0;
-  const removed = purgeOrphanedEnvMappingRows(envMappingsOf(config).map(m => m.id));
+  if ('envMappings' in config && !Array.isArray(config.envMappings)) {
+    console.warn('[env-mappings] skipping orphan cleanup: envMappings in config.json is not a list');
+    return 0;
+  }
+  const removed = purgeOrphanedEnvMappingBindings(envMappingsOf(config).map(m => m.id));
   if (removed > 0) {
-    console.warn(`[env-mappings] cleared ${removed} row(s) left behind by mappings removed from config.json`);
+    console.warn(`[env-mappings] unbound ${removed} placeholder(s) left by mappings removed from config.json`);
   }
   return removed;
 }
