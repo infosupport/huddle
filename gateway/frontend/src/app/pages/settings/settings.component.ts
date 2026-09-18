@@ -219,8 +219,8 @@ import {
                 <input [(ngModel)]="newEnvMapping.secret_hosts" name="ne_hosts"
                        placeholder="api.anthropic.com, *.anthropic.com" autocomplete="off">
                 <p class="hint secret-warning">
-                  The real value is only sent to these hosts. Leave it empty and the secret is
-                  never handed over at all.
+                  The real value is only sent to these hosts. Secret mappings need at least one
+                  host here, or the API will reject them.
                 </p>
               </div>
             </div>
