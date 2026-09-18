@@ -72,6 +72,7 @@ const {
   secretHostAllowed,
   substituteEnvSecrets,
   redactEnvSecrets,
+  createSecretStreamRedactor,
   buildEnvEntries,
   newEnvPlaceholder,
   isEnvPlaceholder,
@@ -245,6 +246,71 @@ d('redactEnvSecrets', () => {
 
   it('ignores an empty secret instead of shredding the text', () => {
     expect(redactEnvSecrets('abc', [{ placeholder: PLACEHOLDER, secret: '' }])).toBe('abc');
+  });
+});
+
+d('createSecretStreamRedactor', () => {
+  // The response relayed to the DEVCONTAINER, not the audit copy: an allowlisted
+  // endpoint that reflects a request header would otherwise hand the workload the
+  // very credential the placeholder exists to withhold.
+  const PLACEHOLDER = 'huddle_env_' + 'a1b2c3d4'.repeat(8);
+  const SECRET = 'sk-real-secret';
+  const subs = [{ placeholder: PLACEHOLDER, secret: SECRET }];
+
+  // Feed `text` through in slices of `size` bytes, as a socket would.
+  const stream = (text: string, size: number): string => {
+    const r = createSecretStreamRedactor(subs);
+    const src = Buffer.from(text, 'utf8');
+    const out: Uint8Array[] = [];
+    for (let i = 0; i < src.length; i += size) out.push(r.push(src.subarray(i, i + size)));
+    out.push(r.flush());
+    return Buffer.concat(out).toString('utf8');
+  };
+
+  it('replaces the secret when it arrives in one chunk', () => {
+    expect(stream(`token=${SECRET};`, 4096)).toBe(`token=${PLACEHOLDER};`);
+  });
+
+  // The reason for the hold-back: a naive per-chunk replace misses a secret that
+  // spans a boundary, which is exactly how a real socket delivers it.
+  it('replaces a secret split across chunk boundaries, at every split size', () => {
+    const body = `{"echo":"${SECRET}","n":1}`;
+    for (let size = 1; size <= body.length; size++) {
+      expect(stream(body, size), `chunk size ${size}`).toBe(`{"echo":"${PLACEHOLDER}","n":1}`);
+    }
+  });
+
+  it('replaces every occurrence, not just the first', () => {
+    expect(stream(`${SECRET} and ${SECRET}`, 3)).toBe(`${PLACEHOLDER} and ${PLACEHOLDER}`);
+  });
+
+  it('leaves a body that never contains the secret byte-identical', () => {
+    const body = 'data: {"delta":"hello"}\n\ndata: [DONE]\n\n';
+    expect(stream(body, 7)).toBe(body);
+  });
+
+  it('survives multi-byte characters split across chunks', () => {
+    const body = `✓ ${SECRET} ✓ café`;
+    for (let size = 1; size <= 12; size++) {
+      expect(stream(body, size), `chunk size ${size}`).toBe(`✓ ${PLACEHOLDER} ✓ café`);
+    }
+  });
+
+  it('passes bytes straight through when nothing was redeemed', () => {
+    const r = createSecretStreamRedactor([]);
+    const chunk = Buffer.from(`this mentions ${SECRET}`, 'utf8');
+    // No substitution happened on this request, so there is nothing to hide and
+    // nothing is held back — the chunk goes out as-is.
+    expect(Buffer.from(r.push(chunk)).toString('utf8')).toBe(`this mentions ${SECRET}`);
+    expect(Buffer.from(r.flush()).length).toBe(0);
+  });
+
+  it('does not emit a partial secret before it knows the match is complete', () => {
+    const r = createSecretStreamRedactor(subs);
+    // First bytes of the secret and nothing else: emitting them would leak a
+    // usable prefix, so they must be held back.
+    const emitted = Buffer.from(r.push(Buffer.from(SECRET.slice(0, 5), 'utf8'))).toString('utf8');
+    expect(emitted).toBe('');
   });
 });
 

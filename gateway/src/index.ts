@@ -6,6 +6,7 @@ import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptab
 import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
+import { purgeOrphanedEnvMappings } from './env-mappings';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
@@ -22,6 +23,9 @@ const SOCKET_DIR = '/tmp/dc-sockets';
 initDb();
 // Resource limits + folder mappings moved from the DB into config.json (#98).
 runSettingsMigration();
+// config.json is hand-editable, so a mapping can vanish without the API's delete
+// path running. Clear what it left behind before anything can redeem it (#108).
+purgeOrphanedEnvMappings();
 initCa();
 createProxyServer();
 createApiServer().catch(err => {

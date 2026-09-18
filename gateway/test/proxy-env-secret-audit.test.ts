@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
+import zlib from 'zlib';
 import type { AddressInfo } from 'net';
 
 // ── Env-mapping secrets never reach audit_log (#108) ─────────────────────────
@@ -62,19 +63,26 @@ let lastUpstreamAuth: string | null = null;
 let proxy: http.Server;
 let proxyPort = 0;
 
-function proxyGet(): Promise<number> {
+interface ClientResponse { status: number; headers: http.IncomingHttpHeaders; body: string }
+
+function proxyGet(path = '/echo'): Promise<ClientResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
         host: '127.0.0.1',
         port: proxyPort,
         method: 'GET',
-        path: `http://127.0.0.1:${upstreamPort}/echo`,
+        path: `http://127.0.0.1:${upstreamPort}${path}`,
         headers: { host: `127.0.0.1:${upstreamPort}`, authorization: `Bearer ${placeholder}` },
       },
       (res) => {
-        res.resume();
-        res.on('end', () => resolve(res.statusCode ?? 0));
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        }));
       },
     );
     req.on('error', reject);
@@ -113,14 +121,31 @@ describe.skipIf(!sqliteAvailable)('env-mapping secrets stay out of the audit log
 
     db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES ('127.0.0.1', NULL, 'allow')`).run();
 
-    // The hostile-but-legitimate upstream: it reflects what it was sent.
+    // The hostile-but-legitimate upstream: it reflects what it was sent. `/gzip`
+    // does the same through a compressed body, `/stream` through SSE.
     upstream = http.createServer((req, res) => {
       lastUpstreamAuth = (req.headers.authorization as string) ?? null;
+      const echo = JSON.stringify({ youSent: { authorization: lastUpstreamAuth } });
+      if (req.url === '/gzip') {
+        const gz = zlib.gzipSync(Buffer.from(echo, 'utf8'));
+        res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip', 'content-length': String(gz.length) });
+        res.end(gz);
+        return;
+      }
+      if (req.url === '/stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+        // Split the secret across two writes, so a per-chunk replace would miss it.
+        const half = Math.floor((lastUpstreamAuth ?? '').length / 2);
+        res.write(`data: ${(lastUpstreamAuth ?? '').slice(0, half)}`);
+        res.write(`${(lastUpstreamAuth ?? '').slice(half)}\n\n`);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       res.writeHead(200, {
         'content-type': 'application/json',
         'x-echo-authorization': lastUpstreamAuth ?? '',
       });
-      res.end(JSON.stringify({ youSent: { authorization: lastUpstreamAuth } }));
+      res.end(echo);
     });
     await new Promise<void>((r) => upstream.listen(0, '127.0.0.1', () => r()));
     upstreamPort = (upstream.address() as AddressInfo).port;
@@ -138,7 +163,8 @@ describe.skipIf(!sqliteAvailable)('env-mapping secrets stay out of the audit log
   });
 
   it('redeems the placeholder upstream but audits only the placeholder', async () => {
-    expect(await proxyGet()).toBe(200);
+    const res = await proxyGet();
+    expect(res.status).toBe(200);
 
     // The point of the feature: the upstream really did get the secret.
     expect(lastUpstreamAuth).toBe(`Bearer ${SECRET}`);
@@ -152,5 +178,37 @@ describe.skipIf(!sqliteAvailable)('env-mapping secrets stay out of the audit log
     expect(row.res_headers).toContain(placeholder);
     expect(row.res_body).not.toContain(SECRET);
     expect(row.res_body).toContain(placeholder);
+  });
+
+  // The audit log is not the only copy: what the DEVCONTAINER receives must not
+  // carry the secret either, or the placeholder design is defeated outright.
+  it('never hands the echoed secret back to the container', async () => {
+    const res = await proxyGet();
+    expect(res.status).toBe(200);
+    expect(lastUpstreamAuth).toBe(`Bearer ${SECRET}`);
+
+    expect(res.body).not.toContain(SECRET);
+    expect(res.body).toContain(placeholder);
+    expect(res.headers['x-echo-authorization']).not.toContain(SECRET);
+    expect(res.headers['x-echo-authorization']).toContain(placeholder);
+  });
+
+  it('redacts a compressed body too, relaying it decompressed', async () => {
+    const res = await proxyGet('/gzip');
+    expect(res.status).toBe(200);
+    // The secret is invisible in gzip bytes, so the body has to be inflated,
+    // rewritten and sent on identity-encoded.
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body).not.toContain(SECRET);
+    expect(res.body).toContain(placeholder);
+  });
+
+  it('redacts a secret split across SSE writes without buffering the stream', async () => {
+    const res = await proxyGet('/stream');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(res.body).not.toContain(SECRET);
+    expect(res.body).toContain(placeholder);
+    expect(res.body).toContain('[DONE]');
   });
 });

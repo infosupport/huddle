@@ -1,11 +1,18 @@
 import crypto from 'crypto';
 import type http from 'http';
 import { matchDomain } from './rules';
-import { getEnvMapping, listEnvMappings, type HostEnvMapping } from './host-config';
+import {
+  getEnvMapping,
+  listEnvMappings,
+  envMappingsOf,
+  readHostConfigStrict,
+  type HostEnvMapping,
+} from './host-config';
 import {
   getEnvSecret,
   resolveEnvPlaceholder,
   setContainerEnvMappings,
+  purgeOrphanedEnvMappingRows,
   type ContainerEnvMapping,
 } from './db';
 
@@ -211,6 +218,108 @@ export function redactEnvSecrets(text: string, subs: readonly EnvSecretSubstitut
     out = out.split(secret).join(placeholder);
   }
   return out;
+}
+
+/**
+ * The same redaction, but over a byte stream, for the response on its way back to
+ * the DEVCONTAINER — not just the audit copy.
+ *
+ * Redeeming a placeholder upstream is only safe while the real value stays out of
+ * the container. An allowlisted endpoint that reflects request headers (a debug
+ * route, an error quoting the credential, a `Set-Cookie`) would otherwise hand the
+ * secret straight back, and the workload would hold a credential the placeholder
+ * design exists to keep away from it.
+ *
+ * Streaming rather than buffering is deliberate: the proxy carries Server-Sent
+ * Events (an env-mapped ANTHROPIC_API_KEY on a streaming completion is the obvious
+ * case), and buffering the body would stall those until the response completed.
+ *
+ * Works on bytes, so it is unaffected by multi-byte characters splitting across
+ * chunks. `push()` holds back the last (longest secret - 1) bytes, since a match
+ * starting there cannot be known to be complete yet; `flush()` releases them.
+ */
+export interface SecretStreamRedactor {
+  push(chunk: Uint8Array): Uint8Array;
+  flush(): Uint8Array;
+}
+
+const EMPTY_BYTES: Uint8Array = Buffer.alloc(0);
+
+export function createSecretStreamRedactor(subs: readonly EnvSecretSubstitution[]): SecretStreamRedactor {
+  const pairs = subs
+    .filter(s => s.secret)
+    .map(s => ({ secret: Buffer.from(s.secret, 'utf8'), placeholder: Buffer.from(s.placeholder, 'utf8') }));
+  // Nothing was redeemed on this request: hand the bytes straight through.
+  if (pairs.length === 0) {
+    return { push: (chunk) => chunk, flush: () => EMPTY_BYTES };
+  }
+  const holdBack = Math.max(...pairs.map(p => p.secret.length)) - 1;
+  let pending: Uint8Array = EMPTY_BYTES;
+
+  // Buffer.concat both normalizes the input to a Buffer we can indexOf() on and
+  // gives back a contiguous copy, so the subarray views handed out below never
+  // alias a chunk the caller may reuse.
+  const replaceAll = (input: Uint8Array): Buffer => {
+    let buf = Buffer.concat([input]);
+    for (const { secret, placeholder } of pairs) {
+      let at = buf.indexOf(secret);
+      if (at < 0) continue;
+      const parts: Uint8Array[] = [];
+      let from = 0;
+      while (at >= 0) {
+        parts.push(buf.subarray(from, at), placeholder);
+        from = at + secret.length;
+        at = buf.indexOf(secret, from);
+      }
+      parts.push(buf.subarray(from));
+      buf = Buffer.concat(parts);
+    }
+    return buf;
+  };
+
+  return {
+    push(chunk: Uint8Array): Uint8Array {
+      const buf = replaceAll(Buffer.concat([pending, chunk]));
+      if (buf.length <= holdBack) {
+        pending = buf;
+        return EMPTY_BYTES;
+      }
+      pending = buf.subarray(buf.length - holdBack);
+      return buf.subarray(0, buf.length - holdBack);
+    },
+    flush(): Uint8Array {
+      const out = replaceAll(pending);
+      pending = EMPTY_BYTES;
+      return out;
+    },
+  };
+}
+
+// ── Reconciling the config file with the runtime rows ────────────────────────
+
+/**
+ * Drop the SQLite rows of every mapping the config no longer defines.
+ *
+ * A mapping's secret and the placeholders issued for it are keyed on its id, and
+ * the API's delete path is the only thing that cleans them up. `config.json` is
+ * meant to be hand-editable, so an operator can also remove a mapping by deleting
+ * the entry — leaving those rows orphaned. Combined with a recycled id that is a
+ * real credential leak (see createEnvMapping), so ids are never reused AND the
+ * orphans are cleared here at startup.
+ *
+ * Refuses to act on a config it could not read: `readHostConfigStrict()` returns
+ * null for a missing or malformed file, where readHostConfig()'s `{}` would look
+ * exactly like "the operator deleted every mapping" and take the live secrets
+ * with it.
+ */
+export function purgeOrphanedEnvMappings(): number {
+  const config = readHostConfigStrict();
+  if (!config) return 0;
+  const removed = purgeOrphanedEnvMappingRows(envMappingsOf(config).map(m => m.id));
+  if (removed > 0) {
+    console.warn(`[env-mappings] cleared ${removed} row(s) left behind by mappings removed from config.json`);
+  }
+  return removed;
 }
 
 // ── Building the container's Env entries ─────────────────────────────────────

@@ -814,6 +814,32 @@ export function purgeEnvMapping(mappingId: number): void {
 }
 
 /**
+ * The same cleanup, driven from the other side: drop the runtime rows of every
+ * mapping that is NOT in `keepIds`. `~/.huddle/config.json` is hand-editable, so
+ * a mapping can disappear without the API's delete path ever running, leaving its
+ * secret and its issued placeholders behind. Those orphans are what make a
+ * recycled id dangerous — a container's old placeholder would resolve against
+ * whatever mapping later claims that id.
+ *
+ * Returns the number of rows removed. Call only when the config was actually
+ * readable: an empty `keepIds` from a failed read would wipe every live mapping.
+ */
+export function purgeOrphanedEnvMappingRows(keepIds: number[]): number {
+  // Integers only, and bound as parameters — the id list is interpolated into the
+  // statement as placeholders, never as values.
+  const ids = [...new Set(keepIds.filter(n => Number.isInteger(n)))];
+  const where = ids.length ? ` WHERE mapping_id NOT IN (${ids.map(() => '?').join(',')})` : '';
+  const tx = db.transaction(() => {
+    let removed = 0;
+    for (const table of ['env_secrets', 'env_mapping_containers', 'env_mapping_workspaces']) {
+      removed += db.prepare(`DELETE FROM ${table}${where}`).run(...ids).changes;
+    }
+    return removed;
+  });
+  return tx();
+}
+
+/**
  * The mapping id and real secret behind a placeholder, bound to the container
  * that was handed it (the binding principle of token-exchange.ts, finding #12).
  * Returns null — never a value — for an unknown placeholder or another caller.

@@ -95,6 +95,11 @@ export interface HostConfig {
   defaultCpus?: string;
   folderMappings?: HostFolderMapping[];
   envMappings?: HostEnvMapping[];
+  /**
+   * High-water mark for env-mapping ids. Kept separately from the mappings so an
+   * id is never handed out twice — see createEnvMapping().
+   */
+  envMappingSeq?: number;
   [k: string]: unknown;
 }
 
@@ -107,6 +112,23 @@ export function readHostConfig(): HostConfig {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) as HostConfig;
   } catch {
     return {};
+  }
+}
+
+/**
+ * Like readHostConfig(), but tells "unreadable" apart from "empty" by returning
+ * null instead of {}. Anything that DELETES state because an entry is absent must
+ * read through this: readHostConfig() flattens a missing or malformed file to an
+ * empty object, which is indistinguishable from "the operator removed everything"
+ * — and acting on that would throw away live secrets.
+ */
+export function readHostConfigStrict(): HostConfig | null {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as HostConfig;
+  } catch {
+    return null;
   }
 }
 
@@ -441,7 +463,7 @@ function coerceEnvMapping(raw: unknown, fallbackId: number): HostEnvMapping {
   };
 }
 
-function envMappingsOf(config: HostConfig): HostEnvMapping[] {
+export function envMappingsOf(config: HostConfig): HostEnvMapping[] {
   const raw = config.envMappings;
   if (!Array.isArray(raw)) return [];
   return raw
@@ -459,12 +481,26 @@ export function getEnvMapping(id: number): HostEnvMapping | undefined {
 
 // Returns the new id, or null when the config file could not be written. The id
 // is derived inside the lock for the same reason as createFolderMapping.
+//
+// Ids are NEVER recycled. A mapping's runtime rows — the stored secret and the
+// placeholders handed to containers — live in SQLite keyed on this id, and they
+// are only cleaned up when a delete goes through the API. This config file is
+// explicitly hand-editable, so a mapping can also vanish by someone deleting the
+// entry: with a plain max(existing)+1 the next mapping would inherit that id, and
+// resolveEnvPlaceholder() would happily join a container's stale placeholder to
+// the NEW secret — handing it a credential it was never granted. The high-water
+// mark survives the removal of the entry, so that id is spent for good.
+// (purgeOrphanedEnvMappingRows() clears the stale rows as a second line of
+// defense, for a config that was edited so heavily the counter went missing too.)
 export function createEnvMapping(m: Omit<HostEnvMapping, 'id'>): number | null {
   let id = 0;
   const written = mutateHostConfig(current => {
     const existing = envMappingsOf(current);
-    id = existing.reduce((max, e) => Math.max(max, e.id), 0) + 1;
-    return { envMappings: [...existing, { ...m, id }] };
+    const seq = typeof current.envMappingSeq === 'number' && Number.isFinite(current.envMappingSeq)
+      ? current.envMappingSeq
+      : 0;
+    id = existing.reduce((max, e) => Math.max(max, e.id), seq) + 1;
+    return { envMappings: [...existing, { ...m, id }], envMappingSeq: id };
   });
   return written ? id : null;
 }

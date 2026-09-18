@@ -10,7 +10,7 @@ import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
 import { storeTokenExchange, resolveToken, isPlaceholderToken } from './token-exchange';
-import { substituteEnvSecrets, redactEnvSecrets, type EnvSecretSubstitution } from './env-mappings';
+import { substituteEnvSecrets, redactEnvSecrets, createSecretStreamRedactor, type EnvSecretSubstitution } from './env-mappings';
 
 const PROXY_PORT = 80;
 
@@ -35,11 +35,126 @@ const NO_REDACTION: AuditRedactor = (s) => s;
 // upstream, but everything the upstream sends back is persisted and served from
 // /api/audit — so an allowlisted service that echoes a request header, sets a
 // cookie from it, or names it in an error would otherwise hand the secret right
-// back. Revert the substitutions of THIS request on the audit copy only; the
-// bytes relayed to the container are untouched. Identity when nothing was
-// redeemed, which is the overwhelmingly common case.
+// back. Revert the substitutions of THIS request on the audit copy; relayResponse
+// below does the same for the copy the container receives. Identity when nothing
+// was redeemed, which is the overwhelmingly common case.
 function auditRedactor(subs: readonly EnvSecretSubstitution[]): AuditRedactor {
   return subs.length === 0 ? NO_REDACTION : (s) => redactEnvSecrets(s, subs);
+}
+
+// ── Relaying the upstream response back to the devcontainer ──────────────────
+//
+// The audit copy is not the only place a redeemed secret can surface: the body
+// and headers we hand back to the container come from an upstream that is free to
+// echo whatever we sent it. Left alone, one request to a reflecting endpoint on an
+// allowlisted host gives the workload the very credential the placeholder exists
+// to withhold. So on any request where a placeholder WAS redeemed, the response is
+// rewritten on its way out.
+//
+// Three consequences, all only on those requests:
+//   • a compressed body has to be decompressed — the secret is not findable in
+//     gzip/br bytes — and is then relayed identity-encoded;
+//   • content-length is dropped, since placeholder and secret differ in length
+//     (Node falls back to chunked, which is what a rewritten body needs anyway);
+//   • the redaction is streaming, never buffered, so Server-Sent Events still
+//     arrive incrementally (see createSecretStreamRedactor).
+const DECOMPRESSORS: Record<string, (() => zlib.Gunzip | zlib.Inflate | zlib.BrotliDecompress) | undefined> = {
+  gzip: () => zlib.createGunzip(),
+  'x-gzip': () => zlib.createGunzip(),
+  deflate: () => zlib.createInflate(),
+  br: () => zlib.createBrotliDecompress(),
+};
+
+function redactResHeaders(h: http.IncomingHttpHeaders, subs: readonly EnvSecretSubstitution[]): http.IncomingHttpHeaders {
+  const out: http.IncomingHttpHeaders = {};
+  for (const [k, v] of Object.entries(h)) {
+    if (typeof v === 'string') out[k] = redactEnvSecrets(v, subs);
+    else if (Array.isArray(v)) out[k] = v.map(one => redactEnvSecrets(one, subs));
+    else out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Pipe `upstreamRes` to `clientRes`, substituting placeholders back for any secret
+ * this request redeemed. `onChunk` still sees the RAW upstream bytes so the audit
+ * path keeps working unchanged (it redacts separately). `onDone` runs once the
+ * body has been fully relayed.
+ *
+ * With no substitutions this is the plain pass-through the proxy always did.
+ */
+function relayResponse(
+  upstreamRes: http.IncomingMessage,
+  clientRes: http.ServerResponse,
+  subs: readonly EnvSecretSubstitution[],
+  onChunk: (chunk: Buffer) => void,
+  onDone: (status: number | null, headers: http.IncomingHttpHeaders) => void,
+): void {
+  if (subs.length === 0) {
+    clientRes.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
+    upstreamRes.on('data', (chunk: Buffer) => {
+      if (!clientRes.writableEnded) clientRes.write(chunk);
+      onChunk(chunk);
+    });
+    upstreamRes.on('end', () => {
+      if (!clientRes.writableEnded) clientRes.end();
+      onDone(upstreamRes.statusCode ?? null, upstreamRes.headers);
+    });
+    upstreamRes.on('error', () => {
+      if (!clientRes.writableEnded) clientRes.destroy();
+      onDone(0, upstreamRes.headers);
+    });
+    return;
+  }
+
+  const encoding = String(upstreamRes.headers['content-encoding'] ?? '').toLowerCase();
+  const makeDecompressor = DECOMPRESSORS[encoding];
+  const outHeaders = redactResHeaders(sanitizeResHeaders(upstreamRes.headers), subs);
+  // The body is rewritten, so neither the original length nor the original
+  // encoding still describes it.
+  delete outHeaders['content-length'];
+  if (makeDecompressor) delete outHeaders['content-encoding'];
+  clientRes.writeHead(upstreamRes.statusCode || 502, outHeaders);
+
+  const redactor = createSecretStreamRedactor(subs);
+  const finish = () => {
+    if (!clientRes.writableEnded) {
+      const tail = redactor.flush();
+      if (tail.length) clientRes.write(tail);
+      clientRes.end();
+    }
+    onDone(upstreamRes.statusCode ?? null, upstreamRes.headers);
+  };
+
+  // Audit always taps the raw upstream bytes, decompressed or not.
+  upstreamRes.on('data', (chunk: Buffer) => onChunk(chunk));
+
+  if (!makeDecompressor) {
+    upstreamRes.on('data', (chunk: Buffer) => {
+      const out = redactor.push(chunk);
+      if (out.length && !clientRes.writableEnded) clientRes.write(out);
+    });
+    upstreamRes.on('end', finish);
+    upstreamRes.on('error', () => { if (!clientRes.writableEnded) clientRes.destroy(); onDone(0, upstreamRes.headers); });
+    return;
+  }
+
+  // Compressed: inflate, redact the plaintext, relay it identity-encoded. A
+  // decompression failure must not leak the still-compressed original through, so
+  // fail closed by tearing the response down.
+  const inflate = makeDecompressor();
+  inflate.on('data', (chunk: Buffer) => {
+    const out = redactor.push(chunk);
+    if (out.length && !clientRes.writableEnded) clientRes.write(out);
+  });
+  inflate.on('end', finish);
+  inflate.on('error', (err) => {
+    console.warn('[proxy] could not decompress a response carrying a redeemed secret:', err.message);
+    if (!clientRes.writableEnded) clientRes.destroy();
+    onDone(0, upstreamRes.headers);
+  });
+  upstreamRes.pipe(inflate);
+  upstreamRes.on('error', () => { if (!clientRes.writableEnded) clientRes.destroy(); onDone(0, upstreamRes.headers); });
 }
 
 function headersToJson(h: Record<string, any>, redact: AuditRedactor = NO_REDACTION): string {
@@ -187,6 +302,15 @@ function forwardUpgrade(
   clientSocket: stream.Duplex,
   clientHead: Buffer,
   auditId: number | null = null,
+  // Substitutions this handshake redeemed (#108). The upstream's handshake
+  // response — and the body of a non-101 answer — can echo the credential back,
+  // so both are rewritten before they reach the container.
+  //
+  // KNOWN LIMIT: once the tunnel is established the two sockets are piped raw, so
+  // a secret echoed inside a WebSocket *frame* is not redacted. Framing (and
+  // permessage-deflate) would have to be parsed to do that; the handshake is where
+  // a reflected request header realistically shows up.
+  envSubs: readonly EnvSecretSubstitution[] = [],
 ): void {
   // Record the handshake outcome on the in-flight audit row exactly once, so an
   // allowed upgrade never stays res_status=NULL in the network log. First
@@ -242,7 +366,7 @@ function forwardUpgrade(
     finishAudit(upstreamRes.statusCode ?? 101);
     // Reconstruct the 101 handshake byte-for-byte back to the client.
     try {
-      clientSocket.write(formatHttpHead(upstreamRes));
+      clientSocket.write(redactEnvSecrets(formatHttpHead(upstreamRes), envSubs));
       if (upstreamHead.length) clientSocket.write(upstreamHead);
     } catch {
       try { upstreamSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ }
@@ -267,9 +391,21 @@ function forwardUpgrade(
   upstreamReq.on('response', (upstreamRes) => {
     clearHandshakeTimer();
     finishAudit(upstreamRes.statusCode ?? null);
-    try { clientSocket.write(formatHttpHead(upstreamRes)); } catch { /* best-effort: peer socket may already be closed */ }
-    upstreamRes.on('data', (c: Buffer) => { try { clientSocket.write(c); } catch { /* best-effort: peer socket may already be closed */ } });
-    upstreamRes.on('end', () => { try { clientSocket.end(); } catch { /* best-effort: peer socket may already be closed */ } });
+    const redactor = createSecretStreamRedactor(envSubs);
+    try { clientSocket.write(redactEnvSecrets(formatHttpHead(upstreamRes), envSubs)); } catch { /* best-effort: peer socket may already be closed */ }
+    upstreamRes.on('data', (c: Buffer) => {
+      try {
+        const out = redactor.push(c);
+        if (out.length) clientSocket.write(out);
+      } catch { /* best-effort: peer socket may already be closed */ }
+    });
+    upstreamRes.on('end', () => {
+      try {
+        const tail = redactor.flush();
+        if (tail.length) clientSocket.write(tail);
+        clientSocket.end();
+      } catch { /* best-effort: peer socket may already be closed */ }
+    });
     upstreamRes.on('error', () => { try { clientSocket.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
   });
 
@@ -489,19 +625,13 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         headers: outgoingHeaders,
       },
       (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
-        upstreamRes.on('data', (chunk: Buffer) => {
-          if (!res.writableEnded) res.write(chunk);
-          if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
-        });
-        upstreamRes.on('end', () => {
-          if (!res.writableEnded) res.end();
-          complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
-        });
-        upstreamRes.on('error', () => {
-          if (!res.writableEnded) res.destroy();
-          complete(0, upstreamRes.headers);
-        });
+        relayResponse(
+          upstreamRes,
+          res,
+          envSubs,
+          (chunk) => { if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; } },
+          (status, headers) => complete(status, headers),
+        );
       }
     ), res, complete);
     if (!upstream) return;
@@ -596,10 +726,9 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
     stripProxyHeaders(outgoingHeaders);
-    // A WebSocket handshake can carry the credential in a header too (#108).
-    // No redaction hook needed here: forwardUpgrade records only the handshake
-    // status on the audit row, never a response body or headers.
-    substituteEnvSecrets(outgoingHeaders, host, containerId);
+    // A WebSocket handshake can carry the credential in a header too (#108), and
+    // the upstream's handshake response can echo it straight back.
+    const envSubs = substituteEnvSecrets(outgoingHeaders, host, containerId);
     const upstreamPort = target.port || 80;
     forwardUpgrade(
       false,
@@ -607,6 +736,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       clientSocket,
       head,
       auditId,
+      envSubs,
     );
   });
 
@@ -874,19 +1004,13 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
           if (isTokenRequest && upstreamRes.statusCode === 200) {
             handleTokenExchangeResponse(upstreamRes, innerRes, containerId, complete);
           } else {
-            innerRes.writeHead(upstreamRes.statusCode || 502, sanitizeResHeaders(upstreamRes.headers));
-            upstreamRes.on('data', (chunk: Buffer) => {
-              if (!innerRes.writableEnded) innerRes.write(chunk);
-              if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; }
-            });
-            upstreamRes.on('end', () => {
-              if (!innerRes.writableEnded) innerRes.end();
-              complete(upstreamRes.statusCode ?? null, upstreamRes.headers);
-            });
-            upstreamRes.on('error', () => {
-              if (!innerRes.writableEnded) innerRes.destroy();
-              complete(0, upstreamRes.headers);
-            });
+            relayResponse(
+              upstreamRes,
+              innerRes,
+              envSubs,
+              (chunk) => { if (resBytes < CAP) { resChunks.push(chunk); resBytes += chunk.length; } },
+              (status, headers) => complete(status, headers),
+            );
           }
         },
       ), innerRes, complete);
@@ -967,9 +1091,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
 
       const upstreamHeaders = { ...innerReq.headers };
       stripProxyHeaders(upstreamHeaders);
-      // As on the ws:// path: only the handshake status is audited, so there is
-      // no response body the redeemed secret could be echoed into.
-      substituteEnvSecrets(upstreamHeaders, hostname, containerId);
+      // As on the ws:// path: the handshake response can echo a redeemed secret.
+      const envSubs = substituteEnvSecrets(upstreamHeaders, hostname, containerId);
       forwardUpgrade(
         true,
         {
@@ -984,6 +1107,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         innerSocket,
         innerHead,
         auditId,
+        envSubs,
       );
     });
     innerHttp.on('clientError', (_err, sock) => { try { sock.destroy(); } catch { /* best-effort: peer socket may already be closed */ } });
