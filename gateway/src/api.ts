@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS, setEnvSecret, deleteEnvSecret, listEnvSecretIds, purgeEnvMapping, deleteContainerEnvMappings, getRememberedEnvMappings, rememberEnvMappings } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -27,7 +27,15 @@ import {
   deleteFolderMapping,
   toWireMapping,
   fromWirePatch,
+  listEnvMappings,
+  getEnvMapping,
+  createEnvMapping,
+  updateEnvMapping,
+  deleteEnvMapping,
+  toWireEnvMapping,
+  fromWireEnvPatch,
 } from './host-config';
+import { validateEnvVarName, validateEnvValue } from './env-mappings';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
 import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
@@ -102,6 +110,19 @@ interface ShareableRule {
   path_pattern: string | null;
   path_mode: number;
   expires_at: number | null;
+}
+
+// The key a "remember these env mappings" choice is stored under (#108). A
+// multi-folder container has no single workspace directory, so its first mount
+// stands in for it — that is the folder the operator picked first and the one the
+// container is named after. Both inputs are already normalizeHostPath()'d, so the
+// same folder spelled two ways lands on the same key.
+export function envWorkspaceKey(
+  workspaceDir: string,
+  mounts?: { hostPath: string; containerPath: string }[],
+): string {
+  if (mounts?.length) return mounts[0].hostPath;
+  return workspaceDir;
 }
 
 export async function createApiServer(): Promise<FastifyInstance> {
@@ -893,6 +914,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      // Drop the container's env-mapping placeholders (#108): a removed container
+      // must not leave a redeemable secret behind for whatever reuses its name.
+      deleteContainerEnvMappings(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
@@ -931,10 +955,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
     presentableName?: string;
     memory?: string;
     cpus?: string;
+    envMappingIds?: number[];
+    rememberEnvMappings?: boolean;
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus, envMappingIds, rememberEnvMappings: remember } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -997,6 +1023,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(400).send({ error: `containerWorkspace ${workspaceProblem}: "${containerWorkspace}"` });
       }
       const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
+      // Only positive integers reach the mapping layer; anything else is dropped
+      // rather than passed on (#108).
+      const selectedEnvMappings = Array.isArray(envMappingIds)
+        ? envMappingIds.map(Number).filter(n => Number.isInteger(n) && n > 0)
+        : [];
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,
@@ -1008,9 +1039,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
         empty: empty === true,
         memory,
         cpus,
+        envMappingIds: selectedEnvMappings,
       };
       try {
         const id = await createAndStartContainer(params);
+        // "Remember for this workspace directory" — only after a successful
+        // start, and only when there is a directory to key on (#108).
+        const rememberKey = envWorkspaceKey(fwd, normalizedMounts);
+        if (remember && rememberKey) rememberEnvMappings(rememberKey, selectedEnvMappings);
         return { id, containerName };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
@@ -1462,6 +1498,129 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!deleteFolderMapping(Number(req.params.id))) {
         return reply.code(500).send({ error: 'config_write_failed' });
       }
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  // ── Environment Variable Mappings CRUD (#108) ─────────────────────────────
+  // Definitions live in the mounted CLI config, like the folder mappings above.
+  // A secret's VALUE does not: it is stored in the DB and never serialised back,
+  // so neither the committed config file nor an API response can leak it. The
+  // portal sees `has_value` instead.
+
+  // `workspace` (optional) adds a `remembered` flag per mapping, so the start
+  // dialog can pre-tick what was chosen last time for that folder.
+  app.get<{ Querystring: { workspace?: string } }>('/api/env-mappings', async (req) => {
+    const workspace = normalizeHostPath(req.query.workspace ?? '');
+    const remembered = new Set(getRememberedEnvMappings(workspace));
+    const withSecret = listEnvSecretIds();
+    return listEnvMappings().map(m => ({
+      ...toWireEnvMapping(m, withSecret.has(m.id)),
+      remembered: remembered.has(m.id),
+    }));
+  });
+
+  app.post<{ Body: { name: string; var_name: string; value?: string; is_secret?: number; secret_hosts?: string; is_global?: number; enabled?: number; sort_order?: number } }>(
+    '/api/env-mappings',
+    async (req, reply) => {
+      const { name, var_name, value = '', is_secret = 0, secret_hosts = '', is_global = 0, enabled = 1, sort_order = 0 } = req.body;
+      if (!name || !var_name) return reply.code(400).send({ error: 'name and var_name are required' });
+      if (!hostConfigAvailable()) return reply.code(503).send({ error: 'config_not_mounted' });
+      const secret = is_secret === 1;
+      try {
+        validateEnvVarName(var_name);
+        validateEnvValue(value);
+        // Fail-closed: a secret without hosts would never be redeemable anyway —
+        // refuse it now, rather than leaving the operator to debug it later.
+        if (secret && !secret_hosts.trim()) {
+          throw new Error('a secret mapping needs at least one host it may be redeemed for');
+        }
+        if (secret && !value) throw new Error('a secret mapping needs a value');
+      } catch (err) {
+        return reply.code(400).send({ error: 'invalid_env_mapping', message: (err as Error).message });
+      }
+      const id = createEnvMapping({
+        name,
+        varName: var_name,
+        // The value of a secret goes to the DB below, never into config.json.
+        value: secret ? '' : value,
+        secret,
+        secretHosts: secret_hosts,
+        global: is_global === 1,
+        enabled: enabled === 1,
+        sortOrder: sort_order,
+      });
+      if (id === null) return reply.code(500).send({ error: 'config_write_failed' });
+      if (secret) setEnvSecret(id, value);
+      // Deliberately no value, name or variable in the audit line: this endpoint
+      // is where credentials are handed over.
+      logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-create' });
+      notifyStateChanged();
+      return { id };
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/env-mappings/:id',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const existing = getEnvMapping(id);
+      if (!existing) return reply.code(404).send({ error: 'not_found' });
+      if (!hostConfigAvailable()) return reply.code(503).send({ error: 'config_not_mounted' });
+      let patch;
+      try {
+        patch = fromWireEnvPatch(req.body);
+      } catch (err: any) {
+        // Unknown field (fail-closed, finding #9) → 400 instead of 500.
+        return reply.code(400).send({ error: 'invalid_field', message: err.message });
+      }
+      // The portal never receives a secret, so it cannot send one back: an
+      // omitted `value` means "leave the stored secret alone".
+      const valueGiven = Object.prototype.hasOwnProperty.call(req.body, 'value');
+      const nextValue = valueGiven ? String(patch.value ?? '') : null;
+      const willBeSecret = patch.secret !== undefined ? patch.secret : existing.secret;
+      const hosts = patch.secretHosts !== undefined ? patch.secretHosts : existing.secretHosts;
+      try {
+        if (patch.varName !== undefined) validateEnvVarName(patch.varName);
+        if (nextValue !== null) validateEnvValue(nextValue);
+        if (willBeSecret && !String(hosts).trim()) {
+          throw new Error('a secret mapping needs at least one host it may be redeemed for');
+        }
+        // Flipping the secret flag moves the value between two stores, so the new
+        // value has to come with it. Without this, turning a secret into a plain
+        // variable would copy the credential into the committed config file, and
+        // the other direction would leave a plain value marked secret.
+        if (willBeSecret !== existing.secret && nextValue === null) {
+          throw new Error('changing the secret flag requires the value to be sent along');
+        }
+        if (willBeSecret && nextValue === '') throw new Error('a secret mapping needs a value');
+      } catch (err) {
+        return reply.code(400).send({ error: 'invalid_env_mapping', message: (err as Error).message });
+      }
+      // config.json only ever holds a non-secret value.
+      if (willBeSecret) patch.value = '';
+      else if (nextValue !== null) patch.value = nextValue;
+      else delete patch.value;
+
+      if (!updateEnvMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
+      if (willBeSecret && nextValue !== null) setEnvSecret(id, nextValue);
+      if (!willBeSecret) deleteEnvSecret(id);
+      logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-update' });
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/env-mappings/:id',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      if (!deleteEnvMapping(id)) return reply.code(500).send({ error: 'config_write_failed' });
+      // Only after the definition is gone: its secret, the placeholders handed out
+      // for it, and any remembered pre-selection.
+      purgeEnvMapping(id);
+      logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-delete' });
       notifyStateChanged();
       return { ok: true };
     }
