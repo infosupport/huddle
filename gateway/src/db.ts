@@ -841,7 +841,7 @@ export function purgeOrphanedEnvMappingBindings(keepIds: number[]): number {
   const where = ids.length ? ` WHERE mapping_id NOT IN (${ids.map(() => '?').join(',')})` : '';
   const tx = db.transaction(() => {
     let removed = 0;
-    for (const table of ['env_mapping_containers', 'env_mapping_workspaces']) {
+    for (const table of ['env_secrets', 'env_mapping_containers', 'env_mapping_workspaces']) {
       removed += db.prepare(`DELETE FROM ${table}${where}`).run(...ids).changes;
     }
     return removed;
