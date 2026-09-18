@@ -1,6 +1,8 @@
 @if (open) {
-  <div class="modal" (click)="close()">
-    <div class="modal-box modal-box--narrow" (click)="$event.stopPropagation()">
+  <!-- Closes on mousedown, not click: releasing a text selection that started
+       inside the box must not count as "clicked outside". -->
+  <div class="modal" (mousedown)="close()">
+    <div class="modal-box modal-box--narrow" (mousedown)="$event.stopPropagation()">
       <div class="modal-header">
         <h2>Allow globally</h2>
         <button class="modal-close" (click)="close()">✕</button>

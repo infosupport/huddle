@@ -13,15 +13,14 @@
       <thead>
         <tr>
           <th>Container</th><th>Status</th><th>Network</th>
-          <th>Requested</th><th>Score</th><th>Docker</th><th class="col-actions">Actions</th>
+          <th>Requested</th><th>Docker</th><th class="col-actions">Actions</th>
         </tr>
       </thead>
       <tbody>
         @if (vm.containers.length === 0) {
-          <tr><td colspan="7"><p class="empty-note">No containers</p></td></tr>
+          <tr><td colspan="6"><p class="empty-note">No containers</p></td></tr>
         } @else {
           @for (c of vm.containers; track c.name) {
-            @let score = scoreOf(c.name, vm.rules);
             @let grant = vm.grants[c.name];
             @let dockerActive = grant && grant.until > vm.now;
             @let reqCount = requestedCount(c.name, vm.rules);
@@ -33,7 +32,7 @@
                   </div>
                   <div>
                     <div class="name">
-                      {{ c.presentableName || c.name }}
+                      {{ c.name }}
                       @if (c.airlocked) {
                         <span class="airlock-badge" title="Airlock active — global firewall rules are ignored">🔒</span>
                       }
@@ -55,13 +54,6 @@
                   <span class="badge-pill yellow">{{ reqCount }}</span>
                 } @else {
                   <span class="badge-pill muted">0</span>
-                }
-              </td>
-              <td>
-                @if (score === null) {
-                  <span class="badge-pill muted">—</span>
-                } @else {
-                  <span class="badge-pill" [ngClass]="scoreClass(score)">{{ score }}%</span>
                 }
               </td>
               <td>

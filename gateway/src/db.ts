@@ -87,16 +87,25 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
-    CREATE TABLE IF NOT EXISTS folder_mappings (
+    -- Indexed host folders: the portal runs in a container and cannot browse the
+    -- host filesystem, so 'huddle indexfolder' walks the host once and stores the
+    -- folders it finds here. The portal then offers them as choices wherever a
+    -- host path is typed. Machine-local scan output — deliberately DB and not
+    -- config.json (unlike the team-managed settings in #69/#98): another machine's
+    -- folder list is noise, not shared configuration.
+    -- Paths are stored normalized (forward slashes, upper-case drive letter;
+    -- see host-path.ts) and compared case-insensitively so the backslashed,
+    -- lower-cased spelling of a Windows folder is the same entry — Windows
+    -- treats them as one folder.
+    CREATE TABLE IF NOT EXISTS indexed_folders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      host_path TEXT NOT NULL DEFAULT '',
-      volume_name TEXT NOT NULL DEFAULT '',
-      container_path TEXT NOT NULL,
-      read_only INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      sort_order INTEGER NOT NULL DEFAULT 0
+      path TEXT NOT NULL,
+      label TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'cli',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_indexed_folders_path
+      ON indexed_folders (path COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -107,6 +116,22 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE(container_id, host_port, protocol)
     );
+    -- Firewall groups (#69): a named, reusable bundle of firewall rules for a
+    -- product/service (OpenAI, GitHub, ...). Rules point at a group via
+    -- rules.group_id. The shared flag marks a group meant to travel between
+    -- installs; source records whether it was created in the UI (manual) or
+    -- loaded from the team-managed rules folder (startup-folder).
+    CREATE TABLE IF NOT EXISTS firewall_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      shared INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_groups_name
+      ON firewall_groups (name COLLATE NOCASE);
   `);
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
@@ -127,6 +152,19 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'last_path')) {
     db.exec('ALTER TABLE rules ADD COLUMN last_path TEXT');
   }
+  // Firewall groups (#69): a rule may belong to one group (NULL = ungrouped).
+  // added_by records the operator identity that created it (shown as "you" in
+  // the UI); source is 'manual' or 'startup-folder' (loaded from the team folder).
+  if (!cols.some(c => c.name === 'group_id')) {
+    db.exec('ALTER TABLE rules ADD COLUMN group_id INTEGER');
+  }
+  if (!cols.some(c => c.name === 'added_by')) {
+    db.exec('ALTER TABLE rules ADD COLUMN added_by TEXT');
+  }
+  if (!cols.some(c => c.name === 'source')) {
+    db.exec("ALTER TABLE rules ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_rules_group ON rules(group_id)');
 
   // Drop the legacy unique indexes FIRST. The lowercase migration below rewrites
   // `GIST.github.com` -> `gist.github.com`, which would collide with an existing
@@ -169,6 +207,22 @@ export function initDb(): void {
   db.prepare(
     `INSERT OR IGNORE INTO rules (domain, container_id, status) VALUES ('huddle', NULL, 'allow')`
   ).run();
+
+  // Keep Huddle's own self-traffic rule in a dedicated "huddle" group so it is
+  // clearly separated from user/team rules in the portal. Idempotent: the group
+  // is created once (unique name) and the seeded rule is filed under it.
+  db.prepare(
+    `INSERT OR IGNORE INTO firewall_groups (name, description, shared, source)
+     VALUES ('huddle', 'Huddle self-traffic (gateway and portal). Managed by Huddle.', 0, 'manual')`
+  ).run();
+  const huddleGroup = db
+    .prepare(`SELECT id FROM firewall_groups WHERE name = 'huddle' COLLATE NOCASE`)
+    .get() as { id: number } | undefined;
+  if (huddleGroup) {
+    db.prepare(
+      `UPDATE rules SET group_id = ? WHERE domain = 'huddle' AND container_id IS NULL AND group_id IS NULL`
+    ).run(huddleGroup.id);
+  }
 
   db.exec("DELETE FROM audit_log WHERE ts < unixepoch() - 604800");
 
@@ -460,9 +514,13 @@ export function deleteMcpValues(id: string): void {
   db.prepare(`DELETE FROM ext_kv WHERE ext_id = ?`).run('mcp-' + id);
 }
 
-// ── Folder Mappings ───────────────────────────────────────────────────────────
+// ── Legacy folder mappings (pre-#98) ─────────────────────────────────────────
 
-export interface FolderMapping {
+// Folder mappings now live in the CLI config file (~/.huddle/config.json) so the
+// team can review and hand-edit them — see host-config.ts. The table is no longer
+// created for fresh installs; this reader exists only so an install that predates
+// #98 can migrate its rows once (settings-migration.ts).
+export interface LegacyFolderMappingRow {
   id: number;
   name: string;
   host_path: string;
@@ -473,55 +531,176 @@ export interface FolderMapping {
   sort_order: number;
 }
 
-export function listFolderMappings(): FolderMapping[] {
-  return db.prepare('SELECT * FROM folder_mappings ORDER BY sort_order ASC, id ASC').all() as FolderMapping[];
+export function readLegacyFolderMappings(): LegacyFolderMappingRow[] {
+  const table = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'folder_mappings'"
+  ).get();
+  if (!table) return [];
+  // Columns listed explicitly: the row shape below is what the migration maps,
+  // and a `SELECT *` would silently hand it whatever a future column adds.
+  return db.prepare(
+    `SELECT id, name, host_path, volume_name, container_path, read_only, enabled, sort_order
+       FROM folder_mappings ORDER BY sort_order ASC, id ASC`
+  ).all() as LegacyFolderMappingRow[];
 }
 
-export function getFolderMapping(id: number): FolderMapping | undefined {
-  return db.prepare('SELECT * FROM folder_mappings WHERE id = ?').get(id) as FolderMapping | undefined;
+// Validate the update keys of any table against its column allowlist. Pure (no
+// DB) so the SQL-injection defense (finding #9) is testable in isolation.
+// Returns the allowed keys; throws on any unknown key (fail-closed). Every
+// dynamic `UPDATE` in this module funnels its caller-supplied keys through here,
+// so the allowlist is the single place that decides what may reach the SQL text.
+export function validateUpdateKeys<K extends string>(
+  m: object,
+  allowed: ReadonlyArray<K>,
+  what: string,
+): K[] {
+  const permitted = allowed as ReadonlyArray<string>;
+  const keys = Object.keys(m);
+  const unknown = keys.filter(k => !permitted.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(`unknown ${what} field(s): ${unknown.join(', ')}`);
+  }
+  return keys.filter((k): k is K => permitted.includes(k));
 }
 
-export function createFolderMapping(m: Omit<FolderMapping, 'id'>): number {
+// ── Indexed host folders ──────────────────────────────────────────────────────
+
+// Populated by `huddle indexfolder` on the host and editable in Settings. Paths
+// must already be normalized by the caller (normalizeHostPath in host-path.ts);
+// this layer only stores and dedupes them.
+export interface IndexedFolder {
+  id: number;
+  path: string;
+  label: string;
+  source: string;
+  created_at: number;
+}
+
+// Upper bound on the index. `huddle indexfolder` at the wrong spot (a home
+// directory, a drive root) can discover tens of thousands of folders; that would
+// bloat the DB and turn the portal's picker into something unusable. The CLI
+// stops well before this, and the API reports what it refused rather than
+// silently truncating.
+export const MAX_INDEXED_FOLDERS = 2000;
+
+export function listIndexedFolders(): IndexedFolder[] {
+  return db.prepare('SELECT * FROM indexed_folders ORDER BY path COLLATE NOCASE ASC').all() as IndexedFolder[];
+}
+
+export function countIndexedFolders(): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM indexed_folders').get() as { n: number }).n;
+}
+
+export function getIndexedFolderByPath(path: string): IndexedFolder | undefined {
+  return db.prepare('SELECT * FROM indexed_folders WHERE path = ? COLLATE NOCASE').get(path) as IndexedFolder | undefined;
+}
+
+// Insert, or refresh the label/source of an existing entry. Returns 'added' or
+// 'updated' so a bulk index can report both without a second query.
+export function upsertIndexedFolder(f: { path: string; label: string; source: string }): 'added' | 'updated' {
+  const existing = getIndexedFolderByPath(f.path);
+  if (existing) {
+    db.prepare('UPDATE indexed_folders SET label = ?, source = ? WHERE id = ?').run(f.label, f.source, existing.id);
+    return 'updated';
+  }
+  db.prepare('INSERT INTO indexed_folders (path, label, source) VALUES (?, ?, ?)').run(f.path, f.label, f.source);
+  return 'added';
+}
+
+export function deleteIndexedFolder(id: number): void {
+  db.prepare('DELETE FROM indexed_folders WHERE id = ?').run(id);
+}
+
+// Clear the whole index, or only the subtree under `root` so re-indexing one
+// project does not throw away the folders indexed from elsewhere. The LIKE
+// pattern is escaped: a path may legitimately contain '%' or '_'.
+export function clearIndexedFolders(root?: string): number {
+  if (!root) return db.prepare('DELETE FROM indexed_folders').run().changes;
+  // The subtree prefix has to be built, not glued on: a root already ends in a
+  // slash ('T:/', '/'), and 'T:/' + '/%' matched nothing, so clearing a whole
+  // drive from the portal silently removed zero rows.
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+  const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return db.prepare(
+    "DELETE FROM indexed_folders WHERE path = ? COLLATE NOCASE OR path LIKE ? || '%' ESCAPE '\\' COLLATE NOCASE"
+  ).run(root, escaped).changes;
+}
+
+// ── Firewall Groups (#69) ─────────────────────────────────────────────────────
+
+export interface FirewallGroup {
+  id: number;
+  name: string;
+  description: string;
+  shared: number;
+  source: string; // 'manual' | 'startup-folder'
+  created_at: number;
+  updated_at: number;
+}
+
+export interface FirewallGroupWithCount extends FirewallGroup {
+  rule_count: number;
+}
+
+export function listGroups(): FirewallGroupWithCount[] {
+  return db.prepare(
+    `SELECT g.id, g.name, g.description, g.shared, g.source, g.created_at, g.updated_at,
+            (SELECT COUNT(*) FROM rules r WHERE r.group_id = g.id) AS rule_count
+       FROM firewall_groups g
+      ORDER BY g.name COLLATE NOCASE ASC`
+  ).all() as FirewallGroupWithCount[];
+}
+
+export function getGroup(id: number): FirewallGroup | undefined {
+  return db.prepare(
+    'SELECT id, name, description, shared, source, created_at, updated_at FROM firewall_groups WHERE id = ?'
+  ).get(id) as FirewallGroup | undefined;
+}
+
+export function getGroupByName(name: string): FirewallGroup | undefined {
+  // Columns listed explicitly (as in getGroup above) so the row shape stays tied
+  // to FirewallGroup instead of to whatever the table happens to hold.
+  return db.prepare(
+    'SELECT id, name, description, shared, source, created_at, updated_at FROM firewall_groups WHERE name = ? COLLATE NOCASE'
+  ).get(name) as FirewallGroup | undefined;
+}
+
+export function createGroup(g: { name: string; description?: string; shared?: number; source?: string }): number {
   const result = db.prepare(
-    `INSERT INTO folder_mappings (name, host_path, volume_name, container_path, read_only, enabled, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(m.name, m.host_path, m.volume_name, m.container_path, m.read_only, m.enabled, m.sort_order);
+    `INSERT INTO firewall_groups (name, description, shared, source) VALUES (?, ?, ?, ?)`
+  ).run(g.name, g.description ?? '', g.shared ?? 0, g.source ?? 'manual');
   return Number(result.lastInsertRowid);
 }
 
-// The columns that may be changed via update. The TS `Partial<>` is only a
-// compile-time guarantee — at runtime `m` comes straight from the request body.
-// Without this allowlist the JSON keys were interpolated unfiltered as SQL
-// identifiers, which made SQL injection via a crafted key possible (finding #9,
-// e.g. `container_path = (SELECT ...), name`).
-const FOLDER_MAPPING_COLUMNS: ReadonlyArray<keyof Omit<FolderMapping, 'id'>> = [
-  'name', 'host_path', 'volume_name', 'container_path', 'read_only', 'enabled', 'sort_order',
+// Column allowlist for dynamic updates — keys never come from request input into
+// the SQL text (same SQL-injection defense as folder mappings, finding #9).
+const FIREWALL_GROUP_COLUMNS: ReadonlyArray<'name' | 'description' | 'shared' | 'source'> = [
+  'name', 'description', 'shared', 'source',
 ];
 
-// Validate the update keys against the column allowlist. Pure (no DB) so the
-// SQL-injection defense (finding #9) is testable in isolation. Returns the
-// allowed keys; throws on any unknown key (fail-closed).
-export function validateFolderMappingKeys(m: object): Array<keyof Omit<FolderMapping, 'id'>> {
-  const allowed = FOLDER_MAPPING_COLUMNS as ReadonlyArray<string>;
-  const unknown = Object.keys(m).filter(k => !allowed.includes(k));
-  if (unknown.length > 0) {
-    throw new Error(`unknown folder-mapping field(s): ${unknown.join(', ')}`);
-  }
-  return Object.keys(m).filter((k): k is keyof Omit<FolderMapping, 'id'> => allowed.includes(k));
+export function validateGroupKeys(m: object): Array<'name' | 'description' | 'shared' | 'source'> {
+  return validateUpdateKeys(m, FIREWALL_GROUP_COLUMNS, 'group');
 }
 
-export function updateFolderMapping(id: number, m: Partial<Omit<FolderMapping, 'id'>>): void {
-  // Only accept known columns; this way keys are never placed into the SQL text
-  // from caller input.
-  const keys = validateFolderMappingKeys(m);
+export function updateGroup(
+  id: number,
+  m: Partial<Pick<FirewallGroup, 'name' | 'description' | 'shared' | 'source'>>,
+): void {
+  const keys = validateGroupKeys(m);
   if (keys.length === 0) return;
-  const fields = keys.map(k => `${k} = ?`).join(', ');
-  const values = [...keys.map(k => (m as Record<string, unknown>)[k]), id];
-  db.prepare(`UPDATE folder_mappings SET ${fields} WHERE id = ?`).run(...values);
+  const fields = [...keys.map((k) => `${k} = ?`), 'updated_at = unixepoch()'].join(', ');
+  const values = [...keys.map((k) => (m as Record<string, unknown>)[k]), id];
+  db.prepare(`UPDATE firewall_groups SET ${fields} WHERE id = ?`).run(...values);
 }
 
-export function deleteFolderMapping(id: number): void {
-  db.prepare('DELETE FROM folder_mappings WHERE id = ?').run(id);
+// Deleting a group ungroups its rules (group_id → NULL); the rules themselves
+// are kept so an accidental group delete never silently opens/closes traffic.
+export function deleteGroup(id: number): void {
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE rules SET group_id = NULL WHERE group_id = ?').run(id);
+    db.prepare('DELETE FROM firewall_groups WHERE id = ?').run(id);
+  });
+  tx();
 }
 
 // ── Approved Host Ports ───────────────────────────────────────────────────────
