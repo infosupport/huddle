@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
 import { listFolderMappings, getResourceDefaults } from './host-config';
+import { buildEnvMappings } from './env-mappings';
 import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
@@ -975,6 +976,8 @@ export interface StartParams {
   empty?: boolean;
   memory?: string;
   cpus?: string;
+  /** Ids of non-global env mappings the operator enabled for this container (#108). */
+  envMappingIds?: number[];
 }
 
 function parseMemoryBytes(s: string): number {
@@ -1051,6 +1054,10 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // JB-specific env (host-config path, JBR/RemoteDev data, java-proxy) is skipped
   // for VS Code; the proxy and user env stay the same.
   const env = [
+    // Operator-configured env mappings FIRST (#108): Huddle's own entries below
+    // must be able to override them, so a mapping can never redirect the proxy
+    // or break CA trust even if one slipped past the API's reserved-name check.
+    ...buildEnvMappings(containerName, params.envMappingIds),
     '_CONTAINER_USER=vscode',
     '_CONTAINER_USER_HOME=/home/vscode',
     '_REMOTE_USER=vscode',

@@ -82,6 +82,27 @@
           }
         }
 
+        @if (optionalEnvMappings().length) {
+          <label>Environment variables</label>
+          <p class="mount-hint">
+            Optional variables from Settings. Global ones are always added and are not listed here.
+          </p>
+          @for (m of optionalEnvMappings(); track m.id) {
+            <label class="env-row">
+              <input type="checkbox" [checked]="isEnvSelected(m.id)" (change)="toggleEnvMapping(m.id)" />
+              <span class="env-name">{{ m.name }}</span>
+              <code class="env-var">{{ m.var_name }}</code>
+              @if (m.is_secret) {
+                <span class="env-secret" [title]="'Only sent to: ' + (m.secret_hosts || 'nothing — no hosts configured')">secret</span>
+              }
+            </label>
+          }
+          <label class="empty-toggle">
+            <input type="checkbox" [(ngModel)]="rememberEnvMappings" [disabled]="!envRememberKey()" />
+            Remember these variables for this workspace directory
+          </label>
+        }
+
         <label for="start-name">Container name</label>
         <input id="start-name" type="text" [(ngModel)]="containerName" (input)="nameTouched = true" placeholder="devcontainer-my-project" />
 
