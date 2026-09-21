@@ -119,6 +119,26 @@ export function initDb(): void {
       value TEXT NOT NULL,
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+    -- Secrets keyed on the mapping's opaque uid rather than its numeric id.
+    --
+    -- The id is a small integer the operator can type: config.json is meant to be
+    -- hand-edited, so an entry can be removed and another later written with the
+    -- same id, and that entry would inherit this credential — redeemable towards
+    -- ITS host allowlist, which the operator never granted. The uid is minted
+    -- once, at creation, and stored next to the id in config.json; a hand-added
+    -- entry carries no uid, so there is nothing for it to inherit, and a secret
+    -- whose uid no longer appears in the config is simply unreachable. That makes
+    -- cleaning orphans hygiene rather than a security control, so no unattended
+    -- deletion has to be trusted with a credential.
+    --
+    -- env_secrets above is the legacy table; migrateEnvSecretsToUids() copies it
+    -- across once uids exist and leaves it in place (same non-destructive
+    -- approach as settings-migration.ts).
+    CREATE TABLE IF NOT EXISTS env_mapping_secrets (
+      uid TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
     -- Persisted rather than in-memory (unlike token-exchange.ts): a container's
     -- Env survives a huddle restart, so the route from placeholder back to the
     -- real secret has to survive it too.
@@ -196,6 +216,15 @@ export function initDb(): void {
     db.exec("ALTER TABLE rules ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_rules_group ON rules(group_id)');
+
+  // The placeholder a container holds is bound to the mapping's uid, not its
+  // recyclable numeric id (#108) — see env_mapping_secrets. Backfilled from
+  // mapping_id by migrateEnvSecretsToUids(); a row still NULL after that belongs
+  // to a mapping the config no longer defines, and resolves to nothing.
+  const envContainerCols = db.prepare("PRAGMA table_info(env_mapping_containers)").all() as { name: string }[];
+  if (!envContainerCols.some(c => c.name === 'uid')) {
+    db.exec('ALTER TABLE env_mapping_containers ADD COLUMN uid TEXT');
+  }
 
   // Drop the legacy unique indexes FIRST. The lowercase migration below rewrites
   // `GIST.github.com` -> `gist.github.com`, which would collide with an existing
@@ -748,39 +777,81 @@ export function deleteGroup(id: number): void {
 // The mapping definitions live in ~/.huddle/config.json (host-config.ts). Only
 // what must stay out of a committed file lives here.
 
-/** Store (or replace) the real secret behind a mapping. Never logged. */
-export function setEnvSecret(mappingId: number, value: string): void {
+/**
+ * Store (or replace) the real secret behind a mapping. Never logged. Keyed on the
+ * mapping's opaque uid — see the env_mapping_secrets schema for why not the id.
+ */
+export function setEnvSecret(uid: string, value: string): void {
   db.prepare(
-    `INSERT INTO env_secrets (mapping_id, value, updated_at) VALUES (?, ?, unixepoch())
-     ON CONFLICT(mapping_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-  ).run(mappingId, value);
+    `INSERT INTO env_mapping_secrets (uid, value, updated_at) VALUES (?, ?, unixepoch())
+     ON CONFLICT(uid) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).run(uid, value);
 }
 
 /** The real secret, for the one caller that needs it: building a container's Env. */
-export function getEnvSecret(mappingId: number): string | null {
-  const row = db.prepare('SELECT value FROM env_secrets WHERE mapping_id = ?')
-    .get(mappingId) as { value: string } | undefined;
+export function getEnvSecret(uid: string): string | null {
+  if (!uid) return null; // a mapping without a uid owns no secret
+  const row = db.prepare('SELECT value FROM env_mapping_secrets WHERE uid = ?')
+    .get(uid) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
-export function deleteEnvSecret(mappingId: number): void {
-  db.prepare('DELETE FROM env_secrets WHERE mapping_id = ?').run(mappingId);
+export function deleteEnvSecret(uid: string): void {
+  if (!uid) return;
+  db.prepare('DELETE FROM env_mapping_secrets WHERE uid = ?').run(uid);
 }
 
 /**
- * Ids of every mapping that has a secret stored. The API answers with membership
+ * Uids of every mapping that has a secret stored. The API answers with membership
  * of this set instead of the value, so the portal can show "set" without the
  * secret ever being serialised into a response.
  */
-export function listEnvSecretIds(): Set<number> {
-  const rows = db.prepare('SELECT mapping_id FROM env_secrets').all() as { mapping_id: number }[];
-  return new Set(rows.map(r => r.mapping_id));
+export function listEnvSecretUids(): Set<string> {
+  const rows = db.prepare('SELECT uid FROM env_mapping_secrets').all() as { uid: string }[];
+  return new Set(rows.map(r => r.uid));
+}
+
+// ── Migration: numeric mapping_id → opaque uid (#108) ────────────────────────
+
+/** A legacy secret row, for the migration to re-key. */
+export function readLegacyEnvSecrets(): Array<{ mapping_id: number; value: string }> {
+  return db.prepare('SELECT mapping_id, value FROM env_secrets').all() as Array<{ mapping_id: number; value: string }>;
+}
+
+/**
+ * Copy legacy id-keyed secrets onto their uid, and stamp the uid onto the
+ * placeholder bindings that still lack one. `idToUid` comes from the config file,
+ * which is the only place that knows which uid belongs to which id.
+ *
+ * Non-destructive and idempotent: an existing uid-keyed secret is never
+ * overwritten, and the legacy rows are left in place (same approach as
+ * settings-migration.ts) so a downgrade still finds them.
+ */
+export function backfillEnvSecretUids(idToUid: ReadonlyMap<number, string>): number {
+  if (idToUid.size === 0) return 0;
+  const tx = db.transaction(() => {
+    let moved = 0;
+    const copy = db.prepare(
+      `INSERT INTO env_mapping_secrets (uid, value, updated_at)
+       SELECT ?, value, updated_at FROM env_secrets WHERE mapping_id = ?
+       ON CONFLICT(uid) DO NOTHING`
+    );
+    const bind = db.prepare('UPDATE env_mapping_containers SET uid = ? WHERE mapping_id = ? AND uid IS NULL');
+    for (const [id, uid] of idToUid) {
+      moved += copy.run(uid, id).changes;
+      bind.run(uid, id);
+    }
+    return moved;
+  });
+  return tx();
 }
 
 // ── Per-container bookkeeping ────────────────────────────────────────────────
 
 export interface ContainerEnvMapping {
   mapping_id: number;
+  /** The mapping's opaque uid — what the placeholder actually resolves through. */
+  uid: string;
   /** Only set for a secret mapping: the value the container actually received. */
   placeholder: string | null;
 }
@@ -791,9 +862,9 @@ export function setContainerEnvMappings(containerId: string, entries: ContainerE
   const tx = db.transaction((cid: string, rows: ContainerEnvMapping[]) => {
     db.prepare('DELETE FROM env_mapping_containers WHERE container_id = ?').run(cid);
     const insert = db.prepare(
-      'INSERT INTO env_mapping_containers (mapping_id, container_id, placeholder) VALUES (?, ?, ?)'
+      'INSERT INTO env_mapping_containers (mapping_id, container_id, placeholder, uid) VALUES (?, ?, ?, ?)'
     );
-    for (const r of rows) insert.run(r.mapping_id, cid, r.placeholder);
+    for (const r of rows) insert.run(r.mapping_id, cid, r.placeholder, r.uid || null);
   });
   tx(containerId, entries);
 }
@@ -803,9 +874,11 @@ export function deleteContainerEnvMappings(containerId: string): void {
 }
 
 // Drop every trace of a mapping that no longer exists: its secret, the
-// placeholders handed out for it, and any remembered pre-selection.
-export function purgeEnvMapping(mappingId: number): void {
+// placeholders handed out for it, and any remembered pre-selection. The secret is
+// keyed on the uid, the rest on the numeric id, so both are needed.
+export function purgeEnvMapping(mappingId: number, uid: string): void {
   const tx = db.transaction((id: number) => {
+    if (uid) db.prepare('DELETE FROM env_mapping_secrets WHERE uid = ?').run(uid);
     db.prepare('DELETE FROM env_secrets WHERE mapping_id = ?').run(id);
     db.prepare('DELETE FROM env_mapping_containers WHERE mapping_id = ?').run(id);
     db.prepare('DELETE FROM env_mapping_workspaces WHERE mapping_id = ?').run(id);
@@ -814,25 +887,20 @@ export function purgeEnvMapping(mappingId: number): void {
 }
 
 /**
- * The same cleanup, driven from the other side: drop the placeholder BINDINGS of
- * every mapping that is NOT in `keepIds`. `~/.huddle/config.json` is
- * hand-editable, so a mapping can disappear without the API's delete path ever
- * running, leaving its issued placeholders behind — and a container's old
- * placeholder resolving against whatever mapping later claims that id is the leak
- * this closes.
+ * Housekeeping, driven from the other side: drop the placeholder bindings and
+ * remembered selections of every mapping that is NOT in `keepIds`, for entries
+ * removed straight out of the hand-editable config.json rather than through the
+ * API's delete path.
  *
- * Deliberately does NOT touch env_secrets. resolveEnvPlaceholder() reaches a
- * secret only THROUGH env_mapping_containers, so clearing the bindings already
- * makes a stale placeholder unresolvable; deleting the secrets as well would buy
- * nothing and make this reconciliation — which runs unattended at every boot —
- * capable of irreversibly destroying credentials over a typo in a file operators
- * are invited to edit by hand. An orphaned secret row is inert, and gets
- * overwritten if its id is ever issued again. purgeEnvMapping() still removes
- * everything, because there the operator asked for exactly that.
+ * Note this is no longer load-bearing for security. A placeholder resolves only
+ * through the mapping's uid (see env_mapping_secrets), and a uid that has left the
+ * config can never be re-issued, so a stale binding already resolves to nothing
+ * whether or not it is still here. That is deliberate: a reconciliation running
+ * unattended at every boot, against a file people edit by hand, should not be the
+ * thing standing between a mistake and a leaked credential — and it never deletes
+ * a secret.
  *
- * Returns the number of rows removed. Call only when the config was actually
- * readable: an empty `keepIds` from a failed read would unbind every live
- * container.
+ * Returns the number of rows removed.
  */
 export function purgeOrphanedEnvMappingBindings(keepIds: number[]): number {
   // Integers only, and bound as parameters — the id list is interpolated into the
@@ -850,22 +918,26 @@ export function purgeOrphanedEnvMappingBindings(keepIds: number[]): number {
 }
 
 /**
- * The mapping id and real secret behind a placeholder, bound to the container
+ * The mapping uid and real secret behind a placeholder, bound to the container
  * that was handed it (the binding principle of token-exchange.ts, finding #12).
  * Returns null — never a value — for an unknown placeholder or another caller.
  * Whether the mapping may be redeemed towards a given host is decided by the
  * caller against the config file; this only answers "whose secret is this".
+ *
+ * The join goes through the uid, so a binding left behind by a mapping that was
+ * removed from config.json finds nothing — and an entry later hand-written with
+ * the same numeric id cannot pick this credential up.
  */
 export function resolveEnvPlaceholder(
   placeholder: string,
   containerId: string,
-): { mappingId: number; value: string } | null {
+): { uid: string; value: string } | null {
   const row = db.prepare(
-    `SELECT c.mapping_id AS mappingId, s.value AS value
+    `SELECT c.uid AS uid, s.value AS value
        FROM env_mapping_containers c
-       JOIN env_secrets s ON s.mapping_id = c.mapping_id
-      WHERE c.placeholder = ? AND c.container_id = ?`
-  ).get(placeholder, containerId) as { mappingId: number; value: string } | undefined;
+       JOIN env_mapping_secrets s ON s.uid = c.uid
+      WHERE c.placeholder = ? AND c.container_id = ? AND c.uid IS NOT NULL`
+  ).get(placeholder, containerId) as { uid: string; value: string } | undefined;
   return row ?? null;
 }
 

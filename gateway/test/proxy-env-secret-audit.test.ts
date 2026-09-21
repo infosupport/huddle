@@ -24,6 +24,8 @@ const HOME_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-home-'));
 process.env.HUDDLE_HOME_DIR = HOME_DIR;
 
 const MAPPING_ID = 1;
+// The secret hangs off the uid, not the numeric id — see env_mapping_secrets.
+const MAPPING_UID = 'b7c1f0e2-0000-4000-8000-0000000000aa';
 const SECRET = 'sk-real-secret-value-do-not-log';
 const CONTAINER = 'devcontainer-envtest';
 
@@ -32,6 +34,7 @@ fs.writeFileSync(
   JSON.stringify({
     envMappings: [{
       id: MAPPING_ID,
+      uid: MAPPING_UID,
       name: 'Test token',
       varName: 'TEST_TOKEN',
       value: '',
@@ -111,8 +114,8 @@ describe.skipIf(!sqliteAvailable)('env-mapping secrets stay out of the audit log
 
     const { newEnvPlaceholder } = await import('../src/env-mappings');
     placeholder = newEnvPlaceholder();
-    dbMod.setEnvSecret(MAPPING_ID, SECRET);
-    dbMod.setContainerEnvMappings(CONTAINER, [{ mapping_id: MAPPING_ID, placeholder }]);
+    dbMod.setEnvSecret(MAPPING_UID, SECRET);
+    dbMod.setContainerEnvMappings(CONTAINER, [{ mapping_id: MAPPING_ID, uid: MAPPING_UID, placeholder }]);
 
     // No Docker here: pin the client IP to the container that owns the
     // placeholder, otherwise substitution correctly refuses to redeem it.

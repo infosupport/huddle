@@ -54,6 +54,14 @@ export interface FolderMapping {
 // hosts it may be redeemed for.
 export interface HostEnvMapping {
   id: number;
+  /**
+   * Opaque, minted once at creation and never reused. The numeric `id` is the
+   * portal's handle and is small enough to be typed by hand; this is the key the
+   * stored secret hangs off, so an entry hand-written with a recycled id inherits
+   * nothing (it carries no uid at all). Empty only for an entry that was added by
+   * hand — such a mapping can hold no secret.
+   */
+  uid: string;
   name: string;
   varName: string;
   /** Plain value; always '' when `secret` is set. */
@@ -450,6 +458,10 @@ function coerceEnvMapping(raw: unknown, fallbackId: number): HostEnvMapping {
   const secret = m.secret === true;
   return {
     id: typeof m.id === 'number' && Number.isFinite(m.id) ? m.id : fallbackId,
+    // Absent for an entry someone wrote by hand. Deliberately NOT invented here:
+    // a uid is what a stored secret hangs off, so minting one on read would let a
+    // hand-written entry adopt whatever secret happened to be under it.
+    uid: str(m.uid),
     name: str(m.name),
     varName: str(m.varName),
     // A hand-edited file could carry a value on a secret mapping. Drop it rather
@@ -479,20 +491,36 @@ export function getEnvMapping(id: number): HostEnvMapping | undefined {
   return listEnvMappings().find(m => m.id === id);
 }
 
+/**
+ * The mapping a stored secret belongs to. Fail-closed on an empty uid: a
+ * hand-written entry has none, and must not match another entry that also has
+ * none.
+ */
+export function getEnvMappingByUid(uid: string): HostEnvMapping | undefined {
+  if (!uid) return undefined;
+  return listEnvMappings().find(m => m.uid === uid);
+}
+
+/** Opaque and unguessable, so it can never be typed back by accident. */
+export function newEnvMappingUid(): string {
+  return randomUUID();
+}
+
 // Returns the new id, or null when the config file could not be written. The id
-// is derived inside the lock for the same reason as createFolderMapping.
+// and the uid are both derived inside the lock, for the same reason as
+// createFolderMapping.
 //
-// Ids are NEVER recycled. A mapping's runtime rows — the stored secret and the
-// placeholders handed to containers — live in SQLite keyed on this id, and they
-// are only cleaned up when a delete goes through the API. This config file is
-// explicitly hand-editable, so a mapping can also vanish by someone deleting the
-// entry: with a plain max(existing)+1 the next mapping would inherit that id, and
-// resolveEnvPlaceholder() would happily join a container's stale placeholder to
-// the NEW secret — handing it a credential it was never granted. The high-water
-// mark survives the removal of the entry, so that id is spent for good.
-// (purgeOrphanedEnvMappingRows() clears the stale rows as a second line of
-// defense, for a config that was edited so heavily the counter went missing too.)
-export function createEnvMapping(m: Omit<HostEnvMapping, 'id'>): number | null {
+// Two separate keys, on purpose:
+//   • `id` is the portal's handle — small, ordered, and typeable. It is never
+//     recycled either (envMappingSeq is a high-water mark that outlives the
+//     entry's removal), which keeps the portal's own references stable.
+//   • `uid` is what the stored secret hangs off. Even if an id were somehow
+//     reused — this file is hand-editable, and nothing stops someone writing
+//     `{"id": 5}` themselves — a uid is never re-issued, so that entry carries no
+//     uid and inherits no credential. A secret whose uid has left the config is
+//     simply unreachable, which is why cleaning orphans is housekeeping here
+//     rather than something a credential's safety depends on.
+export function createEnvMapping(m: Omit<HostEnvMapping, 'id' | 'uid'>): number | null {
   let id = 0;
   const written = mutateHostConfig(current => {
     const existing = envMappingsOf(current);
@@ -500,9 +528,43 @@ export function createEnvMapping(m: Omit<HostEnvMapping, 'id'>): number | null {
       ? current.envMappingSeq
       : 0;
     id = existing.reduce((max, e) => Math.max(max, e.id), seq) + 1;
-    return { envMappings: [...existing, { ...m, id }], envMappingSeq: id };
+    return {
+      envMappings: [...existing, { ...m, id, uid: newEnvMappingUid() }],
+      envMappingSeq: id,
+    };
   });
   return written ? id : null;
+}
+
+/**
+ * Give a uid to every entry that has none, and report id → uid for all of them.
+ *
+ * Runs once at startup so installs predating the uid keep working: their secrets
+ * are still filed under the numeric id, and backfillEnvSecretUids() re-keys them
+ * onto the uid this mints. Entries a human added by hand get one here too — which
+ * is safe, because it happens before any secret is attached to them, so there is
+ * nothing to inherit.
+ *
+ * Returns null when the config could not be written, so the caller can retry on
+ * the next start rather than run a half-migration.
+ */
+export function ensureEnvMappingUids(): Map<number, string> | null {
+  const assigned = new Map<number, string>();
+  let changed = false;
+  const written = mutateHostConfig(current => {
+    assigned.clear();
+    const existing = envMappingsOf(current);
+    const next = existing.map(e => {
+      const uid = e.uid || newEnvMappingUid();
+      if (!e.uid) changed = true;
+      assigned.set(e.id, uid);
+      return { ...e, uid };
+    });
+    if (!changed) return null; // nothing to write; the map is already complete
+    return { envMappings: next };
+  });
+  // `null` from the mutator means "no write needed", which is success.
+  return written || !changed ? assigned : null;
 }
 
 export function updateEnvMapping(id: number, patch: Partial<Omit<HostEnvMapping, 'id'>>): boolean {

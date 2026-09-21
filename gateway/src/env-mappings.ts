@@ -3,9 +3,12 @@ import type http from 'http';
 import { matchDomain } from './rules';
 import {
   getEnvMapping,
+  getEnvMappingByUid,
   listEnvMappings,
   envMappingsOf,
+  ensureEnvMappingUids,
   readHostConfigStrict,
+  hostConfigAvailable,
   type HostEnvMapping,
 } from './host-config';
 import {
@@ -13,6 +16,7 @@ import {
   resolveEnvPlaceholder,
   setContainerEnvMappings,
   purgeOrphanedEnvMappingBindings,
+  backfillEnvSecretUids,
   type ContainerEnvMapping,
 } from './db';
 
@@ -133,7 +137,10 @@ export type SecretLookup = (
 export const lookupEnvSecret: SecretLookup = (placeholder, containerId) => {
   const bound = resolveEnvPlaceholder(placeholder, containerId);
   if (!bound) return null;
-  const mapping = getEnvMapping(bound.mappingId);
+  // By uid, not by id: the config entry that owns this secret is the one that was
+  // issued this uid, so an entry later written by hand under the same numeric id
+  // is not it, and cannot lend its host allowlist to someone else's credential.
+  const mapping = getEnvMappingByUid(bound.uid);
   if (!mapping || !mapping.enabled || !mapping.secret) return null;
   return { value: bound.value, hosts: mapping.secretHosts };
 };
@@ -298,24 +305,41 @@ export function createSecretStreamRedactor(subs: readonly EnvSecretSubstitution[
 // ── Reconciling the config file with the runtime rows ────────────────────────
 
 /**
- * Unbind the placeholders of every mapping the config no longer defines.
+ * One-time migration: give every mapping a uid and re-key its stored secret onto
+ * it (#108).
  *
- * A mapping's issued placeholders are keyed on its id, and the API's delete path
- * is the only thing that cleans them up. `config.json` is meant to be
- * hand-editable, so an operator can also remove a mapping by deleting the entry —
- * leaving those bindings orphaned. Combined with a recycled id that is a real
- * credential leak (see createEnvMapping), so ids are never reused AND the stale
- * bindings are cleared here at startup.
+ * Installs predating the uid have their secrets filed under the numeric
+ * mapping_id, which is the recyclable key this change exists to get away from.
+ * Minting the uids and copying the rows across has to happen before anything
+ * reads a secret, so it runs at startup ahead of purgeOrphanedEnvMappings().
  *
- * This runs unattended at every boot against a file people edit by hand, so it is
- * deliberately hard to make it destroy anything:
- *   • `readHostConfigStrict()` returns null for a missing or unparseable file,
- *     where readHostConfig()'s `{}` would read as "every mapping was deleted";
- *   • a parseable file whose `envMappings` is not an array (`{}`, a string, a
- *     typo'd shape) is refused too — envMappingsOf() collapses those to an empty
- *     list, which is indistinguishable from a real "no mappings";
- *   • only the bindings are removed, never the stored secrets (see
- *     purgeOrphanedEnvMappingBindings).
+ * Skipped when the config is not mounted or could not be written — retried on the
+ * next start rather than left half-done. Non-destructive: the legacy rows stay
+ * (same approach as settings-migration.ts), and an existing uid-keyed secret is
+ * never overwritten, so re-running changes nothing.
+ */
+export function migrateEnvSecretsToUids(): number {
+  if (!hostConfigAvailable()) return 0;
+  const idToUid = ensureEnvMappingUids();
+  if (!idToUid) {
+    console.warn('[env-mappings] could not write config.json; secret migration retried on next start');
+    return 0;
+  }
+  const moved = backfillEnvSecretUids(idToUid);
+  if (moved > 0) console.log(`[env-mappings] re-keyed ${moved} stored secret(s) onto their mapping uid`);
+  return moved;
+}
+
+/**
+ * Housekeeping: drop the placeholder bindings and remembered selections of every
+ * mapping the config no longer defines, for entries removed straight out of the
+ * hand-editable config.json rather than through the API's delete path.
+ *
+ * Not load-bearing for security — a placeholder resolves only through its uid,
+ * and a uid that has left the config is never re-issued, so a stale binding
+ * already resolves to nothing. It is still refused on a config that could not be
+ * read, or whose `envMappings` is not a list, because unbinding every live
+ * container over a typo would be a thoroughly annoying way to find out.
  */
 export function purgeOrphanedEnvMappings(): number {
   const config = readHostConfigStrict();
@@ -357,7 +381,7 @@ export interface BuiltEnvMappings {
  */
 export function buildEnvEntries(
   mappings: HostEnvMapping[],
-  secretFor: (mappingId: number) => string | null,
+  secretFor: (uid: string) => string | null,
   makePlaceholder: () => string = newEnvPlaceholder,
 ): BuiltEnvMappings {
   const entries: string[] = [];
@@ -366,7 +390,10 @@ export function buildEnvEntries(
 
   for (const m of mappings) {
     if (!m.enabled) continue;
-    const value = m.secret ? secretFor(m.id) : m.value;
+    // A secret hangs off the uid, so an entry without one owns nothing. That is
+    // the hand-written `{"id": 5, "secret": true}` case: it must come up empty
+    // rather than adopt whatever secret the numeric id once pointed at.
+    const value = m.secret ? secretFor(m.uid) : m.value;
     try {
       validateEnvVarName(m.varName);
       if (value === null) throw new Error('secret mapping has no stored value');
@@ -379,7 +406,7 @@ export function buildEnvEntries(
     }
     const placeholder = m.secret ? makePlaceholder() : null;
     entries.push(`${m.varName}=${placeholder ?? value}`);
-    containerRows.push({ mapping_id: m.id, placeholder });
+    containerRows.push({ mapping_id: m.id, uid: m.uid, placeholder });
   }
 
   return { entries, containerRows, skipped };

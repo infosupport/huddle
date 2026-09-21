@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS, setEnvSecret, deleteEnvSecret, listEnvSecretIds, purgeEnvMapping, deleteContainerEnvMappings, getRememberedEnvMappings, rememberEnvMappings } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS, setEnvSecret, deleteEnvSecret, listEnvSecretUids, purgeEnvMapping, deleteContainerEnvMappings, getRememberedEnvMappings, rememberEnvMappings } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -1514,9 +1514,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.get<{ Querystring: { workspace?: string } }>('/api/env-mappings', async (req) => {
     const workspace = normalizeHostPath(req.query.workspace ?? '');
     const remembered = new Set(getRememberedEnvMappings(workspace));
-    const withSecret = listEnvSecretIds();
+    const withSecret = listEnvSecretUids();
     return listEnvMappings().map(m => ({
-      ...toWireEnvMapping(m, withSecret.has(m.id)),
+      ...toWireEnvMapping(m, withSecret.has(m.uid)),
       remembered: remembered.has(m.id),
     }));
   });
@@ -1552,7 +1552,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         sortOrder: sort_order,
       });
       if (id === null) return reply.code(500).send({ error: 'config_write_failed' });
-      if (secret) setEnvSecret(id, value);
+      // The uid is minted by createEnvMapping; the secret is filed under it, not
+      // under the numeric id the portal shows.
+      const created = getEnvMapping(id);
+      if (!created?.uid) return reply.code(500).send({ error: 'config_write_failed' });
+      if (secret) setEnvSecret(created.uid, value);
       // Deliberately no value, name or variable in the audit line: this endpoint
       // is where credentials are handed over.
       logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-create' });
@@ -1604,8 +1608,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
       else delete patch.value;
 
       if (!updateEnvMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
-      if (willBeSecret && nextValue !== null) setEnvSecret(id, nextValue);
-      if (!willBeSecret) deleteEnvSecret(id);
+      // Keyed on the uid the mapping was created with — `existing` was read before
+      // the write, and a patch cannot change the uid.
+      if (willBeSecret && nextValue !== null) setEnvSecret(existing.uid, nextValue);
+      if (!willBeSecret) deleteEnvSecret(existing.uid);
       logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-update' });
       notifyStateChanged();
       return { ok: true };
@@ -1616,10 +1622,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/env-mappings/:id',
     async (req, reply) => {
       const id = Number(req.params.id);
+      // Read the uid before the definition goes, or its secret is unreachable.
+      const doomed = getEnvMapping(id);
       if (!deleteEnvMapping(id)) return reply.code(500).send({ error: 'config_write_failed' });
       // Only after the definition is gone: its secret, the placeholders handed out
       // for it, and any remembered pre-selection.
-      purgeEnvMapping(id);
+      purgeEnvMapping(id, doomed?.uid ?? '');
       logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-delete' });
       notifyStateChanged();
       return { ok: true };
