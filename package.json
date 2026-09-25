@@ -14,12 +14,14 @@
   },
   "scripts": {
     "install": "node scripts/install-subprojects.mjs",
+    "install:parallel": "node scripts/install-parallel.mjs",
     "build": "npm --prefix gateway run build",
     "start": "npm --prefix gateway start",
     "cli:build": "npm --prefix cli run build",
     "cli:typecheck": "npm --prefix cli run typecheck",
     "cli:install": "npm --prefix cli run install-global",
     "local:prepare": "podman build ./gateway -t huddle-debug && cd cli && npm install && npm run build && npm link",
-    "dev:single": "node scripts/dev-single.mjs"
+    "dev:single": "node scripts/dev-single.mjs",
+    "dev:full": "node scripts/dev-full.mjs"
   }
 }

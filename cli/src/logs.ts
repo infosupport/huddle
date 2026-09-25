@@ -14,6 +14,7 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import { NODE_LOG_FILE, isNodePidAlive, readNodePid } from './node';
 import { resolveRuntime } from './runtime';
+import { CONTAINER as GATEWAY_CONTAINER } from './init';
 import { bold, cyan, dim, red, yellow } from './utils';
 
 export interface LogsOptions {
@@ -23,7 +24,6 @@ export interface LogsOptions {
   gateway?: boolean;
 }
 
-const GATEWAY_CONTAINER = 'huddle';
 
 export function parseLines(raw: string | undefined): number {
   if (raw === undefined) return 200;

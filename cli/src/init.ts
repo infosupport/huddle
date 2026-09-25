@@ -39,7 +39,32 @@ import {
   startNodeDetached,
 } from './node';
 
-const CONTAINER = 'huddle';
+/**
+ * Optional name for a second, fully independent Huddle stack running next to
+ * the default one — its own gateway container, devcontainer network and
+ * Docker-socket directory, so `HUDDLE_INSTANCE=sbx huddle init` and a plain
+ * `huddle init` can run at once without either seeing the other's
+ * devcontainers. Only the container/network/socket-dir NAMES are derived from
+ * this: ports and the config/data directory (~/.huddle) are separate
+ * env vars (HUDDLE_PORT / HUDDLE_CONTROL_PORT / HUDDLE_SBX_PROXY_PORT / HOME)
+ * that must be set alongside it, or the second instance would collide with
+ * the first on all three. scripts/dev-full.mjs sets all of them together.
+ */
+function resolveInstance(): string {
+  const raw = (process.env.HUDDLE_INSTANCE ?? '').trim();
+  if (!raw) return '';
+  // Flows into a Docker --name/network and a host directory path, so this is
+  // a validation, not a courtesy: a stray "/" or ".." here must not become a
+  // path escape or a shell-meaningful container name.
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,30}$/.test(raw)) {
+    throw new Error(`HUDDLE_INSTANCE must be alphanumeric/dashes (max 31 chars) — got "${raw}"`);
+  }
+  return raw;
+}
+const INSTANCE = resolveInstance();
+const SUFFIX = INSTANCE ? `-${INSTANCE}` : '';
+
+export const CONTAINER = `huddle${SUFFIX}`;
 
 /**
  * Ask Huddle Node to wire the freshly created gateway into every devcontainer.
@@ -207,14 +232,15 @@ const CONTROL_PORT = Number(process.env.HUDDLE_CONTROL_PORT ?? 24843);
  * the Huddle proxy — it is the only way out. Exported so `huddle migrate` can
  * point an existing Compose project at the exact same network.
  */
-export const INTERNAL_NET = 'devcontainer-net';
+export const INTERNAL_NET = `devcontainer-net${SUFFIX}`;
 /**
  * Directory on the Docker ENGINE host where the gateway serves each
  * devcontainer's filtered Docker socket (`<HOST_SOCKET_DIR>/<container_name>`).
- * Kept in sync with SOCKET_DIR in gateway/src/docker.ts. Exported so
+ * Handed to the gateway as HUDDLE_SOCKET_DIR (gateway/src/runtime-env.ts) so
+ * a per-instance dir actually gets served, not just bind-mounted. Exported so
  * `huddle migrate` can generate the matching bind mount.
  */
-export const HOST_SOCKET_DIR = '/tmp/dc-sockets';
+export const HOST_SOCKET_DIR = `/tmp/dc-sockets${SUFFIX}`;
 const HOST_PORT = process.env.HUDDLE_PORT ?? String(DEFAULT_NODE_PORT);
 
 export interface InitOptions {
@@ -285,6 +311,7 @@ function pullBaseImages(rt: string, images: string[]): void {
  */
 export async function runInit(opts: InitOptions, images: ResolvedImages): Promise<void> {
   console.log(`${bold('Starting Huddle...')}\n`);
+  if (INSTANCE) console.log(dim(`Instance: ${INSTANCE} (container ${CONTAINER}, network ${INTERNAL_NET})`));
 
   const IMAGE = images.image;
   if (images.experiment !== undefined) {
@@ -414,6 +441,11 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   const sbxProxyPort = process.env.HUDDLE_SBX_PROXY_PORT?.trim() || '32768';
   dockerArgs.push('-p', `127.0.0.1:${sbxProxyPort}:${sbxProxyPort}`);
   dockerArgs.push('-e', `HUDDLE_SBX_PROXY_PORT=${sbxProxyPort}`);
+  // Only meaningful with HUDDLE_INSTANCE set (defaults to the same
+  // /tmp/dc-sockets otherwise) — tells the gateway to serve this instance's
+  // sockets from its own directory instead of the default one a sibling
+  // instance's gateway is also using.
+  dockerArgs.push('-e', `HUDDLE_SOCKET_DIR=${HOST_SOCKET_DIR}`);
   // The MITM CA, read-only. Its own directory precisely so this mount can exist:
   // the rest of ~/.huddle is the database and the operator token.
   dockerArgs.push('-v', `${nodeCaDir()}:/ca:ro`);
@@ -430,7 +462,16 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // Attaching devcontainer-net after the container has started pollutes
   // resolv.conf on Podman with that network's internal aardvark-DNS; the
   // gateway cleans that up itself (see dns-egress.ts / boot-gateway.ts).
-  runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
+  //
+  // --alias huddle: devcontainers resolve the proxy by the literal DNS name
+  // "huddle" (gateway/src/docker.ts hardcodes http://huddle:80 and the DNAT
+  // script's `getent hosts huddle`). That is safe to keep hardcoded even with
+  // a named instance because network DNS is scoped per network — this alias
+  // only resolves on THIS instance's own INTERNAL_NET, never on a sibling
+  // instance's. Without it, Docker would default the alias to CONTAINER's own
+  // name (e.g. "huddle-sbx"), and every devcontainer under this instance
+  // would fail to resolve its proxy.
+  runArgsSilent(rt, ['network', 'connect', '--alias', 'huddle', INTERNAL_NET, CONTAINER]);
 
   await rewireGateway(HOST_PORT, token);
 

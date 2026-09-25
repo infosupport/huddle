@@ -67,6 +67,9 @@ localhost_3000_*.png
 # native dev run: local DB, CA and operator token (dev-native.ps1)
 .huddle-native/
 
+# standalone local voice-control companion (not part of Huddle, never committed)
+/claude-voice-stack/
+
 # design-sync (claude.ai/design)
 .ds-sync/
 ds-bundle/

@@ -34,6 +34,15 @@
  * USERPROFILE (and HOMEDRIVE/HOMEPATH, in case something reads those instead of
  * USERPROFILE) to the isolated dir — see childEnv() below.
  *
+ * The operator token is the one deliberate exception to "isolate everything":
+ * both this instance's portal and the real install's live on http://localhost,
+ * just different ports, and a browser cookie is scoped by (domain, path) only
+ * — never by port (RFC 6265) — so two different tokens on two localhost ports
+ * fight over the same cookie and keep logging each other out. childEnv() hands
+ * this instance the real install's own operator token (via HUDDLE_OPERATOR_TOKEN,
+ * which gateway/src/auth.ts treats as authoritative) when one already exists,
+ * so both portals authenticate identically and either tab logs both in.
+ *
  * Subcommands:
  *   up     builds gateway+cli if needed, then runs `huddle node` in the
  *          foreground against the isolated HOME — Ctrl-C stops it. Also
@@ -89,6 +98,24 @@ function logPath(devHome) {
 }
 
 /**
+ * The operator token already sitting in the REAL (daily-driver) install's
+ * config — read with the process's own, un-overridden os.homedir(), i.e.
+ * before childEnv() below ever points HOME at the isolated dir. Returns
+ * undefined when the real install has never run `huddle init` (no
+ * ~/.huddle/config.json yet, or no operatorToken field in it) — the caller
+ * falls back to letting this instance mint its own token then.
+ */
+function realOperatorToken() {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), '.huddle', 'config.json'), 'utf8');
+    const token = JSON.parse(raw).operatorToken;
+    return typeof token === 'string' && token.trim() ? token.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The env to spawn the isolated Huddle Node under. HOME is what actually
  * isolates everything on Linux/macOS (see the header comment); on win32,
  * os.homedir() ignores HOME entirely and reads USERPROFILE (or, absent that,
@@ -96,6 +123,10 @@ function logPath(devHome) {
  * HOME unconditionally as well is harmless everywhere (some cross-platform
  * tools check it regardless of os.homedir()) and is the one that matters on
  * Linux/macOS.
+ *
+ * HUDDLE_OPERATOR_TOKEN: an explicit env value the caller already set wins
+ * outright; otherwise default to the real install's token (see the header
+ * comment for why).
  */
 function childEnv(devHome, apiPort, controlPort) {
   const env = {
@@ -112,6 +143,8 @@ function childEnv(devHome, apiPort, controlPort) {
     // it has no business touching any devcontainer. See boot-node.ts.
     HUDDLE_SKIP_GATEWAY_WIRING: '1',
   };
+  const operatorToken = process.env.HUDDLE_OPERATOR_TOKEN?.trim() || realOperatorToken();
+  if (operatorToken) env.HUDDLE_OPERATOR_TOKEN = operatorToken;
   if (process.platform === 'win32') {
     env.USERPROFILE = devHome;
     // HOMEDRIVE/HOMEPATH is the same path split in two ("C:" + "\Users\you\..."),
