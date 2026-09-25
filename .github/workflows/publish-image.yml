@@ -70,32 +70,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/infosupport/base-devimage:latest
 
-      - name: Build and push base-devimage-vscode
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: base-devimage-vscode/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/infosupport/base-devimage-vscode:latest
-
-      - name: Build and push base-devimage-intellij
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: base-devimage-intellij/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/infosupport/base-devimage-intellij:latest
-
-      - name: Build and push base-devimage-rider
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: base-devimage-rider/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/infosupport/base-devimage-rider:latest
-
   # De npm-publish van de CLI leeft in publish-npm.yml: npm trusted publishing
   # staat maar één trusted publisher (workflow-bestand) per package toe.

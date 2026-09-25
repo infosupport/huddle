@@ -10,6 +10,7 @@ import {
   SbxReconcileReport,
   SbxCommandResult,
   SbxSettingsFolders,
+  SbxSshAccess,
 } from '../../core/services/api.service';
 import { Rule } from '../../core/models/rule.model';
 
@@ -93,10 +94,34 @@ export class SandboxesComponent {
   requestedCount(name: string): number { return this.rules().filter(r => r.container_id === name && r.status === 'requested').length; }
 
   // ── clickable IDE deep links ──────────────────────────────────────────────
-  sshHost(name: string): string { return `${name}.sbx`; }
-  vscodeLink(name: string): string { return `vscode://vscode-remote/ssh-remote+root@${this.sshHost(name)}/root`; }
-  jetbrainsLink(name: string): string {
-    return `jetbrains://gateway/ssh/environment?h=${encodeURIComponent(this.sshHost(name))}&u=root&p=22&launchIde=true`;
+  // SSH access is a fixed host-port on localhost (see gateway/src/ssh-keys.ts —
+  // there is no per-sandbox DNS name), fetched on demand from the API rather
+  // than templated, since the JetBrains link only exists once the backend has
+  // finished installing and self-published it (gateway/src/sbx.ts jetbrainsGatewayLink).
+  connectStatus = signal<Record<string, string>>({});
+  connectStatusFor(name: string): string | undefined { return this.connectStatus()[name]; }
+  private setConnectStatus(name: string, m: string): void { this.connectStatus.set({ ...this.connectStatus(), [name]: m }); }
+
+  openVscode(name: string): void {
+    this.setConnectStatus(name, 'Fetching...');
+    this.api.sbxSshKey(name).subscribe({
+      next: (a: SbxSshAccess) => {
+        this.setConnectStatus(name, '');
+        window.open(`vscode://vscode-remote/ssh-remote+root@localhost:${a.port}/root`, '_self');
+      },
+      error: (e) => this.setConnectStatus(name, '✗ ' + (e?.error?.error || 'not ready')),
+    });
+  }
+
+  openJetbrains(name: string): void {
+    this.setConnectStatus(name, 'Fetching...');
+    this.api.sbxSshKey(name).subscribe({
+      next: (a: SbxSshAccess) => {
+        if (a.jetbrainsLink) { this.setConnectStatus(name, ''); window.open(a.jetbrainsLink, '_self'); }
+        else this.setConnectStatus(name, 'Still installing IntelliJ — try again in a bit');
+      },
+      error: (e) => this.setConnectStatus(name, '✗ ' + (e?.error?.error || 'not ready')),
+    });
   }
 
   create(): void {

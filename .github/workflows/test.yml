@@ -135,21 +135,6 @@ jobs:
         if: steps.base-changed.outputs.changed == 'true'
         run: docker build -t ghcr.io/infosupport/base-devimage:latest -f base-devimage/Dockerfile .
 
-      - name: Controleer of base-devimage-vscode gewijzigd is
-        id: vscode-changed
-        run: |
-          git diff --name-only origin/main...HEAD | grep -q '^base-devimage-vscode/' \
-            && echo "changed=true" >> $GITHUB_OUTPUT \
-            || echo "changed=false" >> $GITHUB_OUTPUT
-
-      - name: Pull base-devimage-vscode (ongewijzigd)
-        if: steps.vscode-changed.outputs.changed == 'false'
-        run: docker pull ghcr.io/infosupport/base-devimage-vscode:latest
-
-      - name: Build base-devimage-vscode (gewijzigd)
-        if: steps.vscode-changed.outputs.changed == 'true'
-        run: docker build -t ghcr.io/infosupport/base-devimage-vscode:latest -f base-devimage-vscode/Dockerfile .
-
       - name: Run e2e tests
         run: npm run test:e2e
         working-directory: gateway

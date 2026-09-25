@@ -58,8 +58,9 @@ import {
   type IdeName,
   type LifecycleCommands,
 } from './docker';
+import { getSshAccess, dropSshAccess } from './ssh-keys';
 import { grantSudo, revokeSudo } from './sudo-grant';
-import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan } from './sbx';
+import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan, jetbrainsGatewayLink } from './sbx';
 import { hasSandboxIdentity } from './sandbox/registry';
 import { isValidWorkspacePath } from './sandbox/protocol';
 import { scheduleReconcile } from './sandbox/auto-sync';
@@ -186,7 +187,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { ok: true };
   });
 
-  app.post('/api/auth/logout', async (_req, reply) => {
+  app.post('/api/auth/logout', async (req, reply) => {
     reply.header('set-cookie', clearSessionCookie());
     return { ok: true };
   });
@@ -941,11 +942,30 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      dropSshAccess(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
     }
+  });
+
+  // SSH connection info for a devcontainer (Stage 2): the private key never
+  // touches the gateway's own filesystem — it is handed to the CLI, which
+  // writes it locally with 0600 permissions.
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ssh-key', async (req, reply) => {
+    const { name } = req.params;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid container name' });
+    }
+    try {
+      await inspectContainer(name);
+    } catch {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    const access = getSshAccess(name);
+    if (!access) return reply.code(404).send({ error: 'not_found' });
+    return { privateKey: access.privateKey, publicKey: access.publicKey, port: access.port };
   });
 
   app.get<{ Querystring: { ide?: string } }>('/api/docker/images', async (req) => {
@@ -957,7 +977,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!isIdeName(req.query.ide)) {
       return reply.code(400).send({ error: 'ide query param must be "rider", "intellij" or "vscode"' });
     }
-    return { imageName: getBaseImageName(req.query.ide), ide: req.query.ide };
+    return { imageName: getBaseImageName(), ide: req.query.ide };
   });
 
   // Huddle's MITM root-CA voor HTTPS-interceptie. Devcontainers downloaden dit
@@ -1263,6 +1283,25 @@ export async function createApiServer(): Promise<FastifyInstance> {
     } catch (err: any) {
       return reply.code(502).send({ error: err.message });
     }
+  });
+
+  // SSH connection info for a sandbox (Stage 2): the private key never
+  // touches the gateway's own filesystem — it is handed to the CLI, which
+  // writes it locally with 0600 permissions.
+  app.get<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/ssh-key', async (req, reply) => {
+    const name = req.params.name;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid sandbox name' });
+    }
+    if (!hasSandboxIdentity(name)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    const access = getSshAccess(name);
+    if (!access) return reply.code(404).send({ error: 'not_found' });
+    // Best-effort: null while the backend is still installing/starting — the
+    // frontend polls this same route again rather than this request waiting.
+    const jetbrainsLink = await jetbrainsGatewayLink(name).catch(() => null);
+    return { privateKey: access.privateKey, publicKey: access.publicKey, port: access.port, jetbrainsLink };
   });
 
   // One-time SSH bridge setup so sandboxes are reachable at <name>.sbx for

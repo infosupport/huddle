@@ -10,8 +10,10 @@ import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { runtimeEnv } from './runtime-env';
 import { registerSocketName, unregisterSocketNameIfCurrent } from './db';
+import { provisionSshAccess, getSshAccess, dropSshAccess } from './ssh-keys';
 import { notifyStateChanged } from './events';
 import { waitForSocketReadiness } from './socket-registration';
+import { readDevcontainerScript } from './devcontainer-scripts';
 
 const SOCKET_DIR = runtimeEnv.socketDir;
 
@@ -311,9 +313,11 @@ export function isIdeName(value: unknown): value is IdeName {
   return value === 'rider' || value === 'intellij' || value === 'vscode';
 }
 
-export function getBaseImageName(ide: IdeName): string {
-  const envKey = `BASE_IMAGE_${ide.toUpperCase()}`;
-  return process.env[envKey] ?? `ghcr.io/infosupport/base-devimage-${ide}`;
+// One shared base image for every IDE (rider/intellij/vscode alike) — the IDE
+// backend is installed at runtime (install-ide.sh) instead of baked per-IDE,
+// so there is nothing left for the image name to vary on.
+export function getBaseImageName(): string {
+  return process.env.BASE_IMAGE ?? 'ghcr.io/infosupport/base-devimage';
 }
 
 export async function inspectContainer(name: string): Promise<any> {
@@ -684,8 +688,35 @@ export async function startExistingContainer(containerId: string): Promise<void>
   // already durable across restarts with no migration needed. Best-effort,
   // like every other lifecycle hook: a failure here must never block the
   // resume itself, so it's logged and swallowed, not rethrown.
+  let info: any;
   try {
-    const info = await inspectContainer(containerId);
+    info = await inspectContainer(containerId);
+  } catch (err: any) {
+    console.warn(`[lifecycle] inspect failed for ${containerId}:`, err?.message);
+    return;
+  }
+
+  // SSH (Stage 2): sshd does not survive `docker stop` — only the dummy PID1
+  // sleep loop auto-restarts — so SSHD_BOOTSTRAP must be re-run unconditionally
+  // on every resume, unlike postStartCommand below (which is optional/config-
+  // driven). `info.Name` is Docker's own inspect field (`/<container-name>`),
+  // used here instead of threading containerName through as a parameter.
+  const containerName = String(info?.Name ?? '').replace(/^\//, '');
+  const sshAccess = containerName ? getSshAccess(containerName) : undefined;
+  if (sshAccess) {
+    try {
+      const script = buildSshdBootstrap(sshAccess.publicKey);
+      const execCreate = await dockerRequest('POST', `/containers/${encodeURIComponent(containerId)}/exec`, {
+        User: 'root',
+        Cmd: ['sh', '-c', script],
+      });
+      await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
+    } catch (err: any) {
+      console.warn(`[ssh] SSHD_BOOTSTRAP exec failed for ${containerId}:`, err?.message);
+    }
+  }
+
+  try {
     const labels: Record<string, string> = info?.Config?.Labels ?? {};
     const postStart = labels['com.huddle.lifecycle.postStart'];
     if (!postStart) return;
@@ -849,6 +880,25 @@ else
   ( while true; do _huddle_cred_guard; sleep 1; done ) &
 fi`;
 
+// SSH access (Stage 2): host keys + the developer's authorized_keys entry,
+// then sshd backgrounded. `ssh-keygen -A` is idempotent (skips keys that
+// already exist), so this is safe to re-run on every resume — required,
+// since sshd does not survive `docker stop` (see startExistingContainer).
+// Public key delivery mirrors refreshContainerCa's base64-into-`sh -c` idiom.
+// PermitUserEnvironment no + AllowUsers vscode (base-devimage's
+// sshd_config.d/10-huddle.conf, Stage 1) keep this to a single, credential-
+// scrubbed login path — the same one /etc/profile.d already scrubs.
+function buildSshdBootstrap(publicKey: string): string {
+  const pubKeyB64 = Buffer.from(publicKey, 'utf8').toString('base64');
+  return `# SSH access (Stage 2)
+ssh-keygen -A >/dev/null 2>&1 || true
+install -d -m 700 -o vscode -g vscode /home/vscode/.ssh
+echo '${pubKeyB64}' | base64 -d > /home/vscode/.ssh/authorized_keys
+chmod 600 /home/vscode/.ssh/authorized_keys
+chown vscode:vscode /home/vscode/.ssh/authorized_keys
+nohup /usr/sbin/sshd -D -e > /tmp/huddle-sshd.log 2>&1 &`;
+}
+
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
 export function buildJbConfigScript(
@@ -856,6 +906,7 @@ export function buildJbConfigScript(
   containerName: string,
   ideName: IdeName,
   caCertPem: string,
+  sshPublicKey: string,
   seedScript: string,
   lifecycle?: LifecycleCommands,
   remoteEnv: Record<string, string> = {},
@@ -864,6 +915,7 @@ export function buildJbConfigScript(
 ): string {
   const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
+  const sshdBootstrapScript = buildSshdBootstrap(sshPublicKey);
   // Embedded via printf's %s (an ARGUMENT, not part of the format string), so
   // a `%` or backslash inside the caller's JSON is never re-interpreted by
   // printf itself — only the format string (the literal text before it) gets
@@ -885,55 +937,17 @@ export function buildJbConfigScript(
   // runs again after the first start.
   const postStartStep = buildLifecycleStep('postStart', lifecycle?.postStartCommand, containerWorkspace);
   const postAttachWatcher = buildPostAttachWatcher(lifecycle?.postAttachCommand, containerWorkspace, false);
-  // UNVERIFIED: this codebase has never invoked `remote-dev-server.sh
-  // installPlugins` before — every other IDE CLI call in this script (run,
-  // the keytool imports) is confirmed live against a real build. The exact
-  // subcommand name and flag form need checking against the actual installed
-  // IDE the first time this ships; don't take it on faith. Repeated as a
-  // shell comment (not just here) so it's visible in the exec output too.
-  const installPluginsLine = jbPlugins.length
-    ? `# UNVERIFIED: remote-dev-server.sh installPlugins has never been invoked
-# live from this codebase before (unlike run/keytool below) — check the exact
-# subcommand/flag form against the installed IDE build.
-"$IDEA_PATH/bin/remote-dev-server.sh" installPlugins ${jbPlugins.map(shQuote).join(' ')} > /tmp/huddle-jb-plugins.log 2>&1 || echo "[jb-config] WARNING: installPlugins failed (see /tmp/huddle-jb-plugins.log)" >&2\n`
-    : '';
+  const installIdeB64 = Buffer.from(readDevcontainerScript('install-ide.sh'), 'utf8').toString('base64');
+  // install-ide.sh refuses to run as root (it forks the developer's shell), so
+  // it runs as vscode via su — the whole exec this script is part of runs as
+  // root (see createAndStartContainer's exec Create call). Built with shQuote
+  // twice, deliberately: once for each argument (CACHE_ROOT/PROJECT/plugin
+  // ids), once more for the su -c string itself — shQuote's escaping is
+  // exactly what makes that composition safe to nest.
+  const installArgs = ['install', ideName, ...jbPlugins].map(shQuote).join(' ');
+  const installCmd = `CACHE_ROOT=/.jbdevcontainer PROJECT=${shQuote(containerWorkspace)} /usr/local/bin/huddle-install-ide.sh ${installArgs}`;
   return `#!/bin/sh
-IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
-IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
-BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
-CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
 PROJ=${shQuote(containerWorkspace)}
-mkdir -p /.jbdevcontainer/config/JetBrains
-if [ -n "$IDEA_DIR" ]; then
-  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":%s}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" ${jbSettingsArg} > /.jbdevcontainer/config/JetBrains/host-config.json
-else
-  # IDE not yet in dist/ (empty shared volume on a new machine).
-  # deploy:true lets IntelliJ download and install the backend itself.
-  # After that first deploy the IDE is in the volume and everything works normally.
-  echo "[jb-config] IDE not found in dist/, writing host-config with deploy:true so IntelliJ installs the backend"
-  printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"true"},"forwardPorts":{},"customizations":{"jetbrains":%s}}' "$PROJ" ${jbSettingsArg} > /.jbdevcontainer/config/JetBrains/host-config.json
-  # Background watcher: once IntelliJ has installed the IDE, import the Huddle CA
-  # into the JBR keystore after all (the huddle-ca.crt has been created by then).
-  ( i=0
-    while [ $i -lt 60 ]; do
-      INST=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
-      if [ -n "$INST" ]; then
-        INST_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$INST"
-        j=0
-        while [ ! -x "$INST_PATH/jbr/bin/keytool" ] && [ $j -lt 30 ]; do sleep 10; j=$((j+1)); done
-        if [ -x "$INST_PATH/jbr/bin/keytool" ] && [ -f "$INST_PATH/jbr/lib/security/cacerts" ]; then
-          "$INST_PATH/jbr/bin/keytool" -delete -alias huddle-ca -keystore "$INST_PATH/jbr/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 || true
-          "$INST_PATH/jbr/bin/keytool" -importcert -noprompt -trustcacerts -alias huddle-ca \\
-            -file /usr/local/share/ca-certificates/huddle-ca.crt \\
-            -keystore "$INST_PATH/jbr/lib/security/cacerts" -storepass changeit >/dev/null 2>&1 \\
-            && echo "[jb-config] huddle CA imported in JBR-keystore (after deploy)" \\
-            || echo "[jb-config] WARNING: JBR-keystore import failed (after deploy)"
-        fi
-        break
-      fi
-      sleep 30; i=$((i+1))
-    done ) &
-fi
 
 CURL_LINE='--proxy-header "X-Container-ID: ${containerName}"'
 grep -qF "$CURL_LINE" /home/vscode/.curlrc 2>/dev/null || echo "$CURL_LINE" >> /home/vscode/.curlrc
@@ -965,6 +979,26 @@ command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/de
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
 
+# Install the JetBrains backend + plugins at runtime (install-ide.sh) instead
+# of baking a per-IDE image — must run AFTER the CA is trusted above: its curl
+# calls go through Huddle's MITM proxy and would fail TLS verification
+# otherwise. Runs as vscode (it refuses to run as root) via su; a failure is a
+# warning, not fatal — IDEA_DIR below just stays empty and the JBR-keystore
+# import and backend-start blocks skip themselves, same as an empty shared
+# volume on a brand new machine did before this script existed.
+mkdir -p /.jbdevcontainer/JetBrains/RemoteDev/dist
+chown -R vscode:vscode /.jbdevcontainer 2>/dev/null || true
+echo '${installIdeB64}' | base64 -d > /usr/local/bin/huddle-install-ide.sh
+chmod 755 /usr/local/bin/huddle-install-ide.sh
+su vscode -c ${shQuote(installCmd)} || echo "[jb-config] WARNING: install-ide.sh failed, continuing" >&2
+
+IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
+IDEA_PATH="/.jbdevcontainer/JetBrains/RemoteDev/dist/$IDEA_DIR"
+BUILD=$(awk -F'"' '/"buildNumber"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
+CODE=$(awk -F'"' '/"productCode"/ {print $4; exit}' "$IDEA_PATH/product-info.json" 2>/dev/null)
+mkdir -p /.jbdevcontainer/config/JetBrains
+printf '{"connectionParams":{"type":"docker","projectPath":"%s","deploy":"false","idePath":"%s","buildNumber":"%s","productCode":"%s"},"forwardPorts":{},"customizations":{"jetbrains":%s}}' "$PROJ" "$IDEA_PATH" "$BUILD" "$CODE" ${jbSettingsArg} > /.jbdevcontainer/config/JetBrains/host-config.json
+
 ${IDE_CRED_SCRUB}
 
 # The JetBrains IDE (IntelliJ/Rider) runs on the JBR, its own JVM that validates
@@ -990,6 +1024,8 @@ fi
 fi
 
 ${NOOT_LOCKED_SETUP}
+
+${sshdBootstrapScript}
 
 # remoteEnv (best-effort — see StartParams' doc comment: real per-attach
 # remoteEnv semantics are not achievable here, this is a login-shell profile.d
@@ -1022,7 +1058,7 @@ touch /tmp/sudo-audit.log
 # Its output goes to /tmp, never into "$PROJ": a log file dropped in the project
 # root shows up in the user's git status (and in commits) on every start.
 if [ -n "$IDEA_DIR" ]; then
-${installPluginsLine}nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > /tmp/huddle-ide-backend.log 2>&1 &
+nohup "$IDEA_PATH/bin/remote-dev-server.sh" run "$PROJ" > /tmp/huddle-ide-backend.log 2>&1 &
 fi
 
 # postStartCommand: first-start-only here; see the comment above postStartStep
@@ -1085,11 +1121,13 @@ export function buildVscodeConfigScript(
   containerWorkspace: string,
   containerName: string,
   caCertPem: string,
+  sshPublicKey: string,
   seedScript: string,
   lifecycle?: LifecycleCommands,
   remoteEnv: Record<string, string> = {},
 ): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
+  const sshdBootstrapScript = buildSshdBootstrap(sshPublicKey);
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(remoteEnv), null, 2), 'utf8').toString('base64');
   const remoteEnvScript = buildRemoteEnvScript(remoteEnv);
   const onCreateStep = buildLifecycleStep('onCreate', lifecycle?.onCreateCommand, containerWorkspace);
@@ -1133,6 +1171,8 @@ chmod 644 /etc/profile.d/99-huddle-ca.sh
 ${IDE_CRED_SCRUB}
 
 ${NOOT_LOCKED_SETUP}
+
+${sshdBootstrapScript}
 
 # remoteEnv (best-effort — see StartParams' doc comment).
 ${remoteEnvScript}
@@ -1491,7 +1531,7 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
   }
 
   if (!(await imageExists(imageName))) {
-    const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
+    const dockerfilePath = `/base-devimage/Dockerfile`;
     if (!fs.existsSync(dockerfilePath)) {
       throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
     }
@@ -1521,6 +1561,11 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
   // first.
   const socketRegistrationRevision = registerSocketName(containerName);
   notifyStateChanged();
+
+  // SSH access (Stage 2): mint the keypair + fixed host port up front — the
+  // port must exist before the container-create call below, since it gets
+  // baked into HostConfig.PortBindings at that moment.
+  const sshAccess = provisionSshAccess(containerName, 'devcontainer');
 
   // Everything from here through the container actually starting is wrapped
   // so a failure anywhere in it — readiness timeout, image build, the create
@@ -1663,6 +1708,9 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
           ? { 'com.huddle.lifecycle.postStart': params.lifecycle.postStartCommand.trim() }
           : {}),
       },
+      ExposedPorts: {
+        '22/tcp': {},
+      },
       HostConfig: {
         Mounts: mounts,
         NetworkMode: netName,
@@ -1671,6 +1719,9 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
         Memory: parseMemoryBytes(params.memory || resourceDefaults.defaultMemory || '8g'),
         CpuQuota: parseCpuQuota(params.cpus || resourceDefaults.defaultCpus || '2'),
         CpuPeriod: 100000,
+        PortBindings: {
+          '22/tcp': [{ HostPort: String(sshAccess.port) }],
+        },
       },
     };
 
@@ -1679,6 +1730,7 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
     await startContainer(id);
   } catch (err) {
     unregisterSocketNameIfCurrent(containerName, socketRegistrationRevision);
+    dropSshAccess(containerName);
     notifyStateChanged();
     throw err;
   }
@@ -1688,8 +1740,8 @@ export async function createAndStartContainer(params: StartParams): Promise<{ id
 
   // Run config script via exec — VS Code variant without JB host-config/backend.
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript, params.lifecycle, remoteEnvRecord)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript, params.lifecycle, remoteEnvRecord, params.jbPlugins ?? [], params.jbSettings);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), sshAccess.publicKey, seedScript, params.lifecycle, remoteEnvRecord)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), sshAccess.publicKey, seedScript, params.lifecycle, remoteEnvRecord, params.jbPlugins ?? [], params.jbSettings);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', script],

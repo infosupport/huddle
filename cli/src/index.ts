@@ -10,6 +10,7 @@ import { runNode } from './node';
 import { runMigrate } from './migrate';
 import { runLogs } from './logs';
 import { runSbxStatus, runSbxList, runSbxStart, runSbxRemove, runSbxSshSetup, runSbxReconcile, runSbxTrustCa, runSbxTrustHost, runSbxLog } from './sbx';
+import { runContainerSshSetup } from './container';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -31,7 +32,7 @@ export interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'agent', 'entry', 'port', 'data-dir', 'lines', 'n']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'dry-run', 'follow', 'f', 'node', 'gateway']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'sbx', 'node', 'logs', 'log', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'sbx', 'container', 'node', 'logs', 'log', 'help', 'version']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -171,8 +172,10 @@ Usage:
                                      validates Huddle against the host store; without
                                      this those calls fail with "Empty reply from
                                      server". Run by 'huddle init'; idempotent.
-  huddle sbx ssh-setup               Enable the SSH bridge (<name>.sbx) for
-                                     VS Code / JetBrains remote development
+  huddle sbx ssh-setup <name>        Fetch that sandbox's SSH key (fixed port
+                                     24850-24899) and print a ready ssh command
+  huddle container ssh-setup <name>  Fetch a devcontainer's SSH key (fixed port
+                                     24850-24899) and print a ready ssh command
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
@@ -448,10 +451,22 @@ async function main(): Promise<void> {
     } else if (subCmd === 'log') {
       await runSbxLog({ name: positional[2] ?? flagString(flags, 'name') });
     } else if (subCmd === 'ssh-setup' || subCmd === 'ssh') {
-      await runSbxSshSetup();
+      await runSbxSshSetup({ name: positional[2] ?? flagString(flags, 'name') });
     } else {
       console.error(`Unknown sbx subcommand: ${subCmd}`);
       console.error('Usage: huddle sbx <status|list|start|rm|reconcile|trust-ca|trust-host|ssh-setup|log>');
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'container') {
+    const subCmd = sub ?? 'ssh-setup';
+    if (subCmd === 'ssh-setup' || subCmd === 'ssh') {
+      await runContainerSshSetup({ name: positional[2] ?? flagString(flags, 'name') });
+    } else {
+      console.error(`Unknown container subcommand: ${subCmd}`);
+      console.error('Usage: huddle container ssh-setup <name>');
       process.exit(1);
     }
     return;

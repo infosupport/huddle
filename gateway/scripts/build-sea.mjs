@@ -69,6 +69,12 @@ const STAGED = path.join(OUT, `huddle-node.staged${EXE}`);
 // 9; huddle-node keeps its name at Contents/MacOS/huddle-node inside it.
 const FINAL = IS_MAC ? path.join(OUT, 'Huddle.app') : path.join(OUT, `huddle-node${EXE}`);
 const UI_DIR = path.join(GATEWAY, 'dist', 'ui', 'browser');
+// Sourced straight from src/, not dist/devcontainer-scripts: tsc alone (run
+// directly by step 2 below, not via npm's build:ts) never populates dist/ with
+// non-.ts files, so routing through dist here would need copy-devcontainer-
+// scripts.mjs to run first too. Reading src/ directly avoids that ordering
+// dependency — see gateway/src/devcontainer-scripts.ts for the runtime side.
+const DEVCONTAINER_SCRIPTS_DIR = path.join(GATEWAY, 'src', 'devcontainer-scripts');
 const ICON_SOURCE = path.join(GATEWAY, 'frontend', 'src', 'assets', 'hex-2d.png');
 
 /** Node ships the reader, not the injector; postject does the writing. */
@@ -280,6 +286,17 @@ for (const rel of walk(UI_DIR)) {
   uiBytes += fs.statSync(full).size;
 }
 ok(`portal: ${Object.keys(assets).length} files, ${mb(uiBytes)}`);
+
+if (!fs.existsSync(DEVCONTAINER_SCRIPTS_DIR)) {
+  throw new Error(`devcontainer scripts missing: ${DEVCONTAINER_SCRIPTS_DIR}`);
+}
+let scriptCount = 0;
+for (const rel of walk(DEVCONTAINER_SCRIPTS_DIR)) {
+  const full = path.join(DEVCONTAINER_SCRIPTS_DIR, rel);
+  assets[`devcontainer-scripts/${rel.split(path.sep).join('/')}`] = full;
+  scriptCount += 1;
+}
+ok(`devcontainer scripts: ${scriptCount} files`);
 
 // No native assets. Huddle's database is node:sqlite, which is part of the Node
 // binary this SEA is built from — so there is nothing to extract, nothing to

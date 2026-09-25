@@ -52,7 +52,8 @@
     <div class="cd-head__actions">
       @if (isSandbox) {
         <a class="btn btn-ghost btn-sm" [href]="vscodeLink" title="Open in VS Code (Remote-SSH)">VS Code</a>
-        <a class="btn btn-ghost btn-sm" [href]="jetbrainsLink" title="Open in JetBrains Gateway">JetBrains</a>
+        <button class="btn btn-ghost btn-sm" (click)="openJetbrains()" title="Open in JetBrains Gateway">JetBrains</button>
+        @if (jetbrainsStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ jetbrainsStatus }}</span> }
         <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()" title="Install Huddle's CA (fixes editor backend TLS)">Trust CA</button>
         @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
       } @else if (ide === 'vscode') {
@@ -380,13 +381,14 @@ sudo cat /tmp/sudo-audit.log</code></pre>
         </p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <a class="btn btn--accent btn-sm" [href]="vscodeLink">Open in VS Code</a>
-          <a class="btn btn--accent btn-sm" [href]="jetbrainsLink">Open in JetBrains</a>
+          <button class="btn btn--accent btn-sm" (click)="openJetbrains()">Open in JetBrains</button>
+          @if (jetbrainsStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ jetbrainsStatus }}</span> }
           <button class="btn btn-ghost btn-sm" (click)="sbxSshSetup()">Enable SSH</button>
           <button class="btn btn-ghost btn-sm" (click)="sbxTrustCa()">Trust CA</button>
           @if (sbxMsg) { <span style="font-size:12px;color:var(--text-muted)">{{ sbxMsg }}</span> }
         </div>
         <p style="font-size:12.5px;color:var(--text-muted);margin:1rem 0 0">
-          Terminal from a shell: <code>ssh {{ sshHost }}</code>
+          Terminal from a shell: <code>{{ sshCommand }}</code>
           &nbsp;·&nbsp; A browser terminal isn't available for sandboxes (they run on the host, not under Huddle's Docker orchestration) — connect over SSH instead.
         </p>
       </div>

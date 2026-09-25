@@ -20,9 +20,10 @@ export interface ResolvedImages {
   /** Gateway image. Overridable via HUDDLE_IMAGE (then also set HUDDLE_NO_PULL=1 for a local build). */
   image: string;
   /**
-   * Devcontainer base images the gateway uses to start workspaces.
-   * The names match getBaseImageName() in the gateway; an override is
-   * possible via BASE_IMAGE_<IDE>.
+   * Devcontainer base image the gateway uses to start workspaces, for every
+   * IDE alike (rider/intellij/vscode all run the same image — the IDE backend
+   * installs at runtime instead). The name matches getBaseImageName() in the
+   * gateway; an override is possible via BASE_IMAGE.
    */
   baseImages: BaseImage[];
 }
@@ -35,10 +36,7 @@ export function resolveImages(): ResolvedImages {
     tag,
     image: process.env.HUDDLE_IMAGE ?? `ghcr.io/infosupport/huddle:${tag}`,
     baseImages: [
-      { image: process.env.BASE_IMAGE ?? `ghcr.io/infosupport/base-devimage:${tag}` },
-      { image: process.env.BASE_IMAGE_RIDER ?? `ghcr.io/infosupport/base-devimage-rider:${tag}`, gatewayEnv: 'BASE_IMAGE_RIDER' },
-      { image: process.env.BASE_IMAGE_INTELLIJ ?? `ghcr.io/infosupport/base-devimage-intellij:${tag}`, gatewayEnv: 'BASE_IMAGE_INTELLIJ' },
-      { image: process.env.BASE_IMAGE_VSCODE ?? `ghcr.io/infosupport/base-devimage-vscode:${tag}`, gatewayEnv: 'BASE_IMAGE_VSCODE' },
+      { image: process.env.BASE_IMAGE ?? `ghcr.io/infosupport/base-devimage:${tag}`, gatewayEnv: 'BASE_IMAGE' },
     ],
   };
 }

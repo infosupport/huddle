@@ -26,8 +26,8 @@ describe('noot proxy environment (#110)', () => {
   });
 
   it.each([
-    ['VS Code', docker.buildVscodeConfigScript('/workspaces/test', 'test', 'ca', '')],
-    ['JetBrains', docker.buildJbConfigScript('/workspaces/test', 'test', 'intellij', 'ca', '')],
+    ['VS Code', docker.buildVscodeConfigScript('/workspaces/test', 'test', 'ca', 'ssh-rsa fake-pubkey', '')],
+    ['JetBrains', docker.buildJbConfigScript('/workspaces/test', 'test', 'intellij', 'ca', 'ssh-rsa fake-pubkey', '')],
   ])('includes the shared policy in the %s setup script', (_ide, script) => {
     expect(script.match(/Defaults:noot env_keep/g)).toHaveLength(1);
     expect(script).toContain(expectedPolicy);

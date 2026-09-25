@@ -3,7 +3,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { AsyncPipe, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ApiService, ApprovedHostPort } from '../../core/services/api.service';
+import { ApiService, ApprovedHostPort, SbxSshAccess } from '../../core/services/api.service';
 import { StateService } from '../../core/services/state.service';
 import { ModalService } from '../../core/services/modal.service';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
@@ -190,10 +190,17 @@ export class ContainerDetailComponent implements OnInit {
   // Firewall + Terminal(=connect) are shown; Docker + admin tabs are container-only.
   isSandbox = false;
   sbxMsg = '';
+  jetbrainsStatus = '';
   private static readonly SANDBOX_STUB = { Config: { Labels: {} }, NetworkSettings: { Networks: {} }, Created: null, Image: '' };
-  get sshHost(): string { return `${this.name}.sbx`; }
-  get vscodeLink(): string { return `vscode://vscode-remote/ssh-remote+root@${this.sshHost}/root`; }
-  get jetbrainsLink(): string { return `jetbrains://gateway/ssh/environment?h=${encodeURIComponent(this.sshHost)}&u=root&p=22&launchIde=true`; }
+  // Populated on demand (openJetbrains / ngOnInit) from GET /api/sbx/sandboxes/:name/ssh-key.
+  // SSH access is a fixed host-port on localhost (see gateway/src/ssh-keys.ts — there is no
+  // per-sandbox DNS name), so sshHost/vscodeLink fall back to a not-yet-loaded placeholder.
+  sbxSshAccess: SbxSshAccess | null = null;
+  get sshHost(): string { return this.sbxSshAccess ? `localhost:${this.sbxSshAccess.port}` : '…'; }
+  get sshCommand(): string { return this.sbxSshAccess ? `ssh -p ${this.sbxSshAccess.port} root@localhost` : 'ssh …'; }
+  get vscodeLink(): string {
+    return this.sbxSshAccess ? `vscode://vscode-remote/ssh-remote+root@localhost:${this.sbxSshAccess.port}/root` : '';
+  }
   sbxTrustCa(): void {
     this.sbxMsg = 'Installing Huddle CA…';
     this.api.sbxTrustCa(this.name).subscribe({
@@ -204,8 +211,30 @@ export class ContainerDetailComponent implements OnInit {
   sbxSshSetup(): void {
     this.sbxMsg = 'Enabling SSH bridge…';
     this.api.sbxSshSetup().subscribe({
-      next: (r) => { this.sbxMsg = r.ok ? '✓ SSH bridge ready' : `✗ ssh setup failed (exit ${r.exitCode ?? r.code})`; },
+      next: (r) => { this.sbxMsg = r.ok ? '✓ SSH bridge ready' : `✗ ssh setup failed (exit ${r.exitCode ?? r.code})`; this.loadSbxSshAccess(); },
       error: (e) => { this.sbxMsg = '✗ ' + (e?.error?.error || 'ssh setup failed'); },
+    });
+  }
+  // Best-effort refresh of the SSH access + JetBrains link; the backend may still
+  // be installing (jetbrainsLink comes back null), so this is safe to call repeatedly.
+  loadSbxSshAccess(): void {
+    this.api.sbxSshKey(this.name).subscribe({
+      next: (access) => { this.sbxSshAccess = access; },
+      error: () => { /* not provisioned yet (e.g. SSH bridge not enabled) — leave sbxSshAccess as-is */ },
+    });
+  }
+  // The backend publishes its own connect link once IntelliJ has finished installing and
+  // starting (gateway/src/sbx.ts jetbrainsGatewayLink) — fetch fresh rather than relying on
+  // a possibly-stale cached value, since installs can take minutes.
+  openJetbrains(): void {
+    this.jetbrainsStatus = 'Fetching...';
+    this.api.sbxSshKey(this.name).subscribe({
+      next: (access) => {
+        this.sbxSshAccess = access;
+        if (access.jetbrainsLink) { this.jetbrainsStatus = ''; window.open(access.jetbrainsLink, '_self'); }
+        else { this.jetbrainsStatus = 'Still installing IntelliJ — try again in a bit'; }
+      },
+      error: (err) => { this.jetbrainsStatus = err.message; },
     });
   }
 
@@ -233,6 +262,7 @@ export class ContainerDetailComponent implements OnInit {
       .pipe(skip(1), takeUntilDestroyed(this.destroyRef))
       .subscribe(() => { if (this.name) this.load(); });
     if (!this.isSandbox) this.loadSudoGrant();
+    if (this.isSandbox) this.loadSbxSshAccess();
     this.destroyRef.onDestroy(() => this.clearSudoExpiryTimer());
   }
 

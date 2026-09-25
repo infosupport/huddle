@@ -5,6 +5,7 @@
 
 import { get, post, del } from './api';
 import { dim } from './utils';
+import { installSshKey } from './ssh';
 
 interface SbxStatus {
   available: boolean;
@@ -150,15 +151,17 @@ export async function runSbxTrustHost(opts: { runtime?: string } = {}): Promise<
   if (!r.ok) process.exitCode = 1;
 }
 
-export async function runSbxSshSetup(): Promise<void> {
-  const r = await post<{ exitCode: number; ok: boolean }>('/api/sbx/ssh-setup', {});
-  if (r.ok) {
-    console.log('✓ SSH bridge ready. Connect an editor with:');
-    console.log(dim('    ssh <sandbox-name>.sbx        # or add it as a VS Code / JetBrains remote host'));
-  } else {
-    console.log(`✗ ssh setup failed (exit ${r.exitCode})`);
-    process.exitCode = 1;
+export async function runSbxSshSetup(opts: { name?: string }): Promise<void> {
+  if (!opts.name) {
+    console.error('Usage: huddle sbx ssh-setup <name>');
+    process.exit(1);
   }
+  // A sandbox "Runs as root" — there is no separate `vscode` user to log in as
+  // (see sbx.ts's sshBootstrapScript doc comment).
+  const key = await get<{ privateKey: string; publicKey: string; port: number }>(
+    `/api/sbx/sandboxes/${encodeURIComponent(opts.name)}/ssh-key`
+  );
+  installSshKey(`sbx-${opts.name}`, key, 'root');
 }
 
 export async function runSbxReconcile(opts: { dryRun?: boolean }): Promise<void> {

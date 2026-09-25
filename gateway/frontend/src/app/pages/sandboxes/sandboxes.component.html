@@ -107,9 +107,10 @@
             </td>
             <td>
               <div class="ide">
-                <a class="ide-link" [href]="vscodeLink(s.name)" title="Open in VS Code (Remote-SSH)">VS Code</a>
-                <a class="ide-link" [href]="jetbrainsLink(s.name)" title="Open in JetBrains Gateway">JetBrains</a>
+                <button class="ide-link" (click)="openVscode(s.name)" title="Open in VS Code (Remote-SSH)">VS Code</button>
+                <button class="ide-link" (click)="openJetbrains(s.name)" title="Open in JetBrains Gateway">JetBrains</button>
               </div>
+              @if (connectStatusFor(s.name)) { <div class="rowmsg">{{ connectStatusFor(s.name) }}</div> }
               @if (msgFor(s.name)) { <div class="rowmsg">{{ msgFor(s.name) }}</div> }
             </td>
             <td class="col-actions">

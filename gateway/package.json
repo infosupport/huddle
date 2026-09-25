@@ -9,7 +9,7 @@
     "directory": "gateway"
   },
   "scripts": {
-    "build:ts": "tsc",
+    "build:ts": "tsc && node scripts/copy-devcontainer-scripts.mjs",
     "build:ui": "npm run build --prefix frontend",
     "build": "npm run build:ui && npm run build:ts",
     "build:sea": "node scripts/build-sea.mjs",

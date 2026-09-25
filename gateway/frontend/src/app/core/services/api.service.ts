@@ -127,6 +127,14 @@ export interface SbxCommandResult {
   stderr?: string;
 }
 
+export interface SbxSshAccess {
+  privateKey: string;
+  publicKey: string;
+  port: number;
+  /** The backend's self-published jetbrains-gateway://connect link, or null while it's still installing/starting. */
+  jetbrainsLink: string | null;
+}
+
 export interface SbxReconcileAction {
   op: 'create' | 'delete';
   action: 'allow' | 'deny';
@@ -389,6 +397,10 @@ export class ApiService {
 
   sbxSshSetup(): Observable<SbxCommandResult> {
     return this.handle(this.http.post<SbxCommandResult>('/api/sbx/ssh-setup', {}));
+  }
+
+  sbxSshKey(name: string): Observable<SbxSshAccess> {
+    return this.handle(this.http.get<SbxSshAccess>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/ssh-key`));
   }
 
   sbxReconcile(dryRun = false): Observable<SbxReconcileReport> {

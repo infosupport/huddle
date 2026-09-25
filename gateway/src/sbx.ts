@@ -24,12 +24,14 @@ import {
 import { listFolderMappings } from './host-config';
 import { getCaCertPem } from './tls-ca';
 import { dropSandboxIdentity, mintSandboxIdentity } from './sandbox/registry';
+import { provisionSshAccess, dropSshAccess } from './ssh-keys';
 import { UNCLAIMED_SANDBOX, mintSandboxSecret, redactProxyUrl, sandboxProxyUrl } from './sbx-identity';
 // Reused verbatim from the devcontainer path so a hand-typed env key/lifecycle
 // command is validated and rendered identically in both runtimes — see
 // docs/ADR-workspace-runtime-abstraction.md on keeping the devcontainer.json
 // shape (env/lifecycle/customizations) common across container and sbx.
-import { filterUserEnv, shQuote, type LifecycleCommands } from './docker';
+import { filterUserEnv, shQuote, type LifecycleCommands, type IdeName } from './docker';
+import { readDevcontainerScript } from './devcontainer-scripts';
 
 const execHostCommand = promisify(execCb);
 
@@ -339,6 +341,22 @@ async function startSandboxExclusive(opts: SbxStartOpts): Promise<SbxStartResult
   }
   // Trust Huddle's MITM CA inside the sandbox so HTTPS works (IDE downloads etc.).
   steps.push(await trustCa(opts.name));
+
+  // SSH access (Stage 2): mint a keypair + fixed host port, then bootstrap
+  // sshd inside the sandbox. `sbx setup ssh` (ops.sshSetup(), ops.ts TODO(T2.3))
+  // is NOT called here: its real behavior is unverified and it turned out to
+  // reset the shared CONNECT-proxy tunnel for every sandbox's egress, not just
+  // this one — global sbx-daemon-level port-forwarding wiring, not scoped to a
+  // single box. It stays available as the explicit "Enable SSH" action (see
+  // the module-level `sshSetup()` export below, wired to the frontend's SSH
+  // bridge button), which a developer opts into deliberately instead of it
+  // running — and risking breaking egress — on every single `sbx create`.
+  const sshAccess = provisionSshAccess(opts.name, 'sbx');
+  steps.push(await runInSandbox(opts.name, 'install SSH server + authorized_keys', sshBootstrapScript(sshAccess.publicKey)));
+
+  // JetBrains backend install (background) — see ideInstallScript's doc comment.
+  steps.push(await runInSandbox(opts.name, 'install JetBrains IDE backend (background)', ideInstallScript(sshAccess.port)));
+
   // Link the settings folders where the agent looks for them (~/.claude etc.).
   const linkStep = await linkSettingsFolders(opts.name, settings);
   if (linkStep) steps.push(linkStep);
@@ -470,6 +488,76 @@ function caInstallCommand(): string[] {
   return ['sh', '-c', script];
 }
 
+/**
+ * SSH access (Stage 2): install openssh-server if missing, generate host
+ * keys, drop the developer's public key into authorized_keys, start sshd.
+ * A sandbox "Runs as root" (see buildSbxLifecycleStep's doc comment) — there
+ * is no separate `vscode` user here, so this installs for root/$HOME, not
+ * /home/vscode like the devcontainer side.
+ */
+function sshBootstrapScript(publicKey: string): string {
+  const pubB64 = Buffer.from(publicKey, 'utf8').toString('base64');
+  return `command -v sshd >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y --no-install-recommends openssh-server) >/dev/null 2>&1 || true
+ssh-keygen -A >/dev/null 2>&1 || true
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+echo '${pubB64}' | base64 -d > "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+nohup /usr/sbin/sshd -D -e > /tmp/huddle-sshd.log 2>&1 &`;
+}
+
+/**
+ * IDE backend install, entirely backgrounded inside the sandbox — unlike
+ * docker.ts's buildJbConfigScript, there is no shared dist/ volume here (each
+ * sbx sandbox is its own filesystem), so the ~1.5 GB IntelliJ download is
+ * never a cache hit. Blocking `sbx create` on it would turn today's
+ * near-instant create into a multi-minute one, so the script backgrounds the
+ * whole install+run sequence and returns immediately; the frontend polls
+ * jetbrainsGatewayLink() for the resulting connect link.
+ *
+ * `run` (not just `install`) is what makes this useful over the SSH flow: it
+ * passes `--ssh-link-host/--ssh-link-port`, which makes the backend itself
+ * print a ready `jetbrains-gateway://connect#…` link — reading that off the
+ * backend's own log is simpler and more robust than hand-building Gateway's
+ * undocumented link parameters ourselves (pocsshcontainers/README.md,
+ * "Can credentials go into the Gateway link?").
+ *
+ * sbx has no per-sandbox IDE picker yet, so this always installs IntelliJ —
+ * same default docker.ts uses for a devcontainer with no ideName given.
+ */
+function ideInstallScript(sshPort: number): string {
+  const ide: IdeName = 'intellij';
+  const scriptB64 = Buffer.from(readDevcontainerScript('install-ide.sh'), 'utf8').toString('base64');
+  const install = `HUDDLE_SBX_ROOT=1 /usr/local/bin/huddle-install-ide.sh install ${shQuote(ide)}`;
+  const run = `HUDDLE_SBX_ROOT=1 /usr/local/bin/huddle-install-ide.sh run ${shQuote(ide)} localhost ${sshPort}`;
+  return `echo '${scriptB64}' | base64 -d > /usr/local/bin/huddle-install-ide.sh
+chmod 755 /usr/local/bin/huddle-install-ide.sh
+( ${install} && ${run} ) > /root/huddle-ide-install.log 2>&1 &
+disown 2>/dev/null || true`;
+}
+
+/**
+ * Best-effort peek at the JetBrains backend's own log for the
+ * `jetbrains-gateway://…` link it prints once started (pocsshcontainers/
+ * run-poc.sh greps the same way). Returns null while the backend is still
+ * downloading/installing/indexing — the caller (the API route) is polled
+ * again from the frontend rather than this function waiting itself, so a
+ * slow install never ties up an HTTP request.
+ */
+export async function jetbrainsGatewayLink(name: string): Promise<string | null> {
+  const script = `grep -ohE 'jetbrains-gateway://[^[:space:]"]+' /root/backend.log 2>/dev/null | tail -1`;
+  let out = '';
+  try {
+    await ops.exec({ name, cmd: ['sh', '-c', script] }, (s, d) => {
+      if (s === 'stdout') out = cap(out + d);
+    });
+  } catch {
+    return null;
+  }
+  const link = out.trim();
+  return link || null;
+}
+
 /** Push Huddle's CA into a sandbox and refresh the trust store. */
 export async function trustCa(name: string): Promise<SbxStep> {
   let out = '';
@@ -508,6 +596,7 @@ export async function removeSandbox(name: string, force = false): Promise<number
   // truly still there just re-mints its row the next time Huddle (re)creates
   // or otherwise re-identifies it; one that isn't leaves no secret behind.
   dropSandboxIdentity(name);
+  dropSshAccess(name);
   return code;
 }
 

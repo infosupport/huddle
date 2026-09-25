@@ -23,6 +23,17 @@ vi.mock('../src/socket-registration', () => ({
   waitForSocketReadiness: async () => true,
 }));
 
+// SSH access (Stage 2) provisioning touches the real db.ts too — stubbed the
+// same way, with a fixed fake keypair/port so the create flow has something
+// to bake into HostConfig.PortBindings and the config script.
+vi.mock('../src/ssh-keys', () => ({
+  provisionSshAccess: (targetId: string, kind: string) => ({
+    targetId, kind, port: 24850, privateKey: 'fake-private-key', publicKey: 'ssh-rsa fake-pubkey',
+  }),
+  getSshAccess: () => undefined,
+  dropSshAccess: () => {},
+}));
+
 // createAndStartContainer reads the real CA to bake into the config script;
 // tls-ca.ts requires initCa() to have run first (nothing in this file needs a
 // real cert), so it's stubbed the same way the rest of the Docker-facing
@@ -144,6 +155,7 @@ describe('buildJbConfigScript / buildVscodeConfigScript — lifecycle command te
       'dc-jb-lifecycle',
       'intellij',
       '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
+      'ssh-rsa fake-pubkey',
       '',
       {
         onCreateCommand: 'echo onCreate-marker',
@@ -162,6 +174,7 @@ describe('buildJbConfigScript / buildVscodeConfigScript — lifecycle command te
       '/workspaces/project',
       'dc-vscode-lifecycle',
       '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
+      'ssh-rsa fake-pubkey',
       '',
       {
         onCreateCommand: 'echo onCreate-marker',
@@ -172,12 +185,13 @@ describe('buildJbConfigScript / buildVscodeConfigScript — lifecycle command te
     expect(script).toContain('postCreate-marker');
   });
 
-  it('buildJbConfigScript merges jbSettings into both host-config.json writes', () => {
+  it('buildJbConfigScript embeds jbSettings into the host-config.json write', () => {
     const script = buildJbConfigScript(
       '/workspaces/project',
       'dc-jb-settings',
       'intellij',
       'fake-cert',
+      'ssh-rsa fake-pubkey',
       '',
       undefined,
       {},
@@ -189,32 +203,38 @@ describe('buildJbConfigScript / buildVscodeConfigScript — lifecycle command te
     expect(script).toContain(JSON.stringify({ 'some.setting': true }));
   });
 
-  it('buildJbConfigScript flags the unverified installPlugins invocation when jbPlugins is set', () => {
+  it('buildJbConfigScript passes jbPlugins through to the install-ide.sh invocation', () => {
     const script = buildJbConfigScript(
       '/workspaces/project',
       'dc-jb-plugins',
       'intellij',
       'fake-cert',
+      'ssh-rsa fake-pubkey',
       '',
       undefined,
       {},
       ['org.example.plugin'],
       undefined,
     );
-    expect(script).toContain('installPlugins');
+    expect(script).toContain('huddle-install-ide.sh');
     expect(script).toContain('org.example.plugin');
-    expect(script).toMatch(/UNVERIFIED/);
+    // Runs as vscode (install-ide.sh refuses to run as root), synchronously,
+    // before host-config.json is written.
+    expect(script).toMatch(/su vscode -c .*huddle-install-ide\.sh/);
   });
 
-  it('omits the installPlugins line entirely when jbPlugins is empty', () => {
+  it('still runs install-ide.sh (with no extra plugin args) when jbPlugins is empty', () => {
     const script = buildJbConfigScript(
       '/workspaces/project',
       'dc-jb-no-plugins',
       'intellij',
       'fake-cert',
+      'ssh-rsa fake-pubkey',
       '',
     );
-    expect(script).not.toContain('installPlugins');
+    expect(script).toContain('huddle-install-ide.sh');
+    expect(script).toContain("'install'");
+    expect(script).toContain("'intellij'");
   });
 });
 

@@ -26,6 +26,17 @@ vi.mock('../src/db', () => ({
 
 vi.mock('../src/events', () => ({ notifyStateChanged: () => {} }));
 
+// SSH access (Stage 2) provisioning touches the real db.ts too — stubbed the
+// same way, with a fixed fake keypair/port so the create flow has something
+// to bake into HostConfig.PortBindings and the config script.
+vi.mock('../src/ssh-keys', () => ({
+  provisionSshAccess: (targetId: string, kind: string) => ({
+    targetId, kind, port: 24850, privateKey: 'fake-private-key', publicKey: 'ssh-rsa fake-pubkey',
+  }),
+  getSshAccess: () => undefined,
+  dropSshAccess: () => {},
+}));
+
 // Controls whether the gateway "acknowledges" the socket registration —
 // the fallible step this test drives the rollback through, since it sits
 // right after registerSocketName and before any further Docker calls.

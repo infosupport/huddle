@@ -144,6 +144,18 @@ export function initDb(): void {
       revision TEXT NOT NULL DEFAULT '',
       ready_at INTEGER
     );
+    -- SSH access for a devcontainer or sbx sandbox (Stage 2): one keypair and
+    -- one fixed host port per target, minted the first time the target starts.
+    -- Unlike sandbox_identity, this legitimately needs a plaintext private-key
+    -- reader (../ssh-keys.ts) because the key must reach the developer.
+    CREATE TABLE IF NOT EXISTS ssh_access (
+      target_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      port INTEGER NOT NULL UNIQUE,
+      private_key TEXT NOT NULL,
+      public_key TEXT NOT NULL,
+      created INTEGER NOT NULL
+    );
   `);
 
   // The folder index (#69) is gone: the portal browses the host live now that
