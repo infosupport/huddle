@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { storeTokenExchange, resolveToken, isPlaceholderToken } from '../src/token-exchange';
+import { storeTokenExchange, resolveToken, isPlaceholderToken, managesTokenExchange } from '../src/token-exchange';
 
 // Token-exchange containerId-binding (finding #12). Puur (alleen crypto).
 
@@ -28,6 +28,24 @@ describe('token-exchange containerId binding', () => {
 
   it('onbekende placeholder → null', () => {
     expect(resolveToken('huddle_tok_deadbeef', 'container-a')).toBeNull();
+  });
+
+  // sbx mode: Docker Sandboxes manages the credential itself (the sandbox holds
+  // `sk-ant-oat01-proxy-managed`), and the sbx port cannot attribute a request to
+  // one sandbox (ADR §1.3). Huddle must therefore keep its hands off the
+  // Authorization header there — a placeholder minted for an unattributable
+  // caller is unredeemable by construction, which is why the proxy must never
+  // mint one in the first place.
+  describe('who manages the token', () => {
+    it('the devcontainer proxy manages tokens, the sbx port does not', () => {
+      expect(managesTokenExchange(false)).toBe(true);
+      expect(managesTokenExchange(true)).toBe(false);
+    });
+
+    it('shows why: an unattributable caller could never redeem what it was handed', () => {
+      const ph = storeTokenExchange(null, 'REAL-TOKEN');
+      expect(resolveToken(ph, null)).toBeNull();
+    });
   });
 
   describe('TTL', () => {

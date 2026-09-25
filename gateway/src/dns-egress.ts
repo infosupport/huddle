@@ -140,15 +140,32 @@ async function doSanitize(): Promise<void> {
   }
 }
 
-// `huddle init` koppelt het tweede netwerk (devcontainer-net) pas ná de
-// container-start aan, dus die vervuiling landt kort ná onze eerste sanitize.
-// We draaien daarom nog een paar keer over de eerste ~15s zodat we de connect
-// oppikken wanneer hij ook valt. Elke run is een no-op als resolv.conf al schoon
-// is. Runtime-wijzigingen (nieuwe devcontainers) dekken de connect/disconnect-
-// hooks in docker.ts al direct af.
+// De connect die resolv.conf vervuilt landt niet op het moment dat wij hem zien:
+// `huddle init` koppelt het devcontainer-net pas ná de container-start, en een
+// devcontainer die later bijkomt meldt zich via de container-feed, die kan
+// voorlopen op de connect zelf. We draaien daarom niet één keer maar gespreid
+// over ~15s. Elke run is een no-op als resolv.conf al schoon is.
+//
+// Opnieuw plannen vervángt de vorige planning: bij een reeks wijzigingen
+// (meerdere devcontainers na elkaar) telt alleen de laatste, en er stapelen zich
+// geen timers op.
 const SETTLING_DELAYS_MS = [1000, 3000, 6000, 10000, 15000];
-export function scheduleSettlingSanitize(): void {
-  for (const ms of SETTLING_DELAYS_MS) {
-    setTimeout(() => { void sanitizeResolvConf(); }, ms).unref();
-  }
+let settling: NodeJS.Timeout[] = [];
+export function scheduleSettlingSanitize(run: () => void = () => { void sanitizeResolvConf(); }): void {
+  for (const t of settling) clearTimeout(t);
+  settling = SETTLING_DELAYS_MS.map((ms) => {
+    const t = setTimeout(run, ms);
+    t.unref();
+    return t;
+  });
+}
+
+/**
+ * A control-feed notification means Node has successfully changed one of this
+ * container's networks.  Run once straight away, then retain the delayed runs:
+ * Docker/Podman can finish rewriting resolv.conf after the connect returned.
+ */
+export function sanitizeAfterNetworkChange(run: () => void = () => { void sanitizeResolvConf(); }): void {
+  run();
+  scheduleSettlingSanitize(run);
 }

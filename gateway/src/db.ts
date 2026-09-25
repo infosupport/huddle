@@ -1,9 +1,12 @@
-import Database from 'better-sqlite3';
+import crypto from 'crypto';
+import type { AuditEntry, AuditResponse } from './db-types';
+import { HuddleDatabase } from './sqlite';
+import { runtimeEnv } from './runtime-env';
 
-const DB_PATH = process.env.DB_PATH || '/data/huddle.db';
+const DB_PATH = runtimeEnv.dbPath;
 
-export const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+export const db = new HuddleDatabase(DB_PATH);
+db.exec('PRAGMA journal_mode = WAL');
 
 export function initDb(): void {
   db.exec(`
@@ -87,25 +90,6 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
-    -- Indexed host folders: the portal runs in a container and cannot browse the
-    -- host filesystem, so 'huddle indexfolder' walks the host once and stores the
-    -- folders it finds here. The portal then offers them as choices wherever a
-    -- host path is typed. Machine-local scan output — deliberately DB and not
-    -- config.json (unlike the team-managed settings in #69/#98): another machine's
-    -- folder list is noise, not shared configuration.
-    -- Paths are stored normalized (forward slashes, upper-case drive letter;
-    -- see host-path.ts) and compared case-insensitively so the backslashed,
-    -- lower-cased spelling of a Windows folder is the same entry — Windows
-    -- treats them as one folder.
-    CREATE TABLE IF NOT EXISTS indexed_folders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      path TEXT NOT NULL,
-      label TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL DEFAULT 'cli',
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_indexed_folders_path
-      ON indexed_folders (path COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -132,7 +116,53 @@ export function initDb(): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_firewall_groups_name
       ON firewall_groups (name COLLATE NOCASE);
+    -- Per-sandbox identity (docs/ADR-sbx-identity.md). A sandbox cannot be
+    -- recognised by its source address the way a devcontainer is, so Huddle Node
+    -- mints a secret per box and puts it in the upstream-proxy URL sbx bakes in
+    -- at create. Node keeps the secret because it writes that URL; the control
+    -- feed hands the gateway only the name and the hash, which is all it needs
+    -- to recognise an identity without possessing one.
+    CREATE TABLE IF NOT EXISTS sandbox_identity (
+      name TEXT PRIMARY KEY,
+      secret TEXT NOT NULL,
+      secret_hash TEXT NOT NULL,
+      created INTEGER NOT NULL
+    );
+    -- Container names \`huddle migrate --docker-socket\` asked Node to serve a
+    -- filtered Docker socket for, ahead of the container ever existing (blocker
+    -- 15, docs/ADR-huddle-node-split.md). Node did not create these
+    -- containers, so it has no other way to learn their names before they
+    -- start — unlike a Huddle-created devcontainer, which the IDE label in
+    -- containerSnapshot() already covers. buildContainerFeed() unions this
+    -- table into ContainerFeed.devcontainers so the gateway's socket relay
+    -- (../socket-relay.ts) creates the socket regardless of whether the
+    -- container is running yet, which it has to be for the compose bind mount
+    -- to see a live socket instead of an empty directory.
+    CREATE TABLE IF NOT EXISTS socket_registrations (
+      name TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      revision TEXT NOT NULL DEFAULT '',
+      ready_at INTEGER
+    );
+    -- SSH access for a devcontainer or sbx sandbox (Stage 2): one keypair and
+    -- one fixed host port per target, minted the first time the target starts.
+    -- Unlike sandbox_identity, this legitimately needs a plaintext private-key
+    -- reader (../ssh-keys.ts) because the key must reach the developer.
+    CREATE TABLE IF NOT EXISTS ssh_access (
+      target_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      port INTEGER NOT NULL UNIQUE,
+      private_key TEXT NOT NULL,
+      public_key TEXT NOT NULL,
+      created INTEGER NOT NULL
+    );
   `);
+
+  // The folder index (#69) is gone: the portal browses the host live now that
+  // Huddle Node runs there, so a snapshot of folder names is at best redundant
+  // and at worst wrong. Drop it rather than leave a table nothing reads —
+  // machine-local scan output, so there is nothing here worth migrating.
+  db.exec('DROP TABLE IF EXISTS indexed_folders');
 
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
   if (!cols.some(c => c.name === 'expires_at')) {
@@ -140,6 +170,16 @@ export function initDb(): void {
   }
   if (!cols.some(c => c.name === 'path_pattern')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_pattern TEXT');
+  }
+  // The first implementation of socket registrations only stored a name.
+  // Upgrade it in place if a development build created that short-lived schema
+  // before readiness acknowledgements were added.
+  const socketCols = db.prepare("PRAGMA table_info(socket_registrations)").all() as {name:string}[];
+  if (!socketCols.some(c => c.name === 'revision')) {
+    db.exec("ALTER TABLE socket_registrations ADD COLUMN revision TEXT NOT NULL DEFAULT ''");
+  }
+  if (!socketCols.some(c => c.name === 'ready_at')) {
+    db.exec('ALTER TABLE socket_registrations ADD COLUMN ready_at INTEGER');
   }
   // path_mode marks a host-only rule as a "path allowlist": the bare domain is
   // then closed (status deny), but unknown subpaths are raised as 'requested' so
@@ -356,20 +396,11 @@ function insertAudit() {
   return _insertAudit;
 }
 
-export interface AuditEntry {
-  containerId: string | null;
-  domain: string;
-  port?: number | null;
-  action: string;
-  ruleId?: number | null;
-  method?: string | null;
-  path?: string | null;
-  reqHeaders?: string | null;
-  reqBody?: string | null;
-  resStatus?: number | null;
-  resHeaders?: string | null;
-  resBody?: string | null;
-}
+
+// The audit row shapes live in ./db-types so the gateway can name them without
+// importing a native database binding. Re-exported here: every caller so far
+// imports them from './db', and that is still where they are written.
+export type { AuditEntry, AuditResponse } from './db-types';
 
 // Insert a single audit row. Returns the new row id (or null on error) so an
 // in-flight request can be logged immediately and later completed with the
@@ -396,12 +427,6 @@ export function logAudit(entry: AuditEntry): number | null {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _updateAudit: any = null;
-export interface AuditResponse {
-  reqBody?: string | null;
-  resStatus?: number | null;
-  resHeaders?: string | null;
-  resBody?: string | null;
-}
 
 // Fill in the response fields (and the now fully buffered req_body) on a
 // previously inserted in-flight audit row.
@@ -563,69 +588,6 @@ export function validateUpdateKeys<K extends string>(
   return keys.filter((k): k is K => permitted.includes(k));
 }
 
-// ── Indexed host folders ──────────────────────────────────────────────────────
-
-// Populated by `huddle indexfolder` on the host and editable in Settings. Paths
-// must already be normalized by the caller (normalizeHostPath in host-path.ts);
-// this layer only stores and dedupes them.
-export interface IndexedFolder {
-  id: number;
-  path: string;
-  label: string;
-  source: string;
-  created_at: number;
-}
-
-// Upper bound on the index. `huddle indexfolder` at the wrong spot (a home
-// directory, a drive root) can discover tens of thousands of folders; that would
-// bloat the DB and turn the portal's picker into something unusable. The CLI
-// stops well before this, and the API reports what it refused rather than
-// silently truncating.
-export const MAX_INDEXED_FOLDERS = 2000;
-
-export function listIndexedFolders(): IndexedFolder[] {
-  return db.prepare('SELECT * FROM indexed_folders ORDER BY path COLLATE NOCASE ASC').all() as IndexedFolder[];
-}
-
-export function countIndexedFolders(): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM indexed_folders').get() as { n: number }).n;
-}
-
-export function getIndexedFolderByPath(path: string): IndexedFolder | undefined {
-  return db.prepare('SELECT * FROM indexed_folders WHERE path = ? COLLATE NOCASE').get(path) as IndexedFolder | undefined;
-}
-
-// Insert, or refresh the label/source of an existing entry. Returns 'added' or
-// 'updated' so a bulk index can report both without a second query.
-export function upsertIndexedFolder(f: { path: string; label: string; source: string }): 'added' | 'updated' {
-  const existing = getIndexedFolderByPath(f.path);
-  if (existing) {
-    db.prepare('UPDATE indexed_folders SET label = ?, source = ? WHERE id = ?').run(f.label, f.source, existing.id);
-    return 'updated';
-  }
-  db.prepare('INSERT INTO indexed_folders (path, label, source) VALUES (?, ?, ?)').run(f.path, f.label, f.source);
-  return 'added';
-}
-
-export function deleteIndexedFolder(id: number): void {
-  db.prepare('DELETE FROM indexed_folders WHERE id = ?').run(id);
-}
-
-// Clear the whole index, or only the subtree under `root` so re-indexing one
-// project does not throw away the folders indexed from elsewhere. The LIKE
-// pattern is escaped: a path may legitimately contain '%' or '_'.
-export function clearIndexedFolders(root?: string): number {
-  if (!root) return db.prepare('DELETE FROM indexed_folders').run().changes;
-  // The subtree prefix has to be built, not glued on: a root already ends in a
-  // slash ('T:/', '/'), and 'T:/' + '/%' matched nothing, so clearing a whole
-  // drive from the portal silently removed zero rows.
-  const prefix = root.endsWith('/') ? root : `${root}/`;
-  const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
-  return db.prepare(
-    "DELETE FROM indexed_folders WHERE path = ? COLLATE NOCASE OR path LIKE ? || '%' ESCAPE '\\' COLLATE NOCASE"
-  ).run(root, escaped).changes;
-}
-
 // ── Firewall Groups (#69) ─────────────────────────────────────────────────────
 
 export interface FirewallGroup {
@@ -738,4 +700,155 @@ export function isHostPortApproved(containerId: string, hostPort: number, protoc
   return !!db.prepare(
     'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
   ).get(containerId, hostPort, protocol);
+}
+
+// ── Docker-socket registrations (blocker 15) ─────────────────────────────────
+// See socket_registrations' CREATE TABLE comment above for why this exists.
+
+/**
+ * Register (or re-register) a name, and return the revision this call just
+ * wrote.
+ *
+ * The revision is generated here in JS, not in the SQL statement, so the
+ * caller can hang onto the exact value this call produced — see
+ * `unregisterSocketNameIfCurrent` below, which is what a caller needs that
+ * value for.
+ */
+export function registerSocketName(name: string): string {
+  // Reset readiness for every explicit request.  The gateway must acknowledge
+  // this registration again before the CLI tells the user it is safe to start
+  // Compose; an old acknowledgement cannot prove a restarted gateway listens.
+  const revision = crypto.randomBytes(16).toString('hex');
+  db.prepare(`INSERT INTO socket_registrations (name, revision, ready_at)
+              VALUES (?, ?, NULL)
+              ON CONFLICT(name) DO UPDATE SET revision = excluded.revision, ready_at = NULL`)
+    .run(name, revision);
+  return revision;
+}
+
+/**
+ * Undo a registration unconditionally — the counterpart `registerSocketName`
+ * never had.
+ *
+ * `pruneDeadSocketRegistrations` below does the equivalent delete itself
+ * inline (it needs to match a whole set of dead names in one statement, not
+ * just one), rather than looping over this — but it is the same operation,
+ * and worth spelling out here why THAT delete gets away without
+ * revision-scoping despite this function existing: its own
+ * `ready_at IS NOT NULL` condition already keeps it from touching a row a
+ * fresh concurrent `registerSocketName` just reset to `ready_at = NULL` (a
+ * brand-new registration is never "ready" yet), so it can only ever hit a
+ * row nobody is mid-registration on. Kept as the general unconditional
+ * primitive for any future caller that has the same guarantee some other
+ * way and does not need `unregisterSocketNameIfCurrent`'s revision check.
+ * Safe to call for a name that was never registered (0 rows affected, no
+ * error) so callers do not need to check first.
+ */
+export function unregisterSocketName(name: string): void {
+  db.prepare('DELETE FROM socket_registrations WHERE name = ?').run(name);
+}
+
+/**
+ * Undo a registration, but only if it is still the exact one this call made.
+ *
+ * `createAndStartContainer` (docker.ts) uses this to roll back its own
+ * registration when anything after it fails before the container is
+ * actually up. Two requests can race on the same name (two authenticated
+ * starts, or a start racing `huddle migrate`): `registerSocketName` replaces
+ * the row and mints a new revision on every call, so if a second request
+ * re-registered this name while the first was still waiting or creating, the
+ * row now belongs to the second request. Scoping the delete to the revision
+ * the first call's own `registerSocketName` returned means that race turns
+ * this rollback into a safe no-op instead of deleting the second request's
+ * live registration out from under it (the regression this guards against —
+ * see the Aikido finding on this fix).
+ */
+export function unregisterSocketNameIfCurrent(name: string, revision: string): void {
+  db.prepare('DELETE FROM socket_registrations WHERE name = ? AND revision = ?').run(name, revision);
+}
+
+/**
+ * Drop registrations that are stale rather than merely not-yet-running.
+ *
+ * `ready_at IS NOT NULL` is the signal that separates the two: it means the
+ * gateway already served this name's socket at least once, so the container
+ * genuinely existed. If that name is now missing from `liveNames` (Docker's
+ * current running list, from containerSnapshot()), the container is gone —
+ * removed directly against the engine, since there is no delete route in
+ * Huddle to have unregistered it. A row with `ready_at IS NULL` is left
+ * alone no matter what: that is exactly the state `huddle migrate
+ * --docker-socket` (and createAndStartContainer, briefly) put it in on
+ * purpose, ahead of the container ever running — pruning on "not running yet"
+ * would break that registration before it had a chance to be served.
+ *
+ * Called from buildContainerFeed(), which runs on every gateway poll (~1s,
+ * see boot-gateway.ts) — kept to one indexed DELETE so that stays cheap.
+ *
+ * A `ready_at IS NULL` row is left alone above so a registration is not
+ * pruned before its container has had a chance to start — but nothing else
+ * ever clears one of these if that start never happens: `huddle migrate
+ * --docker-socket` registers ahead of a `docker compose up` the operator may
+ * never run, and a devcontainer create that fails before this poll ever sees
+ * it (or whose rollback is otherwise bypassed) leaves the same shape behind.
+ * Left unbounded, such a row is a permanent phantom registration — the relay
+ * keeps a socket directory open for a name nothing will ever use.
+ * PENDING_REGISTRATION_MAX_AGE_SEC is the line between "early" and "stale":
+ * once a still-pending registration is older than that AND its name is not
+ * currently live, it self-heals on the next poll regardless of whether the
+ * caller that created it ever explicitly unregisters.
+ */
+const PENDING_REGISTRATION_MAX_AGE_SEC = 60 * 60;
+
+export function pruneDeadSocketRegistrations(liveNames: string[]): void {
+  if (liveNames.length === 0) {
+    db.prepare(
+      `DELETE FROM socket_registrations WHERE ready_at IS NOT NULL OR created_at < unixepoch() - ?`
+    ).run(PENDING_REGISTRATION_MAX_AGE_SEC);
+    return;
+  }
+  const placeholders = liveNames.map(() => '?').join(',');
+  db.prepare(
+    `DELETE FROM socket_registrations
+      WHERE (ready_at IS NOT NULL OR created_at < unixepoch() - ?)
+        AND name NOT IN (${placeholders})`
+  ).run(PENDING_REGISTRATION_MAX_AGE_SEC, ...liveNames);
+}
+
+export function listRegisteredSocketNames(): string[] {
+  return (db.prepare('SELECT name FROM socket_registrations ORDER BY name').all() as { name: string }[])
+    .map((r) => r.name);
+}
+
+/** Included in the feed hash so re-registering an existing name repolls it. */
+export function socketRegistrationRevisions(): Record<string, string> {
+  const rows = db.prepare('SELECT name, revision FROM socket_registrations ORDER BY name').all() as { name: string; revision: string }[];
+  return Object.fromEntries(rows.map((r) => [r.name, r.revision]));
+}
+
+/**
+ * Acknowledge that a name's Unix listener is bound and serving.
+ *
+ * `revision`, when given, scopes the ack the same way
+ * `unregisterSocketNameIfCurrent` scopes a rollback: a late "ready" ack
+ * answering an OLD registration must not mark a NEWER one (of the same name,
+ * a fresh revision from a `registerSocketName` call that raced ahead of this
+ * ack) ready — nothing has verified that newer registration's socket yet,
+ * only the one this ack was actually issued for. Optional so callers that
+ * predate this parameter keep working unscoped; passing it is what actually
+ * closes the staleness window described above.
+ */
+export function markSocketReady(name: string, revision?: string): boolean {
+  if (revision !== undefined) {
+    return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ? AND revision = ?')
+      .run(name, revision).changes > 0;
+  }
+  return db.prepare('UPDATE socket_registrations SET ready_at = unixepoch() WHERE name = ?').run(name).changes > 0;
+}
+
+export function socketNamesReady(names: string[]): boolean {
+  if (names.length === 0) return true;
+  const placeholders = names.map(() => '?').join(',');
+  const row = db.prepare(`SELECT count(*) AS total, sum(ready_at IS NOT NULL) AS ready
+                          FROM socket_registrations WHERE name IN (${placeholders})`).get(...names) as { total: number; ready: number };
+  return row.total === names.length && row.ready === names.length;
 }

@@ -4,8 +4,11 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
-import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { runtimeEnv } from './runtime-env';
+import { rewireGatewayIntoDevcontainers } from './gateway-wiring';
+import { registerPortal } from './portal';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
+import { registerSocketRegistrationRoute } from './socket-registration';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -14,6 +17,7 @@ import {
   reloadFirewallRulesFolder,
   syncGroupsToFolder,
 } from './firewall-groups';
+
 import {
   readHostConfig,
   setHostFolder,
@@ -29,7 +33,8 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
+import { normalizeHostPath, hostPathError } from './host-path';
+import { hostRoots, listHostFolders, hostFolderProblem, MAX_FOLDER_ENTRIES } from './host-browse';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -45,14 +50,20 @@ import {
   forceDeleteContainer,
   startExistingContainer,
   cleanupContainerNetwork,
-  resolveContainerByIp,
   isIdeName,
   execContainerOutput,
   execInContainer,
+  ENV_KEY_RE,
   type StartParams,
   type IdeName,
+  type LifecycleCommands,
 } from './docker';
+import { getSshAccess, dropSshAccess } from './ssh-keys';
 import { grantSudo, revokeSudo } from './sudo-grant';
+import { sbxAvailable, startSandbox, sbxUpstreamUrl, SBX_PROXY_PORT, listSandboxes, removeSandbox, sshSetup, reconcile, trustCa, policyLogFor, settingsFolderPlan, jetbrainsGatewayLink } from './sbx';
+import { hasSandboxIdentity } from './sandbox/registry';
+import { isValidWorkspacePath } from './sandbox/protocol';
+import { scheduleReconcile } from './sandbox/auto-sync';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -61,6 +72,7 @@ import {
   sessionCookie,
   clearSessionCookie,
 } from './auth';
+import { isControlPath } from './control/http';
 import { attachTerminal } from './terminal';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
@@ -74,7 +86,9 @@ import {
   EXT_DIR,
 } from './extensions/registry';
 
-const API_PORT = 3000;
+const API_PORT = runtimeEnv.apiPort;
+/** Upper bound on folders per sandbox — each one is an `sbx create` positional. */
+const MAX_SBX_WORKSPACES = 32;
 const UI_DIR = path.join(__dirname, '..', 'dist', 'ui', 'browser');
 
 type RuleStatus = 'requested' | 'allow' | 'deny';
@@ -115,13 +129,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // can therefore only be separated by the token; the former subnet gate has
   // thus been replaced by auth on every /api/* route.
   //
-  // Endpoints that devcontainers must be able to reach without a token (sudo-audit
-  // ingest and the proxy CA). Keep this deliberately minimal: everything here is
-  // callable by anyone on the network.
-  const devcontainerPublicApi: Array<{ method: string; path: string }> = [
-    { method: 'POST', path: '/api/audit/sudo' },
-    { method: 'GET',  path: '/api/tls/ca.crt' },
-  ];
+  // There is no devcontainer-public carve-out any more, and that is the point of
+  // the split: this API runs on the host, on loopback, and no devcontainer can
+  // reach it at all. The one endpoint they did use — sudo-audit ingest — is
+  // answered by the gateway's proxy and relayed over the control channel
+  // (proxy.ts:handleSudoAudit, control/apply.ts). Every /api/* route below is
+  // therefore operator-only, with no exception to keep minimal.
   // Endpoints that the operator browser/CLI must be able to reach without a
   // logged-in session in order to be able to log in at all (and to see that
   // login is needed). The static SPA assets fall under this too (everything
@@ -131,11 +144,32 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.addHook('onRequest', async (req, reply) => {
     const url = req.url ?? '';
     const pathOnly = url.split('?')[0];
+    // The control channel is NOT served here. It has its own listener on its own
+    // port (control/server.ts) precisely so it can be bound where the gateway
+    // container can reach it without dragging the operator token's surface
+    // along. Answering /control/* here as well would be a second door into the
+    // same room, one that widens the moment someone sets HUDDLE_API_HOST.
+    if (isControlPath(pathOnly)) {
+      reply.code(404).send({ error: 'not found' });
+      return;
+    }
     if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
     if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
-    if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
     if (!isAuthenticated(req.headers)) {
       reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
+    }
+  });
+
+  // Auto-sync (sbx mode): after any successful firewall-rule / group mutation, or
+  // a sandbox lifecycle change, (re)project Huddle's rules into sbx policy.
+  // Debounced + best-effort — a no-op when sbx isn't reachable.
+  app.addHook('onResponse', async (req, reply) => {
+    const m = req.method;
+    if (m !== 'POST' && m !== 'PUT' && m !== 'DELETE') return;
+    if (reply.statusCode >= 400) return;
+    const p = (req.url ?? '').split('?')[0];
+    if (/^\/api\/(rules|groups)\b/.test(p) || /^\/api\/sbx\/(start|sandboxes)\b/.test(p)) {
+      scheduleReconcile(`${m} ${p}`);
     }
   });
 
@@ -153,7 +187,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return { ok: true };
   });
 
-  app.post('/api/auth/logout', async (_req, reply) => {
+  app.post('/api/auth/logout', async (req, reply) => {
     reply.header('set-cookie', clearSessionCookie());
     return { ok: true };
   });
@@ -236,11 +270,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
-  app.register(fastifyStatic, {
-    root: UI_DIR,
-    prefix: '/',
-    wildcard: false,
-  });
+  // Directory or blob, depending on how this build was packaged. Registers the
+  // not-found handler too, because serving index.html for a client-side route
+  // is the same decision (src/portal.ts).
+  registerPortal(app, UI_DIR);
 
   app.register(import('@fastify/multipart'), { limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -826,6 +859,22 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
+  // Wire the gateway container into every devcontainer that already exists.
+  //
+  // `huddle init` calls this straight after creating the container. Node does the
+  // same at boot, but only helps on a FIRST install: on every later init Node is
+  // already running and reused, while the gateway container is removed and
+  // recreated with a new IP — leaving every devcontainer attached to nothing and
+  // DNAT'ing to an address that is gone. Operator-only, on /api/*, because this
+  // is Huddle acting on its own containers; the gateway never asks for it.
+  app.post('/api/docker/rewire-gateway', async () => {
+    const report = await rewireGatewayIntoDevcontainers();
+    notifyStateChanged();
+    return report;
+  });
+
+  registerSocketRegistrationRoute(app);
+
   // Reconnect huddle to a devcontainer's dc-net-<name> network.
   // Needed when a container recreates its network after a restart cycle;
   // huddle's old attachment is then stale and must be refreshed.
@@ -893,11 +942,30 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      dropSshAccess(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
     }
+  });
+
+  // SSH connection info for a devcontainer (Stage 2): the private key never
+  // touches the gateway's own filesystem — it is handed to the CLI, which
+  // writes it locally with 0600 permissions.
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ssh-key', async (req, reply) => {
+    const { name } = req.params;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid container name' });
+    }
+    try {
+      await inspectContainer(name);
+    } catch {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    const access = getSshAccess(name);
+    if (!access) return reply.code(404).send({ error: 'not_found' });
+    return { privateKey: access.privateKey, publicKey: access.publicKey, port: access.port };
   });
 
   app.get<{ Querystring: { ide?: string } }>('/api/docker/images', async (req) => {
@@ -909,7 +977,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!isIdeName(req.query.ide)) {
       return reply.code(400).send({ error: 'ide query param must be "rider", "intellij" or "vscode"' });
     }
-    return { imageName: getBaseImageName(req.query.ide), ide: req.query.ide };
+    return { imageName: getBaseImageName(), ide: req.query.ide };
   });
 
   // Huddle's MITM root-CA voor HTTPS-interceptie. Devcontainers downloaden dit
@@ -923,7 +991,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   app.post<{ Body: {
     imageName: string;
     workspaceDir?: string;
-    mounts?: { hostPath: string; containerPath: string }[];
+    mounts?: { hostPath: string; containerPath: string; readOnly?: boolean }[];
     containerWorkspace?: string;
     containerName: string;
     ideName?: string;
@@ -931,12 +999,39 @@ export async function createApiServer(): Promise<FastifyInstance> {
     presentableName?: string;
     memory?: string;
     cpus?: string;
+    // devcontainer.json-shaped settings, hand-typed in the create modal — see
+    // StartParams (docker.ts) for what each one actually does and its caveats.
+    containerEnv?: Record<string, string>;
+    remoteEnv?: Record<string, string>;
+    jbPlugins?: string[];
+    jbSettings?: Record<string, unknown>;
+    lifecycle?: LifecycleCommands;
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const {
+        imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName,
+        empty, presentableName: presentableNameOverride, memory, cpus,
+        containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle,
+      } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
+      }
+      // Reserved-name collisions are a warning (ignoredEnv, handled inside
+      // createAndStartContainer) not a 400 — but a key that isn't even a legal
+      // identifier (contains `=`, whitespace, ...) is a client bug, same as a
+      // malformed mount below, so it's rejected here instead of silently
+      // dropped alongside a legitimate reserved-name collision.
+      for (const [label, map] of [['containerEnv', containerEnv], ['remoteEnv', remoteEnv]] as const) {
+        if (!map) continue;
+        for (const key of Object.keys(map)) {
+          if (!ENV_KEY_RE.test(key)) {
+            return reply.code(400).send({ error: `${label} key is not a valid environment variable name: "${key}"` });
+          }
+        }
+      }
+      if (jbSettings !== undefined && (typeof jbSettings !== 'object' || jbSettings === null || Array.isArray(jbSettings))) {
+        return reply.code(400).send({ error: 'jbSettings must be a JSON object' });
       }
       if (workspaceDir && mounts?.length) {
         return reply.code(400).send({ error: 'Provide either workspaceDir or mounts, not both' });
@@ -946,7 +1041,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       // Each mount binds a host path at an explicit absolute container path; the
       // container paths must be unique so two folders never land on the same target.
-      let normalizedMounts: { hostPath: string; containerPath: string }[] | undefined;
+      let normalizedMounts: { hostPath: string; containerPath: string; readOnly?: boolean }[] | undefined;
       if (mounts?.length) {
         try {
           const seen = new Set<string>();
@@ -963,7 +1058,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
             if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
             if (seen.has(containerPath)) throw new Error(`Duplicate container path: ${containerPath}`);
             seen.add(containerPath);
-            return { hostPath, containerPath };
+            // Defensive typeof guard, same convention as this file's other
+            // optional boolean flags — a non-boolean is silently treated as
+            // "not read-only" rather than 400ing the whole request over it.
+            return { hostPath, containerPath, readOnly: typeof m.readOnly === 'boolean' ? m.readOnly : undefined };
           });
         } catch (err: any) {
           return reply.code(400).send({ error: err.message });
@@ -1008,15 +1106,229 @@ export async function createApiServer(): Promise<FastifyInstance> {
         empty: empty === true,
         memory,
         cpus,
+        containerEnv,
+        remoteEnv,
+        jbPlugins,
+        jbSettings,
+        lifecycle,
       };
       try {
-        const id = await createAndStartContainer(params);
-        return { id, containerName };
+        const { id, ignoredEnv } = await createAndStartContainer(params);
+        return { id, containerName, ignoredEnv };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
       }
     }
   );
+
+  // ── Docker Sandboxes (sbx) — experimental second box type ─────────────────
+  // Start a microVM sandbox with Huddle as its upstream proxy. Minimal MVP:
+  // status tells the portal whether sbx is usable + which upstream/port Huddle
+  // exposes; start sets the upstream proxy and creates the sandbox, returning the
+  // per-step output so the first wall is visible in the UI.
+  app.get('/api/sbx/status', async () => {
+    const avail = await sbxAvailable();
+    return { ...avail, upstreamUrl: sbxUpstreamUrl(), proxyPort: SBX_PROXY_PORT };
+  });
+
+  // A sandbox may get MULTIPLE folders: `workspaces[]` (first = the folder the
+  // agent starts in, the rest extra, optionally read-only). `workspace` stays
+  // accepted as the single-folder form older clients send.
+  app.post<{ Body: {
+    name?: string; agent?: string; workspace?: string; workspaces?: { path?: string; readOnly?: boolean }[];
+    // devcontainer.json-shaped settings — same shape/validation as
+    // /api/docker/start (see StartParams in docker.ts); the create modal's
+    // right column is shared between kinds (docs/ADR-workspace-runtime-
+    // abstraction.md), so a sandbox accepts what a devcontainer does.
+    containerEnv?: Record<string, string>;
+    remoteEnv?: Record<string, string>;
+    jbPlugins?: string[];
+    jbSettings?: Record<string, unknown>;
+    lifecycle?: LifecycleCommands;
+  } }>(
+    '/api/sbx/start',
+    async (req, reply) => {
+      const name = (req.body?.name ?? '').trim() || `huddle-sbx-${Date.now().toString(36)}`;
+      // Sandbox names feed a no-shell execFile arg, but keep them tame anyway.
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+        return reply.code(400).send({ error: 'invalid sandbox name' });
+      }
+      const agent = typeof req.body?.agent === 'string' ? req.body.agent.trim() : undefined;
+      const workspace = typeof req.body?.workspace === 'string' ? req.body.workspace.trim() : undefined;
+      const rawWorkspaces = req.body?.workspaces;
+      let workspaces: { path: string; readOnly: boolean }[] | undefined;
+      if (rawWorkspaces !== undefined) {
+        if (!Array.isArray(rawWorkspaces)) return reply.code(400).send({ error: 'workspaces must be an array' });
+        if (rawWorkspaces.length > MAX_SBX_WORKSPACES) {
+          return reply.code(400).send({ error: `at most ${MAX_SBX_WORKSPACES} folders per sandbox` });
+        }
+        workspaces = [];
+        for (const w of rawWorkspaces) {
+          const p = typeof w?.path === 'string' ? w.path.trim() : '';
+          if (!p) continue;
+          if (!isValidWorkspacePath(p)) return reply.code(400).send({ error: `invalid folder path: ${p}` });
+          workspaces.push({ path: p, readOnly: w?.readOnly === true });
+        }
+        if (workspaces.length === 0) workspaces = undefined;
+      }
+      if (workspace !== undefined && workspace !== '' && !isValidWorkspacePath(workspace)) {
+        return reply.code(400).send({ error: `invalid folder path: ${workspace}` });
+      }
+      const { containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle } = req.body ?? {};
+      // Same structural checks as /api/docker/start — a reserved-name
+      // collision is a warning (ignoredEnv) but an illegal identifier is a
+      // client bug, rejected here rather than silently dropped.
+      for (const [label, map] of [['containerEnv', containerEnv], ['remoteEnv', remoteEnv]] as const) {
+        if (!map) continue;
+        for (const key of Object.keys(map)) {
+          if (!ENV_KEY_RE.test(key)) {
+            return reply.code(400).send({ error: `${label} key is not a valid environment variable name: "${key}"` });
+          }
+        }
+      }
+      if (jbSettings !== undefined && (typeof jbSettings !== 'object' || jbSettings === null || Array.isArray(jbSettings))) {
+        return reply.code(400).send({ error: 'jbSettings must be a JSON object' });
+      }
+      try {
+        const result = await startSandbox({
+          name, agent: agent || undefined, workspace: workspace || undefined, workspaces,
+          containerEnv, remoteEnv, jbPlugins, jbSettings, lifecycle,
+        });
+        logAudit({ containerId: null, domain: '-', action: `admin:sbx-start${result.ok ? '' : '-failed'}` });
+        return { name, ...result };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    }
+  );
+
+  // Which settings folders (folder mappings) a new sandbox gets, and which
+  // mappings cannot travel (Docker volumes, ~-paths). The modal shows this so the
+  // difference with a devcontainer is visible BEFORE creating a sandbox.
+  app.get('/api/sbx/settings-folders', async (_req, reply) => {
+    try {
+      const plan = settingsFolderPlan();
+      return {
+        folders: plan.folders.map((f) => ({ name: f.name, hostPath: f.hostPath, targetPath: f.targetPath, readOnly: f.readOnly })),
+        skipped: plan.skipped,
+      };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
+  });
+
+  // List the sandboxes the host sbx daemon currently knows about.
+  app.get('/api/sbx/sandboxes', async (_req, reply) => {
+    try {
+      return { sandboxes: await listSandboxes() };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Remove a sandbox (host-side `sbx rm [--force] <name>`).
+  app.delete<{ Params: { name: string }; Querystring: { force?: string } }>(
+    '/api/sbx/sandboxes/:name',
+    async (req, reply) => {
+      const name = req.params.name;
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+        return reply.code(400).send({ error: 'invalid sandbox name' });
+      }
+      // Only act on sandboxes Huddle actually created (docs/ADR-sbx-identity.md) —
+      // a matching name on the host is not enough (finding: sandbox endpoints
+      // operating on boxes Huddle didn't create).
+      if (!hasSandboxIdentity(name)) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
+      const force = req.query?.force === '1' || req.query?.force === 'true';
+      try {
+        const exitCode = await removeSandbox(name, force);
+        logAudit({ containerId: null, domain: '-', action: `admin:sbx-rm${exitCode === 0 ? '' : '-failed'}` });
+        return { name, exitCode, ok: exitCode === 0 };
+      } catch (err: any) {
+        return reply.code(502).send({ error: err.message });
+      }
+    }
+  );
+
+  // Raw sbx policy log + parsed denied entries — diagnostics for the pending
+  // ingest (so we can see exactly what `sbx policy log --json` returns).
+  app.get<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/log', async (req, reply) => {
+    const name = req.params.name;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) return reply.code(400).send({ error: 'invalid sandbox name' });
+    // Only Huddle-created sandboxes (see removeSandbox above for rationale).
+    if (!hasSandboxIdentity(name)) return reply.code(404).send({ error: 'not_found' });
+    try {
+      return await policyLogFor(name);
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Install Huddle's CA into a sandbox so HTTPS through the MITM proxy is trusted
+  // (fixes JetBrains/VS Code backend downloads: curl "unable to get local issuer").
+  app.post<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/trust-ca', async (req, reply) => {
+    const name = req.params.name;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid sandbox name' });
+    }
+    // Only Huddle-created sandboxes (see removeSandbox above for rationale).
+    if (!hasSandboxIdentity(name)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    try {
+      const step = await trustCa(name);
+      logAudit({ containerId: null, domain: '-', action: `admin:sbx-trust-ca${step.code === 0 ? '' : '-failed'}` });
+      return { name, ...step, ok: step.code === 0 };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // SSH connection info for a sandbox (Stage 2): the private key never
+  // touches the gateway's own filesystem — it is handed to the CLI, which
+  // writes it locally with 0600 permissions.
+  app.get<{ Params: { name: string } }>('/api/sbx/sandboxes/:name/ssh-key', async (req, reply) => {
+    const name = req.params.name;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) {
+      return reply.code(400).send({ error: 'invalid sandbox name' });
+    }
+    if (!hasSandboxIdentity(name)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    const access = getSshAccess(name);
+    if (!access) return reply.code(404).send({ error: 'not_found' });
+    // Best-effort: null while the backend is still installing/starting — the
+    // frontend polls this same route again rather than this request waiting.
+    const jetbrainsLink = await jetbrainsGatewayLink(name).catch(() => null);
+    return { privateKey: access.privateKey, publicKey: access.publicKey, port: access.port, jetbrainsLink };
+  });
+
+  // One-time SSH bridge setup so sandboxes are reachable at <name>.sbx for
+  // VS Code / JetBrains remote development (host-side `sbx setup ssh`).
+  app.post('/api/sbx/ssh-setup', async (_req, reply) => {
+    try {
+      const exitCode = await sshSetup();
+      logAudit({ containerId: null, domain: '-', action: `admin:sbx-ssh-setup${exitCode === 0 ? '' : '-failed'}` });
+      return { exitCode, ok: exitCode === 0 };
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
+
+  // Reconcile Huddle's rules into sbx policy (one-way, Huddle = truth). Pass
+  // ?dryRun=1 to preview the projection without mutating sbx. Returns a full
+  // report incl. path rules that sbx cannot express (enforced at Huddle's proxy).
+  app.post<{ Querystring: { dryRun?: string } }>('/api/sbx/reconcile', async (req, reply) => {
+    const dryRun = req.query?.dryRun === '1' || req.query?.dryRun === 'true';
+    try {
+      const report = await reconcile({ dryRun });
+      logAudit({ containerId: null, domain: '-', action: `admin:sbx-reconcile${report.ok ? '' : '-partial'}` });
+      return report;
+    } catch (err: any) {
+      return reply.code(502).send({ error: err.message });
+    }
+  });
 
   // ── Docker access grants (persisted in SQLite) ────────────────────────────
 
@@ -1220,33 +1532,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
-  // ── Sudo audit ingest ─────────────────────────────────────────────────────
-  // Container identity is derived from the source IP — the body's `container`
-  // field is ignored. A devcontainer cannot impersonate another container by
-  // sending a forged name.
-  app.post<{ Body: { entry: string } }>('/api/audit/sudo', async (req, reply) => {
-    const { entry } = req.body;
-    if (!entry) return { ok: false };
-    const container = await resolveContainerByIp(req.socket.remoteAddress ?? '');
-    if (!container) {
-      reply.code(403);
-      return { ok: false, error: 'unknown source container' };
-    }
-    // Parse sudo log: "... user : TTY=... ; PWD=... ; USER=root ; COMMAND=/usr/bin/foo bar"
-    const cmdMatch = entry.match(/COMMAND=(.+)$/);
-    const cmd = cmdMatch ? cmdMatch[1].trim() : entry;
-    const cmdBase = cmd.split('/').pop()?.split(' ')[0] ?? 'unknown';
-    logAudit({
-      containerId: container,
-      domain: 'sudo',
-      action: `sudo:${cmdBase}`,
-      method: null,
-      path: cmd.length > 200 ? cmd.slice(0, 200) : cmd,
-    });
-    notifyStateChanged();
-    return { ok: true };
-  });
-
   // ── Extensions ────────────────────────────────────────────────────────────
   // Catch-all for extension API routes. Must come BEFORE loadAllExtensions()
   // so that it is registered before listen() — extensions write to
@@ -1346,10 +1631,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     return reply.send(fs.createReadStream(filePath));
   });
 
-  // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
-  app.setNotFoundHandler(async (_req, reply) => {
-    return reply.sendFile('index.html');
-  });
 
   // ── Settings ──────────────────────────────────────────────────────────────
   app.get('/api/settings', async () => {
@@ -1380,18 +1661,20 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (defaultMemory !== undefined || defaultCpus !== undefined) {
         persisted = setResourceDefaults({ defaultMemory, defaultCpus }) && persisted;
       }
-      // Folder paths are written into the mounted CLI config. They only take
-      // effect after the CLI re-mounts them, so signal that a restart is needed.
-      // `huddle init` passes them to the engine as a `-v` argument WITHOUT a
-      // shell, so they get the same normalizer as every other host path: one
-      // notation in the config file, and no `~` that nothing would expand.
+      // Folder paths are written into the CLI config, which Huddle Node reads
+      // per call — no remount, so the firewall-rules folder is live on the next
+      // reload. Extensions are the exception: they are loaded once at boot, so
+      // pointing at a different folder does need a restart.
+      //
+      // Both go through the host-path normalizer: one notation in the config
+      // file, and no `~` that nothing would expand.
       for (const [key, raw] of [['extensionsFolder', extensionsFolder], ['firewallRulesFolder', firewallRulesFolder]] as const) {
         if (raw === undefined) continue;
         const folder = normalizeHostPath(raw);
         const problem = folder ? hostPathError(folder) : null;   // empty clears the setting
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
-        restartRequired = true;
+        if (key === 'extensionsFolder') restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };
@@ -1467,95 +1750,38 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── Indexed host folders ──────────────────────────────────────────────────
-  // Huddle's portal runs in a container: it cannot open a file dialog on the
-  // host, so a host path has always had to be typed from memory. `huddle
-  // indexfolder` walks the host once and posts what it found here; the portal
-  // then offers those folders wherever a host path is needed. Operators can also
-  // add or remove single entries from Settings.
-  app.get('/api/indexed-folders', async () => ({
-    folders: listIndexedFolders(),
-    max: MAX_INDEXED_FOLDERS,
-  }));
-
-  app.post<{ Body: { path?: string; paths?: string[]; root?: string; source?: string; replace?: boolean } }>(
-    '/api/indexed-folders',
+  // ── Host folders ──────────────────────────────────────────────────────────
+  // The folder dialog the portal cannot ask the operating system for: a browser
+  // will not hand a server a folder path, so a host path used to be typed from
+  // memory, and #69 papered over that with an index the operator filled from a
+  // shell (`huddle indexfolder`).
+  //
+  // Huddle Node runs on the host, so it can simply look. One call lists one
+  // folder; the picker asks again as you open folders. Nothing is stored, so a
+  // folder created a second ago is there and a renamed one is gone — which no
+  // snapshot could manage.
+  //
+  // Reading only, and only folder names. This is the same filesystem the process
+  // already mounts into containers on request, so listing it exposes nothing it
+  // could not already reach; file contents are never read.
+  app.get<{ Querystring: { path?: string } }>(
+    '/api/host-folders',
     async (req, reply) => {
-      const { path: single, paths, root, source, replace } = req.body ?? {};
-      const raw = [...(Array.isArray(paths) ? paths : []), ...(single ? [single] : [])];
-      if (raw.length === 0) return reply.code(400).send({ error: 'no_paths' });
-      // 'cli' when a scan posted the batch, 'manual' when an operator typed one
-      // entry in Settings — the portal shows which is which, and re-running the
-      // scan must not silently relabel a hand-added folder as machine-found.
-      const src = source === 'manual' ? 'manual' : 'cli';
+      // The gateway would list its own container filesystem and hand back paths
+      // that mean nothing on the host.
+      if (!runtimeEnv.hostMode) return reply.code(503).send({ error: 'not_host_mode' });
 
-      // Replace is scoped to the subtree that was just re-scanned, so indexing
-      // one project again never discards folders indexed from anywhere else.
-      // Without a usable root there is no subtree to scope to, and falling back
-      // to "clear everything" would turn a re-index of one project into total
-      // index loss. Refuse instead — wiping the index is the DELETE endpoint's
-      // job, and that one is explicit about it.
-      const normalizedRoot = root ? normalizeHostPath(root) : '';
-      if (replace && !normalizedRoot) {
-        return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
-      }
-      let added = 0;
-      let updated = 0;
-      let skipped = 0;
-      const invalid: { path: string; error: string }[] = [];
-      const validPaths: string[] = [];
-      for (const candidate of raw) {
-        if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
-        const normalized = normalizeHostPath(candidate);
-        const err = hostPathError(normalized);
-        if (err) { invalid.push({ path: candidate, error: err }); continue; }
-        validPaths.push(normalized);
-      }
-      // A replace must be all-or-nothing: validating the whole batch before
-      // clearing anything means a malformed entry rejects the request instead
-      // of deleting the old subtree and leaving it that way (finding: replace
-      // deletes before the batch is validated).
-      if (replace && invalid.length > 0) {
-        return reply.code(400).send({ error: 'invalid_paths', invalid });
-      }
-      let removed = 0;
-      if (replace) removed = clearIndexedFolders(normalizedRoot);
+      const raw = (req.query?.path ?? '').trim();
+      // No path means "where do I start": the drives, or / and home.
+      if (!raw) return { path: '', folders: hostRoots(), truncated: false, max: MAX_FOLDER_ENTRIES };
 
-      // Dedupe inside the batch too: the caller may well send two spellings of
-      // the same folder, and 'skipped' should not depend on insertion order.
-      const seen = new Set<string>();
-      let total = countIndexedFolders();
-      for (const normalized of validPaths) {
-        const key = normalized.toLowerCase();
-        if (seen.has(key)) { skipped++; continue; }
-        seen.add(key);
-        if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
-        const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: src });
-        if (result === 'added') { added++; total++; } else { updated++; }
-      }
-      notifyStateChanged();
-      return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
-    }
-  );
+      const dir = normalizeHostPath(raw);
+      const problem = hostPathError(dir);
+      if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `path ${problem}` });
+      const unreadable = hostFolderProblem(dir);
+      if (unreadable) return reply.code(404).send({ error: 'unreadable_folder', message: `path ${unreadable}` });
 
-  app.delete<{ Params: { id: string } }>(
-    '/api/indexed-folders/:id',
-    async (req) => {
-      deleteIndexedFolder(Number(req.params.id));
-      notifyStateChanged();
-      return { ok: true };
-    }
-  );
-
-  // Clearing the whole index (or one subtree) is a separate, explicit call so a
-  // malformed single-entry delete can never wipe the list.
-  app.delete<{ Querystring: { root?: string } }>(
-    '/api/indexed-folders',
-    async (req) => {
-      const root = req.query?.root ? normalizeHostPath(req.query.root) : undefined;
-      const removed = clearIndexedFolders(root);
-      notifyStateChanged();
-      return { removed };
+      return { ...listHostFolders(dir), max: MAX_FOLDER_ENTRIES };
     }
   );
 
@@ -1598,7 +1824,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // so that the operator immediately knows what to log in with.
   getOperatorToken();
 
-  const address = await app.listen({ port: API_PORT, host: '0.0.0.0' });
+  const address = await app.listen({ port: API_PORT, host: runtimeEnv.apiBindHost });
   console.log(`[api] listening on ${address}`);
 
   return app;

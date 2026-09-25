@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   getOperatorToken,
+  getGatewayToken,
+  isGatewayAuthenticated,
+  __resetGatewayTokenCache,
   __resetOperatorTokenCache,
   timingSafeEqualStr,
   parseCookies,
@@ -102,5 +108,84 @@ describe('session cookie flags', () => {
   });
   it('clear-cookie verloopt direct', () => {
     expect(clearSessionCookie()).toContain('Max-Age=0');
+  });
+});
+
+// ── Gateway-authenticatie voor het control channel ──────────────────────────
+// Het gateway-token staat bewust LOS van het operator-token: de gateway mag
+// alleen /control/* aanspreken, en het operator-token opent dat juist niet. Een
+// gecompromitteerde gateway levert daarmee geen terminal-, exec- of sudo-rechten
+// op. Deze tests pinnen die scheiding in beide richtingen vast.
+
+const GW_TOKEN = 'super-secret-gateway-token';
+
+describe('gateway-token', () => {
+  beforeEach(() => {
+    __resetGatewayTokenCache();
+    __resetOperatorTokenCache();
+    process.env.HUDDLE_GATEWAY_TOKEN = GW_TOKEN;
+    process.env.HUDDLE_OPERATOR_TOKEN = TOKEN;
+  });
+  afterEach(() => {
+    delete process.env.HUDDLE_GATEWAY_TOKEN;
+    delete process.env.HUDDLE_OPERATOR_TOKEN;
+    __resetGatewayTokenCache();
+    __resetOperatorTokenCache();
+  });
+
+  // `huddle init` LEEST dit bestand om het aan de container mee te geven, dus het
+  // moet er al zijn voordat de gateway zijn eerste /control-request doet — die
+  // kan hij zonder token immers niet doen. Boot mint het daarom expliciet
+  // (boot-node.ts); ontbreekt het, dan sneuvelt init met een kale ENOENT halverwege
+  // het aanmaken van de gateway en staat Huddle er half op.
+  it('schrijft het token weg als het bestand nog niet bestaat', () => {
+    delete process.env.HUDDLE_GATEWAY_TOKEN;
+    __resetGatewayTokenCache();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-gwtoken-'));
+    const file = path.join(dir, 'gateway-token');
+    process.env.HUDDLE_GATEWAY_TOKEN_FILE = file;
+    try {
+      expect(fs.existsSync(file)).toBe(false);
+      const minted = getGatewayToken();
+      expect(minted).toBeTruthy();
+      expect(fs.readFileSync(file, 'utf8').trim()).toBe(minted);
+    } finally {
+      delete process.env.HUDDLE_GATEWAY_TOKEN_FILE;
+      __resetGatewayTokenCache();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gebruikt HUDDLE_GATEWAY_TOKEN uit de env', () => {
+    expect(getGatewayToken()).toBe(GW_TOKEN);
+  });
+
+  it('is een ander token dan dat van de operator', () => {
+    expect(getGatewayToken()).not.toBe(getOperatorToken());
+  });
+
+  it('true met correct Bearer-token', () => {
+    expect(isGatewayAuthenticated({ authorization: `Bearer ${GW_TOKEN}` })).toBe(true);
+  });
+
+  it('het operator-token opent het control channel NIET', () => {
+    expect(isGatewayAuthenticated({ authorization: `Bearer ${TOKEN}` })).toBe(false);
+  });
+
+  it('het gateway-token opent de operator-API NIET', () => {
+    expect(isAuthenticated({ authorization: `Bearer ${GW_TOKEN}` })).toBe(false);
+  });
+
+  it('accepteert geen cookie — geen browser hoort hier te komen', () => {
+    // Alleen Bearer. Met een cookie zou een pagina die de operator bezoekt de
+    // browser tot een control-call kunnen verleiden (zelfde CSRF-redenering als
+    // finding #4); een machine-to-machine kanaal heeft cookies niet nodig.
+    expect(isGatewayAuthenticated({ cookie: `huddle_session=${encodeURIComponent(GW_TOKEN)}` })).toBe(false);
+  });
+
+  it('false zonder credential en bij verkeerd token', () => {
+    expect(isGatewayAuthenticated({})).toBe(false);
+    expect(isGatewayAuthenticated({ authorization: 'Bearer nope' })).toBe(false);
+    expect(isGatewayAuthenticated({ authorization: GW_TOKEN })).toBe(false);
   });
 });

@@ -28,24 +28,20 @@ export interface ApprovedHostPort {
   created_at: number;
 }
 
-// A host folder indexed by `huddle indexfolder` on the host. The portal cannot
-// browse the host filesystem, so this index is the only list of real host folders
-// it can offer the operator.
-export interface IndexedFolder {
-  id: number;
+// One folder on the host, as Huddle Node found it just now. A browser cannot
+// hand a server a folder path, so the picker builds one out of these.
+export interface HostFolder {
   path: string;
-  label: string;
-  source: string;
-  created_at: number;
+  name: string;
 }
 
-export interface IndexResult {
-  added: number;
-  updated: number;
-  skipped: number;
-  removed: number;
-  invalid: { path: string; error: string }[];
-  total: number;
+// The contents of exactly one folder. `truncated` means the folder holds more
+// than `max` subfolders and the listing stops there — scrolling past two
+// thousand entries is not how anyone finds a workspace anyway.
+export interface HostFolderListing {
+  path: string;
+  folders: HostFolder[];
+  truncated: boolean;
   max: number;
 }
 
@@ -58,6 +54,105 @@ export interface FolderMapping {
   read_only: number;
   enabled: number;
   sort_order: number;
+}
+
+export interface SbxStatus {
+  available: boolean;
+  version: string;
+  error?: string;
+  /** The sbx binary Huddle would run, or null when this process cannot run it. */
+  bin: string | null;
+  upstreamUrl: string;
+  proxyPort: number;
+}
+
+export interface SbxStep {
+  label: string;
+  command: string;
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** One folder a sandbox is created with. sbx mounts it at the same path inside. */
+export interface SbxWorkspace {
+  path: string;
+  readOnly: boolean;
+}
+
+/** A folder mapping as it lands in a sandbox (settings folder). */
+export interface SbxSettingsFolder {
+  name: string;
+  hostPath: string;
+  targetPath: string;
+  readOnly: boolean;
+}
+
+export interface SbxSettingsFolders {
+  folders: SbxSettingsFolder[];
+  /** Mappings that cannot travel to a sandbox (volumes, ~-paths), with the reason. */
+  skipped: { name: string; reason: string }[];
+}
+
+export interface SbxStartResult {
+  name: string;
+  ok: boolean;
+  upstreamUrl: string;
+  proxyPort: number;
+  steps: SbxStep[];
+  workspaces?: SbxWorkspace[];
+  settingsFolders?: SbxSettingsFolder[];
+  settingsSkipped?: { name: string; reason: string }[];
+  ignoredEnv?: string[];
+}
+
+/** devcontainer.json lifecycle hooks — shared shape between container and sbx starts. */
+export interface DevcontainerLifecycle {
+  initializeCommand?: string; onCreateCommand?: string; updateContentCommand?: string;
+  postCreateCommand?: string; postStartCommand?: string; postAttachCommand?: string;
+}
+
+export interface SandboxInfo {
+  name: string;
+  status?: string;
+  raw?: string;
+}
+
+export interface SbxCommandResult {
+  name?: string;
+  ok: boolean;
+  code?: number;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface SbxSshAccess {
+  privateKey: string;
+  publicKey: string;
+  port: number;
+  /** The backend's self-published jetbrains-gateway://connect link, or null while it's still installing/starting. */
+  jetbrainsLink: string | null;
+}
+
+export interface SbxReconcileAction {
+  op: 'create' | 'delete';
+  action: 'allow' | 'deny';
+  target: string;
+  scope: { kind: string; name?: string };
+  ok: boolean;
+  error?: string;
+}
+
+export interface SbxReconcileReport {
+  ok: boolean;
+  dryRun: boolean;
+  sandboxes: string[];
+  created: number;
+  deleted: number;
+  failed: number;
+  actions: SbxReconcileAction[];
+  error?: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -216,8 +311,19 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
-    return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
+  startContainer(params: {
+    image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string; readOnly?: boolean }[];
+    containerName: string; empty?: boolean;
+    // devcontainer.json-shaped extras (container kind only) — all optional,
+    // field names agreed with the backend plan (docker.ts's StartParams) so
+    // both sides serialize/deserialize the same shape without translation.
+    containerEnv?: Record<string, string>;
+    remoteEnv?: Record<string, string>;
+    jbPlugins?: string[];
+    jbSettings?: Record<string, unknown>;
+    lifecycle?: DevcontainerLifecycle;
+  }): Observable<{ id: string; containerName: string; ignoredEnv: string[] }> {
+    return this.handle(this.http.post<{ id: string; containerName: string; ignoredEnv: string[] }>('/api/docker/start', {
       imageName: params.image,
       // No containerWorkspace: the gateway derives the IDE project root from the
       // mounts (deepest common parent, else /workspaces). The CLI can still send
@@ -228,11 +334,78 @@ export class ApiService {
       containerName: params.containerName,
       ideName: params.ide,
       empty: params.empty === true,
+      // Omitted entirely rather than sent as {}/[] when unused, so an older
+      // gateway build (or a test asserting on the exact request body) doesn't
+      // have to know about fields it never asked for.
+      ...(params.containerEnv && Object.keys(params.containerEnv).length ? { containerEnv: params.containerEnv } : {}),
+      ...(params.remoteEnv && Object.keys(params.remoteEnv).length ? { remoteEnv: params.remoteEnv } : {}),
+      ...(params.jbPlugins?.length ? { jbPlugins: params.jbPlugins } : {}),
+      ...(params.jbSettings ? { jbSettings: params.jbSettings } : {}),
+      ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
     }));
   }
 
   resumeContainer(name: string): Observable<{ ok: boolean }> {
     return this.handle(this.http.post<{ ok: boolean }>(`/api/docker/containers/${encodeURIComponent(name)}/start`, {}));
+  }
+
+  // ── Docker Sandboxes (sbx) — experimental second box type ──────────────────
+  sbxStatus(): Observable<SbxStatus> {
+    return this.handle(this.http.get<SbxStatus>('/api/sbx/status'));
+  }
+
+  startSbx(
+    body: {
+      name?: string; agent?: string; workspace?: string; workspaces?: { path: string; readOnly?: boolean }[];
+      // devcontainer.json-shaped extras — same fields/shape as startContainer,
+      // shared right column between kinds (docs/ADR-workspace-runtime-abstraction.md).
+      containerEnv?: Record<string, string>;
+      remoteEnv?: Record<string, string>;
+      jbPlugins?: string[];
+      jbSettings?: Record<string, unknown>;
+      lifecycle?: DevcontainerLifecycle;
+    } = {}
+  ): Observable<SbxStartResult> {
+    return this.handle(this.http.post<SbxStartResult>('/api/sbx/start', {
+      ...body,
+      // Same "omit rather than send empty" convention as startContainer.
+      containerEnv: body.containerEnv && Object.keys(body.containerEnv).length ? body.containerEnv : undefined,
+      remoteEnv: body.remoteEnv && Object.keys(body.remoteEnv).length ? body.remoteEnv : undefined,
+      jbPlugins: body.jbPlugins?.length ? body.jbPlugins : undefined,
+      jbSettings: body.jbSettings ?? undefined,
+      lifecycle: body.lifecycle ?? undefined,
+    }));
+  }
+
+  /** The settings folders (folder mappings) a new sandbox will get. */
+  sbxSettingsFolders(): Observable<SbxSettingsFolders> {
+    return this.handle(this.http.get<SbxSettingsFolders>('/api/sbx/settings-folders'));
+  }
+
+  listSbxSandboxes(): Observable<{ sandboxes: SandboxInfo[] }> {
+    return this.handle(this.http.get<{ sandboxes: SandboxInfo[] }>('/api/sbx/sandboxes'));
+  }
+
+  removeSbxSandbox(name: string, force = false): Observable<SbxCommandResult> {
+    const q = force ? '?force=1' : '';
+    return this.handle(this.http.delete<SbxCommandResult>(`/api/sbx/sandboxes/${encodeURIComponent(name)}${q}`));
+  }
+
+  sbxTrustCa(name: string): Observable<SbxCommandResult> {
+    return this.handle(this.http.post<SbxCommandResult>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/trust-ca`, {}));
+  }
+
+  sbxSshSetup(): Observable<SbxCommandResult> {
+    return this.handle(this.http.post<SbxCommandResult>('/api/sbx/ssh-setup', {}));
+  }
+
+  sbxSshKey(name: string): Observable<SbxSshAccess> {
+    return this.handle(this.http.get<SbxSshAccess>(`/api/sbx/sandboxes/${encodeURIComponent(name)}/ssh-key`));
+  }
+
+  sbxReconcile(dryRun = false): Observable<SbxReconcileReport> {
+    const q = dryRun ? '?dryRun=1' : '';
+    return this.handle(this.http.post<SbxReconcileReport>(`/api/sbx/reconcile${q}`, {}));
   }
 
   setGrant(container: string, minutes: number): Observable<Grant> {
@@ -338,26 +511,15 @@ export class ApiService {
     return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
   }
 
-  // ── Indexed host folders ────────────────────────────────────────────────────
-  getIndexedFolders(): Observable<{ folders: IndexedFolder[]; max: number }> {
-    return this.handle(this.http.get<{ folders: IndexedFolder[]; max: number }>('/api/indexed-folders'));
-  }
-
-  addIndexedFolder(path: string): Observable<IndexResult> {
-    return this.handle(this.http.post<IndexResult>('/api/indexed-folders', { path, source: 'manual' }));
-  }
-
-  deleteIndexedFolder(id: number): Observable<{ ok: boolean }> {
-    return this.handle(this.http.delete<{ ok: boolean }>(`/api/indexed-folders/${id}`));
-  }
-
-  // Without a root this empties the whole index; with one it removes that folder
-  // and everything below it, which is what pruning a branch in the tree means.
-  clearIndexedFolders(root?: string): Observable<{ removed: number }> {
-    const url = root
-      ? `/api/indexed-folders?root=${encodeURIComponent(root)}`
-      : '/api/indexed-folders';
-    return this.handle(this.http.delete<{ removed: number }>(url));
+  // ── Host folders ────────────────────────────────────────────────────────────
+  // One call, one folder. Without a path this returns the roots to start from
+  // (the drives on Windows, / and home elsewhere); with one it returns that
+  // folder's immediate subfolders. The picker asks again as you open folders,
+  // which is what keeps browsing a drive root cheap and what makes a folder
+  // created a second ago show up.
+  listHostFolders(path?: string): Observable<HostFolderListing> {
+    const url = path ? `/api/host-folders?path=${encodeURIComponent(path)}` : '/api/host-folders';
+    return this.handle(this.http.get<HostFolderListing>(url));
   }
 
   // ── Approved Host Ports ──────────────────────────────────────────────────────

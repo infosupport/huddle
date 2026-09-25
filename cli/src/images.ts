@@ -8,7 +8,7 @@ import { activeExperiment, imageTag } from './config';
 
 export interface BaseImage {
   image: string;
-  /** Env var by which the gateway picks this image for devcontainers. */
+  /** Env var by which Huddle Node picks this image for devcontainers. */
   gatewayEnv?: string;
 }
 
@@ -20,9 +20,10 @@ export interface ResolvedImages {
   /** Gateway image. Overridable via HUDDLE_IMAGE (then also set HUDDLE_NO_PULL=1 for a local build). */
   image: string;
   /**
-   * Devcontainer base images the gateway uses to start workspaces.
-   * The names match getBaseImageName() in the gateway; an override is
-   * possible via BASE_IMAGE_<IDE>.
+   * Devcontainer base image the gateway uses to start workspaces, for every
+   * IDE alike (rider/intellij/vscode all run the same image — the IDE backend
+   * installs at runtime instead). The name matches getBaseImageName() in the
+   * gateway; an override is possible via BASE_IMAGE.
    */
   baseImages: BaseImage[];
 }
@@ -35,26 +36,27 @@ export function resolveImages(): ResolvedImages {
     tag,
     image: process.env.HUDDLE_IMAGE ?? `ghcr.io/infosupport/huddle:${tag}`,
     baseImages: [
-      { image: process.env.BASE_IMAGE ?? `ghcr.io/infosupport/base-devimage:${tag}` },
-      { image: process.env.BASE_IMAGE_RIDER ?? `ghcr.io/infosupport/base-devimage-rider:${tag}`, gatewayEnv: 'BASE_IMAGE_RIDER' },
-      { image: process.env.BASE_IMAGE_INTELLIJ ?? `ghcr.io/infosupport/base-devimage-intellij:${tag}`, gatewayEnv: 'BASE_IMAGE_INTELLIJ' },
-      { image: process.env.BASE_IMAGE_VSCODE ?? `ghcr.io/infosupport/base-devimage-vscode:${tag}`, gatewayEnv: 'BASE_IMAGE_VSCODE' },
+      { image: process.env.BASE_IMAGE ?? `ghcr.io/infosupport/base-devimage:${tag}`, gatewayEnv: 'BASE_IMAGE' },
     ],
   };
 }
 
 /**
- * `-e KEY=val` argv pairs for the gateway container. During an experiment (or
- * with an explicit override) the gateway must start devcontainers from the same
- * base images the CLI just pulled. Returned as an argv array (not a shell
- * string) so init can spawn `docker run` without a shell.
+ * Base-image overrides for HUDDLE NODE's environment. During an experiment (or
+ * with an explicit override) Huddle Node must start devcontainers from the same
+ * base images the CLI just pulled.
+ *
+ * These went to the gateway container as `-e` pairs until Docker orchestration
+ * moved to the host (docs/ADR-huddle-node-split.md). The gateway does not create
+ * containers any more, so it has no use for them — and giving the network-facing
+ * half env vars it does not read is how stale coupling survives a split.
  */
-export function gatewayEnvArgs(resolved: ResolvedImages): string[] {
-  const args: string[] = [];
+export function baseImageEnv(resolved: ResolvedImages): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
   for (const b of resolved.baseImages) {
     if (b.gatewayEnv && (resolved.experiment !== undefined || process.env[b.gatewayEnv])) {
-      args.push('-e', `${b.gatewayEnv}=${b.image}`);
+      env[b.gatewayEnv] = b.image;
     }
   }
-  return args;
+  return env;
 }
