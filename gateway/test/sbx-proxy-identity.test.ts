@@ -114,6 +114,23 @@ function proxyConnect(port: number, headers: Record<string, string> = {}): Promi
   });
 }
 
+/** Like proxyConnect, but to an arbitrary CONNECT target — for dial-failure tests. */
+function proxyConnectTo(port: number, target: string, headers: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1', () => {
+      const extra = Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('');
+      sock.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${extra}\r\n`);
+    });
+    let seen = '';
+    sock.on('data', (c) => {
+      seen += c.toString('utf8');
+      if (seen.includes('\r\n\r\n')) { sock.destroy(); resolve(seen); }
+    });
+    sock.on('error', reject);
+    sock.on('close', () => resolve(seen));
+  });
+}
+
 describe.skipIf(!upstreamHost)('the sbx listener identifies the calling sandbox', () => {
   beforeAll(async () => {
     sbxPort = await freePort();
@@ -259,6 +276,20 @@ describe.skipIf(!upstreamHost)('the sbx listener identifies the calling sandbox'
     const seen = await proxyConnect(sbxPort, { 'Proxy-Authorization': basic('box-a', SECRET_A) });
     expect(seen).toContain('200 Connection Established');
     expect(ruleCalls).toEqual([{ domain: upstreamHost, containerId: 'box-a', path: null }]);
+  });
+
+  it('finishes a CONNECT with a real error instead of a bare reset when the upstream dial fails', async () => {
+    // Regression: on a dial failure (ECONNREFUSED/ENOTFOUND) the raw-tunnel
+    // branch used to destroy the client socket with nothing written at all —
+    // the CONNECT client (sbx) was left mid-read on an empty response, which
+    // surfaces client-side as an opaque low-level reset ("wsarecv: An existing
+    // connection was forcibly closed by the remote host") instead of a legible
+    // error. checkRule allows box-a regardless of domain, so any unreachable
+    // target exercises the dial failure without touching the identity check.
+    const deadPort = await freePort(); // nothing is listening here
+    const seen = await proxyConnectTo(sbxPort, `${upstreamHost}:${deadPort}`, { 'Proxy-Authorization': basic('box-a', SECRET_A) });
+    expect(seen).toContain('502');
+    expect(seen).not.toBe('');
   });
 
   it('denies a CONNECT it cannot attribute', async () => {

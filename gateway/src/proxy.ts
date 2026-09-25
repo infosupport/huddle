@@ -195,6 +195,30 @@ function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string
   socket.end();
 }
 
+// A CONNECT tunnel's own client (sbx, or any other CONNECT-speaking proxy
+// client) reads a full HTTP response off this socket before relaying a single
+// byte through it. Destroying the socket on a dial failure with nothing
+// written — which net.connect's error handler used to do here — leaves that
+// reader mid-read with zero bytes: it surfaces client-side as an opaque
+// low-level reset (observed as curl/Windows' "wsarecv: An existing
+// connection was forcibly closed by the remote host") instead of a real,
+// legible error. Always finish the CONNECT response, even for "upstream is
+// unreachable", the same way rejectSocket does for a policy denial.
+function rejectSocketUpstreamError(socket: stream.Duplex, hostname: string, port: number, err: Error): void {
+  const body = JSON.stringify({
+    error: 'bad_gateway',
+    message: `Could not reach ${hostname}:${port}: ${err.message}`,
+  });
+  socket.write(
+    `HTTP/1.1 502 ${REJECT_REASON[502]}\r\n` +
+      `content-type: application/json\r\n` +
+      `content-length: ${Buffer.byteLength(body)}\r\n` +
+      `connection: close\r\n\r\n` +
+      body
+  );
+  socket.end();
+}
+
 // Forward an HTTP Upgrade handshake (WebSocket `ws://`/`wss://`, but also any
 // other Upgrade) to upstream and then pipe the raw bytes in both
 // directions. `secure` chooses between http.request (plain, after the plain-HTTP path) and
@@ -815,7 +839,9 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // we fall back to the old raw TCP tunnel; request/response content
     // then stays invisible in the audit log (only CONNECT recorded).
     if (NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) || port !== 443) {
+      let established = false;
       const upstream = net.connect(port, hostname, () => {
+        established = true;
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         logAudit({
           containerId,
@@ -832,7 +858,18 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         upstream.on('end', () => clientSocket.destroy());
         clientSocket.on('end', () => upstream.destroy());
       });
-      upstream.on('error', () => clientSocket.destroy());
+      upstream.on('error', (err) => {
+        // Before the tunnel exists (dial/DNS failure) the client is still
+        // waiting on the CONNECT response — finish it. After that (a mid-stream
+        // upstream error) the socket carries opaque piped bytes and there is no
+        // HTTP response left to write, so a plain destroy is correct there.
+        if (established) { clientSocket.destroy(); return; }
+        logAudit({
+          containerId, domain: hostname, port, action: 'allow', ruleId,
+          method: 'CONNECT', resStatus: 502,
+        });
+        rejectSocketUpstreamError(clientSocket, hostname, port, err);
+      });
       clientSocket.on('error', () => upstream.destroy());
       return;
     }
