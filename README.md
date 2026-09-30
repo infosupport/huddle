@@ -484,11 +484,13 @@ class MyExtension extends HTMLElement {
 customElements.define('ext-my-extension', MyExtension);
 ```
 
+Files under `frontend/` are served at `/ext/<id>/` with their MIME type, so `component.js` can `import()` ES modules from the same folder.
+
 ### Extension context (`ctx`)
 
 | | |
 |---|---|
-| `ctx.app.get/post/put/delete(path, handler)` | Register a route under `/api/ext/<id>/` |
+| `ctx.app.get/post/put/delete(path, handler)` | Register a route under `/api/ext/<id>/`; a route outside that prefix fails the load |
 | `ctx.getSetting(key)` / `ctx.setSetting(key, value)` | Read/write settings (SQLite) |
 | `ctx.fetch(url, opts)` | HTTP call through the Huddle proxy — appears as `ext:<id>` in the network log |
 | `ctx.runInContainer(name, cmd)` | Run a shell command in a running devcontainer |

@@ -59,8 +59,24 @@ export function initLoader(app: FastifyInstance, db: Database): void {
   _db = db;
 }
 
+// An extension may only claim routes under its own prefix; otherwise it could shadow another extension's handlers in extDispatch.
+function assertOwnPrefix(extId: string, method: string, routePath: string): void {
+  const prefix = `/api/ext/${extId}/`;
+  const segments = routePath.split('/');
+  if (!routePath.startsWith(prefix) || segments.includes('..') || segments.includes('.')) {
+    throw new Error(`extension '${extId}' registered ${method} ${routePath} outside its own prefix ${prefix}`);
+  }
+}
+
+function dropRoutesOf(extId: string): void {
+  for (const key of extDispatch.keys()) {
+    if (key.includes(`/api/ext/${extId}/`)) extDispatch.delete(key);
+  }
+}
+
 function makeVirtualApp(extId: string, realApp: FastifyInstance): VirtualApp {
   const reg = (method: string) => (path: string, handler: RouteHandler) => {
+    assertOwnPrefix(extId, method, path);
     extDispatch.set(`${method}:${path}`, handler);
   };
   return {
@@ -77,9 +93,7 @@ function buildContext(id: string): ExtensionContext {
   const app = _app;
   if (!app || !db) throw new Error('loader not initialised — roep initLoader() eerst aan');
   // Verwijder eventuele oude routes van een vorige versie van deze extensie
-  for (const key of extDispatch.keys()) {
-    if (key.includes(`/api/ext/${id}/`)) extDispatch.delete(key);
-  }
+  dropRoutesOf(id);
   return {
     app: makeVirtualApp(id, app),
     events: stateEvents,
@@ -252,7 +266,12 @@ export async function loadExtension(id: string, baseDir: string = EXT_DIR): Prom
     throw new Error('index.js does not export a register function');
   }
 
-  await registerFn(buildContext(id));
+  try {
+    await registerFn(buildContext(id));
+  } catch (err) {
+    dropRoutesOf(id);
+    throw err;
+  }
   loaded.set(id, { manifest, enabled: true });
   console.log(`[ext] loaded: ${id} v${manifest.version ?? '?'}`);
 }
@@ -278,6 +297,22 @@ export async function loadAllExtensions(): Promise<void> {
   for (const baseDir of [EXT_DIR, TEAM_EXT_DIR]) {
     await loadExtensionsFrom(baseDir);
   }
+}
+
+// Browsers refuse to run an ES module served without a JavaScript type, so extension assets get one.
+const ASSET_TYPES: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+};
+
+export function extensionAssetType(filePath: string): string {
+  return ASSET_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
 export function removeExtension(id: string): void {

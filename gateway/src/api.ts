@@ -72,6 +72,7 @@ import {
   listExtensions,
   extDispatch,
   EXT_DIR,
+  extensionAssetType,
 } from './extensions/registry';
 
 const API_PORT = 3000;
@@ -1343,7 +1344,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       return reply.code(404).send('Not found');
     }
-    return reply.send(fs.createReadStream(filePath));
+    reply.header('x-content-type-options', 'nosniff');
+    return reply.type(extensionAssetType(filePath)).send(fs.createReadStream(filePath));
   });
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)

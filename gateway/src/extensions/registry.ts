@@ -7,4 +7,5 @@ export {
   listLoadedExtensions as listExtensions,
   extDispatch,
   EXT_DIR,
+  extensionAssetType,
 } from './loader';
