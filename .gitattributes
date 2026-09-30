@@ -1,0 +1,18 @@
+# Normalize line endings to LF on checkin, regardless of the checkout
+# platform's autocrlf setting — this repo has been hit before by files
+# round-tripping through a Windows checkout and coming back CRLF.
+* text=auto eol=lf
+
+# Assets that must not be touched by line-ending normalization.
+*.png binary
+*.webp binary
+*.ico binary
+*.db binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.zip binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
