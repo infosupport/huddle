@@ -12,13 +12,17 @@
   "bugs": {
     "url": "https://github.com/infosupport/huddle/issues"
   },
+  "workspaces": [
+    "gateway",
+    "gateway/frontend",
+    "cli"
+  ],
   "scripts": {
-    "install": "npm --prefix gateway install && npm --prefix cli install",
     "build": "npm --prefix gateway run build",
     "start": "npm --prefix gateway start",
     "cli:build": "npm --prefix cli run build",
     "cli:typecheck": "npm --prefix cli run typecheck",
     "cli:install": "npm --prefix cli run install-global",
-    "local:prepare": "podman build ./gateway -t huddle-debug && cd cli && npm install && npm run build && npm link"
+    "local:prepare": "podman build -f gateway/Dockerfile -t huddle-debug . && npm --prefix cli run build && npm link --workspace=cli"
   }
 }

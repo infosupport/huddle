@@ -72,7 +72,7 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install & build
-        run: cd cli && npm install && npm run build
+        run: npm ci --workspace=cli --include-workspace-root && npm run build --workspace=cli
 
       - name: Publish
         # Provenance vereist een publieke source-repo; auth loopt via OIDC
@@ -127,7 +127,7 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install & build
-        run: cd cli && npm install && npm run build
+        run: npm ci --workspace=cli --include-workspace-root && npm run build --workspace=cli
 
       - name: Publish
         # dist-tag experiment-<nr> zodat gebruikers installeren met
@@ -179,7 +179,7 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install & build
-        run: cd cli && npm install && npm run build
+        run: npm ci --workspace=cli --include-workspace-root && npm run build --workspace=cli
 
       - name: Publish
         # dist-tag experiment-<key> zodat gebruikers installeren met

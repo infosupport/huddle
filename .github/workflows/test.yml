@@ -20,8 +20,7 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install
-        working-directory: gateway
+        run: npm ci
 
       - name: Run unit tests
         run: npm test
@@ -44,11 +43,10 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install
-        working-directory: gateway
+        run: npm ci
 
       - name: Build Huddle image
-        run: docker build -t huddle ./gateway
+        run: docker build -f gateway/Dockerfile -t huddle .
 
       - name: Start Huddle
         # Het operator-token is per run random (alleen deze wegwerp-gateway kent

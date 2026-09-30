@@ -111,7 +111,7 @@ git clone https://github.com/infosupport/huddle.git
 cd huddle
 
 # 2. Install dependencies for gateway + CLI
-npm install            # runs install for gateway and cli
+npm install            # npm workspaces install gateway, gateway/frontend and cli in one go
 
 # 3. Build
 npm run build          # build the gateway (API + frontend)

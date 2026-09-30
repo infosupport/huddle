@@ -590,7 +590,7 @@ Want to work on Huddle itself? Huddle is a monorepo with two parts: the
 git clone https://github.com/infosupport/huddle.git
 cd huddle
 
-npm install            # installs dependencies for gateway and cli
+npm install            # npm workspaces install gateway, gateway/frontend and cli in one go
 npm run build          # builds the gateway (API + frontend)
 npm run cli:build      # builds the CLI
 npm run cli:typecheck  # type-checks the CLI

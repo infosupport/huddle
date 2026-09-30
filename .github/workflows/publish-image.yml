@@ -32,7 +32,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
-          context: ./gateway
+          context: .
+          file: gateway/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/infosupport/huddle:latest
