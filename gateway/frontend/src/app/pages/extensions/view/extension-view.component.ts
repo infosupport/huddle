@@ -1,4 +1,5 @@
 import { Component, OnInit, OnDestroy, ElementRef, ViewChild, inject } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 
@@ -32,16 +33,23 @@ export class ExtensionViewComponent implements OnInit, OnDestroy {
   error: string | null = null;
 
   private scriptEl: HTMLScriptElement | null = null;
+  private params?: Subscription;
+  private generation = 0;
 
+  // The router reuses this view when only :id or :repo changes, so every change remounts.
   ngOnInit(): void {
-    const id   = this.route.snapshot.paramMap.get('id')!;
-    const repo = this.route.snapshot.paramMap.get('repo') ?? undefined;
-    this.loadExtension(id, repo);
+    this.params = this.route.paramMap.subscribe((map) => {
+      this.hostRef.nativeElement.replaceChildren();
+      this.ready = false;
+      this.error = null;
+      this.loadExtension(++this.generation, map.get('id')!, map.get('repo') ?? undefined);
+    });
   }
 
-  private async loadExtension(id: string, repo?: string): Promise<void> {
+  private loadExtension(generation: number, id: string, repo?: string): void {
     this.api.getExtensions().subscribe({
       next: (exts) => {
+        if (generation !== this.generation) return;
         const ext = exts.find(e => e.id === id);
         if (!ext) { this.error = `Extension "${id}" not found.`; return; }
         this.mountWebComponent(id, ext.name, repo);
@@ -54,7 +62,9 @@ export class ExtensionViewComponent implements OnInit, OnDestroy {
     const tagName = `ext-${id}`;
     const scriptSrc = `/ext/${id}/component.js`;
 
+    const generation = this.generation;
     const mount = () => {
+      if (generation !== this.generation) return;
       const el = document.createElement(tagName);
       if (initialRepo) el.setAttribute('initial-repo', initialRepo);
 
@@ -86,6 +96,7 @@ export class ExtensionViewComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.params?.unsubscribe();
     this.hostRef.nativeElement.innerHTML = '';
   }
 }
