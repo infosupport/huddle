@@ -14,8 +14,10 @@ import { Extension } from '../../core/extensions/extension.model';
 export class SidebarComponent implements OnInit {
   private api = inject(ApiService);
   extensions = signal<Extension[]>([]);
+  version = signal('');
 
   ngOnInit(): void {
     this.api.getExtensions().subscribe({ next: (e) => this.extensions.set(e), error: () => {} });
+    this.api.getVersion().subscribe({ next: (v) => this.version.set(v.version), error: () => {} });
   }
 }

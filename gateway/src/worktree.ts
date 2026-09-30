@@ -6,7 +6,9 @@ import path from 'path';
 const execFileAsync = promisify(execFile);
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd });
+  // windowsHide: Huddle Node runs on the host now, and without it every git
+  // call flashes a console window at the user (see sandbox/ops.ts).
+  const { stdout } = await execFileAsync('git', args, { cwd, windowsHide: true });
   return stdout;
 }
 

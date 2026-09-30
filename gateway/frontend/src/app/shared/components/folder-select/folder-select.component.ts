@@ -1,44 +1,42 @@
 import { Component, EventEmitter, Input, Output } from '@angular/core';
-import { IndexedFolder } from '../../../core/services/api.service';
 import { FolderPickerModalComponent } from '../../modals/folder-picker-modal/folder-picker-modal.component';
+import { IconComponent } from '../icon/icon.component';
 
 // One host-path input, used everywhere a host folder has to be named.
 //
-// Huddle's portal runs in a container, so it cannot open a native folder dialog:
-// a host path could only ever be typed from memory. `huddle indexfolder` fills an
-// index of real folders on the host, and Browse… opens that index in a proper
-// picker dialog.
+// A browser will not hand a server a folder path, so there is no native folder
+// dialog to open: Browse… opens Huddle's own, which browses the host through
+// Huddle Node.
 //
-// The text box stays authoritative on purpose: the index is a snapshot taken by
-// the CLI, not a live view of the host, so a folder created five minutes ago must
-// still be usable without re-indexing first.
+// The text box stays authoritative on purpose. A path is still the fastest way
+// to name a folder you already know, it survives a host Node cannot read, and
+// pasting one from a terminal has to keep working.
 let uid = 0;
 
 @Component({
   selector: 'app-folder-select',
   standalone: true,
-  imports: [FolderPickerModalComponent],
+  imports: [FolderPickerModalComponent, IconComponent],
   template: `
-    <div class="fs-field">
+    <div class="fs-field" [class.fs-field--icon]="browseMode === 'icon'">
       <input type="text" [id]="inputId" [value]="value" [placeholder]="placeholder"
              autocomplete="off" spellcheck="false"
              (input)="onInput($any($event.target).value)" />
-      <button type="button" class="fs-browse" [title]="browseTitle()" (click)="open = true">Browse…</button>
+      @if (browseMode === 'icon') {
+        <button type="button" class="fs-browse-icon" title="Browse the folders on this host"
+                (click)="open = true"><app-icon name="folder" [size]="15" /></button>
+      } @else {
+        <button type="button" class="fs-browse" title="Browse the folders on this host"
+                (click)="open = true">Browse…</button>
+      }
     </div>
 
     @if (hint) {
-      <p class="fs-hint">
-        @if (folders.length) {
-          {{ folders.length }} indexed folder(s) available.
-        } @else {
-          No indexed folders yet — run <code>huddle indexfolder</code> on the host to browse
-          your folders here. Typing a path keeps working.
-        }
-      </p>
+      <p class="fs-hint">Browse… opens the folders on this host, or type a path.</p>
     }
 
     @if (open) {
-      <app-folder-picker-modal [folders]="folders" [value]="value" [multiple]="multiple"
+      <app-folder-picker-modal [value]="value" [multiple]="multiple"
                                [title]="pickerTitle" [subtitle]="pickerSubtitle"
                                (picked)="onPicked($event)" (pickedMany)="onPickedMany($event)"
                                (cancel)="open = false" />
@@ -56,31 +54,57 @@ let uid = 0;
     .fs-browse:hover { background: var(--surface-hover); border-color: var(--accent); color: var(--accent); }
     .fs-hint { font-size: 12px; color: var(--text-muted); margin: .25rem 0 0; }
     .fs-hint code { font-size: 11px; }
+
+    /* Icon variant: the Browse trigger lives INSIDE the input rather than
+       beside it — same absolute-positioned-over-the-field technique the IDE
+       select in start-container-modal uses for its logo (position: relative
+       wrapper, absolutely positioned icon, extra input padding so text never
+       runs under it). */
+    .fs-field--icon { position: relative; display: block; }
+    /* Match the destination-path input's own footprint (start-container-modal's
+       input[type="text"] base rule + its .mount-row input override) so the
+       host-path field (rendered inside THIS component's own template) doesn't
+       visually diverge from the container-path field next to it — the parent
+       modal's scoped input[type="text"] rule can never reach into here (see
+       the .btn app-icon comment in start-container-modal.component.ts for why
+       emulated view encapsulation blocks that). Right padding stays separate
+       (below) to leave room for the browse icon; every other value is copied
+       as-is. Scoped to --icon only: the default text-mode variant (used by
+       settings.component.ts) must keep the plain global .modal-body input
+       styling it has always had. */
+    .fs-field--icon input {
+      width: 100%; height: 36px; padding: 0 38px 0 13px; border-radius: 10px;
+      border: 1px solid var(--border-strong); background: var(--surface); font-size: 12.5px;
+    }
+    .fs-browse-icon {
+      position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+      width: 26px; height: 26px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+      background: transparent; color: var(--text-dim); display: grid; place-items: center; cursor: pointer;
+    }
+    .fs-browse-icon:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--border-strong); }
   `],
 })
 export class FolderSelectComponent {
   @Input() value = '';
-  @Input() folders: IndexedFolder[] = [];
   @Input() placeholder = '';
   // The <label for="..."> of the caller points at the text box, not the wrapper.
   @Input() inputId = `folder-input-${++uid}`;
   @Input() hint = false;
   @Input() pickerTitle = 'Select folder';
-  @Input() pickerSubtitle = 'Choose a folder from your indexed locations.';
+  @Input() pickerSubtitle = 'Browse the folders on this host.';
   // Let the dialog pick more than one. The field itself still holds a single
   // path — the extra folders are the caller's problem, handed over on
   // valuesChange, because only the caller knows what several folders mean.
   @Input() multiple = false;
+  // 'text' (default) keeps the original "Browse…" button beside the input, for
+  // every existing call site. 'icon' is the compact variant (folder icon
+  // inside the field) used where the row is already crowded with other
+  // controls (read-only toggle, remove button, computed-path preview).
+  @Input() browseMode: 'icon' | 'text' = 'text';
   @Output() valueChange = new EventEmitter<string>();
   @Output() valuesChange = new EventEmitter<string[]>();
 
   open = false;
-
-  browseTitle(): string {
-    return this.folders.length
-      ? 'Browse indexed host folders'
-      : 'No indexed folders yet — run "huddle indexfolder" on the host';
-  }
 
   onPicked(path: string): void {
     this.open = false;

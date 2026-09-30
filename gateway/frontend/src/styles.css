@@ -832,3 +832,17 @@ h4 { font-size: 13px; font-weight: 600; color: var(--text-muted); margin: 14px 0
   background-position: center;
   background-size: contain;
 }
+
+/* ── Responsive: collapse the sidebar to an icon rail on a narrow (≈half-screen)
+   viewport — labels/branding hide, icons stay centered. Content gets the space. */
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 60px; }
+  .sidebar__logo, .sidebar__igloo, .sidebar__pledge { display: none; }
+  .nav { padding-top: 10px; }
+  .nav__item { justify-content: center; gap: 0; padding: 10px 0; }
+  .nav__item span { display: none; }
+  .nav__item--sub, .nav__item--manage { padding-left: 0; font-size: 14px; }
+  .nav__section { display: none; }
+  .sidebar__footer { justify-content: center; padding: 12px 0; }
+  .sidebar__footer .meta { display: none; }
+}

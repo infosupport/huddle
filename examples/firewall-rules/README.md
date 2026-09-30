@@ -9,9 +9,11 @@ own in Git) and every group loads automatically.
 | File | Group | Kind | Mode |
 |------|-------|------|------|
 | `openai.json`       | OpenAI       | General API — the whole host is the service | Allow |
+| `jetbrains.json`    | JetBrains    | Runtime IDE backend/plugin downloads (IntelliJ/Rider devcontainers) | Allow |
 | `github.json`       | GitHub       | Dependency source — repos/API/raw/codeload/ghcr, per org | **Path mode** |
 | `nodejs.json`       | Node.js      | Dependency downloads — everyone pulls runtimes from `/dist/` | **Path mode** |
 | `npm-registry.json` | NPM Registry | Dependency registry — everyone pulls packages by path | **Path mode** |
+| `openvscode-server.json` | OpenVSCode Server | VS Code Remote-SSH backend (Stage 2) + Open VSX extensions | Mixed |
 
 ### General vs. dependency URLs
 A rule of thumb for writing your own groups:

@@ -1,20 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(`[noot-sudoers.test] SKIPPED - better-sqlite3 binding not usable: ${(e as Error).message}`);
-}
+const docker = await import('../src/docker');
 
-const d = sqliteAvailable ? describe : describe.skip;
-const docker = sqliteAvailable
-  ? await import('../src/docker')
-  : null;
-
-d('noot proxy environment (#110)', () => {
+describe('noot proxy environment (#110)', () => {
   const expectedProfile = [
     "export http_proxy='http://huddle:80'",
     "export https_proxy='http://huddle:80'",
@@ -29,17 +17,17 @@ d('noot proxy environment (#110)', () => {
   ].join('\n');
 
   it('preserves only the Huddle proxy variables and only for noot', () => {
-    expect(docker!.NOOT_SUDOERS_POLICY).toBe(expectedPolicy);
-    expect(docker!.NOOT_SUDOERS_POLICY).not.toContain('Defaults env_keep');
+    expect(docker.NOOT_SUDOERS_POLICY).toBe(expectedPolicy);
+    expect(docker.NOOT_SUDOERS_POLICY).not.toContain('Defaults env_keep');
   });
 
   it('restores the proxy variables discarded by a noot login shell', () => {
-    expect(docker!.HUDDLE_PROXY_PROFILE).toBe(expectedProfile);
+    expect(docker.HUDDLE_PROXY_PROFILE).toBe(expectedProfile);
   });
 
   it.each([
-    ['VS Code', docker!.buildVscodeConfigScript('/workspaces/test', 'test', 'ca', '')],
-    ['JetBrains', docker!.buildJbConfigScript('/workspaces/test', 'test', 'intellij', 'ca', '')],
+    ['VS Code', docker.buildVscodeConfigScript('/workspaces/test', 'test', 'ca', 'ssh-rsa fake-pubkey', '')],
+    ['JetBrains', docker.buildJbConfigScript('/workspaces/test', 'test', 'intellij', 'ca', 'ssh-rsa fake-pubkey', '')],
   ])('includes the shared policy in the %s setup script', (_ide, script) => {
     expect(script.match(/Defaults:noot env_keep/g)).toHaveLength(1);
     expect(script).toContain(expectedPolicy);

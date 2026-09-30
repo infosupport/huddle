@@ -5,19 +5,6 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 // a container and locks the account again on expiry. The docker-exec boundary is
 // injected (ContainerExec) so the lifecycle logic can be tested without a live
 // docker daemon. The grants live in SQLite (table sudo_grants).
-//
-// better-sqlite3 is native; in a DMZ devcontainer without a built binding we
-// skip (same probe as grants.test.ts / rules.test.ts).
-let sqliteAvailable = true;
-try {
-  const mod = await import('better-sqlite3');
-  new mod.default(':memory:').close();
-} catch (e) {
-  sqliteAvailable = false;
-  console.warn(
-    `[sudo-grant.test] SKIPPED — better-sqlite3 binding not usable: ${(e as Error).message}`
-  );
-}
 
 let db: typeof import('../src/db').db;
 let getSudoGrant: typeof import('../src/db').getSudoGrant;
@@ -40,7 +27,7 @@ function makeExec(exitCode: number | null = 0) {
   return { exec, calls };
 }
 
-describe.skipIf(!sqliteAvailable)('sudo grants', () => {
+describe('sudo grants', () => {
   beforeAll(async () => {
     const dbMod = await import('../src/db');
     db = dbMod.db;

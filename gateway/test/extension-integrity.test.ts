@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { bundleSha256, checkExtensionIntegrity, loadExtension } from '../src/extensions/loader';
 
-// Extensie-integriteitscheck (finding #11). loader.ts importeert better-sqlite3
-// alleen als type (erased op runtime) en instantieert geen DB, dus dit draait
-// zonder de native binding.
+// Extensie-integriteitscheck (finding #11). loader.ts importeert het DB-handle
+// alleen als type (erased op runtime) en opent zelf geen database, dus deze test
+// raakt geen opslag.
 
 const bundle = Buffer.from('fake-extension-zip-bytes');
 const hash = bundleSha256(bundle);

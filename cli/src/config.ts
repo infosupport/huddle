@@ -187,10 +187,45 @@ export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
   }
 }
 
-/** Operator-token voor API-auth: env wint, anders uit de config. */
+/**
+ * Optional project-local override for the operator token, checked before the
+ * global ~/.huddle/config.json. Exists so a second, parallel Huddle instance
+ * (e.g. scripts/dev-full.mjs's isolated HOME, or any other install running on
+ * a different port) can be targeted by `cd`-ing into its own directory and
+ * dropping its token there, instead of juggling HUDDLE_OPERATOR_TOKEN by hand
+ * every time you switch between two running instances — a bare `huddle
+ * <command>` otherwise always authenticates with the *global* config's token,
+ * which only matches whichever instance last wrote it there (`huddle init`).
+ *
+ * Two shapes are accepted, matching the two places Huddle itself already
+ * writes a token: a `.huddle/config.json` with an `operatorToken` field (what
+ * this file writes via updateConfig()), or a plain-text `.huddle/operator-token`
+ * file (what Huddle Node itself writes, see gateway/src/auth.ts's
+ * tokenFilePath()) — whichever one ended up there.
+ */
+function localOperatorToken(): string | undefined {
+  const dir = path.join(process.cwd(), '.huddle');
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')) as HuddleConfig;
+    if (cfg.operatorToken && cfg.operatorToken.trim()) return cfg.operatorToken.trim();
+  } catch {
+    // no local config.json, or no operatorToken field in it
+  }
+  try {
+    const fromFile = fs.readFileSync(path.join(dir, 'operator-token'), 'utf8').trim();
+    if (fromFile) return fromFile;
+  } catch {
+    // no local operator-token file
+  }
+  return undefined;
+}
+
+/** Operator-token voor API-auth: env wint, dan een lokale .huddle-map, anders uit de globale config. */
 export function operatorToken(): string | undefined {
   const env = process.env.HUDDLE_OPERATOR_TOKEN?.trim();
   if (env) return env;
+  const local = localOperatorToken();
+  if (local) return local;
   const t = readConfig().operatorToken;
   return t && t.trim() ? t.trim() : undefined;
 }

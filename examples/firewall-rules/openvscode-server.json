@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "OpenVSCode Server",
+    "description": "Domains needed for VS Code Remote-SSH (Stage 2) to install and run gitpod-io/openvscode-server over the fixed SSH port, plus Open VSX for extensions. github.com is path-scoped to the openvscode-server release repo; the two asset/blob hosts serve opaque, non-org paths (like github.json's objects.githubusercontent.com) so they are left unscoped here — tighten later if a scoped path pattern is found.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "github.com",                          "container_id": null, "status": "deny",  "path_pattern": null,                          "path_mode": 1, "expires_at": null },
+    { "domain": "github.com",                          "container_id": null, "status": "allow", "path_pattern": "/gitpod-io/openvscode-server/*", "path_mode": 0, "expires_at": null },
+
+    { "domain": "objects.githubusercontent.com",       "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "release-assets.githubusercontent.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+
+    { "domain": "open-vsx.org",                        "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "openvsxorg.blob.core.windows.net",    "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}

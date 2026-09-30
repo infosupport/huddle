@@ -1,0 +1,19 @@
+# Normalize all text files to LF line endings, regardless of platform or
+# local core.autocrlf settings, to avoid Windows checkouts flipping files to
+# CRLF and producing spurious whole-file diffs.
+* text=auto eol=lf
+
+# Explicit binary files: never touch line endings or attempt diffs.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
+*.zip binary
+*.node binary

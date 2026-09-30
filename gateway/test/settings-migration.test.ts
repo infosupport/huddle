@@ -4,9 +4,9 @@ import os from 'os';
 import path from 'path';
 
 // Eenmalige migratie van resource-limieten + folder mappings uit SQLite naar
-// ~/.huddle/config.json (#98). db.ts instantieert bij import de native
-// better-sqlite3-binding, dus die wordt hier gemockt: de migratie hoeft alleen te
-// weten wát de legacy-laag teruggeeft, niet hoe die het opslaat.
+// ~/.huddle/config.json (#98). db.ts opent bij import een database, dus die
+// wordt hier gemockt: de migratie hoeft alleen te weten wát de legacy-laag
+// teruggeeft, niet hoe die het opslaat.
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-migrate-'));
 const CONFIG = path.join(HOME, 'config.json');
 process.env.HUDDLE_HOME_DIR = HOME;

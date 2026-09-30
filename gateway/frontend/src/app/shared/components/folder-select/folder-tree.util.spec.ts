@@ -1,10 +1,10 @@
 import {
-  FolderNode, ancestorPaths, buildFolderTree, findNode, flattenNodes, folderRows, splitRoot,
+  FolderNode, ancestorPaths, findNode, flattenNodes, folderRows, makeNode, setChildren, splitRoot,
 } from './folder-tree.util';
 
-// The picker rebuilds the folder hierarchy from flat paths, so this util decides
-// what the tree in the portal looks like — including for Windows paths, which is
-// the only notation most Huddle users will ever index.
+// The picker grows this tree one folder at a time from what Huddle Node lists on
+// the host, so this util decides what the portal draws — including for Windows
+// paths, which is the only notation most Huddle users will ever type.
 describe('splitRoot', () => {
   it('neemt de driveletter als root', () => {
     expect(splitRoot('T:/projects/huddle')).toEqual({ root: 'T:/', rest: ['projects', 'huddle'] });
@@ -23,36 +23,75 @@ describe('splitRoot', () => {
   });
 });
 
-describe('buildFolderTree', () => {
-  it('zet vlakke paden om in een boom en markeert wat geïndexeerd is', () => {
-    const tree = buildFolderTree(['T:/projects/huddle', 'T:/projects/huddle/gateway']);
-    expect(tree.length).toBe(1);
-    expect(tree[0].name).toBe('T:');
-    // 'T:/projects' staat niet in de index maar bestaat aantoonbaar wel.
-    const projects = tree[0].children[0];
-    expect([projects.name, projects.indexed]).toEqual(['projects', false]);
-    expect(projects.children[0].indexed).toBe(true);
-    expect(projects.children[0].children[0].path).toBe('T:/projects/huddle/gateway');
+describe('setChildren', () => {
+  it('maakt van een listing kinderen en markeert de map als geladen', () => {
+    const node = makeNode('T:/projects', 'projects');
+    expect(node.loaded).toBe(false);
+    setChildren(node, [{ path: 'T:/projects/api', name: 'api' }]);
+    expect(node.loaded).toBe(true);
+    expect(node.children.map((c) => c.name)).toEqual(['api']);
   });
 
-  it('voegt beide Windows-schrijfwijzen samen tot één tak', () => {
-    const tree = buildFolderTree(['T:/projects/app', 't:\\projects\\app\\src']);
-    expect(tree.length).toBe(1);
-    expect(tree[0].children[0].children.length).toBe(1);
+  it('houdt een al geladen tak intact als de map opnieuw gelezen wordt', () => {
+    const node = makeNode('T:/projects', 'projects');
+    setChildren(node, [{ path: 'T:/projects/api', name: 'api' }]);
+    setChildren(node.children[0], [{ path: 'T:/projects/api/src', name: 'src' }]);
+
+    setChildren(node, [{ path: 'T:/projects/api', name: 'api' }, { path: 'T:/projects/web', name: 'web' }]);
+    // De tak waar je vandaan komt mag niet dichtklappen omdat de ouder ververst is.
+    expect(node.children[0].children.map((c) => c.name)).toEqual(['src']);
+    expect(node.children.map((c) => c.name)).toEqual(['api', 'web']);
   });
 
-  it('sorteert hoofdletterongevoelig', () => {
-    const tree = buildFolderTree(['C:/a/Zebra', 'C:/a/apple', 'C:/a/Beta']);
-    expect(tree[0].children[0].children.map((c) => c.name)).toEqual(['apple', 'Beta', 'Zebra']);
+  it('laat een map die van de host verdwenen is ook hier verdwijnen', () => {
+    const node = makeNode('T:/projects', 'projects');
+    setChildren(node, [{ path: 'T:/projects/api', name: 'api' }, { path: 'T:/projects/old', name: 'old' }]);
+    setChildren(node, [{ path: 'T:/projects/api', name: 'api' }]);
+    expect(node.children.map((c) => c.name)).toEqual(['api']);
   });
 
-  it('houdt meerdere drives uit elkaar', () => {
-    expect(buildFolderTree(['C:/a', 'D:/b']).map((r) => r.name)).toEqual(['C:', 'D:']);
+  it('leest een lege listing als "niets in deze map", niet als "nog niet gekeken"', () => {
+    const node = makeNode('T:/leeg', 'leeg');
+    setChildren(node, []);
+    expect([node.loaded, node.children.length]).toEqual([true, 0]);
   });
 });
 
+/**
+ * Een volledig geladen boom uit vlakke paden — wat het scherm stap voor stap via
+ * de API opbouwt, hier in één keer, zodat deze tests over rijen gaan en niet over
+ * laadvolgorde.
+ */
+function loadedTree(paths: string[]): FolderNode[] {
+  const roots: FolderNode[] = [];
+  const byPath = new Map<string, FolderNode>();
+  for (const raw of paths) {
+    const { root, rest } = splitRoot(raw);
+    let node = byPath.get(root.toLowerCase());
+    if (!node) {
+      node = makeNode(root, root === '/' ? '/' : root.replace(/\/$/, ''));
+      node.loaded = true;
+      byPath.set(root.toLowerCase(), node);
+      roots.push(node);
+    }
+    let current = root;
+    for (const segment of rest) {
+      current = current.endsWith('/') ? `${current}${segment}` : `${current}/${segment}`;
+      let child = byPath.get(current.toLowerCase());
+      if (!child) {
+        child = makeNode(current, segment);
+        child.loaded = true;
+        byPath.set(current.toLowerCase(), child);
+        node.children.push(child);
+      }
+      node = child;
+    }
+  }
+  return roots;
+}
+
 describe('folderRows', () => {
-  const tree = buildFolderTree(['T:/projects/huddle/gateway', 'T:/projects/other']);
+  const tree = loadedTree(['T:/projects/huddle/gateway', 'T:/projects/other']);
 
   it('toont alleen wat opengeklapt is', () => {
     expect(folderRows(tree, new Set()).map((r) => r.node.name)).toEqual(['T:']);
@@ -72,6 +111,16 @@ describe('folderRows', () => {
   it('geeft de diepte mee voor de inspringing', () => {
     expect(folderRows(tree, new Set(), 'gateway').map((r) => r.depth)).toEqual([0, 1, 2, 3]);
   });
+
+  // Een nog niet gelezen map heeft geen kinderen, maar heeft ze misschien wel:
+  // zonder pijltje is er niets om op te klikken en blijft de host onbereikbaar.
+  it('geeft een ongelezen map een pijltje en een lege gelezen map niet', () => {
+    const unread = makeNode('T:/onbekend', 'onbekend');
+    const empty = makeNode('T:/leeg', 'leeg');
+    setChildren(empty, []);
+    const rows = folderRows([unread, empty], new Set());
+    expect(rows.map((r) => r.canExpand)).toEqual([true, false]);
+  });
 });
 
 describe('ancestorPaths', () => {
@@ -84,19 +133,17 @@ describe('ancestorPaths', () => {
   });
 });
 
-// De diepte van deze boom is de segmentdiepte van een geïndexeerd hostpad, en
-// niets aan de schrijfkant begrenst die. Een recursieve wandeling liet daarmee
-// een pad bepalen hoe diep onze call stack gaat (CWE-674). Deze boom wordt
-// rechtstreeks opgebouwd i.p.v. via buildFolderTree: die bewaart per knoop het
-// volledige pad, en dat is op deze diepte kwadratisch in geheugen.
+// De diepte van deze boom is hoe diep de operator doorgeklikt heeft, en niets
+// begrenst dat. Een recursieve wandeling liet daarmee een mappenstructuur
+// bepalen hoe diep onze call stack gaat (CWE-674).
 describe('diepe bomen', () => {
   const DEEP = 50_000;
 
   function deepTree(depth: number): FolderNode[] {
-    const root: FolderNode = { path: 'T:/', name: 'T:', indexed: false, children: [] };
+    const root: FolderNode = { path: 'T:/', name: 'T:', loaded: true, children: [] };
     let node = root;
     for (let i = 0; i < depth; i++) {
-      const child: FolderNode = { path: `n${i}`, name: `n${i}`, indexed: i === depth - 1, children: [] };
+      const child: FolderNode = { path: `n${i}`, name: `n${i}`, loaded: true, children: [] };
       node.children.push(child);
       node = child;
     }
@@ -106,7 +153,7 @@ describe('diepe bomen', () => {
   it('maakt 50.000 niveaus plat en vindt de diepste knoop', () => {
     const tree = deepTree(DEEP);
     expect(flattenNodes(tree).length).toBe(DEEP + 1); // + de root
-    expect(findNode(tree, `n${DEEP - 1}`)?.indexed).toBe(true);
+    expect(findNode(tree, `n${DEEP - 1}`)?.name).toBe(`n${DEEP - 1}`);
   });
 
   it('maakt rijen van 50.000 open niveaus', () => {

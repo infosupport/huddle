@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "kind": "huddle-firewall-group",
+  "group": {
+    "name": "JetBrains",
+    "description": "Domains required to download JetBrains IDE backends (IntelliJ/Rider) and plugins at devcontainer start.",
+    "shared": true
+  },
+  "rules": [
+    { "domain": "download.jetbrains.com",          "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "plugins.jetbrains.com",            "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null },
+    { "domain": "downloads.marketplace.jetbrains.com", "container_id": null, "status": "allow", "path_pattern": null, "path_mode": 0, "expires_at": null }
+  ]
+}
