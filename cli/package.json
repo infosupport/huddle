@@ -20,11 +20,15 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "install-global": "npm run build && npm install -g .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^22.0.0",
-    "typescript": "^5.0.0"
+    "adm-zip": "^0.5.18",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=18"

@@ -6,7 +6,7 @@ import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import fs from 'fs';
 
-const CONTAINER = 'huddle';
+export const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
 /**
  * The shared, internal network that `huddle init` creates (`--internal`, so it
