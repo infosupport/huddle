@@ -442,6 +442,8 @@ When building a base image, Huddle can automatically bake AI CLI configurations 
 
 Huddle has a runtime extension platform. Extensions are `.zip` files you upload through the UI — no restart needed. After uploading, the extension appears as a sub-item in the sidebar.
 
+Uploaded extensions are kept on the `huddle-data` volume, so they survive `huddle restart` and upgrades. An upload with the same id as an extension bundled in the image replaces it; the team extensions folder (see settings) replaces both.
+
 ### Building an extension
 
 ```
