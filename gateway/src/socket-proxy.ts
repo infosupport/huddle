@@ -469,8 +469,39 @@ function namedVolumeSources(hostConfig: any): string[] {
   return out;
 }
 
-function deny403(client: net.Socket, msg: string): void {
-  const body = JSON.stringify({ message: msg });
+// Five reason codes cover every deny403() call site below (audited exhaustively —
+// see .claude/plans/pending/agent-native-firewall.md). An agent shelling out
+// through the Docker CLI/SDK only ever sees `message` (that's the Docker Engine
+// API's own error envelope, `{"message": "..."}"`, which the CLI prints verbatim
+// and discards every other field of) — but an agent calling this socket
+// directly gets `reasonCode`/`actionRequired` too, with a reliable signal for
+// whether retrying could ever succeed.
+type SocketReasonCode =
+  | 'malformed_request'
+  | 'action_not_permitted'
+  | 'grant_required'
+  | 'ownership_mismatch'
+  | 'protected_resource';
+
+const SOCKET_ACTION_REQUIRED: Record<SocketReasonCode, (action?: string) => string> = {
+  malformed_request: () =>
+    "The one case where retrying is fine — this is the agent's own bug. Fix the request and retry immediately; no human needed.",
+  action_not_permitted: () =>
+    "Do not retry. This isn't adjustable via the portal — it requires a Huddle policy/feature change. Tell the user what you were trying to do.",
+  grant_required: (action) =>
+    `Do not retry. Tell the user which action you need (${action ?? 'this action'}) and why, then wait for them to enable it / start a grant in the Huddle portal.`,
+  ownership_mismatch: () =>
+    'Do not retry — this will never be permitted for this devcontainer, no matter what a human approves.',
+  protected_resource: () =>
+    'Do not retry or ask the user to approve it — this is categorically off-limits, not a policy setting.',
+};
+
+function deny403(client: net.Socket, info: { reasonCode: SocketReasonCode; message: string; action?: string }): void {
+  const body = JSON.stringify({
+    message: info.message,
+    reasonCode: info.reasonCode,
+    actionRequired: SOCKET_ACTION_REQUIRED[info.reasonCode](info.action),
+  });
   client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
   client.end();
 }
@@ -586,7 +617,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           body = JSON.parse(bodyBytes.toString());
         } catch {
           // Unparseable body must not bypass HostConfig validation.
-          deny403(client, 'invalid container create body');
+          deny403(client, { reasonCode: 'malformed_request', message: 'invalid container create body' });
           return;
         }
         // Parser-differential (PoC #1a/#1b/#1c): deny case-insensitive duplicate
@@ -595,7 +626,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         // does not land as a second key — merged by the daemon — next to our injection,
         // and validateHostConfig is guaranteed to see the same HostConfig as the daemon.
         const amb = findAmbiguousKey(body);
-        if (amb) { deny403(client, `ambiguous duplicate key not permitted: ${amb}`); return; }
+        if (amb) { deny403(client, { reasonCode: 'malformed_request', message: `ambiguous duplicate key not permitted: ${amb}` }); return; }
         renameKeyCI(body, 'HostConfig');
         renameKeyCI(body, 'Labels');
         renameKeyCI(body, 'Env');
@@ -609,11 +640,15 @@ export async function createContainerProxy(containerName: string, socketDir: str
             const [, portStr, proto] = denial.split(':');
             const hostPort = parseInt(portStr, 10);
             if (!isHostPortApproved(containerName, hostPort, proto)) {
-              deny403(client, `Host port ${hostPort}/${proto} is not approved for this devcontainer. Approve it in the Huddle portal first.`);
+              deny403(client, {
+                reasonCode: 'grant_required',
+                message: `Host port ${hostPort}/${proto} is not approved for this devcontainer. Approve it in the Huddle portal first.`,
+                action: `expose port ${hostPort}/${proto}`,
+              });
               return;
             }
           } else {
-            deny403(client, denial);
+            deny403(client, { reasonCode: 'action_not_permitted', message: denial });
             return;
           }
         }
@@ -626,7 +661,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         for (const src of namedVolumeSources(body.HostConfig)) {
           const { parent } = await lookupParentLabel('volume', src);
           if (parent && parent !== containerName) {
-            deny403(client, `cannot mount volume owned by another devcontainer: ${src}`);
+            deny403(client, { reasonCode: 'ownership_mismatch', message: `cannot mount volume owned by another devcontainer: ${src}` });
             return;
           }
         }
@@ -691,14 +726,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
         try {
           body = JSON.parse(bodyBytes.toString());
         } catch {
-          deny403(client, 'invalid network create body');
+          deny403(client, { reasonCode: 'malformed_request', message: 'invalid network create body' });
           return;
         }
         // Canonicalize the keys we inject into so that a lowercase
         // `labels`/`options` does not remain as a second, merged key (a
         // spoofed `labels.huddle.parent` could otherwise forge ownership).
         const netAmb = findAmbiguousKey(body);
-        if (netAmb) { deny403(client, `ambiguous duplicate key not permitted: ${netAmb}`); return; }
+        if (netAmb) { deny403(client, { reasonCode: 'malformed_request', message: `ambiguous duplicate key not permitted: ${netAmb}` }); return; }
         renameKeyCI(body, 'Options');
         renameKeyCI(body, 'Labels');
         body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
@@ -718,11 +753,11 @@ export async function createContainerProxy(containerName: string, socketDir: str
         try {
           body = JSON.parse(bodyBytes.toString());
         } catch {
-          deny403(client, 'invalid volume create body');
+          deny403(client, { reasonCode: 'malformed_request', message: 'invalid volume create body' });
           return;
         }
         const denial = validateVolumeCreate(body);
-        if (denial) { deny403(client, denial); return; }
+        if (denial) { deny403(client, { reasonCode: 'action_not_permitted', message: denial }); return; }
         // Canonicalize `labels` so that the ownership injection does not land next to a
         // spoofed lowercase variant.
         renameKeyCI(body, 'Labels');
@@ -749,11 +784,11 @@ export async function createContainerProxy(containerName: string, socketDir: str
         } catch {
           // Fail-closed: an unparseable exec body must not skip the Privileged
           // check.
-          deny403(client, 'invalid exec create body');
+          deny403(client, { reasonCode: 'malformed_request', message: 'invalid exec create body' });
           return;
         }
         const denial = validateExecConfig(body);
-        if (denial) { deny403(client, denial); return; }
+        if (denial) { deny403(client, { reasonCode: 'action_not_permitted', message: denial }); return; }
         openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
       }
 
@@ -784,12 +819,12 @@ export async function createContainerProxy(containerName: string, socketDir: str
         const action = classifyRequest(method, p);
         if (!action) {
           console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
-          deny403(client, 'path not allowed');
+          deny403(client, { reasonCode: 'action_not_permitted', message: 'path not allowed' });
           return;
         }
         const policyDenial = authorizeAction(containerName, action);
         if (policyDenial) {
-          deny403(client, policyDenial);
+          deny403(client, { reasonCode: 'grant_required', message: policyDenial, action });
           return;
         }
 
@@ -811,9 +846,9 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (parent === containerName) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else if (parent) {
-                deny403(client, 'cannot delete network owned by another devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'cannot delete network owned by another devcontainer' });
               } else if (name.startsWith('dc-net-') || netId.startsWith('dc-net-')) {
-                deny403(client, 'cannot delete huddle-managed network');
+                deny403(client, { reasonCode: 'protected_resource', message: 'cannot delete huddle-managed network' });
               } else {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               }
@@ -830,7 +865,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
             client.pause();
             lookupParentLabel('volume', volId).then(({ parent }) => {
               if (parent && parent !== containerName) {
-                deny403(client, 'cannot delete volume owned by another devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'cannot delete volume owned by another devcontainer' });
               } else {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               }
@@ -839,14 +874,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          if (!targetId) { deny403(client, 'delete not permitted'); return; }
+          if (!targetId) { deny403(client, { reasonCode: 'action_not_permitted', message: 'delete not permitted' }); return; }
 
           client.pause();
           hasOwnLabel(type, targetId, containerName).then(ok => {
             if (ok) {
               openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
             } else {
-              deny403(client, `cannot delete ${type} not created by this container`);
+              deny403(client, { reasonCode: 'ownership_mismatch', message: `cannot delete ${type} not created by this container` });
             }
             client.resume();
           });
@@ -905,7 +940,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const attachWsCt = p.match(/^\/containers\/([^/]+)\/attach\/ws$/)?.[1];
           if (attachWsCt) {
             if (devcontainerIds.has(attachWsCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
+              deny403(client, { reasonCode: 'protected_resource', message: 'operation on devcontainer not permitted' });
               return;
             }
             client.pause();
@@ -913,7 +948,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ok) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
               } else {
-                deny403(client, 'container was not created by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'container was not created by this devcontainer' });
               }
               client.resume();
             });
@@ -925,7 +960,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const inspectCt = p.match(/^\/containers\/([^/]+)\/(json|logs|top|archive|stats)$/)?.[1];
           if (inspectCt) {
             if (devcontainerIds.has(inspectCt)) {
-              deny403(client, 'inspect of devcontainer not permitted');
+              deny403(client, { reasonCode: 'protected_resource', message: 'inspect of devcontainer not permitted' });
               return;
             }
             client.pause();
@@ -933,14 +968,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ok) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else {
-                deny403(client, 'container not owned by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'container not owned by this devcontainer' });
               }
               client.resume();
             });
             return;
           }
           console.warn(`[socket-proxy] path not allowed: ${method} ${rawUrl} (container: ${containerName})`);
-          deny403(client, 'path not allowed');
+          deny403(client, { reasonCode: 'action_not_permitted', message: 'path not allowed' });
           return;
         }
 
@@ -995,7 +1030,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ok) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else {
-                deny403(client, 'cannot push image not built by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'cannot push image not built by this devcontainer' });
               }
               client.resume();
             });
@@ -1007,7 +1042,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const execCt = p.match(/^\/containers\/([^/]+)\/exec$/)?.[1];
           if (execCt) {
             if (devcontainerIds.has(execCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
+              deny403(client, { reasonCode: 'protected_resource', message: 'operation on devcontainer not permitted' });
               return;
             }
             const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
@@ -1015,7 +1050,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
             client.pause();
             hasOwnLabel('container', execCt, containerName).then(ok => {
               if (!ok) {
-                deny403(client, 'container was not created by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'container was not created by this devcontainer' });
                 client.resume();
                 return;
               }
@@ -1039,7 +1074,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const attachCt = p.match(/^\/containers\/([^/]+)\/attach$/)?.[1];
           if (attachCt) {
             if (devcontainerIds.has(attachCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
+              deny403(client, { reasonCode: 'protected_resource', message: 'operation on devcontainer not permitted' });
               return;
             }
             client.pause();
@@ -1047,7 +1082,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ok) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]), { allowUpgrade: true });
               } else {
-                deny403(client, 'container was not created by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'container was not created by this devcontainer' });
               }
               client.resume();
             });
@@ -1058,7 +1093,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const ctId = p.match(/^\/containers\/([^/]+)\/(start|stop|restart|kill|wait|update)$/)?.[1];
           if (ctId) {
             if (devcontainerIds.has(ctId)) {
-              deny403(client, 'operation on devcontainer not permitted');
+              deny403(client, { reasonCode: 'protected_resource', message: 'operation on devcontainer not permitted' });
               return;
             }
             client.pause();
@@ -1066,7 +1101,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ok) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else {
-                deny403(client, 'container was not created by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'container was not created by this devcontainer' });
               }
               client.resume();
             });
@@ -1111,7 +1146,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
 
-          deny403(client, 'operation not permitted');
+          deny403(client, { reasonCode: 'action_not_permitted', message: 'operation not permitted' });
           return;
         }
 
@@ -1123,7 +1158,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           const archiveCt = p.match(/^\/containers\/([^/]+)\/archive$/)?.[1];
           if (archiveCt) {
             if (devcontainerIds.has(archiveCt)) {
-              deny403(client, 'operation on devcontainer not permitted');
+              deny403(client, { reasonCode: 'protected_resource', message: 'operation on devcontainer not permitted' });
               return;
             }
             client.pause();
@@ -1131,17 +1166,17 @@ export async function createContainerProxy(containerName: string, socketDir: str
               if (ok) {
                 openUpstream(Buffer.concat([Buffer.from(headerPart + '\r\n\r\n'), remainder]));
               } else {
-                deny403(client, 'container was not created by this devcontainer');
+                deny403(client, { reasonCode: 'ownership_mismatch', message: 'container was not created by this devcontainer' });
               }
               client.resume();
             });
             return;
           }
-          deny403(client, 'operation not permitted');
+          deny403(client, { reasonCode: 'action_not_permitted', message: 'operation not permitted' });
           return;
         }
 
-        deny403(client, 'method not allowed');
+        deny403(client, { reasonCode: 'action_not_permitted', message: 'method not allowed' });
       });
     });
 

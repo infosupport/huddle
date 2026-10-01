@@ -66,15 +66,49 @@ function decodeBody(chunks: Buffer[], headers: http.IncomingHttpHeaders): string
   }
 }
 
+// Three reason codes for the domain firewall (see
+// .claude/plans/pending/agent-native-firewall.md). `identity_unrecognized` is
+// reserved for sbx's per-sandbox proxy-credential check (ADR-sbx-identity) —
+// not yet implemented on this branch, so nothing produces it today, but the
+// enum carries it so that work doesn't have to revisit this shape.
+type DomainReasonCode = 'pending_review' | 'blocked_by_rule' | 'identity_unrecognized';
+
+const DOMAIN_REASON_INFO: Record<DomainReasonCode, { reason: string; actionRequired: (domain: string) => string }> = {
+  pending_review: {
+    reason: 'This endpoint has not yet been approved for this devcontainer.',
+    actionRequired: (domain) =>
+      `Do not retry this request. Tell the user you need access to \`${domain}\` and why, then wait for them to approve it in the Huddle portal.`,
+  },
+  blocked_by_rule: {
+    reason: 'This endpoint is denied by an explicit firewall rule.',
+    actionRequired: (domain) =>
+      `Do not retry — this will keep failing until an admin edits or removes the firewall rule. Tell the user why you needed \`${domain}\` so they can decide whether to change the rule.`,
+  },
+  identity_unrecognized: {
+    reason: "This sandbox/container isn't recognized by Huddle.",
+    actionRequired: () =>
+      "Do not retry or ask the user to approve anything in the portal — this is a configuration/connectivity problem, not a policy decision. Tell the user what you were trying to reach; they'll need to check the sandbox's setup.",
+  },
+};
+
+// Maps the rule-check outcome ('requested' vs. anything else — today only
+// 'deny', since 'allow' never reaches send403/rejectSocket) onto a reason
+// code. Distinct from DomainReasonCode's identity_unrecognized, which has no
+// producer yet on this branch.
+function domainReasonCode(status: string): DomainReasonCode {
+  return status === 'requested' ? 'pending_review' : 'blocked_by_rule';
+}
+
 function send403(res: http.ServerResponse, domain: string, status: string, containerId?: string | null): void {
+  const reasonCode = domainReasonCode(status);
+  const info = DOMAIN_REASON_INFO[reasonCode];
   const body = JSON.stringify({
     error: 'REQUEST_BLOCKED_BY_HUDDLE',
     message: 'This request is blocked by Huddle security policy.',
     blockedEndpoint: domain,
-    reason: status === 'requested'
-      ? 'This endpoint has not yet been approved for this devcontainer.'
-      : 'This endpoint is denied by a firewall rule.',
-    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
+    reasonCode,
+    reason: info.reason,
+    actionRequired: info.actionRequired(domain),
     devcontainerId: containerId ?? undefined,
     huddlePortal: 'http://localhost:3000',
   });
@@ -103,14 +137,15 @@ const REJECT_REASON: Record<number, string> = {
 };
 
 function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string, domain: string, containerId?: string | null): void {
+  const reasonCode = domainReasonCode(blockStatus);
+  const info = DOMAIN_REASON_INFO[reasonCode];
   const body = JSON.stringify({
     error: 'REQUEST_BLOCKED_BY_HUDDLE',
     message: 'This request is blocked by Huddle security policy.',
     blockedEndpoint: domain,
-    reason: blockStatus === 'requested'
-      ? 'This endpoint has not yet been approved for this devcontainer.'
-      : 'This endpoint is denied by a firewall rule.',
-    actionRequired: 'The user must approve this endpoint in the Huddle portal (http://huddle:3000) before this request can continue.',
+    reasonCode,
+    reason: info.reason,
+    actionRequired: info.actionRequired(domain),
     devcontainerId: containerId ?? undefined,
     huddlePortal: 'http://localhost:3000',
   });
