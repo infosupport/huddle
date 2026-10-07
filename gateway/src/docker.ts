@@ -1,4 +1,5 @@
 import http from 'http';
+import net from 'net';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
@@ -314,34 +315,41 @@ function execCreateSpec(cmd: string[], stdin: string): Record<string, unknown> {
 // expired grant from being re-locked. A bounded reject lets the caller move on.
 const EXEC_START_TIMEOUT_MS = 15_000;
 
-// POST /exec/<id>/start with the JSON options ONLY — stdin must not go in the
-// body (the daemon parses the body as JSON and rejects trailing bytes). On a 2xx
-// the connection is hijacked into a raw bidirectional stream; on a non-2xx we
-// fail closed with the error body so a failed start never looks like "exit null".
+// POST /exec/<id>/start with the JSON options only; stdin must not go in the
+// body (the daemon parses the body as JSON and rejects trailing bytes). We ask
+// for a real protocol upgrade (Connection: Upgrade / Upgrade: tcp, the same
+// headers terminal.ts's dockerExecStart uses for the web terminal) and take
+// the socket from Node's own 'upgrade' event, rather than reaching into
+// `res.socket` from a plain response callback. On Node 24 those are not
+// equivalent: without a real upgrade, http.IncomingMessage keeps tracking
+// response-completion state for a body with no Content-Length or chunked
+// framing, and ending that socket ourselves (the half-close chpasswd needs to
+// see EOF) races it into a spurious 'aborted' on `res`, which is what caused
+// grantSudo to hang until the watchdog below finally killed it. A non-2xx
+// start never upgrades, so the error body still arrives via the ordinary
+// 'response' event.
 function startExec(execId: string, stdin: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const startBody = JSON.stringify({ Detach: false, Tty: false });
-    const req = http.request(
-      {
-        socketPath: '/var/run/docker.sock',
-        method: 'POST',
-        path: `/exec/${execId}/start`,
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
+    const req = http.request({
+      socketPath: '/var/run/docker.sock',
+      method: 'POST',
+      path: `/exec/${execId}/start`,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(startBody),
+        connection: 'Upgrade',
+        upgrade: 'tcp',
       },
-      (res) => {
-        if (res.statusCode && res.statusCode >= 400) {
-          rejectStartError(res, reject);
-        } else {
-          pumpHijackedStream(res, stdin, resolve, reject);
-        }
-      },
-    );
+    });
     // Idle-timeout on the underlying socket: fires only if the start neither
-    // streams nor completes, converting an indefinite hang into a fail-closed
+    // upgrades nor completes, converting an indefinite hang into a fail-closed
     // error (surfaced via the 'error' handler below).
     req.setTimeout(EXEC_START_TIMEOUT_MS, () => {
       req.destroy(new Error(`exec start timed out after ${EXEC_START_TIMEOUT_MS}ms`));
     });
+    req.on('upgrade', (_res, socket) => pumpHijackedStream(socket, stdin, resolve, reject));
+    req.on('response', (res) => rejectStartError(res, reject));
     req.on('error', reject);
     req.end(startBody);
   });
@@ -355,21 +363,24 @@ function rejectStartError(res: http.IncomingMessage, reject: (err: Error) => voi
   res.on('error', reject);
 }
 
-// Feed stdin over the hijacked raw stream and half-close (FIN) so the process
-// gets EOF, then drain the multiplexed stdout/stderr until the daemon closes it.
+// Feed stdin over the hijacked raw socket and half-close (FIN) so the process
+// gets EOF, then drain the multiplexed stdout/stderr until the daemon closes
+// its side. Operates on the raw socket, not an http.IncomingMessage: once
+// upgraded, Node's HTTP response bookkeeping no longer applies, so a plain
+// socket close/error is the right signal to trust.
 function pumpHijackedStream(
-  res: http.IncomingMessage,
+  socket: net.Socket,
   stdin: string,
   resolve: () => void,
   reject: (err: Error) => void,
 ): void {
   if (stdin.length > 0) {
-    res.socket.write(Buffer.from(stdin, 'utf8'));
-    res.socket.end();
+    socket.write(Buffer.from(stdin, 'utf8'));
+    socket.end();
   }
-  res.on('data', () => { /* ignore multiplexed stdout/stderr */ });
-  res.on('end', () => resolve());
-  res.on('error', reject);
+  socket.on('data', () => { /* ignore multiplexed stdout/stderr */ });
+  socket.on('close', () => resolve());
+  socket.on('error', reject);
 }
 
 // Poll the exec inspect until the process has exited. The stream close usually
