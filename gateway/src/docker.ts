@@ -1,4 +1,5 @@
 import http from 'http';
+import net from 'net';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createContainerProxy } from './socket-proxy';
@@ -314,34 +315,35 @@ function execCreateSpec(cmd: string[], stdin: string): Record<string, unknown> {
 // expired grant from being re-locked. A bounded reject lets the caller move on.
 const EXEC_START_TIMEOUT_MS = 15_000;
 
-// POST /exec/<id>/start with the JSON options ONLY — stdin must not go in the
-// body (the daemon parses the body as JSON and rejects trailing bytes). On a 2xx
-// the connection is hijacked into a raw bidirectional stream; on a non-2xx we
-// fail closed with the error body so a failed start never looks like "exit null".
+// POST /exec/<id>/start with JSON options only; the daemon rejects trailing
+// bytes after a JSON body, so stdin can't go here. Get the hijacked socket via
+// a real protocol upgrade (Connection: Upgrade / Upgrade: tcp, same as
+// terminal.ts's dockerExecStart), not `res.socket` from a plain response
+// callback: on Node 24 the latter never finishes completion-tracking for this
+// framing-less body, so our half-close races into a spurious 'aborted' and
+// grantSudo hangs. A non-2xx start arrives via the ordinary 'response' event.
 function startExec(execId: string, stdin: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const startBody = JSON.stringify({ Detach: false, Tty: false });
-    const req = http.request(
-      {
-        socketPath: '/var/run/docker.sock',
-        method: 'POST',
-        path: `/exec/${execId}/start`,
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(startBody) },
+    const req = http.request({
+      socketPath: '/var/run/docker.sock',
+      method: 'POST',
+      path: `/exec/${execId}/start`,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(startBody),
+        connection: 'Upgrade',
+        upgrade: 'tcp',
       },
-      (res) => {
-        if (res.statusCode && res.statusCode >= 400) {
-          rejectStartError(res, reject);
-        } else {
-          pumpHijackedStream(res, stdin, resolve, reject);
-        }
-      },
-    );
+    });
     // Idle-timeout on the underlying socket: fires only if the start neither
-    // streams nor completes, converting an indefinite hang into a fail-closed
+    // upgrades nor completes, converting an indefinite hang into a fail-closed
     // error (surfaced via the 'error' handler below).
     req.setTimeout(EXEC_START_TIMEOUT_MS, () => {
       req.destroy(new Error(`exec start timed out after ${EXEC_START_TIMEOUT_MS}ms`));
     });
+    req.on('upgrade', (_res, socket) => pumpHijackedStream(socket, stdin, resolve, reject));
+    req.on('response', (res) => rejectStartError(res, reject));
     req.on('error', reject);
     req.end(startBody);
   });
@@ -355,21 +357,23 @@ function rejectStartError(res: http.IncomingMessage, reject: (err: Error) => voi
   res.on('error', reject);
 }
 
-// Feed stdin over the hijacked raw stream and half-close (FIN) so the process
-// gets EOF, then drain the multiplexed stdout/stderr until the daemon closes it.
+// Feed stdin over the hijacked socket and half-close (FIN) so chpasswd sees
+// EOF, then drain multiplexed stdout/stderr until the daemon closes its side.
+// A raw socket, not an http.IncomingMessage, so plain close/error is safe to
+// trust directly.
 function pumpHijackedStream(
-  res: http.IncomingMessage,
+  socket: net.Socket,
   stdin: string,
   resolve: () => void,
   reject: (err: Error) => void,
 ): void {
   if (stdin.length > 0) {
-    res.socket.write(Buffer.from(stdin, 'utf8'));
-    res.socket.end();
+    socket.write(Buffer.from(stdin, 'utf8'));
+    socket.end();
   }
-  res.on('data', () => { /* ignore multiplexed stdout/stderr */ });
-  res.on('end', () => resolve());
-  res.on('error', reject);
+  socket.on('data', () => { /* ignore multiplexed stdout/stderr */ });
+  socket.on('close', () => resolve());
+  socket.on('error', reject);
 }
 
 // Poll the exec inspect until the process has exited. The stream close usually
