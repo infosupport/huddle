@@ -315,19 +315,13 @@ function execCreateSpec(cmd: string[], stdin: string): Record<string, unknown> {
 // expired grant from being re-locked. A bounded reject lets the caller move on.
 const EXEC_START_TIMEOUT_MS = 15_000;
 
-// POST /exec/<id>/start with the JSON options only; stdin must not go in the
-// body (the daemon parses the body as JSON and rejects trailing bytes). We ask
-// for a real protocol upgrade (Connection: Upgrade / Upgrade: tcp, the same
-// headers terminal.ts's dockerExecStart uses for the web terminal) and take
-// the socket from Node's own 'upgrade' event, rather than reaching into
-// `res.socket` from a plain response callback. On Node 24 those are not
-// equivalent: without a real upgrade, http.IncomingMessage keeps tracking
-// response-completion state for a body with no Content-Length or chunked
-// framing, and ending that socket ourselves (the half-close chpasswd needs to
-// see EOF) races it into a spurious 'aborted' on `res`, which is what caused
-// grantSudo to hang until the watchdog below finally killed it. A non-2xx
-// start never upgrades, so the error body still arrives via the ordinary
-// 'response' event.
+// POST /exec/<id>/start with JSON options only; the daemon rejects trailing
+// bytes after a JSON body, so stdin can't go here. Get the hijacked socket via
+// a real protocol upgrade (Connection: Upgrade / Upgrade: tcp, same as
+// terminal.ts's dockerExecStart), not `res.socket` from a plain response
+// callback: on Node 24 the latter never finishes completion-tracking for this
+// framing-less body, so our half-close races into a spurious 'aborted' and
+// grantSudo hangs. A non-2xx start arrives via the ordinary 'response' event.
 function startExec(execId: string, stdin: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const startBody = JSON.stringify({ Detach: false, Tty: false });
@@ -363,11 +357,10 @@ function rejectStartError(res: http.IncomingMessage, reject: (err: Error) => voi
   res.on('error', reject);
 }
 
-// Feed stdin over the hijacked raw socket and half-close (FIN) so the process
-// gets EOF, then drain the multiplexed stdout/stderr until the daemon closes
-// its side. Operates on the raw socket, not an http.IncomingMessage: once
-// upgraded, Node's HTTP response bookkeeping no longer applies, so a plain
-// socket close/error is the right signal to trust.
+// Feed stdin over the hijacked socket and half-close (FIN) so chpasswd sees
+// EOF, then drain multiplexed stdout/stderr until the daemon closes its side.
+// A raw socket, not an http.IncomingMessage, so plain close/error is safe to
+// trust directly.
 function pumpHijackedStream(
   socket: net.Socket,
   stdin: string,
