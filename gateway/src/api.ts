@@ -71,7 +71,7 @@ import {
   removeExtension,
   listExtensions,
   extDispatch,
-  EXT_DIR,
+  extensionDir,
 } from './extensions/registry';
 
 const API_PORT = 3000;
@@ -1329,13 +1329,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
   }
 
   // Serve an extension's static frontend assets from
-  // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
+  // the frontend/ folder of the copy that was loaded (bundled, uploaded or team). The resolved path must stay within that folder,
   // otherwise it is a traversal attempt (e.g. ../../).
   app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
     const { id } = req.params;
     if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('invalid id');
     const subPath = req.params['*'] || 'index.html';
-    const baseDir = path.join(EXT_DIR, id, 'frontend');
+    const dir = extensionDir(id);
+    if (!dir) return reply.code(404).send('Not found');
+    const baseDir = path.join(dir, 'frontend');
     const filePath = path.join(baseDir, subPath);
     if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
       return reply.code(403).send('forbidden');
