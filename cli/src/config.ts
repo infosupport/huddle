@@ -21,6 +21,8 @@ export interface HuddleConfig {
   // ~/.huddle/config.json; changes apply on the next `huddle restart`.
   firewallRulesFolder?: string;
   extensionsFolder?: string;
+  // Mount the host's Claude and Codex session logs read-only, for extensions that read them.
+  hostAgentLogs?: boolean;
   // Team-managed devcontainer defaults (#98). The gateway reads these straight
   // from this file when it creates a container, so an edit applies to the next
   // container without a restart. The CLI only needs to preserve them on write.

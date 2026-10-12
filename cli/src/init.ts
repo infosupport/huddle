@@ -4,9 +4,11 @@ import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
+import os from 'os';
+import { hostAgentLogsMountArgs, hostCodexIndexMountArgs, hostCodexLogsMountArgs } from './host-logs';
 import fs from 'fs';
 
-const CONTAINER = 'huddle';
+export const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
 /**
  * The shared, internal network that `huddle init` creates (`--internal`, so it
@@ -178,6 +180,13 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
   if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
   if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
+  const hostLogs = hostAgentLogsMountArgs(cfg, os.homedir());
+  if (hostLogs.length) console.log(dim('  Mounting host Claude logs (read-only) for extensions'));
+  dockerArgs.push(...hostLogs);
+  const hostCodexLogs = hostCodexLogsMountArgs(cfg, os.homedir());
+  if (hostCodexLogs.length) console.log(dim('  Mounting host Codex logs (read-only) for extensions'));
+  dockerArgs.push(...hostCodexLogs);
+  dockerArgs.push(...hostCodexIndexMountArgs(cfg, os.homedir()));
   dockerArgs.push(...gatewayEnvArgs(images));
   dockerArgs.push(IMAGE);
   runArgs(rt, dockerArgs);

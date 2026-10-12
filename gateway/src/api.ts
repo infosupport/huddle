@@ -16,6 +16,9 @@ import {
 } from './firewall-groups';
 import {
   readHostConfig,
+  getHostAgentLogs,
+  setHostAgentLogs,
+  hostAgentLogsMounted,
   setHostFolder,
   hostConfigAvailable,
   getResourceDefaults,
@@ -1366,13 +1369,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
       firewallRulesFolder: host.firewallRulesFolder ?? '',
       // Whether the CLI config is actually mounted; the portal warns if not.
       hostConfigMounted: hostConfigAvailable(),
+      hostAgentLogs: getHostAgentLogs(),
+      hostAgentLogsMounted: hostAgentLogsMounted(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs } = req.body;
+      if (hostAgentLogs !== undefined && typeof hostAgentLogs !== 'boolean') {
+        return reply.code(400).send({ error: 'hostAgentLogs must be true or false' });
+      }
       let restartRequired = false;
       let persisted = true;
       // Resource limits go into the same config file, but need no remount: the
@@ -1392,6 +1400,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
+      }
+      // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
+      if (hostAgentLogs !== undefined) {
+        persisted = setHostAgentLogs(hostAgentLogs) && persisted;
+        if (hostAgentLogs && !hostAgentLogsMounted()) restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };
