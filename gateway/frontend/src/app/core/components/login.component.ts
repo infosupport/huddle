@@ -37,17 +37,17 @@ import { AuthService } from '../services/auth.service';
     }
     .login-card {
       display: flex; flex-direction: column; gap: 12px; width: 340px; max-width: 90vw;
-      padding: 28px; border-radius: 12px; background: var(--card, #1b1e26);
-      box-shadow: 0 8px 40px rgba(0,0,0,.4); border: 1px solid var(--border, #2a2e3a);
+      padding: 28px; border-radius: 12px; background: var(--surface, #1b1e26); color: var(--text);
+      box-shadow: var(--shadow-pop); border: 1px solid var(--border, #2a2e3a);
     }
     .login-card h1 { margin: 0; font-size: 22px; }
-    .login-hint { margin: 0; font-size: 13px; color: var(--muted, #8a90a2); line-height: 1.5; }
-    .login-hint code { background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
+    .login-hint { margin: 0; font-size: 13px; color: var(--text-muted, #8a90a2); line-height: 1.5; }
+    .login-hint code { background: var(--surface-hover); padding: 1px 5px; border-radius: 4px; }
     .login-card input {
       padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border, #2a2e3a);
-      background: var(--input, #12141a); color: inherit; font-size: 14px;
+      background: var(--surface-2, #12141a); color: inherit; font-size: 14px;
     }
-    .login-error { margin: 0; font-size: 13px; color: #ff6b6b; }
+    .login-error { margin: 0; font-size: 13px; color: var(--danger, #ff6b6b); }
     .login-card button {
       padding: 10px 12px; border-radius: 8px; border: none; cursor: pointer;
       background: var(--accent, #4a7dff); color: #fff; font-size: 14px; font-weight: 600;
