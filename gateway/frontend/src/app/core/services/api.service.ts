@@ -60,6 +60,24 @@ export interface FolderMapping {
   sort_order: number;
 }
 
+// An environment variable mapping (#108). `value` is always empty for a secret
+// mapping — the gateway never serialises a secret — so the portal shows
+// `has_value` instead. `remembered` is only filled in when the list was fetched
+// for a specific workspace folder.
+export interface EnvMapping {
+  id: number;
+  name: string;
+  var_name: string;
+  value: string;
+  is_secret: number;
+  secret_hosts: string;
+  is_global: number;
+  enabled: number;
+  sort_order: number;
+  has_value: boolean;
+  remembered?: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private http = inject(HttpClient);
@@ -216,7 +234,7 @@ export class ApiService {
     return this.handle(this.http.get<{ imageName: string; ide: string }>('/api/docker/base-image', { params: { ide } }));
   }
 
-  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerName: string; empty?: boolean }): Observable<{ id: string; containerName: string }> {
+  startContainer(params: { image: string; ide: string; workspace: string; mounts?: { hostPath: string; containerPath: string }[]; containerName: string; empty?: boolean; envMappingIds?: number[]; rememberEnvMappings?: boolean }): Observable<{ id: string; containerName: string }> {
     return this.handle(this.http.post<{ id: string; containerName: string }>('/api/docker/start', {
       imageName: params.image,
       // No containerWorkspace: the gateway derives the IDE project root from the
@@ -228,6 +246,8 @@ export class ApiService {
       containerName: params.containerName,
       ideName: params.ide,
       empty: params.empty === true,
+      envMappingIds: params.envMappingIds ?? [],
+      rememberEnvMappings: params.rememberEnvMappings === true,
     }));
   }
 
@@ -336,6 +356,27 @@ export class ApiService {
 
   deleteFolderMapping(id: number): Observable<{ ok: boolean }> {
     return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
+  }
+
+  // ── Environment Variable Mappings (#108) ────────────────────────────────────
+  // `workspace` asks the gateway to flag which mappings were remembered for that
+  // folder, so the start dialog can pre-tick them.
+  getEnvMappings(workspace?: string): Observable<EnvMapping[]> {
+    const options = workspace ? { params: { workspace } } : undefined;
+    return this.handle(this.http.get<EnvMapping[]>('/api/env-mappings', options));
+  }
+
+  createEnvMapping(m: Omit<EnvMapping, 'id' | 'has_value' | 'remembered'>): Observable<{ id: number }> {
+    return this.handle(this.http.post<{ id: number }>('/api/env-mappings', m));
+  }
+
+  // Omit `value` to leave a stored secret untouched — the portal never has it.
+  updateEnvMapping(id: number, m: Partial<Omit<EnvMapping, 'id' | 'has_value' | 'remembered'>>): Observable<{ ok: boolean }> {
+    return this.handle(this.http.put<{ ok: boolean }>(`/api/env-mappings/${id}`, m));
+  }
+
+  deleteEnvMapping(id: number): Observable<{ ok: boolean }> {
+    return this.handle(this.http.delete<{ ok: boolean }>(`/api/env-mappings/${id}`));
   }
 
   // ── Indexed host folders ────────────────────────────────────────────────────

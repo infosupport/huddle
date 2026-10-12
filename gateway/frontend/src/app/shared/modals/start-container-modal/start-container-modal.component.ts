@@ -4,7 +4,7 @@ import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
-import { IndexedFolder } from '../../../core/services/api.service';
+import { EnvMapping, IndexedFolder } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
 import { FolderPickerModalComponent } from '../folder-picker-modal/folder-picker-modal.component';
@@ -31,6 +31,14 @@ interface RememberedLayout {
     .mount-row .btn { flex: 0 0 auto; }
     .mount-hint { font-size: 12px; color: var(--text-muted); margin: -.25rem 0 .5rem; }
     .mount-add { display: flex; gap: .5rem; }
+    .env-row { display: flex; align-items: center; gap: .5rem; font-size: 13px; margin: .15rem 0; }
+    .env-row .env-name { flex: 0 1 auto; }
+    .env-row .env-var { color: var(--text-muted); font-size: 12px; }
+    .env-row .env-secret {
+      flex: 0 0 auto; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+      color: var(--accent); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      padding: 0 .3rem;
+    }
   `]
 })
 export class StartContainerModalComponent {
@@ -49,6 +57,14 @@ export class StartContainerModalComponent {
   workspace = '';
   mounts: { hostPath: string; containerPath: string }[] = [];
   folderPickerOpen = false;
+  // Non-global env mappings offered as a choice (#108); the global ones are
+  // always injected and would only be noise here.
+  envMappings: EnvMapping[] = [];
+  selectedEnvMappingIds = new Set<number>();
+  rememberEnvMappings = false;
+  private envSelectionTouched = false;
+  private envLoadedKey = '';
+  private envRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   containerName = '';
   nameTouched = false;
   empty = false;
@@ -78,8 +94,14 @@ export class StartContainerModalComponent {
     this.error = '';
     this.status = '';
     this.loading = false;
+    this.envMappings = [];
+    this.selectedEnvMappingIds = new Set<number>();
+    this.rememberEnvMappings = false;
+    this.envSelectionTouched = false;
+    this.envLoadedKey = '';
     this.restoreRemembered();
     this.loadImagesForIde();
+    this.loadEnvMappings();
     this.api.getIndexedFolders().subscribe({
       next: r => { this.indexedFolders = r.folders; },
       // No index is a normal state (nobody ran `huddle indexfolder` yet), and the
@@ -112,6 +134,7 @@ export class StartContainerModalComponent {
       this.mounts = [];
     }
     this.updateAutoName();
+    this.scheduleEnvRefresh();
   }
 
   addMount(): void {
@@ -148,6 +171,7 @@ export class StartContainerModalComponent {
   onWorkspaceInput(value: string): void {
     this.workspace = value;
     this.updateAutoName();
+    this.scheduleEnvRefresh();
   }
 
   // Picking several folders while the dialog is in single-folder mode is not a
@@ -182,6 +206,7 @@ export class StartContainerModalComponent {
 
   onMountInput(): void {
     this.updateAutoName();
+    this.scheduleEnvRefresh();
   }
 
   private updateAutoName(): void {
@@ -209,6 +234,7 @@ export class StartContainerModalComponent {
       }
     }
     this.updateAutoName();
+    this.scheduleEnvRefresh();
   }
 
   private validate(): string | null {
@@ -247,9 +273,71 @@ export class StartContainerModalComponent {
         : undefined,
       containerName: this.containerName,
       empty: this.empty,
+      envMappingIds: [...this.selectedEnvMappingIds],
+      rememberEnvMappings: this.rememberEnvMappings && !!this.envRememberKey(),
     }).subscribe({
       next: () => { this.remember(); this.loading = false; this.modalService.closeStart(); this.state.loadAll(); },
       error: (err) => { this.error = err.message; this.status = ''; this.loading = false; },
+    });
+  }
+
+  // ── Environment variable mappings (#108) ────────────────────────────────────
+
+  /** Only the non-global ones are a choice; globals are always injected. */
+  optionalEnvMappings(): EnvMapping[] {
+    return this.envMappings.filter(m => !m.is_global && m.enabled);
+  }
+
+  isEnvSelected(id: number): boolean {
+    return this.selectedEnvMappingIds.has(id);
+  }
+
+  toggleEnvMapping(id: number): void {
+    if (this.selectedEnvMappingIds.has(id)) this.selectedEnvMappingIds.delete(id);
+    else this.selectedEnvMappingIds.add(id);
+    // From here on the ticks are the user's, so a folder change must not
+    // silently overwrite them with what was remembered.
+    this.envSelectionTouched = true;
+  }
+
+  /**
+   * The folder the "remember" choice is keyed on — the same one the gateway
+   * derives: the workspace directory, or the first mount for a multi-folder
+   * container.
+   */
+  envRememberKey(): string {
+    if (this.empty) return '';
+    if (this.mode === 'multi') return (this.mounts[0]?.hostPath ?? '').trim();
+    return this.workspace.trim();
+  }
+
+  // The folder is typed or picked character by character, so reload on a short
+  // pause instead of per keystroke, and only when the folder actually changed.
+  private scheduleEnvRefresh(): void {
+    if (this.envRefreshTimer !== null) clearTimeout(this.envRefreshTimer);
+    this.envRefreshTimer = setTimeout(() => {
+      this.envRefreshTimer = null;
+      if (this.envRememberKey() !== this.envLoadedKey) this.loadEnvMappings();
+    }, 300);
+  }
+
+  private loadEnvMappings(): void {
+    const key = this.envRememberKey();
+    this.envLoadedKey = key;
+    this.api.getEnvMappings(key || undefined).subscribe({
+      next: (mappings) => {
+        this.envMappings = mappings;
+        // Pre-tick what was remembered for this folder — unless the user has
+        // already made their own choice in this dialog.
+        if (this.envSelectionTouched) return;
+        this.selectedEnvMappingIds = new Set(
+          mappings.filter(m => m.remembered && !m.is_global && m.enabled).map(m => m.id),
+        );
+        this.rememberEnvMappings = this.selectedEnvMappingIds.size > 0;
+      },
+      // No mappings configured is the normal case, and a failure here must never
+      // block starting a container.
+      error: () => { this.envMappings = []; },
     });
   }
 
