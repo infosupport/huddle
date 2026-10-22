@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
+import { runExtensionList, runExtensionInstall, runExtensionRemove } from './extension';
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
 import { runMigrate } from './migrate';
@@ -27,7 +28,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'extension', 'ext', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -152,6 +153,12 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle extension list              List installed gateway extensions
+  huddle ext list                    Alias for extension list
+  huddle extension install <dir>     Install or update the extension in a folder
+                                     (--force replaces another extension with the
+                                     same id, --restart reloads the gateway process)
+  huddle extension remove <id>       Remove an installed extension
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -359,6 +366,32 @@ async function main(): Promise<void> {
       await runFirewallFolder({ action: positional[2], path: positional[3] });
     } else {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'extension' || cmd === 'ext') {
+    const subCmd = sub ?? 'list';
+    if (subCmd === 'list') {
+      await runExtensionList();
+    } else if (subCmd === 'install') {
+      const dir = positional[2];
+      if (!dir) {
+        console.error('Usage: huddle extension install <dir> [--force] [--restart]');
+        process.exit(1);
+      }
+      await runExtensionInstall(dir, { force: flagBool(flags, 'force'), restart: flagBool(flags, 'restart') });
+    } else if (subCmd === 'remove' || subCmd === 'rm') {
+      const id = positional[2];
+      if (!id) {
+        console.error('Usage: huddle extension remove <id>');
+        process.exit(1);
+      }
+      await runExtensionRemove(id);
+    } else {
+      console.error(`Unknown extension subcommand: ${subCmd}`);
+      console.error('Usage: huddle extension <list|install <dir>|remove <id>>');
       process.exit(1);
     }
     return;
