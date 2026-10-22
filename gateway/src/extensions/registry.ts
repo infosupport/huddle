@@ -8,4 +8,5 @@ export {
   extDispatch,
   EXT_DIR,
   extensionAssetType,
+  extensionDir,
 } from './loader';
