@@ -185,9 +185,21 @@ const HARD_CHECKED_HOSTCONFIG_KEYS = new Set<string>([
 // never runs on too-deep input.
 const MAX_KEY_DEPTH = 200;
 
+// Bounds on what one client can make the shared gateway buffer before
+// authorization (header phase) or validation (body phase). Docker API headers
+// and create/exec/volume/network bodies are far below these.
+const MAX_HEADER_BYTES = 64 * 1024;
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+// A connection that sends no data for this long before it becomes a tunnel is
+// dropped; tunnels (attach, logs --follow, events) may idle indefinitely.
+const PRE_TUNNEL_IDLE_MS = 30_000;
+
 // Walks the entire value recursively and returns the first key that, at one
 // object level, collides case-insensitively with another (e.g. `HostConfig` next to
 // `hostconfig`), or null if everything is unambiguous.
+// Any non-ASCII key is also reported: Go's case folding maps e.g. U+017F (ſ) to
+// `s` and U+212A (K) to `k`, while JS toLowerCase does not, so `Bind\u017F` would
+// reach the daemon as Binds but stay invisible to the lowercased view below.
 export function findAmbiguousKey(value: unknown, depth = 0): string | null {
   if (depth > MAX_KEY_DEPTH) return '__depth_exceeded__';
   if (Array.isArray(value)) {
@@ -197,6 +209,7 @@ export function findAmbiguousKey(value: unknown, depth = 0): string | null {
   if (value && typeof value === 'object') {
     const seen = new Set<string>();
     for (const k of Object.keys(value)) {
+      if (/[^\x00-\x7F]/.test(k)) return `non-ascii key ${JSON.stringify(k)}`;
       const lk = k.toLowerCase();
       if (seen.has(lk)) return lk;
       seen.add(lk);
@@ -305,7 +318,9 @@ export function validateHostConfig(rawHostConfig: any, perms: MountPermissions =
   if (hc.utsmode === 'host') return 'UTSMode=host not permitted';
   if (hc.cgroupparent) return 'CgroupParent override not permitted';
 
-  if (Array.isArray(hc.capadd) && hc.capadd.length > 0)
+  // Docker decodes CapAdd as a StrSlice, which also accepts a bare string
+  // (`"CapAdd":"SYS_ADMIN"`), so deny any non-empty value, not just arrays.
+  if (hc.capadd != null && !(Array.isArray(hc.capadd) && hc.capadd.length === 0) && hc.capadd !== '')
     return 'CapAdd not permitted';
   if (Array.isArray(hc.devices) && hc.devices.length > 0)
     return 'Devices not permitted';
@@ -469,6 +484,35 @@ function namedVolumeSources(hostConfig: any): string[] {
   return out;
 }
 
+// Body length of a buffered POST, or null when the framing is not a single
+// plain Content-Length header (or the body exceeds MAX_BODY_BYTES). dockerd (Go net/http) honours Transfer-Encoding
+// over Content-Length and accepts bare-LF line endings, and a loose substring
+// match would also hit `content-length:` inside another header's value — each
+// would let the proxy validate different bytes than the daemon decodes.
+export function contentLengthOf(headerPart: string): number | null {
+  if (/\r(?!\n)|(?<!\r)\n/.test(headerPart)) return null;
+  const lines = headerPart.split('\r\n').slice(1);
+  if (lines.some(l => /^transfer-encoding\s*:/i.test(l))) return null;
+  const cl = lines.filter(l => /^content-length\s*:/i.test(l));
+  if (cl.length !== 1) return null;
+  const m = /^content-length\s*:\s*(\d+)\s*$/i.exec(cl[0]);
+  if (!m) return null;
+  const len = parseInt(m[1], 10);
+  return len <= MAX_BODY_BYTES ? len : null;
+}
+
+function withContentLength(headerPart: string, length: number): string {
+  return headerPart.split('\r\n')
+    .map(l => /^content-length\s*:/i.test(l) ? `Content-Length: ${length}` : l)
+    .join('\r\n');
+}
+
+// JSON.parse also yields primitives (`null`, `4`); every body handler reads or
+// writes properties on the result, so anything but a plain object is rejected.
+function isJsonObject(v: unknown): v is Record<string, any> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
 function deny403(client: net.Socket, msg: string): void {
   const body = JSON.stringify({ message: msg });
   client.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
@@ -517,6 +561,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
     const server = net.createServer((client) => {
       let upstream: net.Socket | null = null;
       let phase: 'headers' | 'body' | 'tunnel' = 'headers';
+      client.setTimeout(PRE_TUNNEL_IDLE_MS, () => { if (phase !== 'tunnel') client.destroy(); });
       let headerBuf = Buffer.alloc(0);
 
       // Body-accumulation state (for POST /containers/create and /networks/create)
@@ -530,6 +575,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
       function openUpstream(firstData: Buffer, opts?: { allowUpgrade?: boolean }): void {
         phase = 'tunnel';
+        client.setTimeout(0);
         upstream = net.createConnection(DOCKER_SOCKET);
         upstream.on('error', (err) => {
           if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET')
@@ -573,6 +619,20 @@ export async function createContainerProxy(containerName: string, socketDir: str
         upstream.write(Buffer.concat([Buffer.from(fixed + '\r\n\r\n'), tail]));
       }
 
+      // A throw (or rejection) in a body handler must end only this client:
+      // index.ts exits the whole shared gateway on an uncaught exception.
+      // One-shot: chunks arriving while the async create handler awaits a
+      // Docker lookup must not start a second validation/forward.
+      function runBodyHandler(): void {
+        const handler = bodyHandler;
+        bodyHandler = null;
+        const fail = (err: unknown) => {
+          console.error(`[socket-proxy] body handler failed for ${containerName}:`, err);
+          client.destroy();
+        };
+        try { Promise.resolve(handler?.()).catch(fail); } catch (err) { fail(err); }
+      }
+
       function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
         const newHeader = rewriteFirstLine(headerPart, newUrl) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), remainder]));
@@ -589,6 +649,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid container create body');
           return;
         }
+        if (!isJsonObject(body)) { deny403(client, 'invalid container create body'); return; }
         // Parser-differential (PoC #1a/#1b/#1c): deny case-insensitive duplicate
         // keys anywhere in the body, and canonicalize the keys that the proxy
         // itself injects into. That way a lowercase `hostconfig`/`labels`/`env`
@@ -617,16 +678,16 @@ export async function createContainerProxy(containerName: string, socketDir: str
             return;
           }
         }
-        // Finding #8: named-volume ownership. A devcontainer may only mount its
-        // own (huddle.parent) or unlabeled/operator volumes — never
-        // a volume that belongs to ANOTHER devcontainer (cross-container
-        // theft of source/credential volumes). Same semantics as the
-        // delete/prune paths. Unlabeled (pre-existing) volumes remain
-        // allowed; a not-yet-existing named volume (404) counts as unlabeled.
+        // Finding #8: named-volume ownership. A devcontainer may only mount
+        // volumes it created itself through /volumes/create (huddle.parent =
+        // its own name). Unlabeled volumes are denied too: the gateway's own
+        // huddle-data (CA key, policy DB, extensions), folder-mapping and JB
+        // volumes carry no label. A missing volume (404) is denied as well,
+        // since the daemon would auto-create it unlabeled.
         for (const src of namedVolumeSources(body.HostConfig)) {
           const { parent } = await lookupParentLabel('volume', src);
-          if (parent && parent !== containerName) {
-            deny403(client, `cannot mount volume owned by another devcontainer: ${src}`);
+          if (parent !== containerName) {
+            deny403(client, `named volume must be created by this devcontainer first: ${src}`);
             return;
           }
         }
@@ -677,10 +738,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         const existingKeys = new Set(existingEnv.map((e: string) => e.split('=')[0]));
         body.Env = [...existingEnv, ...proxyEnv.filter(e => !existingKeys.has(e.split('=')[0]))];
         const newBodyBuf = Buffer.from(JSON.stringify(body));
-        const newHeader = savedHeaderPart.replace(
-          /content-length:\s*\d+/i,
-          `Content-Length: ${newBodyBuf.length}`
-        ) + '\r\n\r\n';
+        const newHeader = withContentLength(savedHeaderPart, newBodyBuf.length) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
       }
 
@@ -694,6 +752,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid network create body');
           return;
         }
+        if (!isJsonObject(body)) { deny403(client, 'invalid network create body'); return; }
         // Canonicalize the keys we inject into so that a lowercase
         // `labels`/`options` does not remain as a second, merged key (a
         // spoofed `labels.huddle.parent` could otherwise forge ownership).
@@ -704,10 +763,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         body.Options = { ...(body.Options ?? {}), 'com.docker.network.driver.mtu': '1400' };
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         const newBodyBuf = Buffer.from(JSON.stringify(body));
-        const newHeader = savedHeaderPart.replace(
-          /content-length:\s*\d+/i,
-          `Content-Length: ${newBodyBuf.length}`
-        ) + '\r\n\r\n';
+        const newHeader = withContentLength(savedHeaderPart, newBodyBuf.length) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
       }
 
@@ -721,6 +777,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid volume create body');
           return;
         }
+        if (!isJsonObject(body)) { deny403(client, 'invalid volume create body'); return; }
         const denial = validateVolumeCreate(body);
         if (denial) { deny403(client, denial); return; }
         // Canonicalize `labels` so that the ownership injection does not land next to a
@@ -730,10 +787,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
         // remove/prune can enforce ownership.
         body.Labels = { ...(body.Labels ?? {}), 'huddle.parent': containerName };
         const newBodyBuf = Buffer.from(JSON.stringify(body));
-        const newHeader = savedHeaderPart.replace(
-          /content-length:\s*\d+/i,
-          `Content-Length: ${newBodyBuf.length}`
-        ) + '\r\n\r\n';
+        const newHeader = withContentLength(savedHeaderPart, newBodyBuf.length) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), newBodyBuf, rest]));
       }
 
@@ -752,6 +806,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
           deny403(client, 'invalid exec create body');
           return;
         }
+        if (!isJsonObject(body)) { deny403(client, 'invalid exec create body'); return; }
         const denial = validateExecConfig(body);
         if (denial) { deny403(client, denial); return; }
         openUpstream(Buffer.concat([Buffer.from(savedHeaderPart + '\r\n\r\n'), bodyBytes, rest]));
@@ -762,13 +817,22 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
         if (phase === 'body') {
           bodyBuf = Buffer.concat([bodyBuf, chunk]);
-          if (bodyBuf.length >= bodyContentLength) bodyHandler?.();
+          if (bodyBuf.length > bodyContentLength + MAX_HEADER_BYTES) { client.destroy(); return; }
+          if (bodyBuf.length >= bodyContentLength) runBodyHandler();
           return;
         }
 
         // ── Header accumulation ──────────────────────────────────────────────
+        // Search only the new bytes (plus 3 for a split CRLFCRLF) and cap the
+        // header size, so a client that never ends its headers cannot grow the
+        // buffer without limit or make every chunk rescan all of it.
+        const searchFrom = Math.max(0, headerBuf.length - 3);
         headerBuf = Buffer.concat([headerBuf, chunk]);
-        const end = headerBuf.indexOf('\r\n\r\n');
+        const end = headerBuf.indexOf('\r\n\r\n', searchFrom);
+        if (end === -1 ? headerBuf.length > MAX_HEADER_BYTES : end > MAX_HEADER_BYTES) {
+          client.destroy();
+          return;
+        }
         if (end === -1) return;
 
         const headerPart = headerBuf.slice(0, end).toString();
@@ -954,13 +1018,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
           // Spawn container — inject huddle.parent label
           if (p === '/containers/create') {
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            const bodyLen = contentLengthOf(headerPart);
+            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
+            bodyContentLength = bodyLen;
             savedHeaderPart = headerPart;
             bodyHandler = processInjectedBody;
             phase = 'body';
             bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) bodyHandler();
+            if (bodyBuf.length >= bodyContentLength) runBodyHandler();
             return;
           }
 
@@ -1010,8 +1075,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
               deny403(client, 'operation on devcontainer not permitted');
               return;
             }
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            const bodyLen = clMatch ? parseInt(clMatch[1]) : 0;
+            const bodyLen = contentLengthOf(headerPart);
+            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
             client.pause();
             hasOwnLabel('container', execCt, containerName).then(ok => {
               if (!ok) {
@@ -1026,7 +1091,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
               bodyHandler = processExecCreate;
               phase = 'body';
               bodyBuf = remainder;
-              if (bodyBuf.length >= bodyContentLength) bodyHandler();
+              if (bodyBuf.length >= bodyContentLength) runBodyHandler();
               client.resume();
             });
             return;
@@ -1077,13 +1142,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
           // buffered and validated: local bind-backed volumes (host-path
           // escape) are denied.
           if (p === '/volumes/create') {
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            const bodyLen = contentLengthOf(headerPart);
+            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
+            bodyContentLength = bodyLen;
             savedHeaderPart = headerPart;
             bodyHandler = processVolumeCreate;
             phase = 'body';
             bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) bodyHandler();
+            if (bodyBuf.length >= bodyContentLength) runBodyHandler();
             return;
           }
 
@@ -1097,13 +1163,14 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
           // Network management — create, connect, disconnect
           if (p === '/networks/create') {
-            const clMatch = headerPart.match(/content-length:\s*(\d+)/i);
-            bodyContentLength = clMatch ? parseInt(clMatch[1]) : 0;
+            const bodyLen = contentLengthOf(headerPart);
+            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
+            bodyContentLength = bodyLen;
             savedHeaderPart = headerPart;
             bodyHandler = processNetworkCreate;
             phase = 'body';
             bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) bodyHandler();
+            if (bodyBuf.length >= bodyContentLength) runBodyHandler();
             return;
           }
           if (/^\/networks\/[^/]+\/(connect|disconnect)$/.test(p)) {

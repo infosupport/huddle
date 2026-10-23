@@ -201,7 +201,14 @@ export function mutateHostConfig(
     }
     // Write-then-rename so a crash mid-write cannot leave a truncated config
     // behind — the CLI reads this same file to start Huddle.
-    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+    // The file holds the operator token, so owner-only. The gateway runs as
+    // root, so hand the new file back to the existing file's owner — otherwise
+    // the host CLI could no longer read its own config.
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+    try {
+      const { uid, gid } = fs.statSync(CONFIG_FILE);
+      fs.chownSync(tmp, uid, gid);
+    } catch { /* no existing file, or a mount that does not support chown */ }
     fs.renameSync(tmp, CONFIG_FILE);
     return true;
   } catch {

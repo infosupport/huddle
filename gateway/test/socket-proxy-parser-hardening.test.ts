@@ -24,6 +24,7 @@ import {
   findAmbiguousKey,
   deepLowerKeys,
   renameKeyCI,
+  contentLengthOf,
 } from '../src/socket-proxy';
 
 // Broad mount permissions so that mount toggles do not interfere with the tests that
@@ -237,5 +238,54 @@ describe('renameKeyCI — canonicalizes the keys the proxy injects into (PoC 1a)
     const b: any = { Image: 'x' };
     renameKeyCI(b, 'HostConfig');
     expect(b).toEqual({ Image: 'x' });
+  });
+});
+
+describe('findAmbiguousKey — Go Unicode case folding', () => {
+  // Go folds U+017F (ſ) to `s`, JS toLowerCase does not: `Bind\u017F` reached
+  // the daemon as Binds while every lowercased check missed it.
+  it('denies non-ASCII keys anywhere in the body', () => {
+    expect(findAmbiguousKey({ HostConfig: { 'Bind\u017F': ['/:/host'] } })).toMatch(/non-ascii/);
+    expect(findAmbiguousKey({ HostConfig: { Binds: [], 'Device\u017F': [] } })).toMatch(/non-ascii/);
+    expect(validateHostConfig({ 'Ma\u017FkedPaths': [] }, OPEN)).toMatch(/non-ascii/);
+    expect(validateExecConfig({ 'Privileged\u017F': true })).toMatch(/non-ascii/);
+  });
+  it('keeps plain ASCII bodies unambiguous', () => {
+    expect(findAmbiguousKey({ HostConfig: { Binds: [], Memory: 1 } })).toBeNull();
+  });
+});
+
+describe('contentLengthOf — body framing matches dockerd', () => {
+  const req = (...headers: string[]) => ['POST /containers/abc/exec HTTP/1.1', 'Host: docker', ...headers].join('\r\n');
+  it('reads a single Content-Length header', () => {
+    expect(contentLengthOf(req('Content-Length: 42'))).toBe(42);
+    expect(contentLengthOf(req('content-length:7'))).toBe(7);
+  });
+  it('rejects Transfer-Encoding, with or without a decoy Content-Length', () => {
+    expect(contentLengthOf(req('X-Decoy: content-length: 1', 'Transfer-Encoding: chunked'))).toBeNull();
+    expect(contentLengthOf(req('Content-Length: 1', 'Transfer-Encoding: chunked'))).toBeNull();
+  });
+  it('ignores content-length inside another header value', () => {
+    expect(contentLengthOf(req('X-Decoy: content-length: 1'))).toBeNull();
+  });
+  it('rejects missing, duplicate or malformed Content-Length', () => {
+    expect(contentLengthOf(req())).toBeNull();
+    expect(contentLengthOf(req('Content-Length: 1', 'Content-Length: 2'))).toBeNull();
+    expect(contentLengthOf(req('Content-Length: 1x'))).toBeNull();
+  });
+  it('rejects bare-LF line endings that Go would split differently', () => {
+    expect(contentLengthOf(req('X-A: b\nTransfer-Encoding: chunked', 'Content-Length: 1'))).toBeNull();
+  });
+});
+
+describe('validateHostConfig — CapAdd as a bare string', () => {
+  // Docker decodes CapAdd as a StrSlice, which accepts a single string too.
+  it('denies a string CapAdd', () => {
+    expect(validateHostConfig({ CapAdd: 'SYS_ADMIN' }, OPEN)).toMatch(/CapAdd/);
+    expect(validateHostConfig({ capadd: 'ALL' }, OPEN)).toMatch(/CapAdd/);
+  });
+  it('still allows an empty CapAdd', () => {
+    expect(validateHostConfig({ CapAdd: [] }, OPEN)).toBeNull();
+    expect(validateHostConfig({ CapAdd: null }, OPEN)).toBeNull();
   });
 });
