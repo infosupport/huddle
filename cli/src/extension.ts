@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import { get, del, uploadFile } from './api';
 import { createZip, type ZipEntry } from './zip';
 import { CONTAINER } from './init';
-import { resolveRuntime } from './runtime';
+import { resolveRuntime, type RuntimeName } from './runtime';
 import { printTable, dim, green, yellow } from './utils';
 
 export interface ExtensionManifest {
@@ -108,7 +108,40 @@ export async function runExtensionList(): Promise<void> {
   );
 }
 
-export async function runExtensionInstall(dir: string, opts: { force: boolean; restart: boolean }): Promise<void> {
+function hasHuddleContainer(rt: RuntimeName): boolean {
+  try {
+    execFileSync(rt, ['container', 'inspect', CONTAINER], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The engine whose huddle container gets restarted after an install. An explicit
+ * --runtime / HUDDLE_RUNTIME wins; otherwise the engine that actually runs the
+ * container. Plain auto-detection prefers Docker, so with Podman owning Huddle
+ * it would restart an unrelated `huddle` container (or none) and leave the new
+ * extension inactive.
+ */
+export function restartRuntime(
+  explicit: string | undefined,
+  hasContainer: (rt: RuntimeName) => boolean = hasHuddleContainer,
+  detect: () => RuntimeName = () => resolveRuntime().name,
+): RuntimeName {
+  if (explicit ?? process.env.HUDDLE_RUNTIME) return resolveRuntime(explicit).name;
+  const owners = (['docker', 'podman'] as const).filter((rt) => hasContainer(rt));
+  if (owners.length === 1) return owners[0];
+  if (owners.length === 0) {
+    throw new Error(`No ${CONTAINER} container found under docker or podman. Run huddle init first.`);
+  }
+  // Both commands see a huddle container: either `docker` is a Podman shim
+  // (one engine, detection reports podman) or two engines each run one.
+  if (detect() === 'podman') return 'podman';
+  throw new Error(`Both docker and podman run a ${CONTAINER} container; pick one with --runtime <docker|podman>.`);
+}
+
+export async function runExtensionInstall(dir: string, opts: { force: boolean; restart: boolean; runtime?: string }): Promise<void> {
   const { manifest, entries } = collectExtensionFiles(dir);
   const plan = planInstall(manifest, asExtensionList(await get<unknown>('/api/extensions')), opts.force);
   if (plan.action === 'refuse') throw new Error(plan.reason);
@@ -126,7 +159,7 @@ export async function runExtensionInstall(dir: string, opts: { force: boolean; r
     console.log(yellow('The gateway keeps running the old code until it restarts. Re-run with --restart, or restart the huddle container.'));
     return;
   }
-  const rt = resolveRuntime().name;
+  const rt = restartRuntime(opts.runtime);
   console.log(dim(`Restarting the gateway process (${rt} restart ${CONTAINER}); the container itself is kept.`));
   execFileSync(rt, ['restart', CONTAINER], { stdio: 'ignore' });
   console.log(green('[OK] Gateway restarted with the new extension code.'));

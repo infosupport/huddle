@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH, insideFolder, asExtensionList } from '../src/extension';
+import { collectExtensionFiles, planInstall, isExtensionId, runExtensionRemove, MAX_FOLDER_DEPTH, insideFolder, asExtensionList, restartRuntime } from '../src/extension';
 
 let dir: string;
 
@@ -201,5 +201,31 @@ describe('asExtensionList', () => {
 
     // Assert
     expect(act).toThrow(/could not reach Huddle.*HUDDLE_URL/);
+  });
+});
+
+describe('restartRuntime', () => {
+  const saved = process.env.HUDDLE_RUNTIME;
+  beforeEach(() => { delete process.env.HUDDLE_RUNTIME; });
+  afterEach(() => { if (saved === undefined) delete process.env.HUDDLE_RUNTIME; else process.env.HUDDLE_RUNTIME = saved; });
+
+  it('restarts on the engine that runs the huddle container, not the auto-detected one', () => {
+    // Arrange: Podman owns Huddle while Docker is also installed (detection prefers docker)
+    const owns = (rt: string) => rt === 'podman';
+
+    // Act / Assert
+    expect(restartRuntime(undefined, owns, () => 'docker')).toBe('podman');
+  });
+
+  it('uses podman when docker is a Podman shim that sees the same container', () => {
+    expect(restartRuntime(undefined, () => true, () => 'podman')).toBe('podman');
+  });
+
+  it('refuses to guess when two real engines each run a huddle container', () => {
+    expect(() => restartRuntime(undefined, () => true, () => 'docker')).toThrow(/--runtime/);
+  });
+
+  it('fails clearly when no engine runs a huddle container', () => {
+    expect(() => restartRuntime(undefined, () => false, () => 'docker')).toThrow(/No huddle container/);
   });
 });

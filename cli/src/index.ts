@@ -157,7 +157,8 @@ Usage:
   huddle ext list                    Alias for extension list
   huddle extension install <dir>     Install or update the extension in a folder
                                      (--force replaces another extension with the
-                                     same id, --restart reloads the gateway process)
+                                     same id, --restart reloads the gateway process
+                                     on the engine that runs Huddle, or --runtime)
   huddle extension remove <id>       Remove an installed extension
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
@@ -378,10 +379,14 @@ async function main(): Promise<void> {
     } else if (subCmd === 'install') {
       const dir = positional[2];
       if (!dir) {
-        console.error('Usage: huddle extension install <dir> [--force] [--restart]');
+        console.error('Usage: huddle extension install <dir> [--force] [--restart] [--runtime <docker|podman>]');
         process.exit(1);
       }
-      await runExtensionInstall(dir, { force: flagBool(flags, 'force'), restart: flagBool(flags, 'restart') });
+      await runExtensionInstall(dir, {
+        force: flagBool(flags, 'force'),
+        restart: flagBool(flags, 'restart'),
+        runtime: flagString(flags, 'runtime'),
+      });
     } else if (subCmd === 'remove' || subCmd === 'rm') {
       const id = positional[2];
       if (!id) {

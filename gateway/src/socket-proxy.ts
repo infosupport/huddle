@@ -633,6 +633,25 @@ export async function createContainerProxy(containerName: string, socketDir: str
         try { Promise.resolve(handler?.()).catch(fail); } catch (err) { fail(err); }
       }
 
+      // Body length for a buffered POST, or null after denying a request whose
+      // framing the proxy cannot validate (see contentLengthOf).
+      function framedBodyLength(headerPart: string): number | null {
+        const len = contentLengthOf(headerPart);
+        if (len === null) deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB');
+        return len;
+      }
+
+      // Switch to body buffering: `handler` validates and forwards the request
+      // once the full Content-Length body has arrived.
+      function startBody(headerPart: string, bodyLen: number, remainder: typeof bodyBuf, handler: () => void): void {
+        bodyContentLength = bodyLen;
+        savedHeaderPart = headerPart;
+        bodyHandler = handler;
+        phase = 'body';
+        bodyBuf = remainder;
+        if (bodyBuf.length >= bodyContentLength) runBodyHandler();
+      }
+
       function forwardWithRewrittenUrl(headerPart: string, newUrl: string, remainder: Buffer): void {
         const newHeader = rewriteFirstLine(headerPart, newUrl) + '\r\n\r\n';
         openUpstream(Buffer.concat([Buffer.from(newHeader), remainder]));
@@ -1018,14 +1037,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
           // Spawn container — inject huddle.parent label
           if (p === '/containers/create') {
-            const bodyLen = contentLengthOf(headerPart);
-            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
-            bodyContentLength = bodyLen;
-            savedHeaderPart = headerPart;
-            bodyHandler = processInjectedBody;
-            phase = 'body';
-            bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) runBodyHandler();
+            const bodyLen = framedBodyLength(headerPart);
+            if (bodyLen !== null) startBody(headerPart, bodyLen, remainder, processInjectedBody);
             return;
           }
 
@@ -1075,8 +1088,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
               deny403(client, 'operation on devcontainer not permitted');
               return;
             }
-            const bodyLen = contentLengthOf(headerPart);
-            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
+            const bodyLen = framedBodyLength(headerPart);
+            if (bodyLen === null) return;
             client.pause();
             hasOwnLabel('container', execCt, containerName).then(ok => {
               if (!ok) {
@@ -1086,12 +1099,7 @@ export async function createContainerProxy(containerName: string, socketDir: str
               }
               // Ownership ok → switch to body buffering; processExecCreate
               // validates the exec config once the full body is in.
-              bodyContentLength = bodyLen;
-              savedHeaderPart = headerPart;
-              bodyHandler = processExecCreate;
-              phase = 'body';
-              bodyBuf = remainder;
-              if (bodyBuf.length >= bodyContentLength) runBodyHandler();
+              startBody(headerPart, bodyLen, remainder, processExecCreate);
               client.resume();
             });
             return;
@@ -1142,14 +1150,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
           // buffered and validated: local bind-backed volumes (host-path
           // escape) are denied.
           if (p === '/volumes/create') {
-            const bodyLen = contentLengthOf(headerPart);
-            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
-            bodyContentLength = bodyLen;
-            savedHeaderPart = headerPart;
-            bodyHandler = processVolumeCreate;
-            phase = 'body';
-            bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) runBodyHandler();
+            const bodyLen = framedBodyLength(headerPart);
+            if (bodyLen !== null) startBody(headerPart, bodyLen, remainder, processVolumeCreate);
             return;
           }
 
@@ -1163,14 +1165,8 @@ export async function createContainerProxy(containerName: string, socketDir: str
 
           // Network management — create, connect, disconnect
           if (p === '/networks/create') {
-            const bodyLen = contentLengthOf(headerPart);
-            if (bodyLen === null) { deny403(client, 'request body must be framed by a single Content-Length of at most 4 MiB'); return; }
-            bodyContentLength = bodyLen;
-            savedHeaderPart = headerPart;
-            bodyHandler = processNetworkCreate;
-            phase = 'body';
-            bodyBuf = remainder;
-            if (bodyBuf.length >= bodyContentLength) runBodyHandler();
+            const bodyLen = framedBodyLength(headerPart);
+            if (bodyLen !== null) startBody(headerPart, bodyLen, remainder, processNetworkCreate);
             return;
           }
           if (/^\/networks\/[^/]+\/(connect|disconnect)$/.test(p)) {
