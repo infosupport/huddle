@@ -16,6 +16,9 @@ import {
 } from './firewall-groups';
 import {
   readHostConfig,
+  getHostAgentLogs,
+  setHostAgentLogs,
+  hostAgentLogsMounted,
   setHostFolder,
   hostConfigAvailable,
   getResourceDefaults,
@@ -71,7 +74,8 @@ import {
   removeExtension,
   listExtensions,
   extDispatch,
-  EXT_DIR,
+  extensionAssetType,
+  extensionDir,
 } from './extensions/registry';
 
 const API_PORT = 3000;
@@ -1329,13 +1333,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
   }
 
   // Serve an extension's static frontend assets from
-  // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
+  // the frontend/ folder of the copy that was loaded (bundled, uploaded or team). The resolved path must stay within that folder,
   // otherwise it is a traversal attempt (e.g. ../../).
   app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
     const { id } = req.params;
     if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('invalid id');
     const subPath = req.params['*'] || 'index.html';
-    const baseDir = path.join(EXT_DIR, id, 'frontend');
+    const dir = extensionDir(id);
+    if (!dir) return reply.code(404).send('Not found');
+    const baseDir = path.join(dir, 'frontend');
     const filePath = path.join(baseDir, subPath);
     if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
       return reply.code(403).send('forbidden');
@@ -1343,7 +1349,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       return reply.code(404).send('Not found');
     }
-    return reply.send(fs.createReadStream(filePath));
+    reply.header('x-content-type-options', 'nosniff');
+    return reply.type(extensionAssetType(filePath)).send(fs.createReadStream(filePath));
   });
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
@@ -1366,13 +1373,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
       firewallRulesFolder: host.firewallRulesFolder ?? '',
       // Whether the CLI config is actually mounted; the portal warns if not.
       hostConfigMounted: hostConfigAvailable(),
+      hostAgentLogs: getHostAgentLogs(),
+      hostAgentLogsMounted: hostAgentLogsMounted(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs } = req.body;
+      if (hostAgentLogs !== undefined && typeof hostAgentLogs !== 'boolean') {
+        return reply.code(400).send({ error: 'hostAgentLogs must be true or false' });
+      }
       let restartRequired = false;
       let persisted = true;
       // Resource limits go into the same config file, but need no remount: the
@@ -1392,6 +1404,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
+      }
+      // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
+      if (hostAgentLogs !== undefined) {
+        persisted = setHostAgentLogs(hostAgentLogs) && persisted;
+        if (hostAgentLogs && !hostAgentLogsMounted()) restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };

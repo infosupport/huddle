@@ -331,17 +331,27 @@ function handleTokenExchangeResponse(
   });
 }
 
+// Extension server-side fetches (extensions/loader.ts) are identified via the
+// X-Huddle-Ext header, but only when the connection comes from the gateway
+// itself on loopback. Honoring it from a devcontainer would let that container
+// pick its own identity and skip its airlock and per-container deny rules.
+// The header is always removed so it never reaches the upstream.
+async function resolveIdentity(req: http.IncomingMessage): Promise<string | null> {
+  const remote = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '');
+  const extHeader = req.headers['x-huddle-ext'];
+  delete req.headers['x-huddle-ext'];
+  if (extHeader && (remote === '127.0.0.1' || remote === '::1'))
+    return `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`;
+  return resolveContainerByIp(remote);
+}
+
 // `port` defaults to the fixed proxy port; tests bind on 0 (a free
 // ephemeral port) so the path-forwarding behavior can be tested hermetically.
 export function createProxyServer(port: number = PROXY_PORT): http.Server {
   const server = http.createServer();
 
   server.on('request', async (req, res) => {
-    // Extension server-side fetch is identified via the X-Huddle-Ext header
-    const extHeader = req.headers['x-huddle-ext'];
-    const containerId = extHeader
-      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
-      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    const containerId = await resolveIdentity(req);
     const rawUrl = req.url || '';
 
     let target: URL;
@@ -498,10 +508,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   // firewall enforcement as the request path: canonicalize the host, decide on the
   // normalized path, forward the original encoded bytes.
   server.on('upgrade', async (req, clientSocket, head) => {
-    const extHeader = req.headers['x-huddle-ext'];
-    const containerId = extHeader
-      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
-      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    const containerId = await resolveIdentity(req);
     const rawUrl = req.url || '';
 
     let target: URL;
@@ -583,7 +590,18 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       (clientSocket as net.Socket).remoteAddress ?? ''
     );
     const [rawHostname, portStr] = (req.url || '').split(':');
-    const port = Number(portStr) || 443;
+    // Strict port grammar: net.connect throws synchronously on an out-of-range
+    // or non-integer port, which would escape this async listener and take
+    // down the shared gateway process.
+    if (portStr !== undefined && !/^\d{1,5}$/.test(portStr)) {
+      rejectSocket(clientSocket, 400, 'deny', '', null);
+      return;
+    }
+    const port = portStr === undefined ? 443 : Number(portStr);
+    if (port < 1 || port > 65535) {
+      rejectSocket(clientSocket, 400, 'deny', '', null);
+      return;
+    }
 
     // Canonicalize the CONNECT host the same way as the plain-HTTP path
     // (`new URL().hostname`) so both paths match, log, generate the cert and
@@ -638,6 +656,21 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // we fall back to the old raw TCP tunnel; request/response content
     // then stays invisible in the audit log (only CONNECT recorded).
     if (NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) || port !== 443) {
+      // Path rules are only enforced after MITM; a raw tunnel to a path-mode
+      // domain (e.g. CONNECT host:80) would skip every path deny.
+      if (isPathMode(hostname, containerId)) {
+        logAudit({
+          containerId,
+          domain: hostname,
+          port,
+          action: 'deny',
+          ruleId,
+          method: 'CONNECT',
+          resStatus: 403,
+        });
+        rejectSocket(clientSocket, 403, 'deny', hostname, containerId);
+        return;
+      }
       const upstream = net.connect(port, hostname, () => {
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         logAudit({
@@ -656,6 +689,9 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         clientSocket.on('end', () => upstream.destroy());
       });
       upstream.on('error', () => clientSocket.destroy());
+      // The client socket is half-open capable: without this, a client that
+      // closes first leaves it (and its fd) open forever.
+      upstream.on('close', () => clientSocket.destroy());
       clientSocket.on('error', () => upstream.destroy());
       return;
     }

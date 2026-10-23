@@ -18,6 +18,10 @@ import path from 'path';
 
 const HOME_DIR = process.env.HUDDLE_HOME_DIR || '/huddle-home';
 const CONFIG_FILE = path.join(HOME_DIR, 'config.json');
+// Where `huddle init` binds the host's ~/.claude/projects (read-only) when hostAgentLogs is on.
+export const HOST_AGENT_LOGS_MOUNT = process.env.HUDDLE_HOST_AGENT_LOGS_MOUNT || '/host-logs/claude/projects';
+// Where it binds the host's ~/.codex/sessions (read-only), under the same setting.
+export const HOST_CODEX_LOGS_MOUNT = process.env.HUDDLE_HOST_CODEX_LOGS_MOUNT || '/host-logs/codex/sessions';
 
 // A folder mapping as stored in config.json: camelCase and real booleans, so the
 // file stays readable for the humans who edit it. `id` is a stable handle for the
@@ -57,6 +61,7 @@ export interface HostConfig {
   defaultMemory?: string;
   defaultCpus?: string;
   folderMappings?: HostFolderMapping[];
+  hostAgentLogs?: boolean;
   [k: string]: unknown;
 }
 
@@ -196,7 +201,14 @@ export function mutateHostConfig(
     }
     // Write-then-rename so a crash mid-write cannot leave a truncated config
     // behind — the CLI reads this same file to start Huddle.
-    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+    // The file holds the operator token, so owner-only. The gateway runs as
+    // root, so hand the new file back to the existing file's owner — otherwise
+    // the host CLI could no longer read its own config.
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+    try {
+      const { uid, gid } = fs.statSync(CONFIG_FILE);
+      fs.chownSync(tmp, uid, gid);
+    } catch { /* no existing file, or a mount that does not support chown */ }
     fs.renameSync(tmp, CONFIG_FILE);
     return true;
   } catch {
@@ -219,6 +231,23 @@ export function updateHostConfig(patch: Partial<HostConfig>): boolean {
 
 export function setHostFolder(key: 'firewallRulesFolder' | 'extensionsFolder', value: string): boolean {
   return updateHostConfig({ [key]: value || undefined });
+}
+
+// ── Host agent logs (#153) ────────────────────────────────────────────────────
+
+export function getHostAgentLogs(): boolean {
+  return readHostConfig().hostAgentLogs === true;
+}
+
+export function setHostAgentLogs(on: boolean): boolean {
+  return updateHostConfig({ hostAgentLogs: on || undefined });
+}
+
+/** True when either host log folder is mounted: `huddle init` only mounts the ones that exist on the host. */
+export function hostAgentLogsMounted(): boolean {
+  return [HOST_AGENT_LOGS_MOUNT, HOST_CODEX_LOGS_MOUNT].some((dir) => {
+    try { return fs.statSync(dir).isDirectory(); } catch { return false; }
+  });
 }
 
 // ── Resource limits (#98) ─────────────────────────────────────────────────────

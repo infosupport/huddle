@@ -8,6 +8,8 @@ import type { Database } from 'better-sqlite3';
 import { stateEvents } from '../events';
 
 export const EXT_DIR = process.env.EXT_DIR ?? '/data/extensions';
+// Extensions shipped in the image; uploads go to EXT_DIR, on the data volume, so they survive a recreated container.
+export const BUNDLED_EXT_DIR = process.env.BUNDLED_EXT_DIR ?? path.resolve(__dirname, '..', '..', 'extensions');
 
 export interface ExtensionManifest {
   id: string;
@@ -20,6 +22,7 @@ export interface ExtensionManifest {
 interface LoadedExtension {
   manifest: ExtensionManifest;
   enabled: boolean;
+  dir: string;
 }
 
 type RouteHandler = (req: any, reply: any) => Promise<unknown>;
@@ -59,8 +62,24 @@ export function initLoader(app: FastifyInstance, db: Database): void {
   _db = db;
 }
 
+// An extension may only claim routes under its own prefix; otherwise it could shadow another extension's handlers in extDispatch.
+function assertOwnPrefix(extId: string, method: string, routePath: string): void {
+  const prefix = `/api/ext/${extId}/`;
+  const segments = routePath.split('/');
+  if (!routePath.startsWith(prefix) || segments.includes('..') || segments.includes('.')) {
+    throw new Error(`extension '${extId}' registered ${method} ${routePath} outside its own prefix ${prefix}`);
+  }
+}
+
+function dropRoutesOf(extId: string): void {
+  for (const key of extDispatch.keys()) {
+    if (key.includes(`/api/ext/${extId}/`)) extDispatch.delete(key);
+  }
+}
+
 function makeVirtualApp(extId: string, realApp: FastifyInstance): VirtualApp {
   const reg = (method: string) => (path: string, handler: RouteHandler) => {
+    assertOwnPrefix(extId, method, path);
     extDispatch.set(`${method}:${path}`, handler);
   };
   return {
@@ -77,9 +96,7 @@ function buildContext(id: string): ExtensionContext {
   const app = _app;
   if (!app || !db) throw new Error('loader not initialised — roep initLoader() eerst aan');
   // Verwijder eventuele oude routes van een vorige versie van deze extensie
-  for (const key of extDispatch.keys()) {
-    if (key.includes(`/api/ext/${id}/`)) extDispatch.delete(key);
-  }
+  dropRoutesOf(id);
   return {
     app: makeVirtualApp(id, app),
     events: stateEvents,
@@ -217,8 +234,8 @@ export async function installExtension(
 
 // Verwijder de extensie-module (en alles eronder) uit de CommonJS require-cache,
 // zodat een her-upload de nieuwe code laadt i.p.v. de gecachede oude versie.
-function unloadModule(id: string): void {
-  const dir = path.join(EXT_DIR, id);
+function unloadModule(id: string, baseDir: string = EXT_DIR): void {
+  const dir = path.join(baseDir, id);
   for (const key of Object.keys(require.cache)) {
     if (key.startsWith(dir + path.sep)) delete require.cache[key];
   }
@@ -245,39 +262,60 @@ export async function loadExtension(id: string, baseDir: string = EXT_DIR): Prom
 
   const manifest = parseManifest(fs.readFileSync(manifestPath, 'utf8'));
 
-  unloadModule(id);
+  unloadModule(id, baseDir);
   const mod = await import(indexPath);
   const registerFn = mod.register ?? mod.default?.register;
   if (typeof registerFn !== 'function') {
     throw new Error('index.js does not export a register function');
   }
 
-  await registerFn(buildContext(id));
-  loaded.set(id, { manifest, enabled: true });
+  try {
+    await registerFn(buildContext(id));
+  } catch (err) {
+    dropRoutesOf(id);
+    throw err;
+  }
+  loaded.set(id, { manifest, enabled: true, dir });
   console.log(`[ext] loaded: ${id} v${manifest.version ?? '?'}`);
 }
 
-// Load every extension directory in one base dir, best-effort (one failure does
-// not stop the rest). Extracted so loadAllExtensions stays flat.
-async function loadExtensionsFrom(baseDir: string): Promise<void> {
-  if (!fs.existsSync(baseDir)) return;
-  for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+// Extension folders by id; a later folder wins, so an id is only ever loaded once.
+function extensionFolders(): Map<string, string> {
+  const winners = new Map<string, string>();
+  for (const baseDir of [BUNDLED_EXT_DIR, EXT_DIR, TEAM_EXT_DIR]) {
+    if (!fs.existsSync(baseDir)) continue;
+    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) winners.set(entry.name, baseDir);
+    }
+  }
+  return winners;
+}
+
+export async function loadAllExtensions(): Promise<void> {
+  // Bundled < uploaded < team folder: an upload replaces the bundled version, and a team extension replaces both.
+  for (const [id, baseDir] of extensionFolders()) {
     try {
-      await loadExtension(entry.name, baseDir);
+      await loadExtension(id, baseDir);
     } catch (err: any) {
-      console.error(`[ext:${entry.name}] loading failed:`, err.message);
+      console.error(`[ext:${id}] loading failed:`, err.message);
     }
   }
 }
 
-export async function loadAllExtensions(): Promise<void> {
-  // Uploaded extensions (EXT_DIR volume) + the team-managed folder the CLI
-  // mounts at TEAM_EXT_DIR. Team folder loads last so a team extension can
-  // override an uploaded one with the same id.
-  for (const baseDir of [EXT_DIR, TEAM_EXT_DIR]) {
-    await loadExtensionsFrom(baseDir);
-  }
+// Browsers refuse to run an ES module served without a JavaScript type, so extension assets get one.
+const ASSET_TYPES: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+};
+
+export function extensionAssetType(filePath: string): string {
+  return ASSET_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
 export function removeExtension(id: string): void {
@@ -285,6 +323,11 @@ export function removeExtension(id: string): void {
   unloadModule(id);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   loaded.delete(id);
+}
+
+/** The folder the loaded copy of an extension came from (bundled, uploaded or team), or null. */
+export function extensionDir(id: string): string | null {
+  return loaded.get(id)?.dir ?? null;
 }
 
 export function listLoadedExtensions() {
