@@ -61,6 +61,22 @@ import {
         Never paste a private key. Stored in <code>~/.huddle/config.json</code>; applies on the next
         Connect via SSH click.
       </p>
+      <details class="index-help">
+        <summary>How do I create a key?</summary>
+        <p class="hint">
+          Run this on your host (PowerShell, macOS or Linux terminal). Press Enter to accept the
+          default location; a passphrase is recommended. Skip this step if
+          <code>~/.ssh/id_ed25519.pub</code> already exists.
+        </p>
+        <pre class="cmd">ssh-keygen -t ed25519 -C "huddle"</pre>
+        <p class="hint">Then copy the <b>public</b> key (the <code>.pub</code> file) and paste it below:</p>
+        <pre class="cmd">Get-Content $env:USERPROFILE\\.ssh\\id_ed25519.pub   <span class="cmd-note"># Windows (PowerShell)</span>
+cat ~/.ssh/id_ed25519.pub                        <span class="cmd-note"># macOS / Linux</span></pre>
+        <p class="hint">
+          JetBrains Gateway uses this key automatically. If you set a passphrase, load it into your
+          SSH agent (or let Gateway ask for it) when connecting.
+        </p>
+      </details>
       <form (ngSubmit)="saveSshKey()">
         <div class="field">
           <label>Public key(s)</label>
