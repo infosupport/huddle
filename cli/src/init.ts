@@ -25,6 +25,12 @@ export const INTERNAL_NET = 'devcontainer-net';
  */
 export const HOST_SOCKET_DIR = '/tmp/dc-sockets';
 const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
+/**
+ * Ports of the per-devcontainer SSH relays (JetBrains Gateway over SSH), bound to
+ * the host's loopback only. Kept in sync with SSH_RELAY_PORT_MIN/MAX in
+ * gateway/src/ssh-access.ts.
+ */
+export const SSH_RELAY_PORTS = '2200-2219';
 
 export interface InitOptions {
   runtime?: string;
@@ -174,6 +180,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-e', `HUDDLE_RUNTIME=${runtime.name}`);
   dockerArgs.push('-e', `HUDDLE_OPERATOR_TOKEN=${operatorToken}`);
   dockerArgs.push('-p', `${HOST_PORT}:3000`);
+  dockerArgs.push('-p', `127.0.0.1:${SSH_RELAY_PORTS}:${SSH_RELAY_PORTS}`);
   dockerArgs.push('-v', `${VOLUME}:/data`);
   dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);

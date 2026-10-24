@@ -16,6 +16,8 @@ export interface HuddleSettings {
   extensionsFolder: string;
   firewallRulesFolder: string;
   hostConfigMounted?: boolean;
+  /** OpenSSH public key(s) for "Connect via SSH", one per line. */
+  sshPublicKey?: string;
 }
 
 export interface ApprovedHostPort {
@@ -273,6 +275,10 @@ export class ApiService {
 
   getIdeLink(name: string): Observable<{ link: string }> {
     return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
+  }
+
+  getSshLink(name: string): Observable<{ link: string }> {
+    return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ssh-link`));
   }
 
   getContainerIds(): Observable<string[]> {

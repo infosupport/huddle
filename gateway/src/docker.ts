@@ -88,6 +88,23 @@ export async function resolveContainerByIp(rawIp: string): Promise<string | null
   return ipToName.get(ip) ?? null;
 }
 
+/**
+ * Fresh (uncached) check whether `rawIp` belongs to any container. Used where a
+ * stale cache would be a hole — e.g. a just-started devcontainer reaching the
+ * SSH relay. Throws when the engine cannot be asked; callers fail closed.
+ */
+export async function isContainerIp(rawIp: string): Promise<boolean> {
+  const map = await fetchContainerMap();
+  return map.has(rawIp.replace(/^::ffff:/, ''));
+}
+
+/** IP of a running devcontainer on its own dc-net-<name> network, or null. */
+export async function devcontainerIp(containerName: string): Promise<string | null> {
+  const inspect = await inspectContainer(containerName);
+  if (!inspect?.State?.Running) return null;
+  return inspect?.NetworkSettings?.Networks?.[`dc-net-${containerName}`]?.IPAddress || null;
+}
+
 // ── Management functions ─────────────────────────────────────────────────────
 
 export interface DevcontainerInfo {

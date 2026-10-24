@@ -51,6 +51,8 @@
       } @else {
         <button class="btn btn-ghost btn-sm" (click)="openIde()">Connect IDE</button>
         @if (ideLinkStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ ideLinkStatus }}</span> }
+        <button class="btn btn-ghost btn-sm" (click)="openSsh()" title="Open in JetBrains Gateway over SSH (localhost relay)">Connect via SSH</button>
+        @if (sshLinkStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ sshLinkStatus }}</span> }
       }
       <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
       <button

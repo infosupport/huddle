@@ -5,6 +5,7 @@ import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
 import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
+import { restoreSshRelays } from './ssh-link';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 
@@ -39,6 +40,8 @@ async function initContainerProxies(): Promise<void> {
     if (containers.length) {
       console.log(`[socket-proxy] restored ${containers.length} proxy socket(s)`);
     }
+    // SSH relays (inbound JetBrains Gateway SSH) for devcontainers that still exist.
+    await restoreSshRelays(new Set(containers.map(c => c.name)));
   } catch (err: any) {
     console.error('[socket-proxy] init failed:', err.message);
   }

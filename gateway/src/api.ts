@@ -23,6 +23,8 @@ import {
   hostConfigAvailable,
   getResourceDefaults,
   setResourceDefaults,
+  getSshPublicKey,
+  setSshPublicKey,
   listFolderMappings,
   getFolderMapping,
   createFolderMapping,
@@ -56,6 +58,8 @@ import {
   type IdeName,
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
+import { prepareSshLink, removeSshRelay, SshLinkError } from './ssh-link';
+import { normalizeSshPublicKeys } from './ssh-access';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -897,6 +901,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      await removeSshRelay(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
@@ -1224,6 +1229,22 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   });
 
+  // ── SSH link (JetBrains Gateway over SSH) ────────────────────────────────
+  // Sets up the relay + sshd on demand and returns a jetbrains-gateway:// link
+  // to localhost:<relay port>. Idempotent: clicking again after a container
+  // restart starts sshd again and refreshes the authorized key.
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ssh-link', async (req, reply) => {
+    const { name } = req.params;
+    try {
+      const link = await prepareSshLink(name);
+      logAudit({ containerId: name, domain: 'ssh', action: 'ssh:link' });
+      return { link };
+    } catch (err: any) {
+      const status = err instanceof SshLinkError ? err.status : 500;
+      return reply.code(status).send({ error: err.message });
+    }
+  });
+
   // ── Sudo audit ingest ─────────────────────────────────────────────────────
   // Container identity is derived from the source IP — the body's `container`
   // field is ignored. A devcontainer cannot impersonate another container by
@@ -1375,15 +1396,22 @@ export async function createApiServer(): Promise<FastifyInstance> {
       hostConfigMounted: hostConfigAvailable(),
       hostAgentLogs: getHostAgentLogs(),
       hostAgentLogsMounted: hostAgentLogsMounted(),
+      sshPublicKey: getSshPublicKey(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean; sshPublicKey?: string } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs, sshPublicKey } = req.body;
       if (hostAgentLogs !== undefined && typeof hostAgentLogs !== 'boolean') {
         return reply.code(400).send({ error: 'hostAgentLogs must be true or false' });
+      }
+      // Validate before writing anything, so a bad key does not leave a half-saved form.
+      let sshKeys: string | undefined;
+      if (sshPublicKey !== undefined) {
+        try { sshKeys = normalizeSshPublicKeys(sshPublicKey); }
+        catch (err: any) { return reply.code(400).send({ error: 'invalid_ssh_public_key', message: err.message }); }
       }
       let restartRequired = false;
       let persisted = true;
@@ -1404,6 +1432,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
+      }
+      // Takes effect on the next "Connect via SSH" click, which rewrites authorized_keys.
+      if (sshKeys !== undefined) {
+        persisted = setSshPublicKey(sshKeys) && persisted;
       }
       // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
       if (hostAgentLogs !== undefined) {

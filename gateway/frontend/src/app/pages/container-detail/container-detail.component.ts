@@ -184,6 +184,7 @@ export class ContainerDetailComponent implements OnInit {
   rulesTab: RulesTab = 'allow';
   reconnectStatus = '';
   ideLinkStatus = '';
+  sshLinkStatus = '';
 
   ports = signal<ApprovedHostPort[]>([]);
   portsError = signal<string | null>(null);
@@ -410,6 +411,16 @@ export class ContainerDetailComponent implements OnInit {
     this.api.getIdeLink(this.name).subscribe({
       next: ({ link }) => { this.ideLinkStatus = ''; window.open(link, '_self'); },
       error: (err) => { this.ideLinkStatus = err.message; },
+    });
+  }
+
+  // Sets up the relay + sshd on the gateway side (can take a moment the first
+  // time) and hands the jetbrains-gateway:// link to the OS, which opens Gateway.
+  openSsh(): void {
+    this.sshLinkStatus = 'Preparing SSH...';
+    this.api.getSshLink(this.name).subscribe({
+      next: ({ link }) => { this.sshLinkStatus = ''; window.open(link, '_self'); },
+      error: (err) => { this.sshLinkStatus = err.message; },
     });
   }
 

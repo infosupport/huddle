@@ -116,6 +116,13 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE(container_id, host_port, protocol)
     );
+    -- Inbound SSH (JetBrains Gateway): the host-loopback port of each
+    -- devcontainer's SSH relay, kept stable across gateway restarts so a saved
+    -- Gateway connection keeps working.
+    CREATE TABLE IF NOT EXISTS ssh_relays (
+      container_name TEXT PRIMARY KEY,
+      port INTEGER NOT NULL UNIQUE
+    );
     -- Firewall groups (#69): a named, reusable bundle of firewall rules for a
     -- product/service (OpenAI, GitHub, ...). Rules point at a group via
     -- rules.group_id. The shared flag marks a group meant to travel between
@@ -738,4 +745,23 @@ export function isHostPortApproved(containerId: string, hostPort: number, protoc
   return !!db.prepare(
     'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
   ).get(containerId, hostPort, protocol);
+}
+
+// ── SSH relay ports ───────────────────────────────────────────────────────────
+
+export function getSshRelayPort(containerName: string): number | null {
+  const row = db.prepare('SELECT port FROM ssh_relays WHERE container_name = ?').get(containerName) as { port: number } | undefined;
+  return row?.port ?? null;
+}
+
+export function listSshRelayPorts(): { container_name: string; port: number }[] {
+  return db.prepare('SELECT container_name, port FROM ssh_relays').all() as { container_name: string; port: number }[];
+}
+
+export function setSshRelayPort(containerName: string, port: number): void {
+  db.prepare('INSERT INTO ssh_relays (container_name, port) VALUES (?, ?)').run(containerName, port);
+}
+
+export function deleteSshRelayPort(containerName: string): void {
+  db.prepare('DELETE FROM ssh_relays WHERE container_name = ?').run(containerName);
 }

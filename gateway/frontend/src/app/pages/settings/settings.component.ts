@@ -54,6 +54,29 @@ import {
     </div>
 
     <div class="card">
+      <h2>SSH access</h2>
+      <p class="hint">
+        Public key(s) allowed to log in to devcontainers over SSH via <strong>Connect via SSH</strong>
+        (JetBrains Gateway), one per line — e.g. the contents of <code>~/.ssh/id_ed25519.pub</code>.
+        Never paste a private key. Stored in <code>~/.huddle/config.json</code>; applies on the next
+        Connect via SSH click.
+      </p>
+      <form (ngSubmit)="saveSshKey()">
+        <div class="field">
+          <label>Public key(s)</label>
+          <textarea [(ngModel)]="resources.sshPublicKey" name="sshPublicKey" rows="3"
+                    placeholder="ssh-ed25519 AAAA… you@laptop" autocomplete="off" spellcheck="false"></textarea>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn btn--accent" [disabled]="savingSsh()">
+            {{ savingSsh() ? 'Saving…' : 'Save' }}
+          </button>
+          @if (sshNote()) { <span class="saved-note">{{ sshNote() }}</span> }
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
       <h2>Folder mappings</h2>
       <p class="hint">
         Folders or volumes that are automatically mounted in every new devcontainer.
@@ -305,6 +328,7 @@ huddle indexfolder --list     <span class="cmd-note"># what is indexed right now
     .field { margin-bottom: 16px; flex: 1; }
     .field-row { display: flex; gap: 16px; flex-wrap: wrap; }
     label { display: block; margin-bottom: 4px; font-size: 0.9em; color: var(--muted, #888); }
+    textarea { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-family: monospace; font-size: 0.85em; box-sizing: border-box; resize: vertical; }
     input[type=text], input:not([type]) { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 0.95em; box-sizing: border-box; }
     .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.9em; cursor: pointer; }
     .actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
@@ -418,6 +442,8 @@ export class SettingsComponent implements OnInit {
   error = signal<string | null>(null);
   savingResources = signal(false);
   resourceNote = signal<string | null>(null);
+  savingSsh = signal(false);
+  sshNote = signal<string | null>(null);
   configMounted = signal<boolean | null>(null);
   addingMapping = signal(false);
   savingFolders = signal(false);
@@ -612,6 +638,26 @@ export class SettingsComponent implements OnInit {
         }
       },
       error: (e) => { this.savingResources.set(false); this.error.set(e.message); },
+    });
+  }
+
+  // The key is validated server-side (OpenSSH public key lines only) and written
+  // into the mounted ~/.huddle/config.json.
+  saveSshKey(): void {
+    this.savingSsh.set(true);
+    this.sshNote.set(null);
+    this.error.set(null);
+    this.api.saveSettings({ sshPublicKey: this.resources.sshPublicKey ?? '' }).subscribe({
+      next: (res) => {
+        this.savingSsh.set(false);
+        if (res.persisted === false) {
+          this.configMounted.set(false);
+          this.error.set('Could not save — the CLI config is not mounted into Huddle. Run `huddle restart` on the host first.');
+        } else {
+          this.sshNote.set('Saved');
+        }
+      },
+      error: (e) => { this.savingSsh.set(false); this.error.set(e.message); },
     });
   }
 
