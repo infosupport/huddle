@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { normalizeHostPath, hostPathError, hostPathLeaf } from '../src/host-path';
 
 // Host paths komen als tekst binnen: getypt in de modal, getypt in Settings, of
-// gescand door `huddle indexfolder` op de host. Op Windows spelt elk van die
+// gekozen in de host-mappenbrowser (fs.list via de host pipe). Op Windows spelt elk van die
 // drie dezelfde map anders. normalizeHostPath is het enige punt waar dat wordt
-// gladgestreken; deze test pint die vorm vast, want de index dedupliceert erop
+// gladgestreken; deze test pint die vorm vast, want vergelijkingen leunen erop
 // en docker.ts (toLinuxPath) rekent erop.
 describe('normalizeHostPath', () => {
   it('zet backslashes om en maakt de driveletter hoofdletter', () => {

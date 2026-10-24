@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -34,7 +34,8 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
+import { normalizeHostPath, hostPathError } from './host-path';
+import { registerHostPipeRoutes } from './host-pipe-routes';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -1491,97 +1492,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── Indexed host folders ──────────────────────────────────────────────────
-  // Huddle's portal runs in a container: it cannot open a file dialog on the
-  // host, so a host path has always had to be typed from memory. `huddle
-  // indexfolder` walks the host once and posts what it found here; the portal
-  // then offers those folders wherever a host path is needed. Operators can also
-  // add or remove single entries from Settings.
-  app.get('/api/indexed-folders', async () => ({
-    folders: listIndexedFolders(),
-    max: MAX_INDEXED_FOLDERS,
-  }));
-
-  app.post<{ Body: { path?: string; paths?: string[]; root?: string; source?: string; replace?: boolean } }>(
-    '/api/indexed-folders',
-    async (req, reply) => {
-      const { path: single, paths, root, source, replace } = req.body ?? {};
-      const raw = [...(Array.isArray(paths) ? paths : []), ...(single ? [single] : [])];
-      if (raw.length === 0) return reply.code(400).send({ error: 'no_paths' });
-      // 'cli' when a scan posted the batch, 'manual' when an operator typed one
-      // entry in Settings — the portal shows which is which, and re-running the
-      // scan must not silently relabel a hand-added folder as machine-found.
-      const src = source === 'manual' ? 'manual' : 'cli';
-
-      // Replace is scoped to the subtree that was just re-scanned, so indexing
-      // one project again never discards folders indexed from anywhere else.
-      // Without a usable root there is no subtree to scope to, and falling back
-      // to "clear everything" would turn a re-index of one project into total
-      // index loss. Refuse instead — wiping the index is the DELETE endpoint's
-      // job, and that one is explicit about it.
-      const normalizedRoot = root ? normalizeHostPath(root) : '';
-      if (replace && !normalizedRoot) {
-        return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
-      }
-      let added = 0;
-      let updated = 0;
-      let skipped = 0;
-      const invalid: { path: string; error: string }[] = [];
-      const validPaths: string[] = [];
-      for (const candidate of raw) {
-        if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
-        const normalized = normalizeHostPath(candidate);
-        const err = hostPathError(normalized);
-        if (err) { invalid.push({ path: candidate, error: err }); continue; }
-        validPaths.push(normalized);
-      }
-      // A replace must be all-or-nothing: validating the whole batch before
-      // clearing anything means a malformed entry rejects the request instead
-      // of deleting the old subtree and leaving it that way (finding: replace
-      // deletes before the batch is validated).
-      if (replace && invalid.length > 0) {
-        return reply.code(400).send({ error: 'invalid_paths', invalid });
-      }
-      let removed = 0;
-      if (replace) removed = clearIndexedFolders(normalizedRoot);
-
-      // Dedupe inside the batch too: the caller may well send two spellings of
-      // the same folder, and 'skipped' should not depend on insertion order.
-      const seen = new Set<string>();
-      let total = countIndexedFolders();
-      for (const normalized of validPaths) {
-        const key = normalized.toLowerCase();
-        if (seen.has(key)) { skipped++; continue; }
-        seen.add(key);
-        if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
-        const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: src });
-        if (result === 'added') { added++; total++; } else { updated++; }
-      }
-      notifyStateChanged();
-      return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
-    }
-  );
-
-  app.delete<{ Params: { id: string } }>(
-    '/api/indexed-folders/:id',
-    async (req) => {
-      deleteIndexedFolder(Number(req.params.id));
-      notifyStateChanged();
-      return { ok: true };
-    }
-  );
-
-  // Clearing the whole index (or one subtree) is a separate, explicit call so a
-  // malformed single-entry delete can never wipe the list.
-  app.delete<{ Querystring: { root?: string } }>(
-    '/api/indexed-folders',
-    async (req) => {
-      const root = req.query?.root ? normalizeHostPath(req.query.root) : undefined;
-      const removed = clearIndexedFolders(root);
-      notifyStateChanged();
-      return { removed };
-    }
-  );
+  // ── Host pipe: host folders + environments (docs/host-pipe.md) ─────────────
+  registerHostPipeRoutes(app);
 
   // ── Approved Host Ports (per container) ──────────────────────────────────────
   app.get<{ Params: { name: string } }>(
