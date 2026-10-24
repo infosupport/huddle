@@ -230,12 +230,11 @@ docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
 
 You can start devcontainers via the CLI or via the web UI at `http://localhost:3000`.
 
-> **Selecting host folders in the web UI.** Huddle runs in a container, so the portal cannot
-> open a folder dialog on your host — a host path had to be typed from memory. Run
-> `huddle indexfolder` in your projects folder once and the **Browse** button next to every
-> host-path field opens a folder tree of what was found. Ctrl-click several folders when
-> starting a devcontainer and each one is mounted as its own worktree. See
-> [Indexing host folders](#indexing-host-folders).
+> **Selecting host folders in the web UI.** Huddle runs in a container, so it cannot see your
+> host by itself. `huddle init` starts a small **host pipe** next to it, through which the
+> **Browse** button next to every host-path field opens a live folder tree of your host.
+> Ctrl-click several folders when starting a devcontainer and each one is mounted as its own
+> worktree. See [Browsing host folders](#browsing-host-folders).
 
 ### Via the CLI
 
@@ -276,31 +275,30 @@ The CLI also prints a direct gateway link once the JetBrains backend has started
 
 ---
 
-## Indexing host folders
+## Browsing host folders
 
-The portal runs inside a container and has no view of your host filesystem, so it cannot
-offer a folder picker. `huddle indexfolder` closes that gap: it walks your host where you
-run it and hands the folders it finds to Huddle, which offers them wherever a host path is
-needed — starting a devcontainer, the folder mappings, and the team-managed folders.
+The portal runs inside a container and has no view of your host filesystem. The **host pipe**
+closes that gap: a tiny agent of the CLI that runs on your host and answers the gateway through
+files in `~/.huddle/pipe` (a folder inside the `~/.huddle` mount the gateway already has). The
+portal uses it to list host folders live, one folder at a time, wherever a host path is needed —
+starting a devcontainer, the folder mappings, and the team-managed folders — and to drive
+host-side environment tools such as Docker Sandboxes (`sbx`). See [docs/host-pipe.md](docs/host-pipe.md).
+
+`huddle init` (and `huddle restart`) start the host pipe in the background, so normally there is
+nothing to do. To check on it:
 
 ```bash
-cd T:/projects
-huddle indexfolder                  # this folder + 2 levels below it
-huddle indexfolder --depth 3        # deeper
-huddle indexfolder --list           # what is indexed right now
-huddle indexfolder --clear          # empty the index
+huddle pipe status      # online/offline, pid, CLI version, available tools
+huddle pipe start       # start it (replaces a running one)
+huddle pipe stop
+huddle pipe serve       # run it in the foreground, for debugging
 ```
 
-Hidden folders and build folders (`node_modules`, `dist`, `target`, …) are skipped; `--all`
-includes them. Individual folders can be added or removed under **Settings → Indexed
-folders**, and every input still accepts a typed path, so a folder created after the last
-scan works without re-indexing.
-
-Windows paths may be written either way (`T:\projects\app` or `T:/projects/app`): Huddle
-stores one canonical form and translates it to the mount prefix your engine uses
-(`/mnt/t/...` for a native dockerd in WSL2, `/run/desktop/mnt/host/t/...` for Docker
-Desktop). The index is per machine and lives in Huddle's database — unlike the team-managed
-settings in `~/.huddle/config.json`, it is not meant to be shared.
+When the host pipe is offline the **Browse** button cannot list anything, but every input still
+accepts a typed path. Windows paths may be written either way (`T:\projects\app` or
+`T:/projects/app`): Huddle stores one canonical form and translates it to the mount prefix your
+engine uses (`/mnt/t/...` for a native dockerd in WSL2, `/run/desktop/mnt/host/t/...` for Docker
+Desktop).
 
 ---
 
@@ -562,10 +560,12 @@ You configure credentials (Client ID + Secret) through the UI under **Aikido Sec
 | GET | `/api/authz/docker-actions/:container` | Effective action toggles + grant per container |
 | PUT | `/api/authz/docker-actions/:container/:action` | Enable/disable an action (body: `{ enabled }`) |
 | GET | `/api/audit` | Network log (filter: `?container=`, `?domain=`, `?action=`) |
-| GET | `/api/indexed-folders` | Indexed host folders the portal can offer as choices |
-| POST | `/api/indexed-folders` | Add folders (body: `{ path }` or `{ paths, root, replace }`) |
-| DELETE | `/api/indexed-folders/:id` | Remove one indexed folder |
-| DELETE | `/api/indexed-folders` | Empty the index (`?root=` limits it to one subtree) |
+| GET | `/api/host-pipe` | Host pipe status (`{ online, version, platform, tools, updatedAt }`) |
+| GET | `/api/host-folders` | Subfolders of a host folder (`?path=`; no path → the roots); 503 when the host pipe is offline |
+| GET | `/api/environments` | Environment providers (e.g. Docker Sandboxes) and their status |
+| GET | `/api/environments/:provider/sandboxes` | List sandboxes |
+| POST | `/api/environments/:provider/sandboxes` | Create a sandbox (body: `{ name?, agent, workspaces: [{ path, readOnly }] }`) |
+| DELETE | `/api/environments/:provider/sandboxes/:name` | Remove a sandbox Huddle created (`?force=1`) |
 
 All state-mutating endpoints send a WebSocket `{ type: "reload" }` event to connected clients.
 
