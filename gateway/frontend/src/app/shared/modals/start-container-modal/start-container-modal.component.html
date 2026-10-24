@@ -28,7 +28,14 @@
           @if (!baseImage && images.length === 0) {
             <option value="">No images available for this IDE</option>
           }
+          <option [value]="CUSTOM_IMAGE">Custom image…</option>
         </select>
+        @if (selectedImage === CUSTOM_IMAGE) {
+          <input id="start-custom-image" type="text" [(ngModel)]="customImage"
+                 placeholder="e.g. node:22-bookworm or ghcr.io/org/image:tag" autocomplete="off" spellcheck="false" />
+          <p class="mount-hint">Debian/Ubuntu or Alpine based. Huddle builds it once with its own layer on top
+            (dev user, no root, CA, firewall); package downloads go through the firewall.</p>
+        }
 
         <label class="empty-toggle">
           <input type="checkbox" [(ngModel)]="empty" (ngModelChange)="onEmptyToggle()" />

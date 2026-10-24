@@ -44,6 +44,9 @@ export class StartContainerModalComponent {
   indexedFolders: IndexedFolder[] = [];
   baseImage = '';
   selectedImage = '';
+  // Sentinel option value for a free-text image reference.
+  readonly CUSTOM_IMAGE = '__custom__';
+  customImage = '';
   ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
   mode: 'single' | 'multi' = 'single';
   workspace = '';
@@ -211,8 +214,12 @@ export class StartContainerModalComponent {
     this.updateAutoName();
   }
 
+  private imageToStart(): string {
+    return this.selectedImage === this.CUSTOM_IMAGE ? this.customImage.trim() : this.selectedImage;
+  }
+
   private validate(): string | null {
-    if (!this.selectedImage || !this.containerName) return 'All fields are required';
+    if (!this.imageToStart() || !this.containerName) return 'All fields are required';
     if (this.empty) return null;
     if (this.mode === 'multi') {
       if (this.mounts.length === 0) return 'Add at least one folder';
@@ -236,10 +243,12 @@ export class StartContainerModalComponent {
     if (err) { this.error = err; return; }
     this.error = '';
     this.loading = true;
-    this.status = 'Starting container…';
+    this.status = this.selectedImage === this.CUSTOM_IMAGE
+      ? 'Preparing custom image (first time takes a few minutes)…'
+      : 'Starting container…';
     const isMulti = this.mode === 'multi' && !this.empty;
     this.api.startContainer({
-      image: this.selectedImage,
+      image: this.imageToStart(),
       ide: this.ide,
       workspace: this.mode === 'single' ? this.workspace : '',
       mounts: isMulti

@@ -8,6 +8,14 @@ import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
+import {
+  needsHuddleLayer,
+  isValidImageRef,
+  withDefaultTag,
+  derivedImageName,
+  buildLayerDockerfile,
+  HUDDLE_LAYER_SCRIPT,
+} from './custom-image';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -455,31 +463,53 @@ export async function imageExists(name: string): Promise<boolean> {
 }
 
 export async function buildImage(imageName: string, dockerfilePath: string): Promise<void> {
-  const dockerfileContent = fs.readFileSync(dockerfilePath);
-  // Minimal single-file tar: just the Dockerfile.
-  const header = Buffer.alloc(512);
-  Buffer.from('Dockerfile').copy(header, 0);
-  Buffer.from('0000644\0').copy(header, 100);
-  Buffer.from('0000000\0').copy(header, 108);
-  Buffer.from('0000000\0').copy(header, 116);
-  Buffer.from(dockerfileContent.length.toString(8).padStart(11, '0') + '\0').copy(header, 124);
-  Buffer.from(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0').copy(header, 136);
-  header[156] = 0x30;
-  Buffer.from('ustar\0').copy(header, 257);
-  Buffer.from('00').copy(header, 263);
-  Buffer.from('        ').copy(header, 148);
-  let checksum = 0;
-  for (let i = 0; i < 512; i++) checksum += header[i];
-  Buffer.from(checksum.toString(8).padStart(6, '0') + '\0 ').copy(header, 148);
-  const padded = Buffer.alloc(Math.ceil(dockerfileContent.length / 512) * 512);
-  dockerfileContent.copy(padded);
-  const tarData = Buffer.concat([header, padded, Buffer.alloc(1024)]);
+  await buildImageFromFiles(imageName, [{ name: 'Dockerfile', content: fs.readFileSync(dockerfilePath) }]);
+}
+
+/** Minimal ustar archive of regular files (mode 0644) for a build context. */
+function tarFiles(files: { name: string; content: Buffer }[]): Buffer {
+  const parts: Buffer[] = [];
+  const mtime = Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0';
+  for (const f of files) {
+    const header = Buffer.alloc(512);
+    Buffer.from(f.name).copy(header, 0);
+    Buffer.from('0000644\0').copy(header, 100);
+    Buffer.from('0000000\0').copy(header, 108);
+    Buffer.from('0000000\0').copy(header, 116);
+    Buffer.from(f.content.length.toString(8).padStart(11, '0') + '\0').copy(header, 124);
+    Buffer.from(mtime).copy(header, 136);
+    header[156] = 0x30;
+    Buffer.from('ustar\0').copy(header, 257);
+    Buffer.from('00').copy(header, 263);
+    Buffer.from('        ').copy(header, 148);
+    let checksum = 0;
+    for (let i = 0; i < 512; i++) checksum += header[i];
+    Buffer.from(checksum.toString(8).padStart(6, '0') + '\0 ').copy(header, 148);
+    const padded = Buffer.alloc(Math.ceil(f.content.length / 512) * 512);
+    f.content.copy(padded);
+    parts.push(header, padded);
+  }
+  parts.push(Buffer.alloc(1024));
+  return Buffer.concat(parts);
+}
+
+export interface BuildOptions {
+  /** Network the RUN steps are attached to (classic builder). */
+  networkMode?: string;
+  buildArgs?: Record<string, string>;
+}
+
+export async function buildImageFromFiles(imageName: string, files: { name: string; content: Buffer }[], opts: BuildOptions = {}): Promise<void> {
+  const tarData = tarFiles(files);
+  const query = new URLSearchParams({ t: imageName });
+  if (opts.networkMode) query.set('networkmode', opts.networkMode);
+  if (opts.buildArgs) query.set('buildargs', JSON.stringify(opts.buildArgs));
 
   await new Promise<void>((resolve, reject) => {
     const options: http.RequestOptions = {
       socketPath: '/var/run/docker.sock',
       method: 'POST',
-      path: `/build?t=${encodeURIComponent(imageName)}`,
+      path: `/build?${query}`,
       headers: {
         'content-type': 'application/x-tar',
         'content-length': tarData.length,
@@ -493,10 +523,16 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
           reject(new Error(`Docker build ${imageName} → ${res.statusCode}: ${output}`));
           return;
         }
+        const log: string[] = [];
         for (const line of output.split('\n').filter(Boolean)) {
           try {
             const obj = JSON.parse(line);
-            if (obj.error) { reject(new Error(`Docker build failed: ${obj.error}`)); return; }
+            if (typeof obj.stream === 'string') log.push(...obj.stream.split('\n').filter(Boolean));
+            if (obj.error) {
+              // The last build lines carry the reason (e.g. the layer's doctor output).
+              reject(new Error(`Docker build failed: ${obj.error}\n${log.slice(-25).join('\n')}`));
+              return;
+            }
           } catch { /* non-JSON line is fine */ }
         }
         resolve();
@@ -506,6 +542,57 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
     req.write(tarData);
     req.end();
   });
+}
+
+/** Pull an image through the engine (same route as `huddle init`). */
+export async function pullImage(ref: string): Promise<void> {
+  const out = await dockerRequest('POST', `/images/create?fromImage=${encodeURIComponent(withDefaultTag(ref))}`);
+  // Progress is NDJSON; a single-line reply already arrives parsed.
+  const text = typeof out === 'string' ? out : JSON.stringify(out);
+  for (const line of text.split('\n').filter(Boolean)) {
+    let obj: any;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj?.error) throw new Error(`Pulling ${ref} failed: ${obj.error}`);
+  }
+}
+
+/**
+ * The image a devcontainer actually runs. Huddle's own images run as-is; any
+ * other image is pulled if needed and gets the Huddle layer (custom-image.ts) in
+ * a cached derived image, built on `netName` so its downloads go through Huddle.
+ */
+export async function resolveRunImage(imageName: string, ideName: IdeName, netName: string): Promise<string> {
+  const baseImages = (['rider', 'intellij', 'vscode'] as IdeName[]).map(getBaseImageName);
+  if (!(await imageExists(imageName))) {
+    const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
+    if (!needsHuddleLayer(imageName, undefined, baseImages)) {
+      if (!fs.existsSync(dockerfilePath)) {
+        throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
+      }
+      console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
+      await buildImage(imageName, dockerfilePath);
+      console.log(`[huddle] Base image '${imageName}' built successfully`);
+      return imageName;
+    }
+    if (!isValidImageRef(imageName)) throw new Error(`Invalid image reference: '${imageName}'`);
+    console.log(`[huddle] Pulling custom image '${imageName}'...`);
+    await pullImage(imageName);
+  }
+
+  const image = await dockerRequest('GET', `/images/${encodeURIComponent(imageName)}/json`);
+  if (!needsHuddleLayer(imageName, image?.Config?.Labels ?? undefined, baseImages)) return imageName;
+  if (!isValidImageRef(imageName)) throw new Error(`Invalid image reference: '${imageName}'`);
+
+  const derived = derivedImageName(imageName, image.Id);
+  if (await imageExists(derived)) return derived;
+  console.log(`[huddle] Applying the Huddle layer to '${imageName}' → '${derived}'...`);
+  await buildImageFromFiles(derived, [
+    { name: 'Dockerfile', content: Buffer.from(buildLayerDockerfile(imageName)) },
+    { name: 'huddle-layer.sh', content: Buffer.from(HUDDLE_LAYER_SCRIPT) },
+    { name: 'huddle-ca.crt', content: Buffer.from(getCaCertPem()) },
+  ], { networkMode: netName, buildArgs: HUDDLE_PROXY_ENV });
+  console.log(`[huddle] Built '${derived}'`);
+  return derived;
 }
 
 export async function connectNetwork(networkName: string, containerName: string): Promise<void> {
@@ -1056,15 +1143,9 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     if (!msg.includes('already exists in network') && !msg.includes('already connected')) throw err;
   }
 
-  if (!(await imageExists(imageName))) {
-    const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
-    if (!fs.existsSync(dockerfilePath)) {
-      throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
-    }
-    console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
-    await buildImage(imageName, dockerfilePath);
-    console.log(`[huddle] Base image '${imageName}' built successfully`);
-  }
+  // A custom image gets the Huddle layer first; a failing layer (doctor check)
+  // aborts here, before anything is created.
+  const runImage = await resolveRunImage(imageName, ideName, netName);
 
   // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
   await createContainerProxy(containerName, SOCKET_DIR);
@@ -1158,7 +1239,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const resourceDefaults = getResourceDefaults();
 
   const createBody = {
-    Image: imageName,
+    Image: runImage,
     Entrypoint: ['/bin/sh'],
     Cmd: ['-c', 'while sleep 1000; do :; done'],
     Env: env,

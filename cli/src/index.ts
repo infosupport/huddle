@@ -180,7 +180,8 @@ Start options:
   --workspace-root <path>            Container path the IDE opens as project root when using
                                      --mount (default: common parent of the mount targets)
   --name <name>                      Container name (default: devcontainer-<foldername>)
-  --image <image>                    Use a specific image
+  --image <image>                    Use a specific image. Any Debian/Ubuntu/Alpine image works:
+                                     Huddle builds it once with its own layer on top
   --empty                            Empty container without a workspace
 
 Migrate options:
