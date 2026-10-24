@@ -15,7 +15,9 @@ import {
   derivedImageName,
   buildLayerDockerfile,
   HUDDLE_LAYER_SCRIPT,
+  HUDDLE_LAYER_VERSION,
 } from './custom-image';
+import { recordTrustedImage, getTrustedImage } from './db';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -110,7 +112,9 @@ export async function isContainerIp(rawIp: string): Promise<boolean> {
 export async function devcontainerIp(containerName: string): Promise<string | null> {
   const inspect = await inspectContainer(containerName);
   if (!inspect?.State?.Running) return null;
-  return inspect?.NetworkSettings?.Networks?.[`dc-net-${containerName}`]?.IPAddress || null;
+  // Older devcontainers sit on the shared devcontainer-net (same fallback as listing).
+  const networks = inspect?.NetworkSettings?.Networks;
+  return networks?.[`dc-net-${containerName}`]?.IPAddress || networks?.['devcontainer-net']?.IPAddress || null;
 }
 
 // ── Management functions ─────────────────────────────────────────────────────
@@ -433,7 +437,9 @@ export async function commitContainer(containerId: string, imageName: string): P
     `/commit?container=${encodeURIComponent(containerId)}&repo=${encodeURIComponent(repo)}&tag=${encodeURIComponent(tag)}`,
     { Labels: labels }
   );
-  return result.Id ?? '';
+  const imageId: string = result.Id ?? '';
+  if (imageId) recordTrustedImage(imageId, { kind: 'snapshot' });
+  return imageId;
 }
 
 export async function listNetworks(): Promise<any[]> {
@@ -565,7 +571,7 @@ export async function resolveRunImage(imageName: string, ideName: IdeName, netNa
   const baseImages = (['rider', 'intellij', 'vscode'] as IdeName[]).map(getBaseImageName);
   if (!(await imageExists(imageName))) {
     const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
-    if (!needsHuddleLayer(imageName, undefined, baseImages)) {
+    if (!needsHuddleLayer(imageName, null, baseImages)) {
       if (!fs.existsSync(dockerfilePath)) {
         throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
       }
@@ -580,17 +586,25 @@ export async function resolveRunImage(imageName: string, ideName: IdeName, netNa
   }
 
   const image = await dockerRequest('GET', `/images/${encodeURIComponent(imageName)}/json`);
-  if (!needsHuddleLayer(imageName, image?.Config?.Labels ?? undefined, baseImages)) return imageName;
+  if (!needsHuddleLayer(imageName, image?.Id ? getTrustedImage(image.Id) : null, baseImages)) return imageName;
   if (!isValidImageRef(imageName)) throw new Error(`Invalid image reference: '${imageName}'`);
 
+  // Reuse an earlier build only when its ID is the one Huddle recorded: anyone
+  // with Docker access could have put a different image under this tag.
   const derived = derivedImageName(imageName, image.Id);
-  if (await imageExists(derived)) return derived;
+  if (await imageExists(derived)) {
+    const existing = await dockerRequest('GET', `/images/${encodeURIComponent(derived)}/json`);
+    if (existing?.Id && !needsHuddleLayer(derived, getTrustedImage(existing.Id), baseImages)) return derived;
+  }
   console.log(`[huddle] Applying the Huddle layer to '${imageName}' → '${derived}'...`);
   await buildImageFromFiles(derived, [
     { name: 'Dockerfile', content: Buffer.from(buildLayerDockerfile(imageName)) },
     { name: 'huddle-layer.sh', content: Buffer.from(HUDDLE_LAYER_SCRIPT) },
     { name: 'huddle-ca.crt', content: Buffer.from(getCaCertPem()) },
   ], { networkMode: netName, buildArgs: HUDDLE_PROXY_ENV });
+  const built = await dockerRequest('GET', `/images/${encodeURIComponent(derived)}/json`);
+  if (!built?.Id) throw new Error(`Built '${derived}' but could not read its image ID`);
+  recordTrustedImage(built.Id, { kind: 'derived', layerVersion: HUDDLE_LAYER_VERSION });
   console.log(`[huddle] Built '${derived}'`);
   return derived;
 }

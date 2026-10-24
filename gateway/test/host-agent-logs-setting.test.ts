@@ -10,6 +10,8 @@ process.env.HUDDLE_HOME_DIR = HOME;
 process.env.HUDDLE_HOST_AGENT_LOGS_MOUNT = MOUNT;
 const CODEX_MOUNT = path.join(HOME, 'host-logs', 'codex', 'sessions');
 process.env.HUDDLE_HOST_CODEX_LOGS_MOUNT = CODEX_MOUNT;
+const CODEX_INDEX = path.join(HOME, 'host-logs', 'codex', 'session_index.jsonl');
+process.env.HUDDLE_HOST_CODEX_INDEX_MOUNT = CODEX_INDEX;
 
 const hc = await import('../src/host-config');
 
@@ -92,5 +94,17 @@ describe('host agent-logs setting', () => {
     // Assert
     expect(mounted).toBe(true);
     expect(hc.HOST_CODEX_LOGS_MOUNT).toBe(CODEX_MOUNT);
+  });
+
+  it('counts the host logs as mounted when only the Codex index file is mounted', () => {
+    // Arrange
+    fs.mkdirSync(path.dirname(CODEX_INDEX), { recursive: true });
+    fs.writeFileSync(CODEX_INDEX, '');
+
+    // Act
+    const mounted = hc.hostAgentLogsMounted();
+
+    // Assert
+    expect(mounted).toBe(true);
   });
 });

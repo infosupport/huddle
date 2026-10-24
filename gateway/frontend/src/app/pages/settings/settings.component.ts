@@ -56,10 +56,10 @@ import {
     <div class="card">
       <h2>SSH access</h2>
       <p class="hint">
-        Public key(s) allowed to log in to devcontainers over SSH via <strong>Connect via SSH</strong>
+        Public key(s) allowed to log in to devcontainers over SSH via <strong>Connect IDE</strong>
         (JetBrains Gateway), one per line — e.g. the contents of <code>~/.ssh/id_ed25519.pub</code>.
         Never paste a private key. Stored in <code>~/.huddle/config.json</code>; applies on the next
-        Connect via SSH click.
+        Connect IDE click.
       </p>
       <details class="index-help">
         <summary>How do I create a key?</summary>

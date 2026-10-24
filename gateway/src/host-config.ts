@@ -22,6 +22,9 @@ const CONFIG_FILE = path.join(HOME_DIR, 'config.json');
 export const HOST_AGENT_LOGS_MOUNT = process.env.HUDDLE_HOST_AGENT_LOGS_MOUNT || '/host-logs/claude/projects';
 // Where it binds the host's ~/.codex/sessions (read-only), under the same setting.
 export const HOST_CODEX_LOGS_MOUNT = process.env.HUDDLE_HOST_CODEX_LOGS_MOUNT || '/host-logs/codex/sessions';
+// And the host's ~/.codex/session_index.jsonl (a single file, read-only); a host
+// with only the index gets just this mount. Must match cli/src/host-logs.ts.
+export const HOST_CODEX_INDEX_MOUNT = process.env.HUDDLE_HOST_CODEX_INDEX_MOUNT || '/host-logs/codex/session_index.jsonl';
 
 // A folder mapping as stored in config.json: camelCase and real booleans, so the
 // file stays readable for the humans who edit it. `id` is a stable handle for the
@@ -245,11 +248,11 @@ export function setHostAgentLogs(on: boolean): boolean {
   return updateHostConfig({ hostAgentLogs: on || undefined });
 }
 
-/** True when either host log folder is mounted: `huddle init` only mounts the ones that exist on the host. */
+/** True when any host log source is mounted: `huddle init` only mounts the ones that exist on the host. */
 export function hostAgentLogsMounted(): boolean {
-  return [HOST_AGENT_LOGS_MOUNT, HOST_CODEX_LOGS_MOUNT].some((dir) => {
-    try { return fs.statSync(dir).isDirectory(); } catch { return false; }
-  });
+  const isDir = (p: string) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+  const isFile = (p: string) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  return isDir(HOST_AGENT_LOGS_MOUNT) || isDir(HOST_CODEX_LOGS_MOUNT) || isFile(HOST_CODEX_INDEX_MOUNT);
 }
 
 // ── SSH public key (inbound SSH via JetBrains Gateway) ───────────────────────

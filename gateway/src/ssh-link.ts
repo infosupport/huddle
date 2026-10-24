@@ -56,7 +56,7 @@ export async function prepareSshLink(name: string): Promise<string> {
   await ensureSshRelay(name, port, relayDeps);
 
   const sshdConfig = buildSshdConfig(sessionEnvFromContainer(inspect?.Config?.Env));
-  const result = await execInContainer(name, ['sh', '-c', buildEnsureSshdScript(sshdConfig)], `${keys}\n`);
+  const result = await execInContainer(name, ['sh', '-c', buildEnsureSshdScript(sshdConfig, inspect.Id)], `${keys}\n`);
   if (result.exitCode !== 0) {
     throw new SshLinkError(500, ENSURE_SSHD_ERRORS[result.exitCode ?? -1] ?? `Setting up sshd failed (exit ${result.exitCode})`);
   }

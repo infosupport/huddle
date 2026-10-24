@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import type { TrustedImage } from './custom-image';
 
 const DB_PATH = process.env.DB_PATH || '/data/huddle.db';
 
@@ -122,6 +123,13 @@ export function initDb(): void {
     CREATE TABLE IF NOT EXISTS ssh_relays (
       container_name TEXT PRIMARY KEY,
       port INTEGER NOT NULL UNIQUE
+    );
+    -- Image IDs Huddle produced itself (snapshots, images with the Huddle layer).
+    -- Only these run without the layer; labels on an image can be forged.
+    CREATE TABLE IF NOT EXISTS trusted_images (
+      image_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('snapshot', 'derived')),
+      layer_version TEXT
     );
     -- Firewall groups (#69): a named, reusable bundle of firewall rules for a
     -- product/service (OpenAI, GitHub, ...). Rules point at a group via
@@ -764,4 +772,20 @@ export function setSshRelayPort(containerName: string, port: number): void {
 
 export function deleteSshRelayPort(containerName: string): void {
   db.prepare('DELETE FROM ssh_relays WHERE container_name = ?').run(containerName);
+}
+
+// Docker reports image IDs as sha256:<hex>; Podman may omit the prefix.
+const normalizeImageId = (id: string) => id.replace(/^sha256:/, '');
+
+export function recordTrustedImage(imageId: string, trusted: TrustedImage): void {
+  db.prepare('INSERT OR REPLACE INTO trusted_images (image_id, kind, layer_version) VALUES (?, ?, ?)')
+    .run(normalizeImageId(imageId), trusted.kind, trusted.kind === 'derived' ? trusted.layerVersion : null);
+}
+
+export function getTrustedImage(imageId: string): TrustedImage | null {
+  const row = db.prepare('SELECT kind, layer_version FROM trusted_images WHERE image_id = ?')
+    .get(normalizeImageId(imageId)) as { kind: string; layer_version: string | null } | undefined;
+  if (row?.kind === 'snapshot') return { kind: 'snapshot' };
+  if (row?.kind === 'derived' && row.layer_version) return { kind: 'derived', layerVersion: row.layer_version };
+  return null;
 }

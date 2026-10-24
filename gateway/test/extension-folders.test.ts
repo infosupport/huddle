@@ -151,3 +151,52 @@ describe('the gateway image', () => {
     expect(bundled).toBe(true);
   });
 });
+
+describe('changing an extension the team folder manages', () => {
+  it('refuses to remove an extension that lives in the team folder', async () => {
+    // Arrange
+    writeExtension(dirs.uploaded, 'shared', '1.0.0');
+    writeExtension(dirs.team, 'shared', '2.0.0');
+    const loader = await freshLoader();
+    await loader.loadAllExtensions();
+
+    // Act
+    const remove = () => loader.removeExtension('shared');
+
+    // Assert
+    expect(remove).toThrow(/team extensions folder/);
+    expect(loader.extensionDir('shared')).toBe(path.join(dirs.team, 'shared'));
+    expect(fs.existsSync(path.join(dirs.uploaded, 'shared'))).toBe(true);
+  });
+
+  it('refuses to remove an extension that is only bundled', async () => {
+    // Arrange
+    writeExtension(dirs.bundled, 'aikido', '1.0.0');
+    const loader = await freshLoader();
+    await loader.loadAllExtensions();
+
+    // Act
+    const remove = () => loader.removeExtension('aikido');
+
+    // Assert
+    expect(remove).toThrow(/only uploaded extensions/);
+    expect(loader.extensionDir('aikido')).toBe(path.join(dirs.bundled, 'aikido'));
+  });
+
+  it('refuses an upload for an id the team folder already provides', async () => {
+    // Arrange
+    writeExtension(dirs.team, 'shared', '2.0.0');
+    const AdmZip = (await import('adm-zip')).default;
+    const zip = new AdmZip();
+    zip.addFile('manifest.json', Buffer.from(JSON.stringify({ id: 'shared', name: 'shared', version: '3.0.0' })));
+    zip.addFile('index.js', Buffer.from('exports.register = async () => {};'));
+    const loader = await freshLoader();
+
+    // Act
+    const install = loader.installExtension(zip.toBuffer());
+
+    // Assert
+    await expect(install).rejects.toThrow(/team extensions folder/);
+    expect(fs.existsSync(path.join(dirs.uploaded, 'shared'))).toBe(false);
+  });
+});

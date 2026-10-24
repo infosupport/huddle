@@ -16,7 +16,7 @@ export interface HuddleSettings {
   extensionsFolder: string;
   firewallRulesFolder: string;
   hostConfigMounted?: boolean;
-  /** OpenSSH public key(s) for "Connect via SSH", one per line. */
+  /** OpenSSH public key(s) for "Connect IDE" (SSH), one per line. */
   sshPublicKey?: string;
 }
 
@@ -271,10 +271,6 @@ export class ApiService {
 
   setAirlock(name: string, airlocked: boolean): Observable<{ airlocked: boolean }> {
     return this.handle(this.http.post<{ airlocked: boolean }>(`/api/docker/containers/${name}/airlock`, { airlocked }));
-  }
-
-  getIdeLink(name: string): Observable<{ link: string }> {
-    return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
   }
 
   getSshLink(name: string): Observable<{ link: string }> {

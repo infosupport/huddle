@@ -129,7 +129,12 @@ export function restartRuntime(
   hasContainer: (rt: RuntimeName) => boolean = hasHuddleContainer,
   detect: () => RuntimeName = () => resolveRuntime().name,
 ): RuntimeName {
-  if (explicit ?? process.env.HUDDLE_RUNTIME) return resolveRuntime(explicit).name;
+  const requested = explicit ?? process.env.HUDDLE_RUNTIME;
+  if (requested !== undefined) {
+    // An empty value is a typo, not a request to auto-detect: probing could pick another engine's container.
+    if (!requested) throw new Error('--runtime must not be empty; choose docker or podman.');
+    return resolveRuntime(requested).name;
+  }
   const owners = (['docker', 'podman'] as const).filter((rt) => hasContainer(rt));
   if (owners.length === 1) return owners[0];
   if (owners.length === 0) {

@@ -228,4 +228,20 @@ describe('restartRuntime', () => {
   it('fails clearly when no engine runs a huddle container', () => {
     expect(() => restartRuntime(undefined, () => false, () => 'docker')).toThrow(/No huddle container/);
   });
+
+  it.each([
+    ['--runtime=', () => ''],
+    ['HUDDLE_RUNTIME=', () => { process.env.HUDDLE_RUNTIME = ''; return undefined; }],
+  ])('rejects an empty %s instead of probing the engines', (_label, setup) => {
+    // Arrange
+    const explicit = setup();
+    const probed: string[] = [];
+
+    // Act
+    const restart = () => restartRuntime(explicit, (rt) => { probed.push(rt); return rt === 'podman'; }, () => 'docker');
+
+    // Assert
+    expect(restart).toThrow(/must not be empty/);
+    expect(probed).toEqual([]);
+  });
 });

@@ -212,6 +212,7 @@ export async function installExtension(
   const manifest = parseManifest(manifestEntry.getData().toString('utf8'));
 
   if (!zip.getEntry('index.js')) throw new Error('index.js missing in zip');
+  assertNotTeamManaged(manifest.id);
 
   // Fastify staat geen route-verwijdering of -herdeclaratie toe op een draaiende
   // instantie. Een al-geladen extensie kunnen we daarom niet live herladen: we
@@ -318,10 +319,22 @@ export function extensionAssetType(filePath: string): string {
   return ASSET_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
+// The team folder outranks uploads (see extensionFolders), so an upload or a
+// removal there would only touch a copy that is not loaded. Refuse instead.
+function assertNotTeamManaged(id: string): void {
+  if (fs.existsSync(path.join(TEAM_EXT_DIR, id))) {
+    throw new Error(`Extension '${id}' is managed in the team extensions folder; change it there.`);
+  }
+}
+
 export function removeExtension(id: string): void {
+  assertNotTeamManaged(id);
   const dir = path.join(EXT_DIR, id);
+  if (!fs.existsSync(dir)) {
+    throw new Error(`Extension '${id}' was not uploaded (it is bundled with Huddle or not installed); only uploaded extensions can be removed.`);
+  }
   unloadModule(id);
-  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
   loaded.delete(id);
 }
 

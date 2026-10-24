@@ -37,6 +37,16 @@ interface PathRequestRow {
   last_path: string | null;
 }
 
+// Only hand the OS a JetBrains Gateway link: anything else the gateway might
+// return, such as a javascript: URL, would run in the portal's origin.
+const GATEWAY_LINK_PREFIX = 'jetbrains-gateway://';
+
+function openGatewayLink(link: string): string {
+  if (typeof link !== 'string' || !link.startsWith(GATEWAY_LINK_PREFIX)) return 'Unexpected link from the gateway; not opened.';
+  window.open(link, '_self');
+  return '';
+}
+
 @Component({
   selector: 'app-container-detail',
   standalone: true,
@@ -183,7 +193,6 @@ export class ContainerDetailComponent implements OnInit {
   activeTab: DetailTab = 'firewall';
   rulesTab: RulesTab = 'allow';
   reconnectStatus = '';
-  ideLinkStatus = '';
   sshLinkStatus = '';
 
   ports = signal<ApprovedHostPort[]>([]);
@@ -406,20 +415,12 @@ export class ContainerDetailComponent implements OnInit {
 
   setTab(t: DetailTab): void { this.activeTab = t; }
 
-  openIde(): void {
-    this.ideLinkStatus = 'Fetching...';
-    this.api.getIdeLink(this.name).subscribe({
-      next: ({ link }) => { this.ideLinkStatus = ''; window.open(link, '_self'); },
-      error: (err) => { this.ideLinkStatus = err.message; },
-    });
-  }
-
   // Sets up the relay + sshd on the gateway side (can take a moment the first
   // time) and hands the jetbrains-gateway:// link to the OS, which opens Gateway.
   openSsh(): void {
     this.sshLinkStatus = 'Preparing SSH...';
     this.api.getSshLink(this.name).subscribe({
-      next: ({ link }) => { this.sshLinkStatus = ''; window.open(link, '_self'); },
+      next: ({ link }) => { this.sshLinkStatus = openGatewayLink(link); },
       error: (err) => { this.sshLinkStatus = err.message; },
     });
   }

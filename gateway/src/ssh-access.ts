@@ -19,6 +19,9 @@ export const SSH_USER = 'vscode';
 // the daemon config. sshd's StrictModes rejects anything user-writable anyway.
 const SSHD_CONFIG = '/etc/ssh/huddle_sshd_config';
 const HOST_KEY = '/etc/ssh/huddle_host_ed25519_key';
+// Container ID the host key was generated for. A snapshot copies /etc/ssh into
+// every container started from it; the ID mismatch makes each one regenerate.
+const HOST_KEY_OWNER = '/etc/ssh/huddle_host_key.owner';
 const AUTHORIZED_KEYS_DIR = '/etc/ssh/huddle_authorized_keys';
 const PID_FILE = '/run/huddle-sshd.pid';
 
@@ -129,7 +132,8 @@ export function buildSshdConfig(env: Record<string, string>): string {
  * Exit codes: 3 = openssh-server missing and not installable, 4 = config invalid,
  * 5 = sshd did not start.
  */
-export function buildEnsureSshdScript(sshdConfig: string): string {
+export function buildEnsureSshdScript(sshdConfig: string, containerId: string): string {
+  if (!/^[a-f0-9]{12,64}$/.test(containerId)) throw new Error(`invalid container id: ${containerId}`);
   const cfgB64 = Buffer.from(sshdConfig, 'utf8').toString('base64');
   return `set -e
 umask 022
@@ -143,7 +147,11 @@ if [ ! -x /usr/sbin/sshd ]; then
 fi
 mkdir -p /run/sshd ${AUTHORIZED_KEYS_DIR}
 chmod 755 ${AUTHORIZED_KEYS_DIR}
-[ -f ${HOST_KEY} ] || ssh-keygen -q -t ed25519 -N '' -f ${HOST_KEY}
+if [ ! -f ${HOST_KEY} ] || [ "$(cat ${HOST_KEY_OWNER} 2>/dev/null)" != '${containerId}' ]; then
+  rm -f ${HOST_KEY} ${HOST_KEY}.pub
+  ssh-keygen -q -t ed25519 -N '' -f ${HOST_KEY}
+  echo '${containerId}' > ${HOST_KEY_OWNER}
+fi
 printf '%s\\n' "$KEYS" > ${AUTHORIZED_KEYS_DIR}/${SSH_USER}
 chown root:root ${AUTHORIZED_KEYS_DIR}/${SSH_USER}
 chmod 644 ${AUTHORIZED_KEYS_DIR}/${SSH_USER}

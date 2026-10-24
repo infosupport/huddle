@@ -52,7 +52,6 @@ import {
   cleanupContainerNetwork,
   resolveContainerByIp,
   isIdeName,
-  execContainerOutput,
   execInContainer,
   type StartParams,
   type IdeName,
@@ -1201,34 +1200,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── IDE gateway link ─────────────────────────────────────────────────────
-  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ide-link', async (req, reply) => {
-    try {
-      const inspect = await inspectContainer(req.params.name);
-      const labels = inspect?.Config?.Labels;
-      const workspacePath: string | undefined = labels?.['com.intellij.devcontainer.workspace.path'];
-      if (!workspacePath) return reply.code(404).send({ error: 'workspace path label not found' });
-      const ide = labels?.['com.devcontainer.ide'];
-      // VS Code installs its own backend on attach and does not write a
-      // jetbrains-gateway:// link; a deep link does not exist here.
-      if (ide === 'vscode') {
-        return reply.code(404).send({ error: 'VS Code does not use a JetBrains deep-link' });
-      }
-      // Rider and IntelliJ both run remote-dev-server.sh, which writes the gateway
-      // link to <workspace>/rider-client-diagnose.log.
-      const logFile = `${workspacePath}/rider-client-diagnose.log`;
-      const output = await execContainerOutput(inspect.Id, [
-        'sh', '-c',
-        `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${logFile}" 2>/dev/null | tail -1`,
-      ]);
-      const links = output.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('jetbrains-gateway://'));
-      if (links.length === 0) return reply.code(404).send({ error: 'IDE backend not started yet — please wait and try again' });
-      return { link: links[links.length - 1] };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
-    }
-  });
-
   // ── SSH link (JetBrains Gateway over SSH) ────────────────────────────────
   // Sets up the relay + sshd on demand and returns a jetbrains-gateway:// link
   // to localhost:<relay port>. Idempotent: clicking again after a container
@@ -1331,7 +1302,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!/^[a-z0-9-]+$/.test(req.params.id)) {
       return reply.code(400).send({ error: 'invalid id' });
     }
-    removeExtension(req.params.id);
+    try {
+      removeExtension(req.params.id);
+    } catch (err: any) {
+      return reply.code(409).send({ error: err.message });
+    }
     notifyStateChanged();
     return { ok: true };
   });

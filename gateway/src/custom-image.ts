@@ -16,7 +16,7 @@
 // so they can be unit-tested without Docker; docker.ts does the orchestration.
 
 /** Bump when the layer script changes: derived images are cached per version. */
-export const HUDDLE_LAYER_VERSION = '1';
+export const HUDDLE_LAYER_VERSION = '2';
 
 /** Set on Huddle's own base image and on every derived image. */
 export const HUDDLE_LAYER_LABEL = 'io.huddle.layer';
@@ -47,20 +47,21 @@ export function withDefaultTag(ref: string): string {
   return ref.includes('@') || imageRepo(ref) !== ref ? ref : `${ref}:latest`;
 }
 
+/** An image ID Huddle recorded when it produced the image itself (see db trusted_images). */
+export type TrustedImage = { kind: 'snapshot' } | { kind: 'derived'; layerVersion: string };
+
 /**
  * Whether an image may run without the Huddle layer. Only images whose origin
- * Huddle controls: the configured base images (by repository, any tag),
- * snapshots committed from a Huddle container, and derived images of the current
- * layer version. A label alone is not enough for an arbitrary image — anyone can
- * set `io.huddle.layer` in their Dockerfile.
+ * Huddle controls: the configured base images (by repository, any tag), and
+ * image IDs Huddle recorded when it committed a snapshot or built a derived
+ * image (the latter only for the current layer version). Labels and tags are
+ * never enough — anyone can set them in a Dockerfile or push to that name.
  */
-export function needsHuddleLayer(ref: string, labels: Record<string, string> | undefined, baseImages: string[]): boolean {
+export function needsHuddleLayer(ref: string, trusted: TrustedImage | null, baseImages: string[]): boolean {
   const repo = imageRepo(ref);
   if (baseImages.some(b => imageRepo(b) === repo)) return false;
-  if (labels?.['com.devcontainer.snapshot'] === 'true') return false;
-  if (repo === DERIVED_IMAGE_REPO || repo.startsWith(`${DERIVED_IMAGE_REPO}/`)) {
-    return labels?.[HUDDLE_LAYER_LABEL] !== 'custom' || labels?.[LAYER_VERSION_LABEL] !== HUDDLE_LAYER_VERSION;
-  }
+  if (trusted?.kind === 'snapshot') return false;
+  if (trusted?.kind === 'derived') return trusted.layerVersion !== HUDDLE_LAYER_VERSION;
   return true;
 }
 
@@ -102,7 +103,7 @@ fail() { echo "[huddle-layer] FAILED: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail "must run as root"
 
 # ── 1. Packages the runtime config scripts rely on ──────────────────────────
-NEED="sudo iptables curl update-ca-certificates useradd usermod groupadd groupmod gpasswd chpasswd passwd getent base64 awk sshd inotifywait"
+NEED="sudo iptables curl update-ca-certificates useradd usermod groupadd groupmod gpasswd chpasswd passwd getent base64 awk sshd inotifywait getcap setcap"
 missing_cmds() {
   m=""
   for c in $NEED; do command -v "$c" >/dev/null 2>&1 || m="$m $c"; done
@@ -117,10 +118,12 @@ if [ -n "$(missing_cmds)" ]; then
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y --no-install-recommends sudo iptables curl ca-certificates passwd libc-bin coreutils openssh-server inotify-tools
+    apt-get install -y --no-install-recommends sudo iptables curl ca-certificates passwd libc-bin coreutils openssh-server inotify-tools libcap2-bin
     rm -rf /var/lib/apt/lists/*
   elif command -v apk >/dev/null 2>&1; then
     apk add --no-cache sudo iptables curl ca-certificates shadow coreutils musl-utils openssh-server inotify-tools
+    # getcap/setcap: libcap-utils on current Alpine, part of libcap on older releases.
+    command -v getcap >/dev/null 2>&1 || apk add --no-cache libcap-utils 2>/dev/null || apk add --no-cache libcap
   else
     fail "unsupported image: Huddle needs apt (Debian/Ubuntu) or apk (Alpine)"
   fi
@@ -182,16 +185,33 @@ rm -rf /etc/sudoers.d
 mkdir -m 755 /etc/sudoers.d
 rm -rf /etc/doas.conf /etc/doas.d
 usermod -p '!' root
-# setuid/setgid binaries other than sudo, and file capabilities.
-SUDO_BIN=$(readlink -f "$(command -v sudo)")
-find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | while IFS= read -r f; do
-  [ "$(readlink -f "$f")" = "$SUDO_BIN" ] || chmod u-s,g-s "$f"
-done
-if command -v getcap >/dev/null 2>&1 && command -v setcap >/dev/null 2>&1; then
-  for d in /bin /sbin /usr /opt /lib /lib64; do
-    [ -d "$d" ] && getcap -r "$d" 2>/dev/null | awk '{ print $1 }' | while IFS= read -r f; do setcap -r "$f" 2>/dev/null || true; done
-  done
+# sudo stays setuid root, so it must be the distro's sudo, not whatever the image
+# put on PATH: a fixed path, reinstalled from the package repository (through
+# the Huddle proxy), and no config that makes it load other code. What this does
+# not cover: an image built to be malicious can still tamper with libc or the
+# package manager itself; only the Huddle base images are fully trusted.
+SUDO_BIN=/usr/bin/sudo
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y --reinstall --no-install-recommends sudo
+  rm -rf /var/lib/apt/lists/*
+  [ "$(dpkg -S "$SUDO_BIN" 2>/dev/null | cut -d: -f1)" = sudo ] || fail "$SUDO_BIN does not belong to the sudo package"
+else
+  apk fix --no-cache --reinstall sudo
+  apk info --who-owns "$SUDO_BIN" 2>/dev/null | grep -q ' is owned by sudo-' || fail "$SUDO_BIN does not belong to the sudo package"
 fi
+[ -f "$SUDO_BIN" ] && [ ! -L "$SUDO_BIN" ] || fail "$SUDO_BIN is not a regular file"
+chown root:root "$SUDO_BIN"
+chmod 4755 "$SUDO_BIN"
+rm -f /etc/ld.so.preload /etc/sudo.conf
+# setuid/setgid binaries other than sudo.
+find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | while IFS= read -r f; do
+  [ "$f" = "$SUDO_BIN" ] || chmod u-s,g-s "$f"
+done
+# File capabilities (cap_setuid+ep on an interpreter is root without setuid), on
+# the whole filesystem. getcap prints "<file> <caps>" or "<file> = <caps>".
+with_caps() { find / -xdev -type f -exec getcap {} + 2>/dev/null | sed -E 's/ (= )?[^ ]+$//'; }
+with_caps | while IFS= read -r f; do setcap -r "$f"; done
 # Host keys are generated per container (ssh-access.ts), never shared per image.
 rm -f /etc/ssh/ssh_host_*
 rm -f /opt/huddle/huddle-ca.crt
@@ -207,9 +227,11 @@ check "$DEV has home /home/$DEV" '[ "$(getent passwd "$DEV" | cut -d: -f6)" = "/
 check "$DEV is in no admin group" '! id -nG "$DEV" | tr " " "\n" | grep -qxE "sudo|wheel|admin|root"'
 check "sudo denies $DEV" 'sudo -n -l -U "$DEV" 2>&1 | grep -q "is not allowed to run sudo"'
 check "root account locked" 'awk -F: '"'"'$1 == "root" { exit !($2 ~ /^[!*]/) }'"'"' /etc/shadow'
-check "sudo is setuid root" '[ -u "$SUDO_BIN" ]'
+check "sudo is setuid root and only root can change it" '[ -n "$(find "$SUDO_BIN" -maxdepth 0 -type f -user root -perm -4000 ! -perm -0022)" ]'
+check "no sudo.conf or ld.so.preload" '[ ! -e /etc/sudo.conf ] && [ ! -e /etc/ld.so.preload ]'
 check "no doas" '[ ! -e /etc/doas.conf ]'
-check "no setuid/setgid besides sudo" '[ -z "$(find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | while IFS= read -r f; do [ "$(readlink -f "$f")" = "$SUDO_BIN" ] || echo "$f"; done)" ]'
+check "no setuid/setgid besides sudo" '[ -z "$(find / -xdev -type f \( -perm -4000 -o -perm -2000 \) ! -path "$SUDO_BIN" 2>/dev/null)" ]'
+check "no file capabilities" '[ -z "$(with_caps)" ]'
 [ "$ok" = 1 ] || fail "doctor checks failed"
 log "done"
 `;

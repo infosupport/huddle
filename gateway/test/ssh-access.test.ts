@@ -85,13 +85,26 @@ describe('buildSshdConfig', () => {
 });
 
 describe('buildEnsureSshdScript', () => {
+  const ID = 'a'.repeat(64);
+
   it('reads the keys from stdin before anything else and embeds the config as base64', () => {
     const cfg = buildSshdConfig({});
-    const script = buildEnsureSshdScript(cfg);
+    const script = buildEnsureSshdScript(cfg, ID);
     const lines = script.split('\n');
     expect(lines.indexOf('KEYS=$(cat)')).toBeLessThan(lines.findIndex(l => l.includes('apt-get')));
     expect(script).toContain(Buffer.from(cfg).toString('base64'));
     expect(script).not.toContain('AllowUsers');
+  });
+
+  it('regenerates the host key when it was made for another container, e.g. in a snapshot', () => {
+    const script = buildEnsureSshdScript(buildSshdConfig({}), ID);
+    expect(script).toContain(`[ "$(cat /etc/ssh/huddle_host_key.owner 2>/dev/null)" != '${ID}' ]`);
+    expect(script).toContain('rm -f /etc/ssh/huddle_host_ed25519_key /etc/ssh/huddle_host_ed25519_key.pub');
+    expect(script).toContain(`echo '${ID}' > /etc/ssh/huddle_host_key.owner`);
+  });
+
+  it('refuses a container id that is not hex', () => {
+    expect(() => buildEnsureSshdScript(buildSshdConfig({}), "abc'; rm -rf /")).toThrow(/invalid container id/);
   });
 });
 

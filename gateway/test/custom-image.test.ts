@@ -46,22 +46,21 @@ describe('imageRepo / withDefaultTag', () => {
 });
 
 describe('needsHuddleLayer', () => {
-  it('runs Huddle base images (any tag) and snapshots as-is', () => {
-    expect(needsHuddleLayer('ghcr.io/infosupport/base-devimage-intellij:latest', undefined, BASES)).toBe(false);
-    expect(needsHuddleLayer('ghcr.io/infosupport/base-devimage-vscode', undefined, BASES)).toBe(false);
-    expect(needsHuddleLayer('my-snap:1', { 'com.devcontainer.snapshot': 'true' }, BASES)).toBe(false);
+  it('runs Huddle base images (any tag) and recorded snapshots as-is', () => {
+    expect(needsHuddleLayer('ghcr.io/infosupport/base-devimage-intellij:latest', null, BASES)).toBe(false);
+    expect(needsHuddleLayer('ghcr.io/infosupport/base-devimage-vscode', null, BASES)).toBe(false);
+    expect(needsHuddleLayer('my-snap:1', { kind: 'snapshot' }, BASES)).toBe(false);
   });
 
-  it('layers any other image, even when it claims the Huddle label', () => {
-    expect(needsHuddleLayer('node:22', undefined, BASES)).toBe(true);
-    expect(needsHuddleLayer('evil/img', { 'io.huddle.layer': 'custom', 'io.huddle.layer.version': HUDDLE_LAYER_VERSION }, BASES)).toBe(true);
+  it('layers any image Huddle did not record, whatever its name or labels claim', () => {
+    expect(needsHuddleLayer('node:22', null, BASES)).toBe(true);
+    expect(needsHuddleLayer('evil/img', null, BASES)).toBe(true);
+    expect(needsHuddleLayer(`huddle-custom/node:abc-l${HUDDLE_LAYER_VERSION}`, null, BASES)).toBe(true);
   });
 
-  it('trusts derived images only for the current layer version', () => {
-    const ok = { 'io.huddle.layer': 'custom', 'io.huddle.layer.version': HUDDLE_LAYER_VERSION };
-    expect(needsHuddleLayer('huddle-custom/node:abc-l1', ok, BASES)).toBe(false);
-    expect(needsHuddleLayer('huddle-custom/node:abc-l0', { ...ok, 'io.huddle.layer.version': '0' }, BASES)).toBe(true);
-    expect(needsHuddleLayer('huddle-custom/node:abc', undefined, BASES)).toBe(true);
+  it('trusts recorded derived images only for the current layer version', () => {
+    expect(needsHuddleLayer('huddle-custom/node:abc', { kind: 'derived', layerVersion: HUDDLE_LAYER_VERSION }, BASES)).toBe(false);
+    expect(needsHuddleLayer('huddle-custom/node:abc', { kind: 'derived', layerVersion: '0' }, BASES)).toBe(true);
   });
 });
 
@@ -70,7 +69,6 @@ describe('derivedImageName', () => {
     const name = derivedImageName('ghcr.io/org/my_img:1.0', `sha256:${'0123456789ab'.repeat(5)}abcd`);
     expect(name).toBe(`huddle-custom/ghcr.io-org-my_img:0123456789ab-l${HUDDLE_LAYER_VERSION}`);
     expect(isValidImageRef(name)).toBe(true);
-    expect(needsHuddleLayer(name, { 'io.huddle.layer': 'custom', 'io.huddle.layer.version': HUDDLE_LAYER_VERSION }, BASES)).toBe(false);
   });
 });
 
@@ -103,6 +101,35 @@ describe('HUDDLE_LAYER_SCRIPT', () => {
     const sudoers = HUDDLE_LAYER_SCRIPT.split("cat > /etc/sudoers <<'EOF'\n")[1].split('\nEOF\n')[0];
     expect(sudoers).not.toMatch(/NOPASSWD/);
     expect(sudoers).not.toMatch(/vscode/);
+  });
+
+  it('uses the distro sudo at a fixed path and drops config that loads other code', () => {
+    for (const fragment of [
+      'SUDO_BIN=/usr/bin/sudo', 'apt-get install -y --reinstall --no-install-recommends sudo',
+      'apk fix --no-cache --reinstall sudo', 'rm -f /etc/ld.so.preload /etc/sudo.conf',
+      'check "no sudo.conf or ld.so.preload"',
+    ]) expect(HUDDLE_LAYER_SCRIPT).toContain(fragment);
+    expect(HUDDLE_LAYER_SCRIPT).not.toContain('command -v sudo)');
+  });
+
+  it('strips file capabilities everywhere and checks none are left', () => {
+    expect(HUDDLE_LAYER_SCRIPT).toMatch(/^NEED=".* getcap setcap"$/m);
+    expect(HUDDLE_LAYER_SCRIPT).toContain('find / -xdev -type f -exec getcap {} +');
+    expect(HUDDLE_LAYER_SCRIPT).toContain('check "no file capabilities"');
+  });
+
+  it.each([
+    ['current libcap', '/usr/bin/my python3 cap_setuid=ep'],
+    ['older libcap', '/usr/bin/my python3 = cap_setuid,cap_net_raw+ep'],
+  ])('reads the file name from %s getcap output', (_label, line) => {
+    // Arrange
+    const sed = HUDDLE_LAYER_SCRIPT.match(/sed -E '([^']+)'/)![1];
+
+    // Act
+    const file = execFileSync('sed', ['-E', sed], { input: `${line}\n` }).toString().trim();
+
+    // Assert
+    expect(file).toBe('/usr/bin/my python3');
   });
 
   it('ends with doctor checks that fail the build', () => {
