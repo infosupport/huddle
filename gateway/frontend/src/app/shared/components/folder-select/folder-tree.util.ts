@@ -1,19 +1,23 @@
-// Turns the flat list of indexed host folders into a tree the portal can browse.
+// The shape of the host folder tree the picker browses, and the path arithmetic
+// that goes with it.
 //
-// The index is a flat set of absolute paths ('T:/projects/huddle'), because that
-// is what `huddle indexfolder` collects and what Docker needs back. A flat list
-// of a few hundred paths is unreadable, so the picker rebuilds the hierarchy
-// here — client side, from the strings themselves. No extra API, and a path that
-// only exists as the parent of an indexed folder still shows up as a node: it
-// demonstrably exists on the host, so it is selectable too.
+// The tree is grown one folder at a time: the API answers with the contents of
+// exactly one directory, so a node starts unloaded and fills in when it is
+// opened. That is the whole reason `loaded` exists — an empty `children` means
+// "we have not looked yet" until it does, and those two are not the same thing
+// to a twisty.
+//
+// The path helpers stay pure string work: hosts spell paths differently
+// (`T:\\projects`, `//server/share`, `/home/me`) and the picker has to render,
+// compare and walk up them without asking the server.
 
 export interface FolderNode {
-  /** Full host path, in the same notation the API stores. */
+  /** Full host path, in the same notation the API returns. */
   path: string;
   /** The segment shown in the tree ('huddle'), or the root ('T:', '/'). */
   name: string;
-  /** True when this exact path is in the index, false for a synthesized parent. */
-  indexed: boolean;
+  /** False until this folder's children have been fetched. */
+  loaded: boolean;
   children: FolderNode[];
 }
 
@@ -21,6 +25,8 @@ export interface FolderRow {
   node: FolderNode;
   depth: number;
   open: boolean;
+  /** Whether to draw a twisty: yes when it has children or might still have. */
+  canExpand: boolean;
 }
 
 /**
@@ -46,9 +52,9 @@ function join(parent: string, segment: string): string {
 
 /**
  * Every node in the tree, parents before children (pre-order). Iterative on
- * purpose: the depth of this tree is the segment depth of an indexed host path,
- * which nothing on the write side bounds, so a recursive walk would put a
- * hostile or merely absurd path in charge of our call stack (CWE-674).
+ * purpose: the depth of this tree is however deep the operator has browsed,
+ * which nothing bounds, so a recursive walk would put a hostile or merely absurd
+ * folder layout in charge of our call stack (CWE-674).
  */
 export function flattenNodes(nodes: readonly FolderNode[]): FolderNode[] {
   const out: FolderNode[] = [];
@@ -84,7 +90,7 @@ export function prettyPath(path: string): string {
 /**
  * The path as the API stores it: forward slashes, upper-case drive letter, no
  * trailing slash except on a root. Typing 't:\\projects\\' must match the
- * 'T:/projects' that came back from the index.
+ * 'T:/projects' that came back from the API.
  */
 export function canonicalPath(path: string): string {
   const { root, rest } = splitRoot(path);
@@ -92,36 +98,27 @@ export function canonicalPath(path: string): string {
   return root.endsWith('/') ? `${root}${rest.join('/')}` : `${root}/${rest.join('/')}`;
 }
 
-export function buildFolderTree(paths: readonly string[]): FolderNode[] {
-  const roots = new Map<string, FolderNode>();
-  const byPath = new Map<string, FolderNode>();
-
-  const nodeFor = (parent: FolderNode | null, path: string, name: string): FolderNode => {
-    const existing = byPath.get(path.toLowerCase());
-    if (existing) return existing;
-    const node: FolderNode = { path, name, indexed: false, children: [] };
-    byPath.set(path.toLowerCase(), node);
-    if (parent) parent.children.push(node);
-    else roots.set(path.toLowerCase(), node);
-    return node;
-  };
-
-  for (const raw of paths) {
-    const { root, rest } = splitRoot(raw);
-    if (!root) continue;
-    let node = nodeFor(null, root, root === '/' ? '/' : root.replace(/\/$/, ''));
-    for (const segment of rest) node = nodeFor(node, join(node.path, segment), segment);
-    node.indexed = true;
-  }
-
-  const byName = (a: FolderNode, b: FolderNode): number =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-  const tree = [...roots.values()];
-  for (const node of flattenNodes(tree)) node.children.sort(byName);
-  return tree.sort(byName);
+/** A folder we know about but have not looked inside yet. */
+export function makeNode(path: string, name: string): FolderNode {
+  return { path, name, loaded: false, children: [] };
 }
 
-/** The node for an exact path, or null when the index no longer holds it. */
+/**
+ * Fills a node with what the API just listed, keeping the children that are
+ * already there.
+ *
+ * Reusing an existing child rather than replacing it keeps everything below it
+ * loaded, so re-listing a folder does not collapse the branch you came from.
+ * Children that are gone from the host disappear here too — that is the point of
+ * looking live.
+ */
+export function setChildren(node: FolderNode, entries: readonly { path: string; name: string }[]): void {
+  const existing = new Map(node.children.map((c) => [c.path.toLowerCase(), c]));
+  node.children = entries.map((e) => existing.get(e.path.toLowerCase()) ?? makeNode(e.path, e.name));
+  node.loaded = true;
+}
+
+/** The node for an exact path, or null when that branch is not loaded. */
 export function findNode(tree: readonly FolderNode[], path: string): FolderNode | null {
   if (!path) return null;
   const wanted = path.toLowerCase();
@@ -149,8 +146,7 @@ function matches(node: FolderNode, query: string): boolean {
 // is tested exactly once and then only has to look at its own children, which are
 // already decided. Asking the question per node instead — walk this node's
 // subtree, then walk each child's subtree again — re-reads the same nodes once
-// per ancestor, so a deep tree from `huddle index-folder` makes every keystroke
-// quadratic.
+// per ancestor, so a deeply browsed tree makes every keystroke quadratic.
 function subtreeHits(tree: readonly FolderNode[], query: string): Set<FolderNode> {
   const all = flattenNodes(tree); // pre-order, so a node always precedes its children
   const hits = new Set<FolderNode>();
@@ -166,7 +162,9 @@ function subtreeHits(tree: readonly FolderNode[], query: string): Set<FolderNode
  * template free of recursion and make the panel cheap to re-render.
  *
  * While filtering, a branch that contains a hit opens itself: a filter that
- * needs manual expanding to show its results is no filter at all.
+ * needs manual expanding to show its results is no filter at all. The filter
+ * only sees what has been loaded — it narrows the folders on screen, it does not
+ * search the host, which would mean walking the whole filesystem per keystroke.
  */
 export function folderRows(
   tree: readonly FolderNode[],
@@ -178,8 +176,8 @@ export function folderRows(
   const hits = q ? subtreeHits(tree, q) : null;
 
   // Iterative for the same reason as flattenNodes: with a filter active every
-  // branch holding a hit opens itself, so the walk follows the full depth of the
-  // indexed paths. Children are pushed in reverse so they pop in tree order.
+  // branch holding a hit opens itself, so the walk follows the full depth of
+  // what has been loaded. Children are pushed in reverse so they pop in tree order.
   const stack: { node: FolderNode; depth: number }[] = [];
   const push = (nodes: readonly FolderNode[], depth: number): void => {
     for (let i = nodes.length - 1; i >= 0; i--) stack.push({ node: nodes[i], depth });
@@ -191,7 +189,7 @@ export function folderRows(
     if (hits && !hits.has(node)) continue;
     const openByFilter = hits !== null && node.children.some((c) => hits.has(c));
     const open = openByFilter || expanded.has(node.path.toLowerCase());
-    rows.push({ node, depth, open });
+    rows.push({ node, depth, open, canExpand: !node.loaded || node.children.length > 0 });
     if (open) push(node.children, depth + 1);
   }
   return rows;

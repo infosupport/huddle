@@ -30,26 +30,91 @@ export interface ApprovedHostPort {
   created_at: number;
 }
 
-// A host folder indexed by `huddle indexfolder` on the host. The portal cannot
-// browse the host filesystem, so this index is the only list of real host folders
-// it can offer the operator.
-export interface IndexedFolder {
-  id: number;
+// One folder on the host, as the host agent found it just now. A browser cannot
+// hand a server a folder path, so the picker builds one out of these.
+export interface HostFolder {
   path: string;
-  label: string;
-  source: string;
-  created_at: number;
+  name: string;
 }
 
-export interface IndexResult {
-  added: number;
-  updated: number;
-  skipped: number;
-  removed: number;
-  invalid: { path: string; error: string }[];
-  total: number;
+// The contents of exactly one folder (path '' = the roots). `truncated` means the
+// folder holds more than `max` subfolders and the listing stops there.
+export interface HostFolderListing {
+  path: string;
+  folders: HostFolder[];
+  truncated: boolean;
   max: number;
 }
+
+// The host agent (`huddle pipe serve`) as the gateway last heard from it.
+export interface HostPipeStatus {
+  online: boolean;
+  version?: string;
+  platform?: string;
+  tools?: string[];
+  updatedAt?: string;
+}
+
+// An environment provider (Docker Sandboxes today) and whether it can be used
+// right now. Nothing here is provider-specific: the API names and labels them.
+export interface ProviderStatus {
+  id: string;
+  label: string;
+  available: boolean;
+  version?: string;
+  error?: string;
+  agents: string[];
+}
+
+export interface SandboxInfo {
+  name: string;
+  provider: string;
+  status?: string;
+  workspaces?: string[];
+  /** Created by Huddle, so Huddle may remove it; other sandboxes are only listed. */
+  managed?: boolean;
+}
+
+/** One folder a sandbox is created with. */
+export interface SandboxWorkspace {
+  path: string;
+  readOnly: boolean;
+}
+
+export interface SandboxSpec {
+  name?: string;
+  agent: string;
+  workspaces: SandboxWorkspace[];
+}
+
+export interface SandboxStep {
+  label: string;
+  command: string;
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface SandboxCreateResult {
+  name: string;
+  ok: boolean;
+  steps: SandboxStep[];
+}
+
+/** An API failure, with the HTTP status and the API's machine `error` code kept. */
+export interface ApiError extends Error {
+  status?: number;
+  code?: string;
+}
+
+/** The gateway could not reach the host agent: `huddle pipe start` has not run. */
+export function isHostPipeOffline(e: unknown): boolean {
+  const err = e as ApiError | null;
+  return err?.code === 'host_pipe_offline' || err?.status === 503;
+}
+
+export const HOST_PIPE_OFFLINE_HINT =
+  'Host agent not running — run `huddle pipe start` (or `huddle init`) on the host.';
 
 export interface FolderMapping {
   id: number;
@@ -73,7 +138,11 @@ export class ApiService {
         // code: a rejected path should read "host_path must be an absolute
         // path", not "invalid_host_path".
         const msg = err?.error?.message ?? err?.error?.error ?? err?.message ?? 'Unknown error';
-        return throwError(() => new Error(msg));
+        const e: ApiError = Object.assign(new Error(msg), {
+          status: err?.status,
+          code: typeof err?.error?.error === 'string' ? err.error.error : undefined,
+        });
+        return throwError(() => e);
       })
     );
   }
@@ -340,26 +409,38 @@ export class ApiService {
     return this.handle(this.http.delete<{ ok: boolean }>(`/api/folder-mappings/${id}`));
   }
 
-  // ── Indexed host folders ────────────────────────────────────────────────────
-  getIndexedFolders(): Observable<{ folders: IndexedFolder[]; max: number }> {
-    return this.handle(this.http.get<{ folders: IndexedFolder[]; max: number }>('/api/indexed-folders'));
+  // ── Host folders (via the host agent) ───────────────────────────────────────
+  // One call, one folder. Without a path this returns the roots to start from
+  // (the drives on Windows, / and home elsewhere); with one it returns that
+  // folder's immediate subfolders. 503 host_pipe_offline when the agent is down.
+  listHostFolders(path?: string): Observable<HostFolderListing> {
+    const url = path ? `/api/host-folders?path=${encodeURIComponent(path)}` : '/api/host-folders';
+    return this.handle(this.http.get<HostFolderListing>(url));
   }
 
-  addIndexedFolder(path: string): Observable<IndexResult> {
-    return this.handle(this.http.post<IndexResult>('/api/indexed-folders', { path, source: 'manual' }));
+  hostPipeStatus(): Observable<HostPipeStatus> {
+    return this.handle(this.http.get<HostPipeStatus>('/api/host-pipe'));
   }
 
-  deleteIndexedFolder(id: number): Observable<{ ok: boolean }> {
-    return this.handle(this.http.delete<{ ok: boolean }>(`/api/indexed-folders/${id}`));
+  // ── Environment providers (sandboxes) ───────────────────────────────────────
+  listEnvironments(): Observable<{ providers: ProviderStatus[] }> {
+    return this.handle(this.http.get<{ providers: ProviderStatus[] }>('/api/environments'));
   }
 
-  // Without a root this empties the whole index; with one it removes that folder
-  // and everything below it, which is what pruning a branch in the tree means.
-  clearIndexedFolders(root?: string): Observable<{ removed: number }> {
-    const url = root
-      ? `/api/indexed-folders?root=${encodeURIComponent(root)}`
-      : '/api/indexed-folders';
-    return this.handle(this.http.delete<{ removed: number }>(url));
+  listSandboxes(provider: string): Observable<{ sandboxes: SandboxInfo[] }> {
+    return this.handle(this.http.get<{ sandboxes: SandboxInfo[] }>(
+      `/api/environments/${encodeURIComponent(provider)}/sandboxes`));
+  }
+
+  createSandbox(provider: string, spec: SandboxSpec): Observable<SandboxCreateResult> {
+    return this.handle(this.http.post<SandboxCreateResult>(
+      `/api/environments/${encodeURIComponent(provider)}/sandboxes`, spec));
+  }
+
+  removeSandbox(provider: string, name: string, force = false): Observable<{ ok: boolean }> {
+    const q = force ? '?force=1' : '';
+    return this.handle(this.http.delete<{ ok: boolean }>(
+      `/api/environments/${encodeURIComponent(provider)}/sandboxes/${encodeURIComponent(name)}${q}`));
   }
 
   // ── Approved Host Ports ──────────────────────────────────────────────────────
