@@ -246,14 +246,18 @@ function unloadModule(id: string, baseDir: string = EXT_DIR): void {
 // folder here, alongside the uploaded extensions in EXT_DIR.
 export const TEAM_EXT_DIR = process.env.HUDDLE_EXTENSIONS_MOUNT ?? '/extensions';
 
-export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
-  // Defense-in-depth: the id indexes a directory under baseDir, so it must be a
-  // single safe path component (no separators, no `..`). Callers already pass a
-  // validated manifest.id or a readdir basename; this guard makes the path-join
-  // sink safe regardless of the source and closes the traversal class outright.
+// Defense-in-depth: an id indexes a directory under an extensions folder, so it
+// must be a single safe path component (no separators, no `..`). Callers already
+// pass a validated manifest.id, route param or readdir basename; checking it at
+// every path-join sink keeps them safe regardless of the source.
+function assertSafeId(id: string): void {
   if (!/^[a-z0-9-]+$/.test(id)) {
     throw new Error(`invalid extension id: ${id}`);
   }
+}
+
+export async function loadExtension(id: string, baseDir: string = EXT_DIR): Promise<void> {
+  assertSafeId(id);
   const dir = path.join(baseDir, id);
   const manifestPath = path.join(dir, 'manifest.json');
   const indexPath = path.join(dir, 'index.js');
@@ -322,6 +326,7 @@ export function extensionAssetType(filePath: string): string {
 // The team folder outranks uploads (see extensionFolders), so an upload or a
 // removal there would only touch a copy that is not loaded. Refuse instead.
 function assertNotTeamManaged(id: string): void {
+  assertSafeId(id);
   if (fs.existsSync(path.join(TEAM_EXT_DIR, id))) {
     throw new Error(`Extension '${id}' is managed in the team extensions folder; change it there.`);
   }

@@ -200,3 +200,16 @@ describe('changing an extension the team folder manages', () => {
     expect(fs.existsSync(path.join(dirs.uploaded, 'shared'))).toBe(false);
   });
 });
+
+describe('extension ids that are not a single folder name', () => {
+  it.each(['../team', '..', 'a/b', 'Shared'])('refuses to remove %s', async (id) => {
+    // Arrange
+    const loader = await freshLoader();
+
+    // Act
+    const remove = () => loader.removeExtension(id);
+
+    // Assert
+    expect(remove).toThrow(/invalid extension id/);
+  });
+});
