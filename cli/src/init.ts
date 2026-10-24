@@ -6,6 +6,8 @@ import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import os from 'os';
 import { hostAgentLogsMountArgs, hostCodexIndexMountArgs, hostCodexLogsMountArgs } from './host-logs';
+import { PIPE_DIR } from './pipe/protocol';
+import { startPipeAgent } from './pipe/command';
 import fs from 'fs';
 
 export const CONTAINER = 'huddle';
@@ -172,6 +174,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   const extFolder = cfg.extensionsFolder?.trim();
   if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
   if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
+  // The host pipe lives inside the ~/.huddle mount; create it now so the
+  // gateway sees the folder from its first start, before the agent runs.
+  fs.mkdirSync(PIPE_DIR, { recursive: true });
   // Build the container command as an argv array (runArgs → execFileSync, no
   // shell). The folder paths below come from config and are operator-writable via
   // the settings API, so they must never reach a shell as a string.
@@ -203,6 +208,16 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // gateway cleans that up itself (see dns-egress.ts / the startup sanitize in
   // index.ts).
   runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
+
+  // The host pipe lets the portal browse host folders and drive host tools
+  // (docs/host-pipe.md). Restarting it here means it always runs the CLI that
+  // was just installed. It is an extra, so a failure only warns.
+  const pipe = await startPipeAgent();
+  if (pipe.ok) {
+    console.log(dim(`Host pipe: running (pid ${pipe.pid})`));
+  } else {
+    console.log(yellow(`[!] Host pipe did not start: ${pipe.error}. Run: huddle pipe start`));
+  }
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));

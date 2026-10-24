@@ -8,7 +8,7 @@ import { runExtensionList, runExtensionInstall, runExtensionRemove } from './ext
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
 import { runMigrate } from './migrate';
-import { runIndexFolder } from './indexfolder';
+import { runPipe } from './pipe/command';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -26,9 +26,9 @@ interface ParsedArgs {
   mounts: string[];
 }
 
-const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'extension', 'ext', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'extension', 'ext', 'init', 'restart', 'experiment', 'migrate', 'pipe', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -134,10 +134,11 @@ Usage:
                                      team firewall-rules folder)
   huddle migrate [folder]            Wire an existing docker-compose devcontainer
                                      behind Huddle by generating an override file
-  huddle indexfolder [folder]        Index the folders under this one so the portal
-                                     can offer them where a host path is needed
-                                     (the portal runs in a container and cannot
-                                     browse your host)
+  huddle pipe status                 Show whether the host pipe is online (lets the
+                                     portal browse host folders and run sbx)
+  huddle pipe start|stop             Start (or replace) / stop the host pipe in the
+                                     background (huddle init starts it for you)
+  huddle pipe serve                  Run the host pipe in the foreground (debugging)
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
@@ -192,16 +193,6 @@ Migrate options:
   --output <path>                    Override file to write
                                      (default: docker-compose.huddle.yml next to the source)
   --force                            Overwrite an existing override file
-
-Indexfolder options:
-  --depth <n>                        How deep to walk (default: 2, max 8)
-  --all                              Also index build folders (node_modules, dist,
-                                     target, ...); hidden folders stay skipped
-  --replace                          Drop the earlier entries under this folder
-                                     first, instead of merging
-  --list                             Show the current index and exit
-  --clear                            Empty the index (or, with a folder, only the
-                                     entries under it)
 
 Firewall options:
   -i, --interactive                  Interactively approve/deny (list)
@@ -403,15 +394,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (cmd === 'indexfolder' || cmd === 'indexfolders') {
-    await runIndexFolder({
-      path: positional[1],
-      depth: flagString(flags, 'depth'),
-      all: flagBool(flags, 'all'),
-      replace: flagBool(flags, 'replace'),
-      clear: flagBool(flags, 'clear'),
-      list: flagBool(flags, 'list'),
-    });
+  if (cmd === 'pipe') {
+    await runPipe({ action: sub });
     return;
   }
 
