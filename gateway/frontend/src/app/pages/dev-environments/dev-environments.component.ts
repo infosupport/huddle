@@ -11,6 +11,8 @@ import { Container } from '../../core/models/container.model';
 import { Rule } from '../../core/models/rule.model';
 
 type EnvType = 'container' | 'sandbox';
+/** An available provider whose sandbox listing failed, with the API's message. */
+interface ProviderFailure { id: string; label: string; error: string; }
 interface EnvRow {
   type: EnvType;
   name: string;
@@ -75,6 +77,8 @@ export class DevEnvironmentsComponent {
 
   /** Providers that could not be asked for their sandboxes, with why. */
   unavailable = computed(() => this.providers().filter(p => !p.available));
+  /** Available providers whose sandbox listing failed on the last refresh; their last known rows stay. */
+  failed = signal<ProviderFailure[]>([]);
 
   constructor() {
     this.state.containers$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(c => this.containers.set(c));
@@ -94,8 +98,9 @@ export class DevEnvironmentsComponent {
     // loading indicator so it doesn't look empty/stuck. One failing provider
     // must not hide the sandboxes of the others.
     this.loadingSandboxes.set(true);
-    const done = (providers: ProviderStatus[], sandboxes: SandboxInfo[]) => {
+    const done = (providers: ProviderStatus[], sandboxes: SandboxInfo[], failed: ProviderFailure[] = []) => {
       this.providers.set(providers);
+      this.failed.set(failed);
       this.sandboxes.set(sandboxes);
       this.loadingSandboxes.set(false);
       this.sandboxesLoaded.set(true);
@@ -104,11 +109,16 @@ export class DevEnvironmentsComponent {
       next: ({ providers }) => {
         const available = (providers ?? []).filter(p => p.available);
         if (!available.length) { done(providers ?? [], []); return; }
+        const failed: ProviderFailure[] = [];
         forkJoin(available.map(p => this.api.listSandboxes(p.id).pipe(
           // Older/odd providers may leave `provider` out; the row needs it to remove.
           map(r => (r.sandboxes ?? []).map(s => ({ ...s, provider: s.provider || p.id }))),
-          catchError(() => of([] as SandboxInfo[])),
-        ))).subscribe(lists => done(providers, lists.flat()));
+          // A failed listing is not "no sandboxes": keep what we last saw and say so.
+          catchError(e => {
+            failed.push({ id: p.id, label: p.label, error: isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'unknown error' });
+            return of(this.sandboxes().filter(s => s.provider === p.id));
+          }),
+        ))).subscribe(lists => done(providers, lists.flat(), failed));
       },
       error: (e) => {
         done([], []);

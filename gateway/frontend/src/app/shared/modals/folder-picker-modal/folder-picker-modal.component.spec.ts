@@ -171,5 +171,33 @@ describe('FolderPickerModalComponent', () => {
       // De getypte waarde blijft staan: met de hand een pad invullen werkt nog.
       expect(c.selected).toEqual(['T:/projects']);
     });
+
+    // Een mislukte lijst is geen lege map: de map blijft openklapbaar en de
+    // volgende keer openklappen probeert het opnieuw.
+    it('laat een map openklapbaar na een mislukte lijst en probeert opnieuw', async () => {
+      const offline = Object.assign(new Error('host_pipe_offline'), { status: 503, code: 'host_pipe_offline' }) as ApiError;
+      const api = fakeApi();
+      let fail = true;
+      TestBed.overrideProvider(ApiService, {
+        useValue: {
+          listHostFolders: (path?: string) =>
+            path && fail ? (listCalls.push(path), throwError(() => offline)) : api.listHostFolders(path),
+        },
+      });
+      const c = await open(false);
+      const ev = { stopPropagation() {} } as unknown as Event;
+
+      c.toggle(c.rows[0].node, ev); await settle();
+      expect(c.loadError).toBe(HOST_PIPE_OFFLINE_HINT);
+      expect(c.error).toBe('');
+      expect(c.rows[0].canExpand).toBe(true);
+      expect(c.rows[0].open).toBe(false);
+
+      fail = false;
+      c.toggle(c.rows[0].node, ev); await settle();
+      expect(c.loadError).toBe('');
+      expect(c.rows.map((r) => r.node.name)).toEqual(['T:', 'projects', 'tools']);
+      expect(listCalls).toEqual(['', 'T:/', 'T:/']);
+    });
   });
 });

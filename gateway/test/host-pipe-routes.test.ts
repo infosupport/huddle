@@ -158,6 +158,19 @@ describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
     });
   });
 
+  it('GET vergeet records van verdwenen sandboxes, zodat een hergebruikte naam niet managed wordt', async () => {
+    db.db.prepare('INSERT INTO sandboxes (provider, name, created_at) VALUES (?, ?, unixepoch() - 60)').run('fake', 'gone');
+    db.recordSandbox('fake', 'just-made'); // net aangemaakt: mag nog ontbreken in een lopende list
+    existing = [];
+    await app.inject({ method: 'GET', url: '/api/environments/fake/sandboxes' });
+    expect(db.hasSandbox('fake', 'gone')).toBe(false);
+    expect(db.hasSandbox('fake', 'just-made')).toBe(true);
+
+    existing = [{ name: 'gone', provider: 'fake' }];
+    const list = await app.inject({ method: 'GET', url: '/api/environments/fake/sandboxes' });
+    expect(list.json().sandboxes).toEqual([{ name: 'gone', provider: 'fake', managed: false }]);
+  });
+
   it('POST: mislukte create wordt niet geregistreerd; ontbrekende velden → 400', async () => {
     const r = await app.inject({
       method: 'POST', url: '/api/environments/fake/sandboxes',

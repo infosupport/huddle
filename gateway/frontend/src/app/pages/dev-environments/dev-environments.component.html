@@ -15,6 +15,9 @@
 @for (p of unavailable(); track p.id) {
   <p class="notice">{{ p.label }} unavailable{{ p.error ? ': ' + p.error : '' }}</p>
 }
+@for (f of failed(); track f.id) {
+  <p class="notice">Could not list {{ f.label }} sandboxes: {{ f.error }} — showing the last known list; use Refresh to retry.</p>
+}
 
 <div class="card">
   <table class="data-table">

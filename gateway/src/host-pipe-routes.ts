@@ -13,7 +13,7 @@ import {
   InvalidSpecError,
   ToolFailedError,
 } from './environments';
-import { recordSandbox, hasSandbox, deleteSandbox, logAudit } from './db';
+import { recordSandbox, hasSandbox, deleteSandbox, listSandboxRecords, logAudit } from './db';
 import { notifyStateChanged } from './events';
 
 export interface HostPipeRouteDeps {
@@ -80,8 +80,17 @@ export function registerHostPipeRoutes(app: FastifyInstance, deps: HostPipeRoute
     const provider = getProvider(req.params.provider);
     if (!provider) return reply.code(404).send({ error: 'unknown_provider' });
     try {
+      const startedAt = Math.floor(Date.now() / 1000);
+      const listed = await provider.list();
+      // Forget sandboxes that are gone: providers reuse names, and a record must
+      // not make a later sandbox with the same name look like Huddle's. Only
+      // records older than this list, so a create finishing meanwhile is kept.
+      const names = new Set(listed.map((s) => s.name));
+      for (const r of listSandboxRecords(provider.id)) {
+        if (!names.has(r.name) && r.created_at < startedAt) deleteSandbox(provider.id, r.name);
+      }
       // managed: Huddle created it, so the portal may offer to remove it.
-      const sandboxes = (await provider.list()).map((s) => ({ ...s, managed: hasSandbox(provider.id, s.name) }));
+      const sandboxes = listed.map((s) => ({ ...s, managed: hasSandbox(provider.id, s.name) }));
       return { sandboxes };
     } catch (err) {
       return sendError(reply, err);

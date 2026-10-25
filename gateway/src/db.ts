@@ -597,7 +597,7 @@ export function deleteSandbox(provider: string, name: string): void {
 }
 
 export function listSandboxRecords(provider: string): SandboxRecord[] {
-  return db.prepare('SELECT * FROM sandboxes WHERE provider = ? ORDER BY name ASC').all(provider) as SandboxRecord[];
+  return db.prepare('SELECT provider, name, created_at FROM sandboxes WHERE provider = ? ORDER BY name ASC').all(provider) as SandboxRecord[];
 }
 
 // ── Firewall Groups (#69) ─────────────────────────────────────────────────────

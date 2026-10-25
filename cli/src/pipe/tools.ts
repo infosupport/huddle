@@ -74,11 +74,11 @@ export function resolveTool(name: string): ResolvedTool {
     for (const lookup of lookups) {
       for (const file of candidates(lookup)) {
         const ext = path.extname(file).toLowerCase();
-        if (process.platform === 'win32' && REFUSED_EXT.has(ext)) {
-          if (isRunnableFile(file)) refused ??= file;
+        // On Windows, skip batch files (they go through cmd.exe) and non-executables.
+        if (process.platform === 'win32' && !WIN_RUNNABLE_EXT.has(ext)) {
+          if (REFUSED_EXT.has(ext) && isRunnableFile(file)) refused ??= file;
           continue;
         }
-        if (process.platform === 'win32' && !WIN_RUNNABLE_EXT.has(ext)) continue;
         if (isRunnableFile(file)) return { path: file };
       }
     }

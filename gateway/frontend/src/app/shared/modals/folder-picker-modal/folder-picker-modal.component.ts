@@ -112,6 +112,9 @@ import {
               }
             </div>
           }
+          @if (loadError) {
+            <p class="fp-empty fp-note fp-error">{{ loadError }} Expand the folder again to retry.</p>
+          }
           @if (truncated) {
             <p class="fp-empty fp-note">
               Only the first {{ max }} subfolders are shown. Type the path if the folder
@@ -240,6 +243,8 @@ export class FolderPickerModalComponent implements OnInit, OnChanges {
   selected: string[] = [];
   /** Set when the host could not be listed at all — the box says so and stays open. */
   error = '';
+  /** Set when one folder could not be listed; the tree stays and the folder can be retried. */
+  loadError = '';
   max = 0;
 
   private tree: FolderNode[] = [];
@@ -409,16 +414,22 @@ export class FolderPickerModalComponent implements OnInit, OnChanges {
     this.refresh();
     const listing = await this.fetch(node.path);
     this.loading.delete(key);
-    // A folder we cannot read (permissions, unplugged drive) is marked loaded
-    // with nothing in it: the twisty goes away instead of retrying forever.
-    setChildren(node, listing?.folders ?? []);
+    // A failed listing (API error, host agent offline) leaves the folder unloaded
+    // and collapsed, so it keeps its twisty and the next expand tries again.
+    if (listing) setChildren(node, listing.folders);
+    else this.expanded.delete(key);
     this.refresh();
   }
 
   private async fetch(path: string): Promise<HostFolderListing | null> {
     try {
-      return await this.request(path);
-    } catch {
+      const listing = await this.request(path);
+      this.loadError = '';
+      return listing;
+    } catch (e) {
+      this.loadError = isHostPipeOffline(e)
+        ? HOST_PIPE_OFFLINE_HINT
+        : `Could not list ${prettyPath(path)} (${(e as Error)?.message || 'unknown error'}).`;
       return null;
     }
   }
