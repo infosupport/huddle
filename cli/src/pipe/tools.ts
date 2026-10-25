@@ -68,20 +68,20 @@ export function resolveTool(name: string): ResolvedTool {
   const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
   let refused: string | undefined;
 
-  for (const bin of bins) {
-    // A bin with a directory in it is a path, not a name to look up on PATH.
-    const lookups = bin.includes('/') || bin.includes('\\') ? [path.resolve(bin)] : dirs.map((d) => path.join(d, bin));
-    for (const lookup of lookups) {
-      for (const file of candidates(lookup)) {
-        const ext = path.extname(file).toLowerCase();
-        // On Windows, skip batch files (they go through cmd.exe) and non-executables.
-        if (process.platform === 'win32' && !WIN_RUNNABLE_EXT.has(ext)) {
-          if (REFUSED_EXT.has(ext) && isRunnableFile(file)) refused ??= file;
-          continue;
-        }
-        if (isRunnableFile(file)) return { path: file };
-      }
+  // Every file to try, in order. A bin with a directory in it is a path, not a
+  // name to look up on PATH.
+  const files = bins
+    .flatMap((bin) => (bin.includes('/') || bin.includes('\\') ? [path.resolve(bin)] : dirs.map((d) => path.join(d, bin))))
+    .flatMap(candidates);
+
+  for (const file of files) {
+    const ext = path.extname(file).toLowerCase();
+    // On Windows, skip batch files (they go through cmd.exe) and non-executables.
+    if (process.platform === 'win32' && !WIN_RUNNABLE_EXT.has(ext)) {
+      if (REFUSED_EXT.has(ext) && isRunnableFile(file)) refused ??= file;
+      continue;
     }
+    if (isRunnableFile(file)) return { path: file };
   }
 
   if (refused) {

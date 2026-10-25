@@ -86,11 +86,14 @@ export function registerHostPipeRoutes(app: FastifyInstance, deps: HostPipeRoute
       // not make a later sandbox with the same name look like Huddle's. Only
       // records older than this list, so a create finishing meanwhile is kept.
       const names = new Set(listed.map((s) => s.name));
-      for (const r of listSandboxRecords(provider.id)) {
+      const records = listSandboxRecords(provider.id);
+      for (const r of records) {
         if (!names.has(r.name) && r.created_at < startedAt) deleteSandbox(provider.id, r.name);
       }
-      // managed: Huddle created it, so the portal may offer to remove it.
-      const sandboxes = listed.map((s) => ({ ...s, managed: hasSandbox(provider.id, s.name) }));
+      // managed: Huddle created it, so the portal may offer to remove it. Only
+      // listed names are looked up, so the records just dropped never match.
+      const managed = new Set(records.map((r) => r.name));
+      const sandboxes = listed.map((s) => ({ ...s, managed: managed.has(s.name) }));
       return { sandboxes };
     } catch (err) {
       return sendError(reply, err);
