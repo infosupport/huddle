@@ -190,6 +190,9 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
   dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
+  // Its host path, so the gateway can refuse mounts that would expose it (the
+  // operator token in config.json, the host pipe) to a devcontainer or sandbox.
+  dockerArgs.push('-e', `HUDDLE_HOST_HOME_DIR=${CONFIG_DIR}`);
   if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
   if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
   const hostLogs = hostAgentLogsMountArgs(cfg, os.homedir());

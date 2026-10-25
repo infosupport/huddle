@@ -34,7 +34,7 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
-import { normalizeHostPath, hostPathError } from './host-path';
+import { normalizeHostPath, hostPathError, huddleHomeMountError } from './host-path';
 import { registerHostPipeRoutes } from './host-pipe-routes';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
@@ -961,12 +961,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
           const seen = new Set<string>();
           normalizedMounts = mounts.map((m) => {
             // Host paths go through the one normalizer (host-path.ts): the value
-            // may be typed in the modal, picked from the folder index or sent by
-            // the CLI, and on Windows all three spell the same folder
-            // differently (`T:\p`, `t:/p/`, `T:/p`).
+            // may be typed in the modal, picked from the host folder browser or
+            // sent by the CLI, and on Windows all three spell the same folder
+            // differently (`T:\p`, `t:/p/`, `T:/p`). Workspace mounts are read-write.
             const hostPath = normalizeHostPath(m.hostPath ?? '');
             const containerPath = (m.containerPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-            const hostProblem = hostPathError(hostPath);
+            const hostProblem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, false);
             if (hostProblem) throw new Error(`Host path ${hostProblem}: "${m.hostPath ?? ''}"`);
             const pathProblem = containerPathError(containerPath);
             if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
@@ -980,7 +980,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       const fwd = normalizeHostPath(workspaceDir ?? '');
       if (!empty && !normalizedMounts) {
-        const problem = hostPathError(fwd);
+        const problem = hostPathError(fwd) ?? huddleHomeMountError(fwd, false);
         if (problem) return reply.code(400).send({ error: `workspaceDir ${problem}: "${workspaceDir ?? ''}"` });
       }
       const leaf = empty
@@ -1440,7 +1440,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // Windows translated to the engine's prefix at container-create time.
       const hostPath = normalizeHostPath(host_path);
       if (hostPath) {
-        const problem = hostPathError(hostPath);
+        const problem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, read_only === 1);
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
       }
       const id = createFolderMapping({
@@ -1462,7 +1462,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/folder-mappings/:id',
     async (req, reply) => {
       const id = Number(req.params.id);
-      if (!getFolderMapping(id)) return reply.code(404).send({ error: 'not_found' });
+      const current = getFolderMapping(id);
+      if (!current) return reply.code(404).send({ error: 'not_found' });
       let patch;
       try {
         patch = fromWirePatch(req.body);
@@ -1475,6 +1476,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         const problem = patch.hostPath ? hostPathError(patch.hostPath) : null;
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
       }
+      // Checked on the merged mapping: making a home-folder mapping writable is a
+      // patch of read_only alone.
+      const merged = { ...current, ...patch };
+      const homeProblem = merged.hostPath ? huddleHomeMountError(merged.hostPath, merged.readOnly) : null;
+      if (homeProblem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${homeProblem}` });
       if (!updateFolderMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
       notifyStateChanged();
       return { ok: true };

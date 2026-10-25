@@ -54,3 +54,30 @@ export function hostPathLeaf(p: string): string {
   const segments = p.split('/').filter(Boolean);
   return segments.length ? segments[segments.length - 1] : p;
 }
+
+// Huddle's own host folder (~/.huddle), as `huddle init` passes it in
+// HUDDLE_HOST_HOME_DIR; null when the gateway was started without it. It holds
+// config.json (with the operator token) and the host pipe (pipe/), which runs
+// allowlisted tools on the host for whoever can write a request file. A mount
+// that exposes it would hand a devcontainer or sandbox those powers, so:
+//  - ~/.huddle itself and everything inside it is never mounted;
+//  - a folder that contains it (the home folder, a drive root) only read-only.
+// Compared case-insensitively: Windows and macOS file systems are, and on Linux
+// this only over-refuses. Symlinks are not resolved (the gateway can't see the host).
+export function hostHuddleHome(): string | null {
+  return normalizeHostPath(process.env.HUDDLE_HOST_HOME_DIR ?? '') || null;
+}
+
+export function huddleHomeMountError(p: string, readOnly: boolean, home: string | null = hostHuddleHome()): string | null {
+  if (!home) return null;
+  const path = p.toLowerCase();
+  const huddle = home.toLowerCase();
+  const withSlash = (s: string) => (s.endsWith('/') ? s : `${s}/`);
+  if (path === huddle || path.startsWith(withSlash(huddle))) {
+    return `must not be Huddle's own folder (${home}) or inside it`;
+  }
+  if (!readOnly && huddle.startsWith(withSlash(path))) {
+    return `contains Huddle's own folder (${home}), so it can only be mounted read-only`;
+  }
+  return null;
+}

@@ -79,6 +79,21 @@ describe('buildCreateArgs', () => {
   it('weigert lege workspaces', () => {
     expect(() => buildCreateArgs({ name: 'b', agent: 'claude', workspaces: [] })).toThrow(/workspace/);
   });
+
+  it('stelt ~/.huddle niet bloot: niet erin, de home alleen read-only en niet als eerste', () => {
+    const before = process.env.HUDDLE_HOST_HOME_DIR;
+    process.env.HUDDLE_HOST_HOME_DIR = '/home/me/.huddle';
+    try {
+      const create = (...w: ReturnType<typeof ws>[]) => buildCreateArgs({ name: 'b', agent: 'claude', workspaces: w });
+      expect(() => create(ws('/home/me/.huddle/pipe'))).toThrow(InvalidSpecError);
+      expect(() => create(ws('/home/me'))).toThrow(/read-only/);
+      expect(() => create(ws('/ok'), ws('/home/me'))).toThrow(/read-only/);
+      expect(create(ws('/ok'), ws('/home/me', true))).toEqual(['create', '--name', 'b', 'claude', '/ok', '/home/me:ro']);
+    } finally {
+      if (before === undefined) delete process.env.HUDDLE_HOST_HOME_DIR;
+      else process.env.HUDDLE_HOST_HOME_DIR = before;
+    }
+  });
 });
 
 describe('defaultSandboxName', () => {

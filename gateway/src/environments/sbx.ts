@@ -6,7 +6,7 @@
 
 import crypto from 'crypto';
 import { hostPipe, HostPipe } from '../host-pipe';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from '../host-path';
+import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError } from '../host-path';
 import {
   EnvironmentProvider,
   InvalidSpecError,
@@ -79,7 +79,10 @@ export function buildCreateArgs(spec: SandboxSpec & { name: string }): string[] 
     const p = validWorkspacePath(w?.path);
     if (seen.has(key(p))) return;
     seen.add(key(p));
-    paths.push(i > 0 && w.readOnly === true ? `${p}:ro` : p);
+    const readOnly = i > 0 && w.readOnly === true;
+    const homeProblem = huddleHomeMountError(p, readOnly);
+    if (homeProblem) throw new InvalidSpecError(`workspace path ${homeProblem}`);
+    paths.push(readOnly ? `${p}:ro` : p);
   });
   return ['create', '--name', spec.name, spec.agent, ...paths];
 }

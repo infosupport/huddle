@@ -16,6 +16,12 @@ host                                   gateway container
 Devcontainers and sandboxes never get this folder mounted. Only the gateway (which already holds the
 Docker socket, i.e. is already fully trusted by the host) and the host agent can write to it.
 
+The agent trusts every request file, so that is enforced: `huddle init` passes the host path of
+`~/.huddle` to the gateway (`HUDDLE_HOST_HOME_DIR`), and every devcontainer workspace, folder mapping and
+sandbox workspace is refused when it is `~/.huddle` or inside it, and only allowed read-only when it
+contains it (the home folder, a drive root). Compared case-insensitively; symlinks are not resolved. This
+also keeps `config.json` (with the operator token) out of containers.
+
 ## Lifecycle
 
 - `huddle init` (and `huddle restart`) starts the host agent in the background, replacing a running one
@@ -97,6 +103,8 @@ Adding an environment = one provider file in `gateway/src/environments/` + its b
 agent's `TOOLS`. Nothing in the API, the pipe or the frontend is sbx-specific.
 
 Huddle only removes sandboxes it created: a provider-agnostic table `sandboxes(provider, name, created_at)`.
+Providers reuse names, so every successful list drops the records of sandboxes that are gone (only records
+older than that list, so a create finishing meanwhile is kept); a new sandbox with an old name is not Huddle's.
 
 ### HTTP API (operator token, like every other `/api` route)
 
