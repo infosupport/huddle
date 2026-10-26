@@ -100,7 +100,7 @@
         <tr><td colspan="5"><p class="empty-note">No environments yet — start a devcontainer or create a sandbox.</p></td></tr>
       } @else {
         @for (e of rows(); track e.type + e.provider + e.name) {
-          <tr [class.clickable]="e.type === 'container'" (click)="openDetail(e)">
+          <tr class="clickable" (click)="openDetail(e)">
             <td>
               <div class="container-cell">
                 <div class="cc-icon">
@@ -119,22 +119,23 @@
             <td><span class="type-badge" [ngClass]="'type--' + e.type">{{ e.typeLabel }}</span></td>
             <td><span class="status" [ngClass]="e.running ? 'status--running' : 'status--stopped'">{{ e.statusLabel }}</span></td>
             <td>
-              @if (e.requested > 0 && e.type === 'container') {
-                <a class="badge-pill yellow" [routerLink]="['/container', e.name]">{{ e.requested }}</a>
-              } @else if (e.requested > 0) {
-                <span class="badge-pill yellow">{{ e.requested }}</span>
+              @if (e.requested > 0) {
+                <a class="badge-pill yellow" [routerLink]="detailLink(e)">{{ e.requested }}</a>
               } @else {
                 <span class="badge-pill muted">0</span>
               }
             </td>
             <td class="col-actions" (click)="$event.stopPropagation()">
               @if (e.type === 'container') {
-                <button class="btn btn-ghost btn-sm" [routerLink]="['/container', e.name]">Detail</button>
+                <button class="btn btn-ghost btn-sm" [routerLink]="detailLink(e)">Detail</button>
                 @if (!e.running) { <button class="btn btn--accent btn-sm" (click)="startContainer(e.name)">Start</button> }
                 <button class="btn btn-delete btn-sm" (click)="snapshot(e.name)">Snapshot</button>
                 <button class="btn btn-delete btn-sm" (click)="deleteContainer(e.name)">Delete</button>
-              } @else if (e.managed) {
-                <button class="btn btn-delete btn-sm" (click)="deleteSandbox(e)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Remove' }}</button>
+              } @else {
+                <button class="btn btn-ghost btn-sm" [routerLink]="detailLink(e)">Detail</button>
+                @if (e.managed) {
+                  <button class="btn btn-delete btn-sm" (click)="deleteSandbox(e)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Remove' }}</button>
+                }
               }
             </td>
           </tr>

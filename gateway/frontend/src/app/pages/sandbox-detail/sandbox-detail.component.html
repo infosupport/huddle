@@ -1,0 +1,82 @@
+<a class="back-link" routerLink="/dev-environments">← Dev Environments</a>
+
+@if (error()) {
+  <div class="card"><p style="padding:16px;color:var(--danger);margin:0">{{ error() }}</p></div>
+}
+
+<section class="cd-head">
+  <div class="cd-head__bg"></div>
+  <div class="cd-head__hex"></div>
+  <div class="cd-head__text">
+    <h1>{{ name }}</h1>
+    <div class="cd-head__badges">
+      <span class="cd-badge cd-badge--ok">{{ providerLabel() }}</span>
+      @if (sandbox(); as s) {
+        @if (running()) {
+          <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> Running</span>
+        } @else {
+          <span class="cd-badge cd-badge--warn">{{ s.status || 'Stopped' }}</span>
+        }
+      }
+      <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Through Huddle</span>
+    </div>
+  </div>
+  <div class="cd-head__actions">
+    <button class="btn btn-ghost btn-sm" (click)="load()" [disabled]="loading()">
+      @if (loading()) { <span class="spinner"></span> Loading… } @else { Refresh }
+    </button>
+    @if (sandbox()?.managed) {
+      <button class="btn btn-delete btn-sm" (click)="remove()" [disabled]="!!busy()">{{ busy() || 'Remove' }}</button>
+    }
+  </div>
+</section>
+
+<div class="cd-meta">
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">Workspaces</span>
+    <span class="cd-meta__value">{{ sandbox()?.workspaces?.join(', ') || '—' }}</span>
+  </div>
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">Firewall scope</span>
+    <span class="cd-meta__value"><code>{{ scope }}</code></span>
+  </div>
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">Created by</span>
+    <span class="cd-meta__value">{{ sandbox()?.managed ? 'Huddle' : 'outside Huddle' }}</span>
+  </div>
+</div>
+
+<section class="cd-sec">
+  <div class="cd-sec__head">
+    <h2 class="cd-sec__title">Pending <span class="em">requests</span></h2>
+    <p class="cd-sec__sub">— for this sandbox</p>
+  </div>
+  <div class="card req-card">
+    @if (requested().length === 0) {
+      <div class="fw-empty">
+        <app-icon name="circle-check" [size]="24" />
+        <p>No pending requests.</p>
+      </div>
+    } @else {
+      <table class="data-table">
+        <thead><tr><th>Domain</th><th>Requests</th><th>Last seen</th><th class="col-actions">Actions</th></tr></thead>
+        <tbody>
+          @for (r of requested(); track r.id) {
+            <tr>
+              <td><code>{{ r.domain }}</code></td>
+              <td>{{ r.request_count }}</td>
+              <td>{{ r.last_seen | relTime }}</td>
+              <td class="col-actions sd-actions">
+                <button class="btn btn--accent btn-sm" (click)="resolve(r, 'allow')">Allow</button>
+                <button class="btn btn-ghost btn-sm" (click)="resolve(r, 'allow', 5)">Allow 5 min</button>
+                <button class="btn btn-delete btn-sm" (click)="resolve(r, 'deny')">Deny</button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </div>
+</section>
+
+<app-firewall-groups-panel [container]="scope" />

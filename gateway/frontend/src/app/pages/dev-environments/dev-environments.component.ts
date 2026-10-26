@@ -33,8 +33,7 @@ interface EnvRow {
 }
 
 // Dev Environments — one list for devcontainers and the sandboxes of every
-// environment provider (GET /api/environments). Container rows open the
-// container detail; sandbox rows have no detail page yet.
+// environment provider (GET /api/environments). Every row opens its detail page.
 @Component({
   selector: 'app-dev-environments',
   standalone: true,
@@ -69,7 +68,8 @@ export class DevEnvironmentsComponent {
 
   rows = computed<EnvRow[]>(() => {
     const rules = this.rules();
-    const reqOf = (name: string) => rules.filter(r => r.container_id === name && r.status === 'requested').length;
+    // Firewall scope: the container name, or `<provider>:<name>` for a sandbox.
+    const reqOf = (scope: string) => rules.filter(r => r.container_id === scope && r.status === 'requested').length;
     const containerRows: EnvRow[] = this.containers().map(c => {
       const running = (c.status || '').toLowerCase().includes('up');
       return { type: 'container', name: c.name, provider: '', typeLabel: 'Container', short: c.name.replace(/^devcontainer-/, ''),
@@ -79,7 +79,7 @@ export class DevEnvironmentsComponent {
     const sandboxRows: EnvRow[] = this.sandboxes().map(s => {
       const running = /up|run/i.test(s.status || '');
       return { type: 'sandbox', name: s.name, provider: s.provider, typeLabel: labels.get(s.provider) || s.provider, short: s.name,
-        statusLabel: running ? 'Running' : (s.status || 'Stopped'), running, requested: reqOf(s.name),
+        statusLabel: running ? 'Running' : (s.status || 'Stopped'), running, requested: reqOf(`${s.provider}:${s.name}`),
         workspaces: s.workspaces?.join(', ') || undefined, managed: s.managed };
     });
     return [...containerRows, ...sandboxRows].sort((a, b) => a.short.localeCompare(b.short));
@@ -149,8 +149,14 @@ export class DevEnvironmentsComponent {
   }
   isBusy(name: string): string | undefined { return this.busy()[name]; }
 
+  detailLink(row: EnvRow): string[] {
+    return row.type === 'container'
+      ? ['/dev-environments', 'container', row.name]
+      : ['/dev-environments', 'sandbox', row.provider, row.name];
+  }
+
   openDetail(row: EnvRow): void {
-    if (row.type === 'container') this.router.navigate(['/container', row.name]);
+    this.router.navigate(this.detailLink(row));
   }
 
   // container actions
