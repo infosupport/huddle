@@ -197,6 +197,10 @@ under a rule scope of its own: `sbx:<name>`.
   off. Otherwise it lists the sandboxes. If any has no known
   secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
   it tries again every 30 s.
+- **Connect an IDE.** The sandbox detail page asks `GET /api/environments/sbx/sandboxes/<name>/ide-link?ide=vscode|jetbrains`.
+  The first time per gateway run that runs `sbx setup ssh` on the host, which makes every sandbox reachable as
+  `<name>.sbx` from the host's ssh config. The link (VS Code Remote-SSH or JetBrains Gateway) points at that alias and
+  opens the first workspace folder when it is a POSIX path. SSH is inbound and does not go through the Huddle proxy.
 - **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone. Paths are not visible in it, so a
   path-mode domain is denied to sandboxes, and the `huddle` host is closed to them entirely. Interception needs two kinds of
   trust that sbx has no setting for:

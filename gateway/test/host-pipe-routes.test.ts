@@ -52,6 +52,7 @@ const fake: EnvironmentProvider = {
     steps: [{ label: 'Create sandbox', command: 'fake create', code: spec.agent === 'fail' ? 1 : 0, stdout: '', stderr: '' }],
   }),
   remove: (name, opts) => removeImpl(name, opts),
+  ideLink: async (name, ide) => ({ link: `${ide}://${name}`, sshHost: `${name}.fake` }),
 };
 
 describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
@@ -265,5 +266,15 @@ describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
     expect(r.statusCode).toBe(200);
     expect(r.json()).toMatchObject({ running: true });
     expect(recreates).toEqual(['requested in the portal']);
+  });
+
+  it('GET .../ide-link geeft de link; onbekende ide → 400', async () => {
+    const r = await app.inject({ method: 'GET', url: '/api/environments/fake/sandboxes/box/ide-link?ide=vscode' });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toEqual({ link: 'vscode://box', sshHost: 'box.fake' });
+    const bad = await app.inject({ method: 'GET', url: '/api/environments/fake/sandboxes/box/ide-link?ide=emacs' });
+    expect(bad.statusCode).toBe(400);
+    const none = await app.inject({ method: 'GET', url: '/api/environments/nope/sandboxes/box/ide-link?ide=vscode' });
+    expect(none.statusCode).toBe(404);
   });
 });

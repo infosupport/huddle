@@ -186,6 +186,25 @@ export function registerHostPipeRoutes(app: FastifyInstance, deps: HostPipeRoute
       return { ok: true };
     }
   );
+
+  // Link that opens the sandbox in an IDE on the host, over SSH. Any sandbox,
+  // also one Huddle did not create: connecting changes nothing about it.
+  app.get<{ Params: { provider: string; name: string }; Querystring: { ide?: string } }>(
+    '/api/environments/:provider/sandboxes/:name/ide-link',
+    async (req, reply) => {
+      const provider = getProvider(req.params.provider);
+      if (!provider?.ideLink) return reply.code(404).send({ error: 'unknown_provider' });
+      const ide = req.query?.ide;
+      if (ide !== 'vscode' && ide !== 'jetbrains') {
+        return reply.code(400).send({ error: 'invalid_request', message: 'ide must be vscode or jetbrains' });
+      }
+      try {
+        return await provider.ideLink(req.params.name, ide);
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    }
+  );
 }
 
 // Whether the provider still lists the sandbox. When that cannot be told,

@@ -22,6 +22,9 @@
     </div>
   </div>
   <div class="cd-head__actions">
+    <button class="btn btn-ghost btn-sm" (click)="connectIde('vscode')" [disabled]="!sandbox()" title="Open in VS Code over SSH (Remote-SSH extension)">Connect VS Code</button>
+    <button class="btn btn-ghost btn-sm" (click)="connectIde('jetbrains')" [disabled]="!sandbox()" title="Open in JetBrains Gateway over SSH">Connect JetBrains</button>
+    @if (ideStatus()) { <span style="font-size:12px;color:var(--text-muted)">{{ ideStatus() }}</span> }
     <button class="btn btn-ghost btn-sm" (click)="load()" [disabled]="loading()">
       @if (loading()) { <span class="spinner"></span> Loading… } @else { Refresh }
     </button>
@@ -35,6 +38,10 @@
   <div class="cd-meta__item">
     <span class="cd-meta__label">Workspaces</span>
     <span class="cd-meta__value">{{ sandbox()?.workspaces?.join(', ') || '—' }}</span>
+  </div>
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">SSH</span>
+    <span class="cd-meta__value"><code>ssh {{ sshHost() || name + '.sbx' }}</code></span>
   </div>
   <div class="cd-meta__item">
     <span class="cd-meta__label">Firewall scope</span>

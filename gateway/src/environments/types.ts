@@ -79,6 +79,16 @@ export interface EnvironmentProvider {
   setEnabled(enabled: boolean): Promise<SandboxStep[]>;
   // Recreates every sandbox (in the background); resolves once it has started.
   recreateAll(reason: string): Promise<RecreateState>;
+  // A link that opens the sandbox in an IDE over SSH. Optional: not every
+  // provider can be reached over SSH.
+  ideLink?(name: string, ide: IdeKind): Promise<IdeLink>;
+}
+
+export type IdeKind = 'vscode' | 'jetbrains';
+export interface IdeLink {
+  link: string;
+  /** The ssh host alias the link uses, so `ssh <host>` works too. */
+  sshHost: string;
 }
 
 // The provider is switched off in Huddle → HTTP 409.

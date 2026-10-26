@@ -34,6 +34,8 @@ export class SandboxDetailComponent {
   loading = signal(true);
   error = signal<string | null>(null);
   busy = signal<string | null>(null);
+  ideStatus = signal('');
+  sshHost = signal<string | null>(null);
   private rules = signal<Rule[]>([]);
 
   requested = computed(() => this.rules().filter(r => r.container_id === this.scope && r.status === 'requested'));
@@ -71,6 +73,22 @@ export class SandboxDetailComponent {
   resolve(rule: Rule, status: 'allow' | 'deny', minutes?: number): void {
     const expires = minutes ? Math.floor(Date.now() / 1000) + minutes * 60 : undefined;
     this.api.resolveRule(rule.id, status, 'rule', expires).subscribe(() => this.state.loadAll());
+  }
+
+  // The link opens VS Code (Remote-SSH) or JetBrains Gateway on this machine;
+  // both reach the sandbox through the `<name>.sbx` alias `sbx setup ssh` wrote.
+  connectIde(ide: 'vscode' | 'jetbrains'): void {
+    this.ideStatus.set('Preparing SSH…');
+    this.api.getSandboxIdeLink(this.provider, this.name, ide).subscribe({
+      next: ({ link, sshHost }) => {
+        this.sshHost.set(sshHost);
+        const prefix = ide === 'vscode' ? 'vscode://' : 'jetbrains-gateway://';
+        if (typeof link !== 'string' || !link.startsWith(prefix)) { this.ideStatus.set('Unexpected link from the gateway; not opened.'); return; }
+        this.ideStatus.set('');
+        window.open(link, '_self');
+      },
+      error: (e) => this.ideStatus.set(isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'could not prepare SSH'),
+    });
   }
 
   remove(): void {

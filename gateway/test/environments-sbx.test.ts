@@ -6,6 +6,7 @@ import {
   defaultSandboxName,
   parseSbxLsJson,
   parseSbxLsTable,
+  buildIdeLink,
 } from '../src/environments/sbx';
 import { InvalidSpecError, ProviderDisabledError, ToolFailedError } from '../src/environments/types';
 import { hashProxySecret, parseProxyAuthorization, redactProxyUrls, isHuddleProxyUrl, sbxProxyHostPort } from '../src/environments/sbx-egress';
@@ -580,6 +581,26 @@ describe('SbxProvider egress', () => {
     expect(calls.some((c) => c.args.args[0] === 'create' && c.args.args[2] === 'b')).toBe(false);
     expect(store.identified('b')).toBe(false);
     expect(p['recreate']!.results.find((r) => r.name === 'b')).toMatchObject({ ok: false, message: expect.stringMatching(/removed/) });
+  });
+
+  it('ideLink: sbx setup ssh één keer, link naar <naam>.sbx met de eerste workspace', async () => {
+    const store = memStore();
+    store.saveIdentity('box', 'h', { name: 'box', agent: 'shell', workspaces: [ws('/home/me/proj'), ws('/lib', true)] });
+    const ls = { code: 0, stdout: JSON.stringify([{ name: 'box' }]) };
+    const pipe = fakePipe([ls, { code: 0 }, ls]);
+    const p = sbx(pipe, store);
+    expect(await p.ideLink('box', 'vscode')).toEqual({ link: 'vscode://vscode-remote/ssh-remote+box.sbx/home/me/proj', sshHost: 'box.sbx' });
+    expect((await p.ideLink('box', 'jetbrains')).link)
+      .toBe('jetbrains-gateway://connect#type=ssh&deploy=true&host=box.sbx&port=22&projectPath=%2Fhome%2Fme%2Fproj');
+    expect(pipe.calls.map((c) => c.args.args).filter((a) => a[0] === 'setup')).toEqual([['setup', 'ssh']]);
+
+    await expect(sbx(fakePipe([{ code: 0, stdout: '[]' }])).ideLink('gone', 'vscode')).rejects.toBeInstanceOf(InvalidSpecError);
+    await expect(sbx(fakePipe([ls, { code: 1, stderr: 'no' }])).ideLink('box', 'vscode')).rejects.toBeInstanceOf(ToolFailedError);
+  });
+
+  it('buildIdeLink: Windows-pad wordt weggelaten', () => {
+    expect(buildIdeLink('vscode', 'b.sbx', 'C:\\proj')).toBe('vscode://vscode-remote/ssh-remote+b.sbx');
+    expect(buildIdeLink('jetbrains', 'b.sbx')).not.toMatch(/projectPath/);
   });
 
   it('reset-secret gezien: één recreate tegelijk, daarna afkoelen', async () => {

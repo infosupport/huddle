@@ -479,6 +479,12 @@ export class ApiService {
       `/api/environments/${encodeURIComponent(provider)}/sandboxes`, spec));
   }
 
+  // Runs `sbx setup ssh` on the host the first time, so it can take a moment.
+  getSandboxIdeLink(provider: string, name: string, ide: 'vscode' | 'jetbrains'): Observable<{ link: string; sshHost: string }> {
+    return this.handle(this.http.get<{ link: string; sshHost: string }>(
+      `/api/environments/${encodeURIComponent(provider)}/sandboxes/${encodeURIComponent(name)}/ide-link?ide=${ide}`));
+  }
+
   removeSandbox(provider: string, name: string, force = false): Observable<{ ok: boolean }> {
     const q = force ? '?force=1' : '';
     return this.handle(this.http.delete<{ ok: boolean }>(

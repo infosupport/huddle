@@ -10,6 +10,8 @@ import { hostPipe, HostPipe } from '../host-pipe';
 import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError } from '../host-path';
 import {
   EnvironmentProvider,
+  IdeKind,
+  IdeLink,
   InvalidSpecError,
   ProviderDisabledError,
   ProviderStatus,
@@ -229,6 +231,22 @@ export function specFromListing(info: SandboxInfo): SandboxSpec | null {
   };
 }
 
+/**
+ * vscode://vscode-remote/ssh-remote+<host><folder> for VS Code Remote-SSH, or a
+ * JetBrains Gateway connect link. Both use the ssh alias as host, so the ssh
+ * config `sbx setup ssh` wrote decides how to get there and as whom. A folder
+ * that is not an absolute POSIX path (a Windows path) is left out.
+ */
+export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): string {
+  const posix = folder && folder.startsWith('/') ? folder : undefined;
+  if (ide === 'vscode') {
+    return `vscode://vscode-remote/ssh-remote+${encodeURIComponent(sshHost)}${posix ? encodeURI(posix) : ''}`;
+  }
+  const params: [string, string][] = [['type', 'ssh'], ['deploy', 'true'], ['host', sshHost], ['port', '22']];
+  if (posix) params.push(['projectPath', posix]);
+  return 'jetbrains-gateway://connect#' + params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+}
+
 /** What the provider keeps between runs (the DB in production, see sbx-store.ts). */
 export interface SbxStore {
   enabled(): boolean;
@@ -264,6 +282,8 @@ export class SbxProvider implements EnvironmentProvider {
   // Removed through Huddle since the running recreate listed the sandboxes: it
   // must not bring them back.
   private removedSinceListing = new Set<string>();
+  // `sbx setup ssh` ran (once per gateway run is enough: it writes the host's ssh config).
+  private sshReady = false;
 
   constructor(
     private readonly pipe: PipeCall = hostPipe,
@@ -400,6 +420,23 @@ export class SbxProvider implements EnvironmentProvider {
       if (r.code !== 0) throw failure(r, 'sbx rm failed');
       this.removedSinceListing.add(name);
     });
+  }
+
+  // `sbx setup ssh` makes every sandbox reachable as `<name>.sbx` from the
+  // host's ssh config; the IDE on the host connects to that alias.
+  async ideLink(name: string, ide: IdeKind): Promise<IdeLink> {
+    this.requireEnabled();
+    if (!SANDBOX_NAME_RE.test(name)) throw new InvalidSpecError('invalid sandbox name');
+    const info = (await this.listAll()).find((s) => s.name === name);
+    if (!info) throw new InvalidSpecError(`no sandbox named ${name}`);
+    if (!this.sshReady) {
+      const r = await this.run(['setup', 'ssh']);
+      if (r.code !== 0) throw failure(r, 'sbx setup ssh failed');
+      this.sshReady = true;
+    }
+    const sshHost = `${name}.sbx`;
+    const folder = this.store.spec(name)?.workspaces[0]?.path ?? info.workspaces?.[0]?.replace(/:ro$/, '');
+    return { link: buildIdeLink(ide, sshHost, folder), sshHost };
   }
 
   async setEnabled(enabled: boolean): Promise<SandboxStep[]> {
