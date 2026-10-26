@@ -185,7 +185,9 @@ under a rule scope of its own: `sbx:<name>`.
   - Restarts the daemon, so running sandboxes drop Huddle.
   - Only when both worked: marked off, and every secret forgotten. A failure leaves sbx on, so it can be
     tried again. A recreate that is still running leaves the sandboxes it has not reached yet alone.
-- **Gateway restart.** Once the host pipe answers, the gateway lists the sandboxes. If any has no known
+- **Gateway restart.** Once the host pipe answers, the gateway first reads `proxy.sandbox`. If sbx is on but
+  the setting no longer points at Huddle, the gateway stopped in the middle of a switch-off: it restarts the
+  daemon and marks sbx off. Otherwise it lists the sandboxes. If any has no known
   secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
   it tries again every 30 s.
 - **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone, so path-mode rules do

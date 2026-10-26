@@ -485,12 +485,13 @@ describe('SbxProvider egress', () => {
 
     const known = memStore();
     known.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
-    const quiet = fakePipe([{ code: 0, stdout: JSON.stringify([{ name: 'a' }]) }]);
+    const quiet = fakePipe([{ code: 0, stdout: 'http://_huddle-reset:x@127.0.0.1:32768' }, { code: 0, stdout: JSON.stringify([{ name: 'a' }]) }]);
     const p1 = sbx(quiet, known);
     expect(await p1.reconcile()).toBe(true);
     expect(p1['recreate']).toBeUndefined();
 
     const pipe = fakePipe([
+      { code: 0, stdout: 'http://_huddle-reset:x@127.0.0.1:32768' },                     // settings get
       { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'lost' }]) }, // ls (reconcile)
       { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'lost' }]) }, // ls (recreate)
       { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 },                    // a
@@ -500,6 +501,23 @@ describe('SbxProvider egress', () => {
     expect(await p2.reconcile()).toBe(true);
     await vi.waitFor(() => expect(p2['recreate']?.running).toBe(false));
     expect(p2['recreate']!.reason).toMatch(/gateway restarted/);
+  });
+
+  it('reconcile: gestopt midden in uitzetten (setting is al de eigen) → uitzetten afmaken', async () => {
+    const store = memStore({ originalProxy: 'http://me:***@corp:8080' });
+    store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
+    const pipe = fakePipe([{ code: 0, stdout: 'http://corp:8080' }, { code: 0 }]);
+    expect(await sbx(pipe, store).reconcile()).toBe(true);
+    expect(pipe.calls.map((c) => c.args.args)).toEqual([['settings', 'get', 'proxy.sandbox'], ['daemon', 'restart']]);
+    expect(store.enabled()).toBe(false);
+    expect(store.identities.get('a')?.hash).toBeNull();
+    expect(store.originalProxy()).toBeNull();
+
+    // Herstart mislukt → blijft aan, later opnieuw.
+    const store2 = memStore();
+    const pipe2 = fakePipe([{ code: 0, stdout: '' }, { code: 1 }]);
+    expect(await sbx(pipe2, store2).reconcile()).toBe(false);
+    expect(store2.enabled()).toBe(true);
   });
 
   it('reset-secret gezien: één recreate tegelijk, daarna afkoelen', async () => {

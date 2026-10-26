@@ -488,6 +488,8 @@ export class SbxProvider implements EnvironmentProvider {
     if (!this.isEnabled() || this.hostPort === null) return true;
     let listed: SandboxInfo[];
     try {
+      if (!(await this.exclusive(() => this.finishInterruptedSwitchOff()))) return false;
+      if (!this.isEnabled()) return true;
       listed = await this.listAll();
     } catch {
       return false;
@@ -495,6 +497,24 @@ export class SbxProvider implements EnvironmentProvider {
     if (!this.recreating && listed.some((s) => !this.store.identified(s.name))) {
       await this.recreateAll('the gateway restarted without the secret of every sandbox');
     }
+    return true;
+  }
+
+  // A gateway that stopped inside switchOff() after the user's setting was put
+  // back still says "on", while sandboxes may already go around Huddle. The
+  // setting on the host decides: not ours means the switch-off was under way, so
+  // finish it (restart, so no sandbox keeps a Huddle proxy it can never use).
+  // False when it could not be told or finished.
+  private async finishInterruptedSwitchOff(): Promise<boolean> {
+    if (!this.isEnabled()) return true;
+    const current = await this.run(['settings', 'get', 'proxy.sandbox']);
+    if (current.code !== 0) return false;
+    if (isHuddleProxyUrl(current.stdout.trim(), this.hostPort as number)) return true;
+    const restart = await this.run(['daemon', 'restart'], CREATE_TIMEOUT_MS);
+    if (restart.code !== 0) return false;
+    this.store.setEnabled(false);
+    this.store.clearIdentities();
+    this.store.setOriginalProxy(null);
     return true;
   }
 
