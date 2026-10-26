@@ -1,6 +1,7 @@
 import { inspectContainer, execInContainer, execContainerOutput, isContainerIp, devcontainerIp } from './docker';
 import { getSshRelayPort, listSshRelayPorts, setSshRelayPort, deleteSshRelayPort } from './db';
-import { getSshPublicKey } from './host-config';
+import { hostPipe, HostPipeError } from './host-pipe';
+import { buildIdeLink } from './environments/sbx';
 import { ensureSshRelay, closeSshRelay, type SshRelayDeps } from './ssh-relay';
 import {
   SSH_RELAY_PORT_MIN,
@@ -8,16 +9,20 @@ import {
   SSH_USER,
   pickFreePort,
   sessionEnvFromContainer,
+  HOST_KEY_PUB,
+  normalizeSshPublicKeys,
   buildSshdConfig,
   buildEnsureSshdScript,
-  buildSshGatewayLink,
+  sshAlias,
 } from './ssh-access';
 
 // ── "Connect via SSH" orchestration ──────────────────────────────────────────
 // One idempotent call behind the portal button: allocate (or reuse) the relay
-// port, start the relay, (re)configure sshd in the container with the
-// operator's current public key, and return a jetbrains-gateway:// link to
-// localhost:<port>. Re-running it after a container restart brings sshd back.
+// port, start the relay, (re)configure sshd in the container with Huddle's own
+// public key (the host agent makes the key pair on the host), let the host agent
+// write the `<name>.huddle` ssh alias with the container's host key pinned, and
+// return a JetBrains Toolbox link to that alias. Nobody has to set up a key.
+// Re-running it after a container restart brings sshd back.
 
 /** The gateway container; `huddle init` publishes the SSH relay ports on it. */
 const HUDDLE_CONTAINER = 'huddle';
@@ -45,8 +50,10 @@ export async function prepareSshLink(name: string): Promise<string> {
   if (ide === 'vscode') throw new SshLinkError(404, 'The SSH link opens a JetBrains IDE; this is a VS Code devcontainer');
   if (!inspect?.State?.Running) throw new SshLinkError(409, 'Container is not running');
 
-  const keys = getSshPublicKey();
-  if (!keys) throw new SshLinkError(409, 'No SSH public key configured. Add yours under Settings → SSH access.');
+  const { publicKey } = await onHost<{ publicKey: string }>('ssh.key', {});
+  let keys: string;
+  try { keys = normalizeSshPublicKeys(publicKey); } catch { keys = ''; }
+  if (!keys || keys.includes('\n')) throw new SshLinkError(500, 'The host agent returned no valid SSH public key.');
 
   const port = allocatePort(name);
   const self = await inspectContainer(HUDDLE_CONTAINER);
@@ -61,13 +68,10 @@ export async function prepareSshLink(name: string): Promise<string> {
     throw new SshLinkError(500, ENSURE_SSHD_ERRORS[result.exitCode ?? -1] ?? `Setting up sshd failed (exit ${result.exitCode})`);
   }
 
-  return buildSshGatewayLink({
-    host: 'localhost',
-    port,
-    user: SSH_USER,
-    projectPath,
-    idePath: await findIdePath(inspect.Id, ide === 'rider' ? 'rider' : 'idea'),
-  });
+  const hostKey = (await execContainerOutput(inspect.Id, ['cat', HOST_KEY_PUB])).trim().split(' ').slice(0, 2).join(' ');
+  const alias = sshAlias(name);
+  await onHost('ssh.host', { alias, port, user: SSH_USER, hostKey });
+  return buildIdeLink('jetbrains', alias, projectPath);
 }
 
 function allocatePort(name: string): number {
@@ -81,18 +85,16 @@ function allocatePort(name: string): number {
   return port;
 }
 
-// The backend already in the shared RemoteDev volume (same lookup as the config
-// script). Undefined → the link asks Gateway to deploy one.
-async function findIdePath(containerId: string, filter: 'rider' | 'idea'): Promise<string | undefined> {
-  const dist = '/.jbdevcontainer/JetBrains/RemoteDev/dist';
+// The host agent does the host side (key pair, ssh alias). Without it no IDE
+// on the host could find the key, so say how to start it.
+async function onHost<T>(op: string, args: Record<string, unknown>): Promise<T> {
   try {
-    const out = await execContainerOutput(containerId, [
-      'sh', '-c', `ls ${dist}/ 2>/dev/null | grep -i ${filter} | sort -t- -k2 -V | tail -1`,
-    ]);
-    const dir = out.trim().split('\n').pop()?.trim();
-    return dir && /^[\w.+-]+$/.test(dir) ? `${dist}/${dir}` : undefined;
-  } catch {
-    return undefined;
+    return await hostPipe.call<T>(op, args);
+  } catch (err) {
+    if (err instanceof HostPipeError && err.code === 'host_pipe_offline') {
+      throw new SshLinkError(409, 'The Huddle host agent is not running, and it sets up SSH on this machine. Run `huddle pipe start` (or `huddle restart`) on the host.');
+    }
+    throw new SshLinkError(500, `Setting up SSH on the host failed: ${(err as Error).message}`);
   }
 }
 
@@ -108,8 +110,11 @@ export async function restoreSshRelays(existing: Set<string>): Promise<void> {
   }
 }
 
-/** Drop the relay and its port when a devcontainer is removed. */
+/** Drop the relay, its port and the host's ssh alias when a devcontainer is removed. */
 export async function removeSshRelay(name: string): Promise<void> {
   await closeSshRelay(name);
+  const hadPort = getSshRelayPort(name) !== null;
   deleteSshRelayPort(name);
+  // Best effort: a leftover alias is rewritten on the next Connect IDE anyway.
+  if (hadPort) await hostPipe.call('ssh.host', { alias: sshAlias(name), remove: true }).catch(() => undefined);
 }

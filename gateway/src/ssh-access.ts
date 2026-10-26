@@ -1,9 +1,11 @@
-// ── Inbound SSH into a devcontainer (JetBrains Gateway "Connect via SSH") ────
+// ── Inbound SSH into a devcontainer (JetBrains Toolbox "Connect IDE") ───────
 // The devcontainer networks are Internal, so a container port can never be
 // published. Instead the gateway — already attached to every dc-net-* network —
 // runs a plain TCP relay per container (ssh-relay.ts) on a port published to the
 // host's loopback only. The SSH protocol itself is end-to-end between the IDE on
-// the host and sshd inside the container; the gateway never sees keys or content.
+// the host and sshd inside the container. The key pair is Huddle's own, made and
+// kept on the host by the host agent (cli/src/pipe/ssh-hosts.ts); the gateway
+// only ever sees its public key, and never the content.
 //
 // This module holds the pure parts (config, link, key validation, port choice)
 // so they can be unit-tested without Docker.
@@ -19,6 +21,8 @@ export const SSH_USER = 'vscode';
 // the daemon config. sshd's StrictModes rejects anything user-writable anyway.
 const SSHD_CONFIG = '/etc/ssh/huddle_sshd_config';
 const HOST_KEY = '/etc/ssh/huddle_host_ed25519_key';
+/** The container's host key, pinned in the host's known_hosts for its alias. */
+export const HOST_KEY_PUB = `${HOST_KEY}.pub`;
 // Container ID the host key was generated for. A snapshot copies /etc/ssh into
 // every container started from it; the ID mismatch makes each one regenerate.
 const HOST_KEY_OWNER = '/etc/ssh/huddle_host_key.owner';
@@ -44,10 +48,11 @@ const KEY_LINE = new RegExp(`^(${KEY_TYPES.map(t => t.replace(/[.@]/g, '\\$&')).
 const MAX_KEYS_BYTES = 16 * 1024;
 
 /**
- * Validate and normalise the operator's public key(s): one key per line, each
+ * Validate and normalise public key(s) for authorized_keys (Huddle's own, from
+ * the host agent): one key per line, each
  * `<type> <base64> [comment]`. Lines starting with authorized_keys options
  * (`command=`, `from=`, …) do not match and are rejected. Returns the normalised
- * text (empty string clears the setting) or throws with a readable reason.
+ * text or throws with a readable reason.
  */
 export function normalizeSshPublicKeys(raw: string): string {
   if (typeof raw !== 'string') throw new Error('sshPublicKey must be a string');
@@ -166,29 +171,10 @@ fi
 `;
 }
 
-export interface SshLinkParams {
-  host: string;
-  port: number;
-  user: string;
-  projectPath: string;
-  /** Backend already in the shared RemoteDev volume; omitted → Gateway deploys one. */
-  idePath?: string;
-}
-
 /**
- * JetBrains Gateway deep link for an SSH connection (same shape as the link
- * Gateway itself generates). encodeURIComponent, not URLSearchParams: the latter
- * turns spaces into '+', which Gateway would read literally.
+ * The host's ssh alias for a devcontainer: `ssh <name>.huddle` and the IDE link
+ * reach it through the entry the host agent writes (op `ssh.host`).
  */
-export function buildSshGatewayLink(p: SshLinkParams): string {
-  const params: [string, string][] = [
-    ['type', 'ssh'],
-    ['deploy', p.idePath ? 'false' : 'true'],
-    ['host', p.host],
-    ['port', String(p.port)],
-    ['user', p.user],
-    ['projectPath', p.projectPath],
-  ];
-  if (p.idePath) params.push(['idePath', p.idePath]);
-  return 'jetbrains-gateway://connect#' + params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+export function sshAlias(containerName: string): string {
+  return `${containerName}.huddle`;
 }

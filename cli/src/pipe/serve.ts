@@ -28,6 +28,7 @@ import {
 import { fsList, toHuddlePath } from './fs-list';
 import { availableTools, toolRun, toolsInfo } from './tools';
 import { sbxLinks } from './sbx-links';
+import { sshHost, sshKey } from './ssh-hosts';
 
 export interface ServeOptions {
   dir: string;
@@ -66,6 +67,10 @@ async function dispatch(req: PipeRequest, maxEntries: number): Promise<unknown> 
       return toolRun(args);
     case 'sbx.links':
       return sbxLinks(args);
+    case 'ssh.key':
+      return sshKey(args);
+    case 'ssh.host':
+      return sshHost(args);
     default:
       throw new PipeError('unknown_op', `unknown op '${req.op}'`);
   }

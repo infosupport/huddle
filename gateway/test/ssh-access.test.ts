@@ -5,7 +5,7 @@ import {
   sessionEnvFromContainer,
   buildSshdConfig,
   buildEnsureSshdScript,
-  buildSshGatewayLink,
+  sshAlias,
 } from '../src/ssh-access';
 
 // "Connect via SSH": the pure helpers. The key text ends up in a root-owned
@@ -16,10 +16,6 @@ const ED = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9ok
 describe('normalizeSshPublicKeys', () => {
   it('accepts keys with comments, trims and drops blank lines', () => {
     expect(normalizeSshPublicKeys(`  ${ED} me@laptop \r\n\r\n${ED}\n`)).toBe(`${ED} me@laptop\n${ED}`);
-  });
-
-  it('empty input clears the setting', () => {
-    expect(normalizeSshPublicKeys('  \n ')).toBe('');
   });
 
   it('rejects authorized_keys options (command=, from=)', () => {
@@ -108,19 +104,8 @@ describe('buildEnsureSshdScript', () => {
   });
 });
 
-describe('buildSshGatewayLink', () => {
-  it('encodes values and skips deploy when a backend exists', () => {
-    const link = buildSshGatewayLink({
-      host: 'localhost', port: 2201, user: 'vscode',
-      projectPath: '/workspaces/my project', idePath: '/dist/idea-2025.2',
-    });
-    expect(link).toBe('jetbrains-gateway://connect#type=ssh&deploy=false&host=localhost&port=2201&user=vscode'
-      + '&projectPath=%2Fworkspaces%2Fmy%20project&idePath=%2Fdist%2Fidea-2025.2');
-  });
-
-  it('asks Gateway to deploy when no backend is known', () => {
-    const link = buildSshGatewayLink({ host: 'localhost', port: 2200, user: 'vscode', projectPath: '/w' });
-    expect(link).toContain('deploy=true');
-    expect(link).not.toContain('idePath');
+describe('sshAlias', () => {
+  it('is the container name under .huddle, the host entry the IDE link points at', () => {
+    expect(sshAlias('my-dc')).toBe('my-dc.huddle');
   });
 });

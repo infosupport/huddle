@@ -66,6 +66,8 @@ Error codes: `bad_request`, `unknown_op`, `not_found`, `not_allowed`, `tool_miss
 | `fs.list` | `{ path?: string }` | `HostFolderListing` (below). No `path` → the roots. |
 | `tool.run` | `{ tool: string, args: string[], timeoutMs?: number }` | `{ code: number, stdout: string, stderr: string }` |
 | `sbx.links` | `{ name: string, links: { id, hostPath, readOnly }[] }` | `{ rw: string \| null, ro: string \| null, skipped: { id, reason }[] }` |
+| `ssh.key` | `{}` | `{ publicKey: string }` |
+| `ssh.host` | `{ alias, port, user, hostKey }` or `{ alias, remove: true }` | `{ publicKey: string \| null }` |
 
 **`fs.list`**: lists the immediate subfolders of one folder (port of `host-browse.ts` from
 `feat/sbx-sandboxes-rebased`). No path → roots: every readable drive `X:/` on Windows, `/` elsewhere, plus
@@ -95,6 +97,15 @@ Only allowlisted tools that are actually installed are listed in the heartbeat's
 The old folder is removed first without following any link in it; an empty `links` only removes it. A
 mapping that does not exist, is not a folder, resolves into `~/.huddle`, or contains `~/.huddle` while
 writable is left out and listed in `skipped`. `rw`/`ro` are the host paths of the folders that got links.
+
+**`ssh.key`** / **`ssh.host`**: SSH into a devcontainer (Connect IDE) without setting up a key, like `sbx setup ssh`
+does for sandboxes. `ssh.key` makes Huddle's own ed25519 key pair in `~/.huddle/ssh/id_ed25519` once (on the host,
+private key 0600; the gateway only gets the public key, which it puts in the container's authorized_keys) and puts
+`Include ~/.huddle/ssh/hosts/*.conf` at the top of `~/.ssh/config`. `ssh.host` writes `~/.huddle/ssh/hosts/<alias>.conf`
+(`Host <name>.huddle` → `localhost:<relay port>`, user, that key, `IdentitiesOnly`) and pins the container's host key
+in `<alias>.known_hosts` (`StrictHostKeyChecking yes`); `remove` deletes both. Alias, port, user and host key are
+validated so nothing can be injected into the ssh config. The portal link is a JetBrains Toolbox link to the alias,
+and `ssh <name>.huddle` works from a terminal too.
 
 ## Gateway side
 

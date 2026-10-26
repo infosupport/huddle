@@ -49,45 +49,6 @@ import { FolderSelectComponent } from '../../shared/components/folder-select/fol
     </div>
 
     <div class="card">
-      <h2>SSH access</h2>
-      <p class="hint">
-        Public key(s) allowed to log in to devcontainers over SSH via <strong>Connect IDE</strong>
-        (JetBrains Gateway), one per line — e.g. the contents of <code>~/.ssh/id_ed25519.pub</code>.
-        Never paste a private key. Stored in <code>~/.huddle/config.json</code>; applies on the next
-        Connect IDE click.
-      </p>
-      <details class="index-help">
-        <summary>How do I create a key?</summary>
-        <p class="hint">
-          Run this on your host (PowerShell, macOS or Linux terminal). Press Enter to accept the
-          default location; a passphrase is recommended. Skip this step if
-          <code>~/.ssh/id_ed25519.pub</code> already exists.
-        </p>
-        <pre class="cmd">ssh-keygen -t ed25519 -C "huddle"</pre>
-        <p class="hint">Then copy the <b>public</b> key (the <code>.pub</code> file) and paste it below:</p>
-        <pre class="cmd">Get-Content $env:USERPROFILE\\.ssh\\id_ed25519.pub   <span class="cmd-note"># Windows (PowerShell)</span>
-cat ~/.ssh/id_ed25519.pub                        <span class="cmd-note"># macOS / Linux</span></pre>
-        <p class="hint">
-          JetBrains Gateway uses this key automatically. If you set a passphrase, load it into your
-          SSH agent (or let Gateway ask for it) when connecting.
-        </p>
-      </details>
-      <form (ngSubmit)="saveSshKey()">
-        <div class="field">
-          <label>Public key(s)</label>
-          <textarea [(ngModel)]="resources.sshPublicKey" name="sshPublicKey" rows="3"
-                    placeholder="ssh-ed25519 AAAA… you@laptop" autocomplete="off" spellcheck="false"></textarea>
-        </div>
-        <div class="actions">
-          <button type="submit" class="btn btn--accent" [disabled]="savingSsh()">
-            {{ savingSsh() ? 'Saving…' : 'Save' }}
-          </button>
-          @if (sshNote()) { <span class="saved-note">{{ sshNote() }}</span> }
-        </div>
-      </form>
-    </div>
-
-    <div class="card">
       <h2>Folder mappings</h2>
       <p class="hint">
         Folders or volumes that are automatically mounted in every new devcontainer. Host folders also go into new Docker Sandboxes.
@@ -254,8 +215,6 @@ export class SettingsComponent implements OnInit {
   error = signal<string | null>(null);
   savingResources = signal(false);
   resourceNote = signal<string | null>(null);
-  savingSsh = signal(false);
-  sshNote = signal<string | null>(null);
   configMounted = signal<boolean | null>(null);
   addingMapping = signal(false);
   savingFolders = signal(false);
@@ -299,26 +258,6 @@ export class SettingsComponent implements OnInit {
         }
       },
       error: (e) => { this.savingResources.set(false); this.error.set(e.message); },
-    });
-  }
-
-  // The key is validated server-side (OpenSSH public key lines only) and written
-  // into the mounted ~/.huddle/config.json.
-  saveSshKey(): void {
-    this.savingSsh.set(true);
-    this.sshNote.set(null);
-    this.error.set(null);
-    this.api.saveSettings({ sshPublicKey: this.resources.sshPublicKey ?? '' }).subscribe({
-      next: (res) => {
-        this.savingSsh.set(false);
-        if (res.persisted === false) {
-          this.configMounted.set(false);
-          this.error.set('Could not save — the CLI config is not mounted into Huddle. Run `huddle restart` on the host first.');
-        } else {
-          this.sshNote.set('Saved');
-        }
-      },
-      error: (e) => { this.savingSsh.set(false); this.error.set(e.message); },
     });
   }
 

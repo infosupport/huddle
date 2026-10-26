@@ -49,7 +49,7 @@
       @if (ide === 'vscode') {
         <span style="font-size:12px;color:var(--text-muted)">VS Code: Attach to Running Container</span>
       } @else {
-        <button class="btn btn-ghost btn-sm" (click)="openSsh()" title="Open in JetBrains Gateway over SSH (localhost relay)">Connect IDE</button>
+        <button class="btn btn-ghost btn-sm" (click)="openSsh()" title="Open in JetBrains Toolbox over SSH; Huddle sets up the key">Connect IDE</button>
         @if (sshLinkStatus) { <span style="font-size:12px;color:var(--text-muted)">{{ sshLinkStatus }}</span> }
       }
       <button class="btn btn-delete btn-sm" (click)="modal.openSnapshot(name)">Snapshot</button>
