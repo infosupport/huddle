@@ -190,8 +190,8 @@ under a rule scope of its own: `sbx:<name>`.
   daemon and marks sbx off. Otherwise it lists the sandboxes. If any has no known
   secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
   it tries again every 30 s.
-- **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone, so path-mode rules do
-  not apply to sandboxes. The `huddle` host is closed to them entirely. Interception needs two kinds of
+- **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone. Paths are not visible in it, so a
+  path-mode domain is denied to sandboxes, and the `huddle` host is closed to them entirely. Interception needs two kinds of
   trust that sbx has no setting for:
   - The sandboxes must trust the Huddle CA. Possible with a mixin kit (`files/home/*.crt` plus
     `update-ca-certificates`) on every create.
