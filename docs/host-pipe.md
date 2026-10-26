@@ -221,7 +221,8 @@ under a rule scope of its own: `sbx:<name>`.
 - **One firewall: Huddle's.** sbx's own network policy would ask a second time for what Huddle already
   allowed. So every sandbox Huddle creates gets `sbx policy allow network --sandbox <name> "**"`: before the
   create when sbx takes it, else right after (a failure shows in the steps; the sandbox then still asks). The
-  rule goes before `sbx rm`, and for every sandbox on switch-off, when sbx's policy is the only firewall again.
+  rule goes before `sbx rm`, and for every sandbox on switch-off, when sbx's policy is the only firewall again;
+  a rule that cannot be removed keeps Huddle on (switch off again to retry).
   Deny rules (yours or an organization's) still win, and under organization governance local allows do nothing.
 - **Folder mappings.** Settings → Folder mappings with a host folder go into every sandbox too (Docker
   volumes stay devcontainer-only). Before the create, `sbx.links` links them into

@@ -39,11 +39,17 @@ export function sbxProxyUrl(user: string, secret: string, port: number): string 
   return `http://${user}:${secret}@127.0.0.1:${port}`;
 }
 
-/** Whether a `proxy.sandbox` value points at our listener (so it is not the user's own). */
-export function isHuddleProxyUrl(value: string, port: number): boolean {
+/**
+ * Whether a `proxy.sandbox` value points at our listener (so it is not the user's
+ * own): on this port, or carrying the reset secret, which also recognises
+ * Huddle's URL on the port of an earlier `huddle init`.
+ */
+export function isHuddleProxyUrl(value: string, port: number, resetSecret?: string): boolean {
   try {
     const u = new URL(value.trim());
-    return ['127.0.0.1', 'localhost'].includes(u.hostname) && Number(u.port) === port;
+    if (!['127.0.0.1', 'localhost'].includes(u.hostname)) return false;
+    if (Number(u.port) === port) return true;
+    return !!resetSecret && decodeURIComponent(u.username) === RESET_USER && decodeURIComponent(u.password) === resetSecret;
   } catch {
     return false;
   }

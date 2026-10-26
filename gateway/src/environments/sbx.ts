@@ -341,6 +341,9 @@ export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): st
  * `sbx policy allow|rm network --sandbox <name> "**"`: every host, for one sandbox.
  * Only for a sandbox routed through Huddle, whose firewall then decides alone.
  */
+// What `sbx policy rm` says when there was no such rule: nothing left to remove.
+const NO_RULE_RE = /not found|no (matching )?(rule|polic)|does not exist|doesn't exist/i;
+
 export function allowAllArgs(verb: 'allow' | 'rm', name: string): string[] {
   return ['policy', verb, 'network', '--sandbox', name, '**'];
 }
@@ -419,6 +422,10 @@ export class SbxProvider implements EnvironmentProvider {
     return this.store.enabled();
   }
 
+  private isOurs(value: string): boolean {
+    return isHuddleProxyUrl(value, this.hostPort as number, this.store.resetSecret());
+  }
+
   private resetUrl(): string {
     return sbxProxyUrl(RESET_USER, this.store.resetSecret(), this.hostPort as number);
   }
@@ -475,7 +482,15 @@ export class SbxProvider implements EnvironmentProvider {
     const name = spec.name || (first ? defaultSandboxName(first) : '');
     const args = buildCreateArgs({ ...spec, name });
     const steps: SandboxStep[] = [];
-    const ok = await this.exclusive(() => this.createWithSecret({ ...spec, name }, args, steps));
+    const ok = await this.exclusive(async () => {
+      // A taken name: sbx create refuses it, but only after preparing the folder
+      // mappings has replaced the links the existing sandbox with that name uses.
+      if (planFolderMappings(this.folderMappings()).links.length && (await this.listAll()).some((s) => s.name === name)) {
+        steps.push({ label: 'Create sandbox', command: '', code: 1, stdout: '', stderr: `a sandbox named ${name} already exists` });
+        return false;
+      }
+      return this.createWithSecret({ ...spec, name }, args, steps);
+    });
     return { name, ok, steps };
   }
 
@@ -633,7 +648,7 @@ export class SbxProvider implements EnvironmentProvider {
     const value = current.stdout.trim();
     // Saved before anything changes: while off, a saved setting also says a
     // switch-on was under way (see finishInterruptedSwitchOn).
-    if (!isHuddleProxyUrl(value, this.hostPort as number)) this.store.setOriginalProxy(value);
+    if (!this.isOurs(value)) this.store.setOriginalProxy(value);
     else if (this.store.originalProxy() === null) this.store.setOriginalProxy('');
     const set = await this.step(steps, 'Route new sandboxes through Huddle', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]);
     if (set.code !== 0) {
@@ -658,11 +673,16 @@ export class SbxProvider implements EnvironmentProvider {
   private async switchOff(steps: SandboxStep[]): Promise<void> {
     if (!this.isEnabled()) return;
     // The sandboxes are the user's again, without Huddle in the way: sbx's own
-    // policy decides for them again, so their allow-all rule goes. Shown per box;
-    // one that could not be removed does not keep Huddle on.
-    for (const info of await this.listAll().catch(() => [] as SandboxInfo[])) {
-      await this.step(steps, `Hand ${info.name} back to the sbx firewall`, allowAllArgs('rm', info.name)).catch(() => undefined);
+    // policy decides for them again, so their allow-all rule goes. One that is
+    // left would let that box go anywhere once Huddle is out of the way, so a
+    // failure keeps Huddle on (a box that had no rule is fine).
+    const kept: string[] = [];
+    for (const info of await this.listAll()) {
+      const r = await this.step(steps, `Hand ${info.name} back to the sbx firewall`, allowAllArgs('rm', info.name))
+        .catch((err) => ({ code: -1, stdout: '', stderr: String(err?.message ?? err) }));
+      if (r.code !== 0 && !NO_RULE_RE.test(`${r.stdout}\n${r.stderr}`)) kept.push(info.name);
     }
+    if (kept.length) throw new ToolFailedError(`could not remove the allow-all sbx policy of ${kept.join(', ')}; Huddle stays on, try again`, 1);
     const restore = await this.restoreOriginal(steps);
     if (restore.code !== 0) throw failure(restore, 'restoring proxy.sandbox failed');
     // Running sandboxes keep the Huddle proxy until sbx rebuilds their network.
@@ -739,12 +759,27 @@ export class SbxProvider implements EnvironmentProvider {
     if (!this.isEnabled()) return true;
     const current = await this.run(['settings', 'get', 'proxy.sandbox']);
     if (current.code !== 0) return false;
-    if (isHuddleProxyUrl(current.stdout.trim(), this.hostPort as number)) return true;
+    const value = current.stdout.trim();
+    if (this.isOurs(value)) return this.movePort(value);
     const restart = await this.run(['daemon', 'restart'], CREATE_TIMEOUT_MS);
     if (restart.code !== 0) return false;
     this.store.setEnabled(false);
     this.store.clearIdentities();
     this.store.setOriginalProxy(null);
+    return true;
+  }
+
+  // Huddle's setting on another port: `huddle init` published a new one since
+  // sbx was switched on. Point it at this listener and restart, so no sandbox
+  // keeps a port nothing may be listening on; they come back with the reset
+  // secret and reconcile recreates them all.
+  private async movePort(value: string): Promise<boolean> {
+    if (Number(new URL(value).port) === this.hostPort) return true;
+    const set = await this.run(['settings', 'set', 'proxy.sandbox', this.resetUrl()]);
+    if (set.code !== 0) return false;
+    const restart = await this.run(['daemon', 'restart'], CREATE_TIMEOUT_MS);
+    if (restart.code !== 0) return false;
+    this.store.clearIdentities();
     return true;
   }
 
@@ -756,7 +791,7 @@ export class SbxProvider implements EnvironmentProvider {
     if (this.isEnabled() || this.store.originalProxy() === null) return true;
     const current = await this.run(['settings', 'get', 'proxy.sandbox']);
     if (current.code !== 0) return false;
-    if (isHuddleProxyUrl(current.stdout.trim(), this.hostPort as number)) {
+    if (this.isOurs(current.stdout.trim())) {
       const restore = await this.restoreOriginal([]);
       if (restore.code !== 0) return false;
     }

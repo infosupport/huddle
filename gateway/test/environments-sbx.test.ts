@@ -87,6 +87,8 @@ function memStore(init: { enabled?: boolean; originalProxy?: string | null } = {
 }
 
 const PORT = 32768;
+// `sbx ls --json` zonder sandboxes (create met mappings kijkt eerst of de naam vrij is).
+const NO_BOXES = { code: 0, stdout: '[]' };
 const sbx = (pipe: ReturnType<typeof fakePipe>, store = memStore(), mappings: any[] = []) => new SbxProvider(pipe, store, PORT, () => mappings);
 
 describe('buildCreateArgs', () => {
@@ -299,6 +301,10 @@ describe('sbx egress helpers', () => {
     expect(isHuddleProxyUrl('http://localhost:32768', 32768)).toBe(true);
     expect(isHuddleProxyUrl('http://corp-proxy:8080', 32768)).toBe(false);
     expect(isHuddleProxyUrl('', 32768)).toBe(false);
+    // Andere poort: alleen met het reset-secret is het nog van Huddle.
+    expect(isHuddleProxyUrl('http://_huddle-reset:S@127.0.0.1:40000', 32768, 'S')).toBe(true);
+    expect(isHuddleProxyUrl('http://_huddle-reset:X@127.0.0.1:40000', 32768, 'S')).toBe(false);
+    expect(isHuddleProxyUrl('http://me:S@127.0.0.1:40000', 32768, 'S')).toBe(false);
     expect(sbxProxyHostPort({ HUDDLE_SBX_PROXY_HOST_PORT: '32768' })).toBe(32768);
     expect(sbxProxyHostPort({})).toBeNull();
     expect(sbxProxyHostPort({ HUDDLE_SBX_PROXY_HOST_PORT: '99999' })).toBeNull();
@@ -506,6 +512,24 @@ describe('SbxProvider egress', () => {
     expect(store.enabled()).toBe(true);
   });
 
+  it('uit: allow-all regel niet weg te halen of sbx ls mislukt → blijft aan; geen regel is goed', async () => {
+    const store = memStore({ originalProxy: 'http://corp:8080' });
+    const boxes = { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'b' }]) };
+    const pipe = fakePipe([boxes], undefined, (args) => (args[4] === 'a' ? { code: 1, stderr: 'daemon busy' } : { code: 0 }));
+    await expect(sbx(pipe, store).setEnabled(false)).rejects.toThrow(/policy of a; Huddle stays on/);
+    expect(pipe.policyCalls).toHaveLength(2); // b wordt toch teruggegeven
+    expect(pipe.calls).toHaveLength(1);       // proxy niet teruggezet
+    expect(store.enabled()).toBe(true);
+
+    const pipe2 = fakePipe([{ code: 1, stderr: 'no daemon' }, { code: 1 }]);
+    await expect(sbx(pipe2, store).setEnabled(false)).rejects.toBeInstanceOf(ToolFailedError);
+    expect(store.enabled()).toBe(true);
+
+    const pipe3 = fakePipe([boxes, { code: 0 }, { code: 0 }], undefined, () => ({ code: 1, stderr: 'Error: rule not found' }));
+    await sbx(pipe3, store).setEnabled(false);
+    expect(store.enabled()).toBe(false);
+  });
+
   it('uit: gemaskeerde eigen proxy (wachtwoord niet bewaard) → unset en zeg het', async () => {
     const store = memStore({ originalProxy: 'http://me:***@corp:8080' });
     const pipe = fakePipe([{ code: 0, stdout: '[]' }, { code: 0 }, { code: 0 }]);
@@ -589,6 +613,23 @@ describe('SbxProvider egress', () => {
     const pipe2 = fakePipe([{ code: 0, stdout: '' }, { code: 1 }]);
     expect(await sbx(pipe2, store2).reconcile()).toBe(false);
     expect(store2.enabled()).toBe(true);
+  });
+
+  it('reconcile: Huddle-setting op de poort van een eerdere init → naar deze poort, herstart, alles herbouwen', async () => {
+    const store = memStore();
+    store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
+    const pipe = fakePipe([
+      { code: 0, stdout: 'http://_huddle-reset:RESETSECRET@127.0.0.1:40000' },
+      { code: 0 }, { code: 0 },  // set, restart
+      { code: 0, stdout: '[]' }, // ls
+    ]);
+    expect(await sbx(pipe, store).reconcile()).toBe(true);
+    expect(pipe.calls.map((c) => c.args.args).slice(1, 3)).toEqual([
+      ['settings', 'set', 'proxy.sandbox', `http://_huddle-reset:RESETSECRET@127.0.0.1:${PORT}`],
+      ['daemon', 'restart'],
+    ]);
+    expect(store.enabled()).toBe(true);
+    expect(store.identities.get('a')?.hash).toBeNull();
   });
 
   it('reconcile: gestopt midden in aanzetten (uit, maar setting wijst naar Huddle) → terugdraaien', async () => {
@@ -790,7 +831,7 @@ describe('folder mappings in een sandbox', () => {
 
   it('create: host linkt, rw en ro gaan mee naar sbx create, daarna sbx exec met het linkscript', async () => {
     const store = memStore();
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }, { code: 0 }], () => ({
+    const pipe = fakePipe([NO_BOXES, { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 }], () => ({
       rw: 'C:/Users/me/.huddle/sbx/links/box/rw',
       ro: 'C:/Users/me/.huddle/sbx/links/box/ro',
       skipped: [{ id: 'm3', reason: 'does not exist' }],
@@ -805,41 +846,51 @@ describe('folder mappings in een sandbox', () => {
       { id: 'm3', hostPath: '/host/m3', readOnly: false },
     ] }]);
     const argv = pipe.calls.map((c) => c.args.args);
-    expect(argv[1]).toEqual(['create', '--name', 'box', 'shell', 'T:/a', 'C:/Users/me/.huddle/sbx/links/box/rw', 'C:/Users/me/.huddle/sbx/links/box/ro:ro']);
-    expect(argv[3].slice(0, 5)).toEqual(['exec', 'box', '--', 'sh', '-c']);
-    expect(argv[3][5]).toContain(`l '/c/Users/me/.huddle/sbx/links/box/rw/m1' "$HOME"'/.m1'`);
-    expect(argv[3][5]).toContain(`l '/c/Users/me/.huddle/sbx/links/box/ro/m2' '/opt/tools'`);
-    expect(argv[3][5]).not.toContain('m3');
+    expect(argv[2]).toEqual(['create', '--name', 'box', 'shell', 'T:/a', 'C:/Users/me/.huddle/sbx/links/box/rw', 'C:/Users/me/.huddle/sbx/links/box/ro:ro']);
+    expect(argv[4].slice(0, 5)).toEqual(['exec', 'box', '--', 'sh', '-c']);
+    expect(argv[4][5]).toContain(`l '/c/Users/me/.huddle/sbx/links/box/rw/m1' "$HOME"'/.m1'`);
+    expect(argv[4][5]).toContain(`l '/c/Users/me/.huddle/sbx/links/box/ro/m2' '/opt/tools'`);
+    expect(argv[4][5]).not.toContain('m3');
     // Alleen de echte workspaces in de spec: de links-mappen komen er bij een recreate opnieuw bij.
     expect(store.identities.get('box')!.spec.workspaces).toEqual([{ path: 'T:/a', readOnly: false }]);
     expect(r.steps.find((s) => s.label === 'Prepare the folder mappings')!.stderr).toMatch(/map3: does not exist/);
   });
 
   it('create: een map van de host buiten ~/.huddle/sbx/links/<naam> wordt niet gemount', async () => {
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }, { code: 0 }], () => ({ rw: 'C:/Users/me', ro: null, skipped: [] }));
+    const pipe = fakePipe([NO_BOXES, { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 }], () => ({ rw: 'C:/Users/me', ro: null, skipped: [] }));
     const r = await withHome('C:/Users/me/.huddle', () => sbx(pipe, memStore(), [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] }));
     expect(r.ok).toBe(true);
-    expect(pipe.calls.map((c) => c.args.args[0])).toEqual(['settings', 'create', 'settings']);
-    expect(pipe.calls[1].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
+    expect(pipe.calls.map((c) => c.args.args[0])).toEqual(['ls', 'settings', 'create', 'settings']);
+    expect(pipe.calls[2].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
   });
 
   it('create: host-agent kent sbx.links niet → doos komt er toch, zonder mappings, met een stap die het zegt', async () => {
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }], () => new HostPipeError('unknown_op', "unknown op 'sbx.links'"));
+    const pipe = fakePipe([NO_BOXES, { code: 0 }, { code: 0 }, { code: 0 }], () => new HostPipeError('unknown_op', "unknown op 'sbx.links'"));
     const r = await sbx(pipe, memStore(), [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
     expect(r.ok).toBe(true);
-    expect(pipe.calls[1].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
+    expect(pipe.calls[2].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
     const prep = r.steps.find((s) => s.label === 'Prepare the folder mappings')!;
     expect(prep.code).toBe(-1);
     expect(prep.stderr).toMatch(/unknown op/);
   });
 
   it('linken mislukt → create blijft gelukt, de stap toont de fout', async () => {
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }, { code: 1, stderr: 'could not link /opt/x' }], () => ({ rw: '/h/.huddle/sbx/links/box/rw', ro: null, skipped: [] }));
+    const pipe = fakePipe([NO_BOXES, { code: 0 }, { code: 0 }, { code: 0 }, { code: 1, stderr: 'could not link /opt/x' }], () => ({ rw: '/h/.huddle/sbx/links/box/rw', ro: null, skipped: [] }));
     const store = memStore();
     const r = await sbx(pipe, store, [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
     expect(r.ok).toBe(true);
     expect(store.identified('box')).toBe(true);
     expect(r.steps.at(-1)).toMatchObject({ label: 'Link the folder mappings', code: 1 });
+  });
+
+  it('create met mappings onder een bestaande naam → geweigerd vóór de links van die doos worden vervangen', async () => {
+    const pipe = fakePipe([{ code: 0, stdout: JSON.stringify([{ name: 'box' }]) }]);
+    const r = await sbx(pipe, memStore(), [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(r.ok).toBe(false);
+    expect(r.steps[0].stderr).toMatch(/already exists/);
+    expect(pipe.linkCalls).toEqual([]);
+    expect(pipe.policyCalls).toEqual([]);
+    expect(pipe.calls).toHaveLength(1);
   });
 
   it('remove ruimt de links-map van de doos op', async () => {
