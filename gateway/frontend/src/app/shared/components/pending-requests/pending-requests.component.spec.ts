@@ -111,6 +111,25 @@ describe('PendingRequestsComponent', () => {
     expect(toPathPrefix('/x/y/')).toBe('/x/*');
   });
 
+  it('path rows of a global path allowlist only change after confirm', () => {
+    const { c } = create([]);
+    const global = { rule: rule({ id: 30, container_id: null, path_pattern: '/g' }), domain: 'g.test', path_pattern: '/g', last_path: null };
+    const own = { rule: rule({ id: 31, path_pattern: '/o' }), domain: 'o.test', path_pattern: '/o', last_path: null };
+    c.pathRequests = [global, own];
+    const ask = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    c.onPathPieAction('path-later', global);
+    expect(api.deleteRule).not.toHaveBeenCalled();
+    c.onPathPieAction('path-later', global);
+    expect(api.deleteRule).toHaveBeenCalledWith(30);
+    c.onPathPieAction('path-allow', own);
+    expect(ask).toHaveBeenCalledTimes(2);
+    c.togglePending(30);
+    c.togglePending(31);
+    ask.mockReturnValueOnce(false);
+    c.onBulkPathPie('path-deny');
+    expect(api.resolveRule).toHaveBeenCalledTimes(1);
+  });
+
   it('builds domain and path requests the same way for every page', () => {
     const marker = rule({ id: 20, domain: 'p.test', status: 'allow', path_mode: 1, container_id: null });
     const pathReq = rule({ id: 21, domain: 'p.test', path_pattern: '/x', path_mode: 1, container_id: null, last_seen: 5 });

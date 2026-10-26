@@ -55,23 +55,34 @@ export async function prepareSshLink(name: string): Promise<string> {
   try { keys = normalizeSshPublicKeys(publicKey); } catch { keys = ''; }
   if (!keys || keys.includes('\n')) throw new SshLinkError(500, 'The host agent returned no valid SSH public key.');
 
+  const reserved = getSshRelayPort(name) !== null;
   const port = allocatePort(name);
-  const self = await inspectContainer(HUDDLE_CONTAINER);
-  if (!self?.HostConfig?.PortBindings?.[`${port}/tcp`]) {
-    throw new SshLinkError(409, `SSH port ${port} is not published on the Huddle container. Run \`huddle restart\` on the host once to publish ports ${SSH_RELAY_PORT_MIN}-${SSH_RELAY_PORT_MAX}.`);
-  }
-  await ensureSshRelay(name, port, relayDeps);
+  try {
+    const self = await inspectContainer(HUDDLE_CONTAINER);
+    if (!self?.HostConfig?.PortBindings?.[`${port}/tcp`]) {
+      throw new SshLinkError(409, `SSH port ${port} is not published on the Huddle container. Run \`huddle restart\` on the host once to publish ports ${SSH_RELAY_PORT_MIN}-${SSH_RELAY_PORT_MAX}.`);
+    }
+    await ensureSshRelay(name, port, relayDeps);
 
-  const sshdConfig = buildSshdConfig(sessionEnvFromContainer(inspect?.Config?.Env));
-  const result = await execInContainer(name, ['sh', '-c', buildEnsureSshdScript(sshdConfig, inspect.Id)], `${keys}\n`);
-  if (result.exitCode !== 0) {
-    throw new SshLinkError(500, ENSURE_SSHD_ERRORS[result.exitCode ?? -1] ?? `Setting up sshd failed (exit ${result.exitCode})`);
-  }
+    const sshdConfig = buildSshdConfig(sessionEnvFromContainer(inspect?.Config?.Env));
+    const result = await execInContainer(name, ['sh', '-c', buildEnsureSshdScript(sshdConfig, inspect.Id)], `${keys}\n`);
+    if (result.exitCode !== 0) {
+      throw new SshLinkError(500, ENSURE_SSHD_ERRORS[result.exitCode ?? -1] ?? `Setting up sshd failed (exit ${result.exitCode})`);
+    }
 
-  const hostKey = (await execContainerOutput(inspect.Id, ['cat', HOST_KEY_PUB])).trim().split(' ').slice(0, 2).join(' ');
-  const alias = sshAlias(name);
-  await onHost('ssh.host', { alias, port, user: SSH_USER, hostKey });
-  return buildIdeLink('jetbrains', alias, projectPath);
+    const hostKey = (await execContainerOutput(inspect.Id, ['cat', HOST_KEY_PUB])).trim().split(' ').slice(0, 2).join(' ');
+    const alias = sshAlias(name);
+    await onHost('ssh.host', { alias, port, user: SSH_USER, hostKey });
+    return buildIdeLink('jetbrains', alias, projectPath);
+  } catch (err) {
+    // A port this call reserved goes back to the pool: failed attempts must not
+    // use up the 20 ports. One reserved earlier stays with its container.
+    if (!reserved) {
+      await closeSshRelay(name).catch(() => undefined);
+      deleteSshRelayPort(name);
+    }
+    throw err;
+  }
 }
 
 function allocatePort(name: string): number {
