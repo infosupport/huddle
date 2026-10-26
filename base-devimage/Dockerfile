@@ -24,8 +24,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Global CLIs
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @github/copilot opencode-ai 
+# Global CLIs, elk in een eigen laag: samen ~1,3 GB (native binaries). Kleinere
+# lagen downloaden parallel, en een update van één CLI raakt alleen zijn eigen
+# laag en de lagen erna.
+RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+RUN npm install -g @openai/codex && npm cache clean --force
+RUN npm install -g @github/copilot && npm cache clean --force
+RUN npm install -g opencode-ai && npm cache clean --force
 
 # markitdown: converteert PDF/Office/HTML/afbeeldingen → Markdown.
 # Wordt gebruikt door de markitdown-skill (.ai/claude/skills/markitdown.md).
