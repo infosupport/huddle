@@ -1,8 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { execFileSync } from 'child_process';
 import {
   SbxProvider,
   SbxStore,
   buildCreateArgs,
+  buildLinkScript,
+  planFolderMappings,
+  sandboxPathOf,
+  specFromListing,
   defaultSandboxName,
   parseSbxLsJson,
   parseSbxLsTable,
@@ -17,11 +25,21 @@ import { HostPipeError } from '../src/host-pipe';
 
 type Reply = { code: number; stdout?: string; stderr?: string } | Error;
 
-function fakePipe(replies: Reply[]) {
+// `sbx.links` (folder mappings) wordt apart beantwoord en vastgelegd, zodat de
+// tool.run-volgorde in `calls` hetzelfde blijft.
+function fakePipe(replies: Reply[], linksReply: (args: any) => any = () => ({ rw: null, ro: null, skipped: [] })) {
   const calls: { op: string; args: any; opts: any }[] = [];
+  const linkCalls: any[] = [];
   return {
     calls,
+    linkCalls,
     call: async (op: string, args: any, opts: any) => {
+      if (op === 'sbx.links') {
+        linkCalls.push(args);
+        const r = linksReply(args);
+        if (r instanceof Error) throw r;
+        return r;
+      }
       calls.push({ op, args, opts });
       const r = replies.shift();
       if (!r) throw new Error('unexpected call');
@@ -54,7 +72,7 @@ function memStore(init: { enabled?: boolean; originalProxy?: string | null } = {
 }
 
 const PORT = 32768;
-const sbx = (pipe: ReturnType<typeof fakePipe>, store = memStore()) => new SbxProvider(pipe, store, PORT);
+const sbx = (pipe: ReturnType<typeof fakePipe>, store = memStore(), mappings: any[] = []) => new SbxProvider(pipe, store, PORT, () => mappings);
 
 describe('buildCreateArgs', () => {
   it('bouwt create --name <n> <agent> <primary> <extra>[:ro]', () => {
@@ -321,7 +339,7 @@ describe('SbxProvider egress', () => {
       },
     };
     const secretUser = (u: string) => /\/\/([^:]+):/.exec(u)![1];
-    const p = new SbxProvider(pipe as any, memStore(), PORT);
+    const p = new SbxProvider(pipe as any, memStore(), PORT, () => []);
     await Promise.all([
       p.create({ name: 'a', agent: 'shell', workspaces: [ws('/a')] }),
       p.create({ name: 'b', agent: 'shell', workspaces: [ws('/b')] }),
@@ -462,6 +480,7 @@ describe('SbxProvider egress', () => {
     const pipe = {
       calls,
       call: async (op: string, args: any, opts: any) => {
+        if (op === 'sbx.links') return { rw: null, ro: null, skipped: [] };
         calls.push({ op, args, opts });
         if (args.args[0] === 'rm' && args.args[2] === 'a') await gate;
         const r = replies.shift();
@@ -469,7 +488,7 @@ describe('SbxProvider egress', () => {
         return { stdout: '', stderr: '', ...(r as any) };
       },
     };
-    const p = new SbxProvider(pipe as any, store, PORT);
+    const p = new SbxProvider(pipe as any, store, PORT, () => []);
     await p.recreateAll('test');
     await vi.waitFor(() => expect(calls.length).toBe(2));
     const off = p.setEnabled(false);
@@ -561,6 +580,7 @@ describe('SbxProvider egress', () => {
     const pipe = {
       calls,
       call: async (op: string, args: any, opts: any) => {
+        if (op === 'sbx.links') return { rw: null, ro: null, skipped: [] };
         calls.push({ op, args, opts });
         if (args.args[0] === 'rm' && args.args[2] === 'a') await gate;
         const r = replies.shift();
@@ -568,7 +588,7 @@ describe('SbxProvider egress', () => {
         return { stdout: '', stderr: '', ...(r as any) };
       },
     };
-    const p = new SbxProvider(pipe as any, store, PORT);
+    const p = new SbxProvider(pipe as any, store, PORT, () => []);
     await p.recreateAll('test');
     await vi.waitFor(() => expect(calls.length).toBe(2));
     const rm = p.remove('b', { force: false });
@@ -625,5 +645,163 @@ describe('SbxProvider egress', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(pipe.calls).toHaveLength(1);
     expect(p['recreate']?.reason).toMatch(/reset secret/);
+  });
+});
+
+describe('folder mappings in een sandbox', () => {
+  const mapping = (id: number, over: Record<string, unknown> = {}) => ({
+    id, name: `map${id}`, hostPath: `/host/m${id}`, volumeName: '', containerPath: `/home/vscode/.m${id}`,
+    readOnly: false, enabled: true, sortOrder: id, ...over,
+  });
+  const withHome = <T>(home: string, fn: () => T): T => {
+    const before = process.env.HUDDLE_HOST_HOME_DIR;
+    process.env.HUDDLE_HOST_HOME_DIR = home;
+    try { return fn(); } finally {
+      if (before === undefined) delete process.env.HUDDLE_HOST_HOME_DIR;
+      else process.env.HUDDLE_HOST_HOME_DIR = before;
+    }
+  };
+
+  it('plan: uit, volume, ~/.huddle, slecht containerpad en dubbel doel vallen af', () => {
+    const plan = withHome('/home/me/.huddle', () => planFolderMappings([
+      mapping(1),
+      mapping(2, { readOnly: true, hostPath: 'C:\\Users\\me\\tools' }),
+      mapping(3, { enabled: false }),
+      mapping(4, { hostPath: '', volumeName: 'claude-{containerName}' }),
+      mapping(5, { hostPath: '/home/me/.huddle/pipe' }),
+      mapping(6, { hostPath: '/home/me' }),
+      mapping(7, { containerPath: '/home/vscode/$(id)' }),
+      mapping(8, { containerPath: '/home/vscode/.m1/' }),
+    ] as any));
+    expect(plan.links).toEqual([
+      { id: 'm1', hostPath: '/host/m1', readOnly: false },
+      { id: 'm2', hostPath: 'C:/Users/me/tools', readOnly: true },
+    ]);
+    expect(plan.skipped).toHaveLength(5);
+    expect(plan.skipped.join('\n')).toMatch(/map4: a Docker volume/);
+    expect(plan.skipped.join('\n')).toMatch(/map5: host path must not be Huddle's own folder/);
+    expect(plan.skipped.join('\n')).toMatch(/map6: host path contains Huddle's own folder/);
+    expect(plan.skipped.join('\n')).toMatch(/map7: container path/);
+    expect(plan.skipped.join('\n')).toMatch(/map8: \/home\/vscode\/\.m1 is mapped already/);
+  });
+
+  it('sandboxPathOf: Windows-schijf → /c/..., POSIX blijft', () => {
+    expect(sandboxPathOf('C:\\Users\\me\\.huddle\\sbx\\links\\b\\rw')).toBe('/c/Users/me/.huddle/sbx/links/b/rw');
+    expect(sandboxPathOf('d:/')).toBe('/d');
+    expect(sandboxPathOf('/home/me/x')).toBe('/home/me/x');
+  });
+
+  it('linkscript: /home/vscode → $HOME, bestaande map opzij, lege map weg, rest gaat door', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-linkscript-'));
+    try {
+      const home = path.join(tmp, 'home');
+      const src = (n: string) => { const d = path.join(tmp, 'src', n); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'f'), n); return d; };
+      fs.mkdirSync(path.join(home, '.full'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.full', 'old'), 'old');
+      fs.mkdirSync(path.join(home, '.empty'), { recursive: true });
+      const script = buildLinkScript([
+        { from: src('a'), to: '/home/vscode/.config/a b' },
+        { from: src('full'), to: '/home/vscode/.full' },
+        { from: src('empty'), to: '/home/vscode/.empty' },
+        { from: src('x'), to: `${tmp}/plain/x'q` },
+      ]);
+      execFileSync('sh', ['-c', script], { env: { ...process.env, HOME: home } });
+      expect(fs.readFileSync(path.join(home, '.config', 'a b', 'f'), 'utf8')).toBe('a');
+      expect(fs.readFileSync(path.join(home, '.full', 'f'), 'utf8')).toBe('full');
+      expect(fs.readFileSync(path.join(home, '.full.huddle-orig', 'old'), 'utf8')).toBe('old');
+      expect(fs.readFileSync(path.join(home, '.empty', 'f'), 'utf8')).toBe('empty');
+      expect(fs.readFileSync(path.join(tmp, 'plain', "x'q", 'f'), 'utf8')).toBe('x');
+      // Nog een keer (recreate in dezelfde doos): links worden vervangen, niet genest.
+      execFileSync('sh', ['-c', script], { env: { ...process.env, HOME: home } });
+      expect(fs.lstatSync(path.join(home, '.full')).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(path.join(src('a'), 'a b'))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('linkscript: een mapping die niet lukt → exit 1, de volgende wordt toch gelinkt', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-linkscript-'));
+    try {
+      fs.writeFileSync(path.join(tmp, 'file'), '');
+      fs.mkdirSync(path.join(tmp, 'b'));
+      const script = buildLinkScript([
+        { from: '/nope', to: `${tmp}/file/sub` },
+        { from: path.join(tmp, 'b'), to: `${tmp}/ok` },
+      ]);
+      const r = (() => { try { execFileSync('sh', ['-c', script], { stdio: 'pipe', env: { ...process.env, PATH: '/usr/bin:/bin' } }); return 0; } catch (e: any) { return e.status; } })();
+      expect(r).toBe(1);
+      expect(fs.lstatSync(path.join(tmp, 'ok')).isSymbolicLink()).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('create: host linkt, rw en ro gaan mee naar sbx create, daarna sbx exec met het linkscript', async () => {
+    const store = memStore();
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }, { code: 0 }], () => ({
+      rw: 'C:/Users/me/.huddle/sbx/links/box/rw',
+      ro: 'C:/Users/me/.huddle/sbx/links/box/ro',
+      skipped: [{ id: 'm3', reason: 'does not exist' }],
+    }));
+    const r = await withHome('C:\\Users\\me\\.huddle', () => sbx(pipe, store, [
+      mapping(1), mapping(2, { readOnly: true, containerPath: '/opt/tools' }), mapping(3),
+    ]).create({ name: 'box', agent: 'shell', workspaces: [ws('T:\\a')] }));
+    expect(r.ok).toBe(true);
+    expect(pipe.linkCalls).toEqual([{ name: 'box', links: [
+      { id: 'm1', hostPath: '/host/m1', readOnly: false },
+      { id: 'm2', hostPath: '/host/m2', readOnly: true },
+      { id: 'm3', hostPath: '/host/m3', readOnly: false },
+    ] }]);
+    const argv = pipe.calls.map((c) => c.args.args);
+    expect(argv[1]).toEqual(['create', '--name', 'box', 'shell', 'T:/a', 'C:/Users/me/.huddle/sbx/links/box/rw', 'C:/Users/me/.huddle/sbx/links/box/ro:ro']);
+    expect(argv[3].slice(0, 5)).toEqual(['exec', 'box', '--', 'sh', '-c']);
+    expect(argv[3][5]).toContain(`l '/c/Users/me/.huddle/sbx/links/box/rw/m1' "$HOME"'/.m1'`);
+    expect(argv[3][5]).toContain(`l '/c/Users/me/.huddle/sbx/links/box/ro/m2' '/opt/tools'`);
+    expect(argv[3][5]).not.toContain('m3');
+    // Alleen de echte workspaces in de spec: de links-mappen komen er bij een recreate opnieuw bij.
+    expect(store.identities.get('box')!.spec.workspaces).toEqual([{ path: 'T:/a', readOnly: false }]);
+    expect(r.steps.find((s) => s.label === 'Prepare the folder mappings')!.stderr).toMatch(/map3: does not exist/);
+  });
+
+  it('create: een map van de host buiten ~/.huddle/sbx/links/<naam> wordt niet gemount', async () => {
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }, { code: 0 }], () => ({ rw: 'C:/Users/me', ro: null, skipped: [] }));
+    const r = await withHome('C:/Users/me/.huddle', () => sbx(pipe, memStore(), [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] }));
+    expect(r.ok).toBe(true);
+    expect(pipe.calls.map((c) => c.args.args[0])).toEqual(['settings', 'create', 'settings']);
+    expect(pipe.calls[1].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
+  });
+
+  it('create: host-agent kent sbx.links niet → doos komt er toch, zonder mappings, met een stap die het zegt', async () => {
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }], () => new HostPipeError('unknown_op', "unknown op 'sbx.links'"));
+    const r = await sbx(pipe, memStore(), [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(r.ok).toBe(true);
+    expect(pipe.calls[1].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
+    const prep = r.steps.find((s) => s.label === 'Prepare the folder mappings')!;
+    expect(prep.code).toBe(-1);
+    expect(prep.stderr).toMatch(/unknown op/);
+  });
+
+  it('linken mislukt → create blijft gelukt, de stap toont de fout', async () => {
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }, { code: 1, stderr: 'could not link /opt/x' }], () => ({ rw: '/h/.huddle/sbx/links/box/rw', ro: null, skipped: [] }));
+    const store = memStore();
+    const r = await sbx(pipe, store, [mapping(1)]).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(r.ok).toBe(true);
+    expect(store.identified('box')).toBe(true);
+    expect(r.steps.at(-1)).toMatchObject({ label: 'Link the folder mappings', code: 1 });
+  });
+
+  it('remove ruimt de links-map van de doos op', async () => {
+    const pipe = fakePipe([{ code: 0 }]);
+    await sbx(pipe).remove('box', { force: true });
+    expect(pipe.linkCalls).toEqual([{ name: 'box', links: [] }]);
+  });
+
+  it('specFromListing: de links-mappen in ~/.huddle tellen niet als workspace', () => {
+    const spec = withHome('/home/me/.huddle', () => specFromListing({
+      name: 'box', agent: 'shell', status: 'running',
+      workspaces: ['/w', '/home/me/.huddle/sbx/links/box/rw', '/home/me/.huddle/sbx/links/box/ro:ro'],
+    } as any));
+    expect(spec!.workspaces).toEqual([{ path: '/w', readOnly: false }]);
   });
 });

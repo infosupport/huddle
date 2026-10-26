@@ -90,7 +90,7 @@ cat ~/.ssh/id_ed25519.pub                        <span class="cmd-note"># macOS 
     <div class="card">
       <h2>Folder mappings</h2>
       <p class="hint">
-        Folders or volumes that are automatically mounted in every new devcontainer.
+        Folders or volumes that are automatically mounted in every new devcontainer. Host folders also go into new Docker Sandboxes.
         Use a host path for bind mounts, or a volume name for Docker volumes.
         Stored in <code>~/.huddle/config.json</code> so the team can review them in version control.
       </p>

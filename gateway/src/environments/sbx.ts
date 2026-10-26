@@ -7,7 +7,9 @@
 
 import crypto from 'crypto';
 import { hostPipe, HostPipe } from '../host-pipe';
-import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError } from '../host-path';
+import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError, hostHuddleHome } from '../host-path';
+import { HostFolderMapping, listFolderMappings } from '../host-config';
+import { containerPathError } from '../workspace-root';
 import {
   EnvironmentProvider,
   IdeKind,
@@ -223,12 +225,98 @@ function failure(r: RunResult, fallback: string): ToolFailedError {
  * Huddle has no record of. Null when sbx did not say which agent or folders.
  */
 export function specFromListing(info: SandboxInfo): SandboxSpec | null {
-  if (!info.agent || !SBX_AGENTS.includes(info.agent) || !info.workspaces?.length) return null;
-  return {
-    name: info.name,
-    agent: info.agent,
-    workspaces: info.workspaces.map((w) => (/:ro$/.test(w) ? { path: w.slice(0, -3), readOnly: true } : { path: w, readOnly: false })),
+  // Folders inside ~/.huddle are the folder-mapping links: the create adds them again.
+  const workspaces = (info.workspaces ?? [])
+    .map((w) => (/:ro$/.test(w) ? { path: w.slice(0, -3), readOnly: true } : { path: w, readOnly: false }))
+    .filter((w) => !huddleHomeMountError(normalizeHostPath(w.path), true));
+  if (!info.agent || !SBX_AGENTS.includes(info.agent) || !workspaces.length) return null;
+  return { name: info.name, agent: info.agent, workspaces };
+}
+
+// ── Folder mappings ──────────────────────────────────────────────────────────
+// Settings → Folder mappings in a sandbox: the host agent links each mapping
+// into ~/.huddle/sbx/links/<name>/rw or /ro (op `sbx.links`), those two folders
+// go to `sbx create` as extra workspaces (ro with `:ro`), and after the create a
+// script in the sandbox links each one to its container path. See
+// cli/src/pipe/sbx-links.ts for why this is safe.
+
+export interface FolderMappingPlan {
+  /** What the host agent links: id → host folder. */
+  links: { id: string; hostPath: string; readOnly: boolean }[];
+  /** id → container path and display name. */
+  targets: Map<string, { containerPath: string; name: string }>;
+  /** Mappings left out, with why, for the create's steps. */
+  skipped: string[];
+}
+
+/** Which mappings can go into a sandbox. Same checks as for a devcontainer mount. */
+export function planFolderMappings(mappings: HostFolderMapping[]): FolderMappingPlan {
+  const plan: FolderMappingPlan = { links: [], targets: new Map(), skipped: [] };
+  const usedTargets = new Set<string>();
+  mappings.forEach((m, i) => {
+    if (!m.enabled) return;
+    const name = m.name || `#${m.id}`;
+    if (!m.hostPath?.trim()) {
+      if (m.volumeName?.trim()) plan.skipped.push(`${name}: a Docker volume, only for devcontainers`);
+      return;
+    }
+    const hostPath = normalizeHostPath(m.hostPath.trim());
+    const hostProblem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, m.readOnly);
+    if (hostProblem) return void plan.skipped.push(`${name}: host path ${hostProblem}`);
+    const containerPath = m.containerPath.trim().replace(/\/+$/, '');
+    const containerProblem = containerPathError(containerPath);
+    if (containerProblem) return void plan.skipped.push(`${name}: container path ${containerProblem}`);
+    if (usedTargets.has(containerPath)) return void plan.skipped.push(`${name}: ${containerPath} is mapped already`);
+    usedTargets.add(containerPath);
+    const id = /^\d{1,12}$/.test(String(m.id)) ? `m${m.id}` : `i${i}`;
+    plan.links.push({ id, hostPath, readOnly: m.readOnly });
+    plan.targets.set(id, { containerPath, name });
+  });
+  return plan;
+}
+
+/** Where sbx puts a host folder in the sandbox: `C:/Users/me` → `/c/Users/me`, POSIX as is. */
+export function sandboxPathOf(hostPath: string): string {
+  const p = normalizeHostPath(hostPath);
+  const drive = /^([A-Za-z]):(\/.*)?$/.exec(p);
+  return drive ? `/${drive[1].toLowerCase()}${drive[2] && drive[2] !== '/' ? drive[2] : ''}` : p;
+}
+
+const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The script `sbx exec` runs after the create: each mapping folder linked to
+ * its container path. The devcontainer paths assume user vscode, so
+ * /home/vscode becomes the sandbox user's $HOME. Whatever the sandbox has at
+ * that path already is moved to `<path>.huddle-orig` (an empty folder is just
+ * removed), like a mount hides it in a devcontainer. Paths outside $HOME may
+ * need sudo; when that is not there, that one mapping fails and the rest go on.
+ */
+export function buildLinkScript(links: { from: string; to: string }[]): string {
+  const target = (p: string) => {
+    const home = /^\/home\/vscode(\/.*)?$/.exec(p);
+    return home ? `"$HOME"${home[1] ? sq(home[1]) : ''}` : sq(p);
   };
+  return [
+    'l() {',
+    '  if [ -e "$2" ] && [ ! -L "$2" ]; then',
+    '    rmdir "$2" 2>/dev/null || mv "$2" "$2.huddle-orig" 2>/dev/null || sudo -n mv "$2" "$2.huddle-orig" || return 1',
+    '  fi',
+    '  d=$(dirname "$2")',
+    '  mkdir -p "$d" 2>/dev/null || sudo -n mkdir -p "$d" || return 1',
+    '  ln -sfn "$1" "$2" 2>/dev/null || sudo -n ln -sfn "$1" "$2"',
+    '}',
+    'rc=0',
+    ...links.map((l) => `l ${sq(l.from)} ${target(l.to)} || { echo "could not link "${target(l.to)} >&2; rc=1; }`),
+    'exit $rc',
+  ].join('\n');
+}
+
+/** What the host agent's `sbx.links` returns. */
+interface SbxLinksResult {
+  rw: string | null;
+  ro: string | null;
+  skipped: { id: string; reason: string }[];
 }
 
 /**
@@ -289,6 +377,7 @@ export class SbxProvider implements EnvironmentProvider {
     private readonly pipe: PipeCall = hostPipe,
     private readonly store: SbxStore,
     private readonly hostPort: number | null = sbxProxyHostPort(),
+    private readonly folderMappings: () => HostFolderMapping[] = listFolderMappings,
   ) {}
 
   private run(args: string[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<RunResult> {
@@ -390,12 +479,13 @@ export class SbxProvider implements EnvironmentProvider {
   private async createWithSecret(spec: SandboxSpec & { name: string }, args: string[], steps: SandboxStep[]): Promise<boolean> {
     // Switched off while this waited in the queue: the setting is the user's again.
     if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
+    const mappings = await this.prepareFolderMappings(spec.name, steps);
     const secret = newProxySecret();
     const set = await this.step(steps, 'Route the sandbox through Huddle', ['settings', 'set', 'proxy.sandbox', sbxProxyUrl(spec.name, secret, this.hostPort as number)]);
     if (set.code !== 0) return false;
     let created: RunResult | undefined;
     try {
-      created = await this.step(steps, 'Create sandbox', args, CREATE_TIMEOUT_MS);
+      created = await this.step(steps, 'Create sandbox', [...args, ...mappings.paths], CREATE_TIMEOUT_MS);
     } finally {
       await this.step(steps, 'Reset the proxy for the next sandbox', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]).then(
         (r) => { if (r.code !== 0) created = undefined; },
@@ -408,7 +498,61 @@ export class SbxProvider implements EnvironmentProvider {
       agent: spec.agent,
       workspaces: spec.workspaces.map((w) => ({ path: normalizeHostPath(w.path), readOnly: w.readOnly === true })),
     });
+    // The sandbox exists and is routed: a mapping that could not be linked shows
+    // in the steps, it does not undo the create.
+    if (mappings.links.length) {
+      await this.step(steps, 'Link the folder mappings', ['exec', spec.name, '--', 'sh', '-c', buildLinkScript(mappings.links)]).catch((err) => {
+        steps.push({ label: 'Link the folder mappings', command: '', code: -1, stdout: '', stderr: String(err?.message ?? err) });
+      });
+    }
     return true;
+  }
+
+  /**
+   * Has the host agent link the enabled folder mappings for this sandbox, and
+   * returns the extra `sbx create` workspaces plus what to link inside. Never
+   * fails the create: a mapping that cannot go in is listed in the steps.
+   */
+  private async prepareFolderMappings(name: string, steps: SandboxStep[]): Promise<{ paths: string[]; links: { from: string; to: string }[] }> {
+    const none = { paths: [], links: [] };
+    const plan = planFolderMappings(this.folderMappings());
+    const label = 'Prepare the folder mappings';
+    const note = (code: number, stdout: string, skipped: string[]) =>
+      steps.push({ label, command: '', code, stdout, stderr: skipped.length ? `left out:\n${skipped.join('\n')}` : '' });
+    if (plan.links.length === 0) {
+      if (plan.skipped.length) note(0, '', plan.skipped);
+      return none;
+    }
+    let res: SbxLinksResult;
+    try {
+      res = await this.pipe.call<SbxLinksResult>('sbx.links', { name, links: plan.links });
+    } catch (err: any) {
+      note(-1, '', [`all folder mappings: ${err?.message ?? err}`]);
+      return none;
+    }
+    const skipped = [...plan.skipped, ...(res.skipped ?? []).map((s) => `${plan.targets.get(s.id)?.name ?? s.id}: ${s.reason}`)];
+    const left = new Set((res.skipped ?? []).map((s) => s.id));
+    const paths: string[] = [];
+    const links: { from: string; to: string }[] = [];
+    for (const kind of ['rw', 'ro'] as const) {
+      const raw = res[kind];
+      if (!raw) continue;
+      // Only ever this sandbox's own folder under ~/.huddle/sbx/links.
+      const dir = normalizeHostPath(String(raw));
+      const home = hostHuddleHome();
+      const expected = home ? `${home}/sbx/links/${name}/${kind}` : null;
+      if (hostPathError(dir) || !dir.endsWith(`/sbx/links/${name}/${kind}`) || (expected && dir.toLowerCase() !== expected.toLowerCase())) {
+        skipped.push(`${kind} mappings: unexpected folder from the host (${dir})`);
+        continue;
+      }
+      paths.push(kind === 'ro' ? `${dir}:ro` : dir);
+      for (const l of plan.links) {
+        if ((l.readOnly ? 'ro' : 'rw') !== kind || left.has(l.id)) continue;
+        links.push({ from: `${sandboxPathOf(dir)}/${l.id}`, to: plan.targets.get(l.id)!.containerPath });
+      }
+    }
+    note(0, links.map((l) => `${l.to}`).join('\n'), skipped);
+    return { paths, links };
   }
 
   async remove(name: string, opts: { force: boolean }): Promise<void> {
@@ -421,6 +565,8 @@ export class SbxProvider implements EnvironmentProvider {
       const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
       if (r.code !== 0) throw failure(r, 'sbx rm failed');
       this.removedSinceListing.add(name);
+      // Its folder-mapping links (best effort: an older host agent lacks the op).
+      await this.pipe.call('sbx.links', { name, links: [] }).catch(() => undefined);
     });
   }
 

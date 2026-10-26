@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import { servePipe, cleanStale, type ServeHandle } from '../../cli/src/pipe/serve';
 import { toHuddlePath, isAbsoluteHostPath } from '../../cli/src/pipe/fs-list';
 import { execTool } from '../../cli/src/pipe/tools';
+import { sbxLinks, removeNoFollow } from '../../cli/src/pipe/sbx-links';
 import { readHeartbeat, heartbeatFresh, writeJsonAtomic, ensurePrivateDir } from '../../cli/src/pipe/protocol';
 
 const isWin = process.platform === 'win32';
@@ -196,6 +197,10 @@ describe('host pipe serve loop', () => {
     expect(notString).toMatchObject({ ok: false, error: { code: 'bad_request' } });
   });
 
+  it('sbx.links is an op: a bad sandbox name → bad_request', async () => {
+    expect(await call(dir, { v: 1, op: 'sbx.links', args: { name: '../x', links: [] } })).toMatchObject({ ok: false, error: { code: 'bad_request' } });
+  });
+
   it('unknown op → unknown_op', async () => {
     expect(await call(dir, { v: 1, op: 'rm.rf', args: {} })).toMatchObject({ ok: false, error: { code: 'unknown_op' } });
   });
@@ -324,5 +329,82 @@ describe('host pipe internals', () => {
     expect(fs.existsSync(path.join(dir, 'host.json'))).toBe(true);
     await h.stop();
     expect(fs.existsSync(path.join(dir, 'host.json'))).toBe(false);
+  });
+});
+
+describe('sbx.links (folder mappings for a sandbox)', () => {
+  let tmp: string;
+  let home: string; // stands in for ~/.huddle
+  let root: string; // ~/.huddle/sbx/links
+  let user: string;
+  beforeAll(() => {
+    tmp = tmpDir('huddle-sbx-links-');
+    home = path.join(tmp, 'user', '.huddle');
+    root = path.join(home, 'sbx', 'links');
+    user = path.join(tmp, 'user');
+    fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+    for (const d of ['code', 'tools', 'secret']) {
+      fs.mkdirSync(path.join(user, d));
+      fs.writeFileSync(path.join(user, d, 'f'), d);
+    }
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const run = (args: Record<string, unknown>) => sbxLinks(args, root, home);
+
+  it('links rw and ro mappings into their own folders, private', () => {
+    const r = run({ name: 'box', links: [
+      { id: 'm1', hostPath: path.join(user, 'code'), readOnly: false },
+      { id: 'm2', hostPath: path.join(user, 'tools'), readOnly: true },
+    ] });
+    expect(r).toEqual({ rw: toHuddlePath(path.join(root, 'box', 'rw')), ro: toHuddlePath(path.join(root, 'box', 'ro')), skipped: [] });
+    expect(fs.readFileSync(path.join(root, 'box', 'rw', 'm1', 'f'), 'utf8')).toBe('code');
+    expect(fs.readFileSync(path.join(root, 'box', 'ro', 'm2', 'f'), 'utf8')).toBe('tools');
+    if (!isWin) expect(fs.statSync(path.join(root, 'box')).mode & 0o777).toBe(0o700);
+  });
+
+  it('skips what is missing, not a folder, inside ~/.huddle, or around it while writable', () => {
+    fs.writeFileSync(path.join(user, 'file'), '');
+    const r = run({ name: 'box', links: [
+      { id: 'a', hostPath: path.join(user, 'nope'), readOnly: false },
+      { id: 'b', hostPath: path.join(user, 'file'), readOnly: false },
+      { id: 'c', hostPath: path.join(home, 'pipe', '..'), readOnly: true },
+      { id: 'd', hostPath: user, readOnly: false },
+      { id: 'e', hostPath: user, readOnly: true },
+    ] });
+    expect(r.skipped.map((s) => s.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(r.rw).toBeNull();
+    expect(r.ro).toBe(toHuddlePath(path.join(root, 'box', 'ro')));
+    // The earlier links of this box are gone: the folder is rebuilt every time.
+    expect(fs.existsSync(path.join(root, 'box', 'rw'))).toBe(false);
+  });
+
+  it('a mapping that is a symlink into ~/.huddle counts as where it points', () => {
+    if (isWin) return;
+    const sneaky = path.join(user, 'sneaky');
+    fs.symlinkSync(home, sneaky);
+    const r = run({ name: 'box', links: [{ id: 'x', hostPath: sneaky, readOnly: true }] });
+    expect(r).toEqual({ rw: null, ro: null, skipped: [{ id: 'x', reason: "is Huddle's own folder or inside it" }] });
+  });
+
+  it('an empty list removes the folder without following the links in it', () => {
+    run({ name: 'box', links: [{ id: 'm1', hostPath: path.join(user, 'code'), readOnly: false }] });
+    // Something the sandbox may have left in rw: a link to a folder that is not mapped.
+    fs.symlinkSync(path.join(user, 'secret'), path.join(root, 'box', 'rw', 'extra'), isWin ? 'junction' : 'dir');
+    expect(run({ name: 'box', links: [] })).toEqual({ rw: null, ro: null, skipped: [] });
+    expect(fs.existsSync(path.join(root, 'box'))).toBe(false);
+    expect(fs.readFileSync(path.join(user, 'code', 'f'), 'utf8')).toBe('code');
+    expect(fs.readFileSync(path.join(user, 'secret', 'f'), 'utf8')).toBe('secret');
+  });
+
+  it('refuses bad requests', () => {
+    expect(() => run({ name: 'Box', links: [] })).toThrow(/invalid sandbox name/);
+    expect(() => run({ name: 'box', links: 'x' })).toThrow(/links must be an array/);
+    expect(() => run({ name: 'box', links: [{ id: '../x', hostPath: user }] })).toThrow(/link id/);
+    expect(() => run({ name: 'box', links: [{ id: 'a', hostPath: 'rel/path' }] })).toThrow(/absolute/);
+    expect(() => run({ name: 'box', links: [{ id: 'a', hostPath: user }, { id: 'a', hostPath: user }] })).toThrow(/duplicate/);
+  });
+
+  it('removeNoFollow on a missing path is a no-op', () => {
+    expect(() => removeNoFollow(path.join(tmp, 'gone'))).not.toThrow();
   });
 });

@@ -20,7 +20,9 @@ The agent trusts every request file, so that is enforced: `huddle init` passes t
 `~/.huddle` to the gateway (`HUDDLE_HOST_HOME_DIR`), and every devcontainer workspace, folder mapping and
 sandbox workspace is refused when it is `~/.huddle` or inside it, and only allowed read-only when it
 contains it (the home folder, a drive root). Compared case-insensitively; symlinks are not resolved. This
-also keeps `config.json` (with the operator token) out of containers.
+also keeps `config.json` (with the operator token) out of containers. The one exception is
+`~/.huddle/sbx/links/<name>/rw|ro`, which the host agent builds for a sandbox's folder mappings (below): it
+holds only links to the mapped folders, and the gateway mounts nothing else from there.
 
 ## Lifecycle
 
@@ -63,6 +65,7 @@ Error codes: `bad_request`, `unknown_op`, `not_found`, `not_allowed`, `tool_miss
 | `host.info` | `{}` | `{ platform, version, home, tools: { [name]: { available, path?, version? } } }` |
 | `fs.list` | `{ path?: string }` | `HostFolderListing` (below). No `path` → the roots. |
 | `tool.run` | `{ tool: string, args: string[], timeoutMs?: number }` | `{ code: number, stdout: string, stderr: string }` |
+| `sbx.links` | `{ name: string, links: { id, hostPath, readOnly }[] }` | `{ rw: string \| null, ro: string \| null, skipped: { id, reason }[] }` |
 
 **`fs.list`**: lists the immediate subfolders of one folder (port of `host-browse.ts` from
 `feat/sbx-sandboxes-rebased`). No path → roots: every readable drive `X:/` on Windows, `/` elsewhere, plus
@@ -86,6 +89,12 @@ would let argv inject commands). stdin is closed, `windowsHide: true`, output ca
 Interactive commands (TTY) are not supported. A tool that runs past `timeoutMs` (max 15 min) is killed and
 the reply is `ok: true` with `code: 124` and a `[huddle] timed out` line in stderr; a signal gives `128 + n`.
 Only allowlisted tools that are actually installed are listed in the heartbeat's `tools`.
+
+**`sbx.links`**: (re)builds `~/.huddle/sbx/links/<name>/` for one sandbox: one link per folder mapping in
+`rw/` or `ro/` (a junction on Windows, which needs no admin rights; a symlink elsewhere), each folder 0700.
+The old folder is removed first without following any link in it; an empty `links` only removes it. A
+mapping that does not exist, is not a folder, resolves into `~/.huddle`, or contains `~/.huddle` while
+writable is left out and listed in `skipped`. `rw`/`ro` are the host paths of the folders that got links.
 
 ## Gateway side
 
@@ -138,12 +147,13 @@ argv only, via `tool.run` with tool `sbx`:
 - list: `sbx ls --json` (fall back to parsing the `sbx ls` table)
 - create: `sbx create --name <name> <agent> <path> [<path>[:ro] ...]` (first workspace is never read-only),
   timeout 15 min
-- remove: `sbx rm [--force] <name>`
+- remove: `sbx rm [--force] <name>`, then `sbx.links` with no links
+- folder mappings: see below
 
 Sandbox names: `^[a-z0-9][a-z0-9-]{0,62}$`; default `huddle-<leaf of first workspace>-<4 hex>`.
 Agents offered: `claude`, `codex`, `copilot`, `gemini`, `shell` (provider-defined list).
 
-Out of scope for now: policy reconcile, SSH/IDE connect.
+Out of scope for now: policy reconcile.
 
 ### sbx egress
 
@@ -197,6 +207,15 @@ under a rule scope of its own: `sbx:<name>`.
   off. Otherwise it lists the sandboxes. If any has no known
   secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
   it tries again every 30 s.
+- **Folder mappings.** Settings → Folder mappings with a host folder go into every sandbox too (Docker
+  volumes stay devcontainer-only). Before the create, `sbx.links` links them into
+  `~/.huddle/sbx/links/<name>/rw` and `/ro`; those go to `sbx create` as two extra workspaces, `ro` with
+  `:ro`. After the create, `sbx exec <name> -- sh -c <script>` links each one to its container path, with
+  `/home/vscode` read as the sandbox user's `$HOME`. What the sandbox had at that path is moved to
+  `<path>.huddle-orig`. A mapping that cannot go in is listed in the create's steps and does not fail it.
+  Checked against sbx v0.39.0 on Windows (`sbx-folder-links-poc.mjs`): the file share follows the links on
+  the host side, `:ro` holds through them, and links the sandbox makes in `rw` never reach the host. The
+  stored spec keeps only the real workspaces; a recreate links the current mappings again.
 - **Connect an IDE.** The sandbox detail page asks `GET /api/environments/sbx/sandboxes/<name>/ide-link?ide=vscode|jetbrains`.
   The first time per gateway run that runs `sbx setup ssh` on the host, which makes every sandbox reachable as
   `<name>.sbx` from the host's ssh config. The link (VS Code Remote-SSH or JetBrains Gateway) points at that alias and

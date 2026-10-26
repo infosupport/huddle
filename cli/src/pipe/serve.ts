@@ -27,6 +27,7 @@ import {
 } from './protocol';
 import { fsList, toHuddlePath } from './fs-list';
 import { availableTools, toolRun, toolsInfo } from './tools';
+import { sbxLinks } from './sbx-links';
 
 export interface ServeOptions {
   dir: string;
@@ -63,6 +64,8 @@ async function dispatch(req: PipeRequest, maxEntries: number): Promise<unknown> 
       return fsList(args, maxEntries);
     case 'tool.run':
       return toolRun(args);
+    case 'sbx.links':
+      return sbxLinks(args);
     default:
       throw new PipeError('unknown_op', `unknown op '${req.op}'`);
   }
