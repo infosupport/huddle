@@ -102,7 +102,7 @@ writable is left out and listed in `skipped`. `rw`/`ro` are the host paths of th
 does for sandboxes. `ssh.key` makes Huddle's own ed25519 key pair in `~/.huddle/ssh/id_ed25519` once (on the host,
 private key 0600; the gateway only gets the public key, which it puts in the container's authorized_keys) and puts
 `Include ~/.huddle/ssh/hosts/*.conf` at the top of `~/.ssh/config`. `ssh.host` writes `~/.huddle/ssh/hosts/<alias>.conf`
-(`Host <name>.huddle` → `localhost:<relay port>`, user, that key, `IdentitiesOnly`) and pins the container's host key
+(`Host <name>.huddle` → `127.0.0.1:<relay port>`, user, that key, `IdentitiesOnly`) and pins the container's host key
 in `<alias>.known_hosts` (`StrictHostKeyChecking yes`); `remove` deletes both. Alias, port, user and host key are
 validated so nothing can be injected into the ssh config. The portal link is a JetBrains Toolbox link to the alias,
 and `ssh <name>.huddle` works from a terminal too.

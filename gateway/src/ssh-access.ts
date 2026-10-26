@@ -124,6 +124,8 @@ export function buildSshdConfig(env: Record<string, string>): string {
     'GatewayPorts no',
     'PermitTunnel no',
     'X11Forwarding no',
+    // PAM (pam_motd) already shows the motd; sshd would print it a second time.
+    'PrintMotd no',
     // JetBrains Gateway uploads files (and, on first use, the backend) over SFTP.
     'Subsystem sftp internal-sftp',
     ...setEnv,
