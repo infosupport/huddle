@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { NgTemplateOutlet } from '@angular/common';
 import { ModalService } from '../../../core/services/modal.service';
 import {
-  ApiService, FolderMapping, HOST_PIPE_OFFLINE_HINT, ProviderStatus, SandboxStep, isHostPipeOffline,
+  ApiService, FolderMapping, HOST_PIPE_OFFLINE_HINT, ProviderStatus, SandboxStep, isHostPipeOffline, isProviderDisabled,
 } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
@@ -352,8 +352,12 @@ export class StartContainerModalComponent {
 
   /** Hint under the type cards when a provider cannot be used right now. */
   providerHint(p: ProviderStatus): string {
+    if (!p.enabled) return `${p.label} is switched off in Huddle — switch it on under Dev Environments.`;
     return p.error || `${p.label} is not available on this host.`;
   }
+
+  /** A provider sandboxes can be created with right now: switched on and reachable. */
+  usable(p: ProviderStatus): boolean { return p.enabled && p.available; }
 
   /** A fresh, non-dirty mount row — see MountRow. */
   private newMountRow(hostPath = '', readOnly = false): MountRow {
@@ -462,7 +466,7 @@ export class StartContainerModalComponent {
 
   private validateSandbox(): string | null {
     const p = this.provider;
-    if (!p || !p.available) return 'This environment type is not available right now';
+    if (!p || !this.usable(p)) return 'This environment type is not available right now';
     const name = this.sbxName.trim();
     if (name && !SANDBOX_NAME_PATTERN.test(name)) {
       return 'Name: lower-case letters, digits and dashes only, starting with a letter or digit (max 63)';
@@ -482,7 +486,7 @@ export class StartContainerModalComponent {
   setKind(k: string): void {
     if (k !== 'container') {
       const p = this.providers.find((x) => x.id === k);
-      if (!p || !p.available) return;
+      if (!p || !this.usable(p)) return;
       if (!p.agents.includes(this.sbxAgent)) this.sbxAgent = p.agents[0] ?? '';
     }
     this.kind = k;
@@ -713,6 +717,12 @@ export class StartContainerModalComponent {
       error: (err) => {
         this.loading = false;
         this.status = '';
+        if (isProviderDisabled(err)) {
+          // Switched off since the modal opened: say so and reload the type cards.
+          this.error = `${this.provider?.label ?? 'This environment'} is switched off in Huddle.`;
+          this.loadProviders();
+          return;
+        }
         this.error = isHostPipeOffline(err) ? HOST_PIPE_OFFLINE_HINT : (err?.message || 'Sandbox creation failed');
       },
     });

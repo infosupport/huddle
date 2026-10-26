@@ -28,8 +28,8 @@
                 </button>
                 <!-- One card per environment provider (GET /api/environments). -->
                 @for (p of providers; track p.id) {
-                  <button type="button" class="sc-card" [class.on]="kind === p.id" [disabled]="!p.available"
-                          [title]="p.available ? p.label + (p.version ? ' ' + p.version : '') : providerHint(p)"
+                  <button type="button" class="sc-card" [class.on]="kind === p.id" [disabled]="!usable(p)"
+                          [title]="usable(p) ? p.label + (p.version ? ' ' + p.version : '') : providerHint(p)"
                           (click)="setKind(p.id)">
                     <span class="sc-card-icon"><app-icon name="layers" [size]="16" /></span>
                     <span class="sc-card-b"><span class="sc-card-name">{{ p.label }}</span></span>
@@ -48,7 +48,9 @@
                 <p class="mount-hint muted">Sandboxes unavailable: {{ providersError }}</p>
               }
               @for (p of providers; track p.id) {
-                @if (!p.available) {
+                @if (!p.enabled) {
+                  <p class="mount-hint muted">{{ providerHint(p) }}</p>
+                } @else if (!p.available) {
                   <p class="mount-hint muted">{{ p.label }} unavailable: {{ providerHint(p) }}</p>
                 }
               }

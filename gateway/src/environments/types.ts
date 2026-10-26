@@ -6,16 +6,37 @@
 export interface ProviderStatus {
   id: string;
   label: string;
+  // Switched on in Huddle. Off: Huddle leaves the tool alone (no list, no create).
+  enabled: boolean;
   available: boolean;
   version?: string;
   error?: string;
+  // Why it cannot be switched on here (for example: the CLI did not publish the egress port).
+  unavailableReason?: string;
   agents: string[];
+  recreate?: RecreateState;
+}
+
+export interface RecreateResult {
+  name: string;
+  ok: boolean;
+  message?: string;
+}
+
+// The last (or running) "recreate every sandbox" run.
+export interface RecreateState {
+  running: boolean;
+  reason: string;
+  startedAt: string;
+  finishedAt?: string;
+  results: RecreateResult[];
 }
 
 export interface SandboxInfo {
   name: string;
   provider: string;
   status?: string;
+  agent?: string;
   workspaces?: string[];
 }
 
@@ -52,6 +73,20 @@ export interface EnvironmentProvider {
   list(): Promise<SandboxInfo[]>;
   create(spec: SandboxSpec): Promise<SandboxCreateResult>;
   remove(name: string, opts: { force: boolean }): Promise<void>;
+  isEnabled(): boolean;
+  // Switching on routes the sandboxes through Huddle and recreates them all;
+  // switching off hands them back. Returns what it ran, for the portal.
+  setEnabled(enabled: boolean): Promise<SandboxStep[]>;
+  // Recreates every sandbox (in the background); resolves once it has started.
+  recreateAll(reason: string): Promise<RecreateState>;
+}
+
+// The provider is switched off in Huddle → HTTP 409.
+export class ProviderDisabledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderDisabledError';
+  }
 }
 
 // A provider refusing input (bad name, relative path, unknown agent) before

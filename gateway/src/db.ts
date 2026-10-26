@@ -144,6 +144,17 @@ export function initDb(): void {
   // host live through the host pipe (fs.list), so the stored snapshot is dead data.
   db.exec('DROP TABLE IF EXISTS indexed_folders');
 
+  // Sandbox egress identity (docs/host-pipe.md): the SHA-256 of the proxy secret
+  // a sandbox was created with, and the spec it was created from so it can be
+  // recreated with a fresh secret.
+  const sandboxCols = db.prepare('PRAGMA table_info(sandboxes)').all() as { name: string }[];
+  if (!sandboxCols.some((c) => c.name === 'proxy_secret_hash')) {
+    db.exec('ALTER TABLE sandboxes ADD COLUMN proxy_secret_hash TEXT');
+  }
+  if (!sandboxCols.some((c) => c.name === 'spec_json')) {
+    db.exec('ALTER TABLE sandboxes ADD COLUMN spec_json TEXT');
+  }
+
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
   if (!cols.some(c => c.name === 'expires_at')) {
     db.exec('ALTER TABLE rules ADD COLUMN expires_at INTEGER');
@@ -255,6 +266,10 @@ export function getSetting(key: string): string | null {
 export function setSetting(key: string, value: string): void {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, value);
+}
+
+export function deleteSetting(key: string): void {
+  db.prepare('DELETE FROM settings WHERE key = ?').run(key);
 }
 
 // ── Container airlock ────────────────────────────────────────────────────────
@@ -584,8 +599,41 @@ export interface SandboxRecord {
   created_at: number;
 }
 
+// Upsert that keeps the identity columns: the provider may already have stored
+// the proxy secret for this create.
 export function recordSandbox(provider: string, name: string): void {
-  db.prepare('INSERT OR REPLACE INTO sandboxes (provider, name) VALUES (?, ?)').run(provider, name);
+  db.prepare(
+    'INSERT INTO sandboxes (provider, name) VALUES (?, ?) ON CONFLICT(provider, name) DO UPDATE SET created_at = unixepoch()',
+  ).run(provider, name);
+}
+
+/** Stores (or replaces) a sandbox's proxy identity; also marks it as Huddle's. */
+export function saveSandboxIdentity(provider: string, name: string, secretHash: string, specJson: string): void {
+  db.prepare(
+    `INSERT INTO sandboxes (provider, name, proxy_secret_hash, spec_json) VALUES (?, ?, ?, ?)
+     ON CONFLICT(provider, name) DO UPDATE SET created_at = unixepoch(),
+       proxy_secret_hash = excluded.proxy_secret_hash, spec_json = excluded.spec_json`,
+  ).run(provider, name, secretHash, specJson);
+}
+
+/** The sandbox whose proxy secret hashes to `secretHash`, if any. */
+export function sandboxByProxySecretHash(provider: string, secretHash: string): string | null {
+  const row = db
+    .prepare('SELECT name FROM sandboxes WHERE provider = ? AND proxy_secret_hash = ?')
+    .get(provider, secretHash) as { name: string } | undefined;
+  return row?.name ?? null;
+}
+
+export function sandboxSpecJson(provider: string, name: string): string | null {
+  const row = db
+    .prepare('SELECT spec_json FROM sandboxes WHERE provider = ? AND name = ?')
+    .get(provider, name) as { spec_json: string | null } | undefined;
+  return row?.spec_json ?? null;
+}
+
+/** Revokes every proxy secret of a provider (the records themselves stay). */
+export function clearSandboxIdentities(provider: string): void {
+  db.prepare('UPDATE sandboxes SET proxy_secret_hash = NULL WHERE provider = ?').run(provider);
 }
 
 export function hasSandbox(provider: string, name: string): boolean {

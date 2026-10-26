@@ -11,6 +11,7 @@ import {
   listProviders as defaultListProviders,
   EnvironmentProvider,
   InvalidSpecError,
+  ProviderDisabledError,
   ToolFailedError,
 } from './environments';
 import { recordSandbox, hasSandbox, deleteSandbox, listSandboxRecords, logAudit } from './db';
@@ -39,6 +40,7 @@ function sendError(reply: FastifyReply, err: unknown): FastifyReply {
   }
   if (err instanceof InvalidSpecError) return reply.code(400).send({ error: 'invalid_request', message: err.message });
   if (err instanceof ToolFailedError) return reply.code(502).send({ error: 'tool_failed', message: err.message, code: err.code });
+  if (err instanceof ProviderDisabledError) return reply.code(409).send({ error: 'provider_disabled', message: err.message });
   throw err;
 }
 
@@ -71,6 +73,38 @@ export function registerHostPipeRoutes(app: FastifyInstance, deps: HostPipeRoute
   app.get('/api/environments', async (_req, reply) => {
     try {
       return { providers: await Promise.all(listProviders().map((p) => p.status())) };
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  // Switching on routes every sandbox through Huddle and recreates all of them
+  // (also the ones Huddle did not create); switching off gives sbx its own proxy
+  // setting back. Both can take minutes: the answer is the steps that ran, the
+  // recreate itself goes on in the background (see status().recreate).
+  app.put<{ Params: { provider: string }; Body: { enabled?: unknown } }>('/api/environments/:provider', async (req, reply) => {
+    const provider = getProvider(req.params.provider);
+    if (!provider) return reply.code(404).send({ error: 'unknown_provider' });
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== 'boolean') return reply.code(400).send({ error: 'invalid_request', message: 'enabled must be a boolean' });
+    try {
+      const steps = await provider.setEnabled(enabled);
+      logAudit({ containerId: null, domain: provider.id, action: enabled ? 'admin:provider-enable' : 'admin:provider-disable' });
+      notifyStateChanged();
+      return { enabled: provider.isEnabled(), steps };
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.post<{ Params: { provider: string } }>('/api/environments/:provider/recreate', async (req, reply) => {
+    const provider = getProvider(req.params.provider);
+    if (!provider) return reply.code(404).send({ error: 'unknown_provider' });
+    try {
+      const state = await provider.recreateAll('requested in the portal');
+      logAudit({ containerId: null, domain: provider.id, action: 'admin:sandbox-recreate-all' });
+      notifyStateChanged();
+      return state;
     } catch (err) {
       return sendError(reply, err);
     }

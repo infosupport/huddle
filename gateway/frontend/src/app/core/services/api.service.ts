@@ -60,10 +60,30 @@ export interface HostPipeStatus {
 export interface ProviderStatus {
   id: string;
   label: string;
+  /** Switched on in Huddle. Off: Huddle leaves the tool alone (no list, no create). */
+  enabled: boolean;
   available: boolean;
   version?: string;
   error?: string;
+  /** Why it cannot be switched on here (e.g. the CLI did not publish the egress port). */
+  unavailableReason?: string;
   agents: string[];
+  /** The last (or running) "recreate every sandbox" run. */
+  recreate?: RecreateState;
+}
+
+export interface RecreateResult {
+  name: string;
+  ok: boolean;
+  message?: string;
+}
+
+export interface RecreateState {
+  running: boolean;
+  reason: string;
+  startedAt: string;
+  finishedAt?: string;
+  results: RecreateResult[];
 }
 
 export interface SandboxInfo {
@@ -95,6 +115,11 @@ export interface SandboxStep {
   stderr: string;
 }
 
+export interface ProviderToggleResult {
+  enabled: boolean;
+  steps: SandboxStep[];
+}
+
 export interface SandboxCreateResult {
   name: string;
   ok: boolean;
@@ -111,6 +136,11 @@ export interface ApiError extends Error {
 export function isHostPipeOffline(e: unknown): boolean {
   const err = e as ApiError | null;
   return err?.code === 'host_pipe_offline' || err?.status === 503;
+}
+
+/** The provider is switched off in Huddle (409 provider_disabled). */
+export function isProviderDisabled(e: unknown): boolean {
+  return (e as ApiError | null)?.code === 'provider_disabled';
 }
 
 export const HOST_PIPE_OFFLINE_HINT =
@@ -425,6 +455,18 @@ export class ApiService {
   // ── Environment providers (sandboxes) ───────────────────────────────────────
   listEnvironments(): Observable<{ providers: ProviderStatus[] }> {
     return this.handle(this.http.get<{ providers: ProviderStatus[] }>('/api/environments'));
+  }
+
+  // Switching on recreates every sandbox on the machine (in the background, see
+  // ProviderStatus.recreate); both directions can take a while.
+  setEnvironmentEnabled(provider: string, enabled: boolean): Observable<ProviderToggleResult> {
+    return this.handle(this.http.put<ProviderToggleResult>(
+      `/api/environments/${encodeURIComponent(provider)}`, { enabled }));
+  }
+
+  recreateEnvironment(provider: string): Observable<RecreateState> {
+    return this.handle(this.http.post<RecreateState>(
+      `/api/environments/${encodeURIComponent(provider)}/recreate`, {}));
   }
 
   listSandboxes(provider: string): Observable<{ sandboxes: SandboxInfo[] }> {

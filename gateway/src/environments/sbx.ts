@@ -2,7 +2,8 @@
 // array handed to the host agent's `tool.run` (never a shell), and every value
 // that ends up in that argv is validated here first. Ported from
 // feat/sbx-sandboxes-rebased:gateway/src/sandbox/ops.ts, minus everything that
-// needed the gateway on the host (identity, proxy, policy reconcile, SSH).
+// needed the gateway on the host (policy reconcile, SSH). Egress goes through
+// Huddle with a proxy secret per sandbox: see sbx-egress.ts.
 
 import crypto from 'crypto';
 import { hostPipe, HostPipe } from '../host-pipe';
@@ -10,12 +11,24 @@ import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError } 
 import {
   EnvironmentProvider,
   InvalidSpecError,
+  ProviderDisabledError,
   ProviderStatus,
+  RecreateState,
   SandboxCreateResult,
   SandboxInfo,
   SandboxSpec,
+  SandboxStep,
   ToolFailedError,
 } from './types';
+import {
+  RESET_USER,
+  hashProxySecret,
+  isHuddleProxyUrl,
+  newProxySecret,
+  redactProxyUrls,
+  sbxProxyHostPort,
+  sbxProxyUrl,
+} from './sbx-egress';
 
 export const SBX_AGENTS = ['claude', 'codex', 'copilot', 'gemini', 'shell'];
 export const SANDBOX_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -168,22 +181,29 @@ export function parseSbxLsJson(stdout: string): SandboxInfo[] | null {
   for (const e of items) {
     let name: unknown;
     let status: unknown;
+    let agent: unknown;
     let ws: unknown;
     if (typeof e === 'string') name = e;
     else if (e && typeof e === 'object') {
       const o = e as Record<string, unknown>;
       name = o.name ?? o.Name ?? o.vm_name ?? o.id ?? o.ID;
       status = o.status ?? o.Status ?? o.state ?? o.State;
+      agent = o.agent ?? o.Agent ?? o.agent_name;
       ws = o.workspaces ?? o.Workspaces ?? o.paths;
     }
     if (typeof name !== 'string' || !name || seen.has(name)) continue;
     seen.add(name);
     const info: SandboxInfo = { name, provider: 'sbx' };
     if (typeof status === 'string') info.status = status;
+    if (typeof agent === 'string' && agent) info.agent = agent;
     if (Array.isArray(ws)) {
-      const paths = ws
-        .map((w) => (typeof w === 'string' ? w : w && typeof w === 'object' ? (w as any).path : undefined))
-        .filter((p): p is string => typeof p === 'string' && !!p);
+      // A read-only workspace keeps sbx's own `:ro` suffix, so it can be recreated as one.
+      const pathOf = (w: any): string | undefined => {
+        if (typeof w === 'string') return w;
+        if (!w || typeof w !== 'object' || typeof w.path !== 'string') return undefined;
+        return w.readOnly === true || w.read_only === true || w.readonly === true || w.ro === true ? `${w.path}:ro` : w.path;
+      };
+      const paths = ws.map(pathOf).filter((p): p is string => typeof p === 'string' && !!p);
       if (paths.length) info.workspaces = paths;
     }
     out.push(info);
@@ -191,37 +211,128 @@ export function parseSbxLsJson(stdout: string): SandboxInfo[] | null {
   return out;
 }
 
+
 function failure(r: RunResult, fallback: string): ToolFailedError {
-  return new ToolFailedError((r.stderr || r.stdout).trim() || fallback, r.code);
+  return new ToolFailedError(redactProxyUrls((r.stderr || r.stdout).trim()) || fallback, r.code);
 }
+
+/**
+ * The sandbox spec back from an `sbx ls --json` row, for recreating a sandbox
+ * Huddle has no record of. Null when sbx did not say which agent or folders.
+ */
+export function specFromListing(info: SandboxInfo): SandboxSpec | null {
+  if (!info.agent || !SBX_AGENTS.includes(info.agent) || !info.workspaces?.length) return null;
+  return {
+    name: info.name,
+    agent: info.agent,
+    workspaces: info.workspaces.map((w) => (/:ro$/.test(w) ? { path: w.slice(0, -3), readOnly: true } : { path: w, readOnly: false })),
+  };
+}
+
+/** What the provider keeps between runs (the DB in production, see sbx-store.ts). */
+export interface SbxStore {
+  enabled(): boolean;
+  setEnabled(on: boolean): void;
+  /** The reset secret, minted on first use and then kept (it must survive a gateway restart). */
+  resetSecret(): string;
+  /** The `proxy.sandbox` value from before Huddle took it over, '' for unset. Null: none saved. */
+  originalProxy(): string | null;
+  setOriginalProxy(value: string | null): void;
+  saveIdentity(name: string, secretHash: string, spec: SandboxSpec): void;
+  spec(name: string): SandboxSpec | null;
+  clearIdentities(): void;
+}
+
+// After a recreate that the reset secret triggered, ignore the reset secret for
+// this long: a sandbox that could not be recreated keeps presenting it, and that
+// must not turn into a loop of recreating everything.
+const RESET_COOLDOWN_MS = 5 * 60_000;
+
+const NO_PORT = 'The Huddle CLI did not publish the sandbox egress port. Run `huddle init` again.';
 
 export class SbxProvider implements EnvironmentProvider {
   readonly id = 'sbx';
   readonly label = 'Docker Sandbox';
+  private queue: Promise<unknown> = Promise.resolve();
+  private recreate: RecreateState | undefined;
+  private recreating: Promise<void> | undefined;
 
-  constructor(private readonly pipe: PipeCall = hostPipe) {}
+  constructor(
+    private readonly pipe: PipeCall = hostPipe,
+    private readonly store: SbxStore,
+    private readonly hostPort: number | null = sbxProxyHostPort(),
+  ) {}
 
   private run(args: string[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<RunResult> {
     return this.pipe.call<RunResult>('tool.run', { tool: 'sbx', args, timeoutMs }, { timeoutMs: timeoutMs + PIPE_GRACE_MS });
   }
 
+  // Runs a command and logs it as a step, with every proxy secret masked.
+  private async step(steps: SandboxStep[], label: string, args: string[], timeoutMs?: number): Promise<RunResult> {
+    const r = await this.run(args, timeoutMs);
+    steps.push({
+      label,
+      command: redactProxyUrls(displayCommand(args)),
+      code: r.code,
+      stdout: redactProxyUrls(r.stdout),
+      stderr: redactProxyUrls(r.stderr),
+    });
+    return r;
+  }
+
+  // `proxy.sandbox` is one setting for the whole machine, so everything that
+  // sets it runs one at a time: two creates at once could swap their secrets.
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(fn, fn);
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  isEnabled(): boolean {
+    return this.store.enabled();
+  }
+
+  private resetUrl(): string {
+    return sbxProxyUrl(RESET_USER, this.store.resetSecret(), this.hostPort as number);
+  }
+
   // Not available is an answer, not an error: sbx missing or broken on the host
   // is shown in the portal. A dead pipe is the caller's problem (503).
   async status(): Promise<ProviderStatus> {
-    const base = { id: this.id, label: this.label, agents: [...SBX_AGENTS] };
+    const base: ProviderStatus = {
+      id: this.id,
+      label: this.label,
+      enabled: this.isEnabled(),
+      available: false,
+      agents: [...SBX_AGENTS],
+      ...(this.hostPort === null ? { unavailableReason: NO_PORT } : {}),
+      ...(this.recreate ? { recreate: structuredClone(this.recreate) } : {}),
+    };
     try {
       const r = await this.run(['version']);
-      if (r.code !== 0) return { ...base, available: false, error: failure(r, 'sbx version failed').message };
+      if (r.code !== 0) return { ...base, error: failure(r, 'sbx version failed').message };
       const version = r.stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean)?.slice(0, 200);
       return { ...base, available: true, version };
     } catch (err: any) {
       if (err?.code === 'host_pipe_offline') throw err;
-      if (err?.code === 'tool_missing') return { ...base, available: false, error: 'sbx is not installed on the host' };
-      return { ...base, available: false, error: err?.message ?? String(err) };
+      if (err?.code === 'tool_missing') return { ...base, error: 'sbx is not installed on the host' };
+      return { ...base, error: err?.message ?? String(err) };
     }
   }
 
+  private requireEnabled(): void {
+    if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox is switched off in Huddle');
+    // Switched on under a CLI that published the port, now running without it:
+    // there is no URL to give a new sandbox.
+    if (this.hostPort === null) throw new ProviderDisabledError(NO_PORT);
+  }
+
   async list(): Promise<SandboxInfo[]> {
+    this.requireEnabled();
+    return this.listAll();
+  }
+
+  private async listAll(): Promise<SandboxInfo[]> {
     // Prefer --json: structured, so a header row can never pass for a sandbox.
     // Older sbx without --json: parse the table.
     const j = await this.run(['ls', '--json']);
@@ -232,20 +343,151 @@ export class SbxProvider implements EnvironmentProvider {
   }
 
   async create(spec: SandboxSpec): Promise<SandboxCreateResult> {
+    this.requireEnabled();
     const first = Array.isArray(spec?.workspaces) && spec.workspaces.length ? validWorkspacePath(spec.workspaces[0]?.path) : '';
     const name = spec.name || (first ? defaultSandboxName(first) : '');
     const args = buildCreateArgs({ ...spec, name });
-    const r = await this.run(args, CREATE_TIMEOUT_MS);
-    return {
-      name,
-      ok: r.code === 0,
-      steps: [{ label: 'Create sandbox', command: displayCommand(args), code: r.code, stdout: r.stdout, stderr: r.stderr }],
-    };
+    const steps: SandboxStep[] = [];
+    const ok = await this.exclusive(() => this.createWithSecret({ ...spec, name }, args, steps));
+    return { name, ok, steps };
+  }
+
+  /**
+   * The create sequence (call inside exclusive()): point `proxy.sandbox` at the
+   * gateway with a fresh secret, create, and point it back at the reset secret,
+   * also when the create failed. The sandbox is only known to the gateway when
+   * all three worked: with the setting still on this box's secret, the next
+   * sandbox anyone creates would get this box's identity.
+   */
+  private async createWithSecret(spec: SandboxSpec & { name: string }, args: string[], steps: SandboxStep[]): Promise<boolean> {
+    const secret = newProxySecret();
+    const set = await this.step(steps, 'Route the sandbox through Huddle', ['settings', 'set', 'proxy.sandbox', sbxProxyUrl(spec.name, secret, this.hostPort as number)]);
+    if (set.code !== 0) return false;
+    let created: RunResult | undefined;
+    try {
+      created = await this.step(steps, 'Create sandbox', args, CREATE_TIMEOUT_MS);
+    } finally {
+      await this.step(steps, 'Reset the proxy for the next sandbox', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]).then(
+        (r) => { if (r.code !== 0) created = undefined; },
+        (err) => { created = undefined; steps.push({ label: 'Reset the proxy for the next sandbox', command: '', code: -1, stdout: '', stderr: String(err?.message ?? err) }); },
+      );
+    }
+    if (created?.code !== 0) return false;
+    this.store.saveIdentity(spec.name, hashProxySecret(secret), {
+      name: spec.name,
+      agent: spec.agent,
+      workspaces: spec.workspaces.map((w) => ({ path: normalizeHostPath(w.path), readOnly: w.readOnly === true })),
+    });
+    return true;
   }
 
   async remove(name: string, opts: { force: boolean }): Promise<void> {
+    this.requireEnabled();
     if (!SANDBOX_NAME_RE.test(name)) throw new InvalidSpecError('invalid sandbox name');
     const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
     if (r.code !== 0) throw failure(r, 'sbx rm failed');
+  }
+
+  async setEnabled(enabled: boolean): Promise<SandboxStep[]> {
+    if (enabled && this.hostPort === null) {
+      throw new InvalidSpecError(NO_PORT);
+    }
+    const steps: SandboxStep[] = [];
+    await this.exclusive(async () => {
+      if (enabled) {
+        if (this.isEnabled()) return;
+        // Remember the user's own setting, to put back when switched off. Never our
+        // own URL (left behind by a crash): restoring that would keep pointing here.
+        const current = await this.run(['settings', 'get', 'proxy.sandbox']);
+        if (current.code !== 0) throw failure(current, 'sbx settings get failed');
+        const value = current.stdout.trim();
+        if (!isHuddleProxyUrl(value, this.hostPort as number)) this.store.setOriginalProxy(value);
+        const set = await this.step(steps, 'Route new sandboxes through Huddle', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]);
+        if (set.code !== 0) throw failure(set, 'sbx settings set failed');
+        this.store.setEnabled(true);
+        // Fail closed right away: after the restart every existing sandbox presents
+        // the reset secret and is denied until it is recreated. Without it, a
+        // sandbox that cannot be recreated would keep its old, direct way out.
+        await this.step(steps, 'Restart the sbx daemon so running sandboxes go through Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
+      } else {
+        if (!this.isEnabled()) return;
+        this.store.setEnabled(false);
+        this.store.clearIdentities();
+        const original = this.store.originalProxy() ?? '';
+        const restore = original
+          ? await this.step(steps, 'Restore your own sandbox proxy', ['settings', 'set', 'proxy.sandbox', original])
+          : await this.step(steps, 'Restore the default sandbox proxy', ['settings', 'unset', 'proxy.sandbox']);
+        if (restore.code === 0) this.store.setOriginalProxy(null);
+        // Running sandboxes keep the Huddle proxy until sbx rebuilds their network.
+        await this.step(steps, 'Restart the sbx daemon so running sandboxes drop Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
+      }
+    });
+    // Every sandbox that exists now still has the old (or no) Huddle identity.
+    if (enabled && this.isEnabled()) await this.recreateAll('switched on');
+    return steps;
+  }
+
+  /**
+   * Recreates every sandbox on the machine with a fresh secret, in the
+   * background. Sandboxes Huddle did not create are adopted: they are recreated
+   * from what `sbx ls --json` says about them. Everything inside a sandbox
+   * outside its workspaces is lost; the workspaces are host folders and stay.
+   */
+  async recreateAll(reason: string): Promise<RecreateState> {
+    this.requireEnabled();
+    if (this.recreating) return structuredClone(this.recreate!);
+    const state: RecreateState = { running: true, reason, startedAt: new Date().toISOString(), results: [] };
+    this.recreate = state;
+    this.recreating = this.recreateEach(state)
+      .catch((err) => { state.results.push({ name: '*', ok: false, message: redactProxyUrls(String(err?.message ?? err)) }); })
+      .finally(() => {
+        state.running = false;
+        state.finishedAt = new Date().toISOString();
+        this.recreating = undefined;
+      });
+    return structuredClone(state);
+  }
+
+  /** The reset secret reached the gateway: recreate, unless that just happened. */
+  onResetSecretSeen(): void {
+    if (!this.isEnabled() || this.recreating) return;
+    const last = this.recreate?.finishedAt ? Date.parse(this.recreate.finishedAt) : 0;
+    if (Date.now() - last < RESET_COOLDOWN_MS) return;
+    void this.recreateAll('a sandbox presented the reset secret');
+  }
+
+  // A sandbox that could not be recreated has no identity: all it can present
+  // is the reset secret, which would set off another recreate of everything.
+  // Stopped it is quiet (best effort: it may already be gone).
+  private async stopUnrouted(name: string): Promise<void> {
+    await this.run(['stop', name]).catch(() => undefined);
+  }
+
+  private async recreateEach(state: RecreateState): Promise<void> {
+    // Every old secret goes first: whichever box still holds one is denied.
+    this.store.clearIdentities();
+    for (const info of await this.listAll()) {
+      const spec = this.store.spec(info.name) ?? specFromListing(info);
+      if (!spec) {
+        await this.stopUnrouted(info.name);
+        state.results.push({ name: info.name, ok: false, message: 'sbx did not say which agent and folders it has, so it cannot be recreated; stopped' });
+        continue;
+      }
+      const steps: SandboxStep[] = [];
+      try {
+        const args = buildCreateArgs({ ...spec, name: info.name });
+        const ok = await this.exclusive(async () => {
+          const rm = await this.step(steps, 'Remove sandbox', ['rm', '--force', info.name]);
+          if (rm.code !== 0) return false;
+          return this.createWithSecret({ ...spec, name: info.name }, args, steps);
+        });
+        const failed = steps.find((s) => s.code !== 0);
+        if (!ok) await this.stopUnrouted(info.name);
+        state.results.push(ok ? { name: info.name, ok } : { name: info.name, ok, message: failed ? `${failed.label}: ${(failed.stderr || failed.stdout).trim().slice(0, 500)}` : 'failed' });
+      } catch (err: any) {
+        await this.stopUnrouted(info.name);
+        state.results.push({ name: info.name, ok: false, message: redactProxyUrls(String(err?.message ?? err)) });
+      }
+    }
   }
 }

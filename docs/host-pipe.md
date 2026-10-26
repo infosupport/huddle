@@ -116,6 +116,11 @@ older than that list, so a create finishing meanwhile is kept); a new sandbox wi
 | `GET /api/environments/:provider/sandboxes` | | `{ sandboxes: (SandboxInfo & { managed: boolean })[] }`; `managed` = created by Huddle |
 | `POST /api/environments/:provider/sandboxes` | `{ name?, agent, workspaces: {path, readOnly}[] }` | `SandboxCreateResult` `{ name, ok, steps: {label, command, code, stdout, stderr}[] }` |
 | `DELETE /api/environments/:provider/sandboxes/:name` | `?force=1` | `{ ok: true }`; 404 if Huddle did not create it |
+| `PUT /api/environments/:provider` | `{ enabled: boolean }` | `{ enabled, steps }`; switching on also starts a recreate of every sandbox |
+| `POST /api/environments/:provider/recreate` | | `RecreateState` `{ running, reason, startedAt, finishedAt?, results: {name, ok, message?}[] }` |
+
+A provider that is switched off answers list, create and remove with 409 `{ error: 'provider_disabled' }`.
+`ProviderStatus` carries `enabled`, `unavailableReason?` (why it cannot be switched on) and `recreate?`.
 
 Removed: `GET/POST/DELETE /api/indexed-folders`, the `indexed_folders` table (dropped on startup), and the
 `huddle indexfolder` CLI command.
@@ -133,5 +138,49 @@ argv only, via `tool.run` with tool `sbx`:
 Sandbox names: `^[a-z0-9][a-z0-9-]{0,62}$`; default `huddle-<leaf of first workspace>-<4 hex>`.
 Agents offered: `claude`, `codex`, `copilot`, `gemini`, `shell` (provider-defined list).
 
-Out of scope for now (were the complicated part of `feat/sbx-sandboxes-rebased`): routing sandbox egress
-through the Huddle proxy, per-sandbox identity, policy reconcile, SSH/IDE connect.
+Out of scope for now: policy reconcile, SSH/IDE connect.
+
+### sbx egress
+
+While sbx is switched on in Huddle, every sandbox reaches the network only through the Huddle firewall,
+under a rule scope of its own: `sbx:<name>`.
+
+- **Listener.** The gateway runs a second proxy listener on port 3128. `huddle init` publishes it on host
+  loopback only (`127.0.0.1:${HUDDLE_SBX_PROXY_PORT:-32768}`) and passes the port as
+  `HUDDLE_SBX_PROXY_HOST_PORT`; without it the provider cannot be switched on.
+- **Identity.** sbx has one global upstream proxy setting, `proxy.sandbox`, but a sandbox keeps the value
+  it was created with, and the sbx daemon sends its credential as `Proxy-Authorization` on every request
+  and CONNECT. The sandbox never sees it. So every create runs, one at a time:
+  1. `sbx settings set proxy.sandbox http://<name>:<secret>@127.0.0.1:<port>` with a fresh 256-bit secret
+  2. `sbx create ...`
+  3. `sbx settings set proxy.sandbox http://_huddle-reset:<reset secret>@127.0.0.1:<port>`, also when the
+     create failed
+
+  The gateway stores only the SHA-256 of the secret (`sandboxes.proxy_secret_hash`) and the spec
+  (`sandboxes.spec_json`), and only when all three steps worked. Secrets are masked (`:***@`) in every
+  step shown to the portal.
+- **Unknown callers.** No credential, an unknown secret, a secret under another sandbox's name, or sbx
+  switched off: all get 407.
+- **Reset secret.** It belongs to no sandbox. sbx rebuilds every sandbox's proxy from the global setting
+  when its daemon restarts, so a sandbox that presents the reset secret means Huddle no longer knows which
+  sandbox is which. The request is denied, and every sandbox is recreated with a new secret. This happens
+  at most once per 5 minutes, and never while a recreate is already running.
+- **Recreate all.** Runs in the background:
+  - It starts by forgetting every old secret.
+  - Each sandbox listed by `sbx ls --json`, including ones Huddle did not create, is removed with
+    `rm --force` and created again from its stored spec, or else from the agent and workspaces in the
+    listing.
+  - Anything inside a sandbox outside its workspaces is lost; the workspaces are host folders and stay.
+  - A sandbox that cannot be recreated is stopped, so it does not keep setting off the reset secret.
+- **Switching on:**
+  - Saves the user's own `proxy.sandbox`, unless it already points at Huddle.
+  - Sets the reset URL.
+  - Restarts the sbx daemon. From then on every existing sandbox is denied until it has been recreated.
+  - Then recreates everything.
+- **Switching off:**
+  - Forgets all secrets.
+  - Restores the saved `proxy.sandbox`, or unsets it.
+  - Restarts the daemon, so running sandboxes drop Huddle.
+- **No TLS interception.** Sandboxes do not trust the Huddle CA, and sbx intercepts some hosts itself.
+  CONNECT is therefore a raw tunnel decided on the host alone, and path-mode rules do not apply to
+  sandboxes. The `huddle` host is closed to them entirely.

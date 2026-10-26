@@ -5,7 +5,9 @@ import { NgClass } from '@angular/common';
 import { StateService } from '../../core/services/state.service';
 import { forkJoin, of } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
-import { ApiService, HOST_PIPE_OFFLINE_HINT, ProviderStatus, SandboxInfo, isHostPipeOffline } from '../../core/services/api.service';
+import {
+  ApiService, HOST_PIPE_OFFLINE_HINT, ProviderStatus, SandboxInfo, SandboxStep, isHostPipeOffline, isProviderDisabled,
+} from '../../core/services/api.service';
 import { ModalService } from '../../core/services/modal.service';
 import { Container } from '../../core/models/container.model';
 import { Rule } from '../../core/models/rule.model';
@@ -49,13 +51,21 @@ export class DevEnvironmentsComponent {
 
   private containers = signal<Container[]>([]);
   private sandboxes = signal<SandboxInfo[]>([]);
-  private providers = signal<ProviderStatus[]>([]);
+  providers = signal<ProviderStatus[]>([]);
   private rules = signal<Rule[]>([]);
   loadingSandboxes = signal(false);
   sandboxesLoaded = signal(false);
 
   busy = signal<Record<string, string>>({});
   notice = signal<string | null>(null);
+
+  /** Provider id → what is going on while switching it on/off or starting a recreate. */
+  providerBusy = signal<Record<string, string>>({});
+  /** The steps the last switch on/off ran, per provider. */
+  providerSteps = signal<Record<string, SandboxStep[]>>({});
+  /** The last switch on/off or recreate failure, per provider. */
+  providerError = signal<Record<string, string>>({});
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   rows = computed<EnvRow[]>(() => {
     const rules = this.rules();
@@ -76,7 +86,7 @@ export class DevEnvironmentsComponent {
   });
 
   /** Providers that could not be asked for their sandboxes, with why. */
-  unavailable = computed(() => this.providers().filter(p => !p.available));
+  unavailable = computed(() => this.providers().filter(p => p.enabled && !p.available));
   /** Available providers whose sandbox listing failed on the last refresh; their last known rows stay. */
   failed = signal<ProviderFailure[]>([]);
 
@@ -91,6 +101,7 @@ export class DevEnvironmentsComponent {
       if (first) { first = false; return; } // skip the initial value (constructor already loaded)
       this.refreshSandboxes();
     });
+    this.destroyRef.onDestroy(() => this.stopPolling());
   }
 
   refreshSandboxes(): void {
@@ -104,10 +115,12 @@ export class DevEnvironmentsComponent {
       this.sandboxes.set(sandboxes);
       this.loadingSandboxes.set(false);
       this.sandboxesLoaded.set(true);
+      this.schedulePoll();
     };
     this.api.listEnvironments().subscribe({
       next: ({ providers }) => {
-        const available = (providers ?? []).filter(p => p.available);
+        // A provider switched off in Huddle has no sandboxes to list from here.
+        const available = (providers ?? []).filter(p => p.available && p.enabled);
         if (!available.length) { done(providers ?? [], []); return; }
         const failed: ProviderFailure[] = [];
         forkJoin(available.map(p => this.api.listSandboxes(p.id).pipe(
@@ -115,6 +128,8 @@ export class DevEnvironmentsComponent {
           map(r => (r.sandboxes ?? []).map(s => ({ ...s, provider: s.provider || p.id }))),
           // A failed listing is not "no sandboxes": keep what we last saw and say so.
           catchError(e => {
+            // Switched off between the status call and the listing: nothing to show, no error.
+            if (isProviderDisabled(e)) return of([]);
             failed.push({ id: p.id, label: p.label, error: isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'unknown error' });
             return of(this.sandboxes().filter(s => s.provider === p.id));
           }),
@@ -149,7 +164,91 @@ export class DevEnvironmentsComponent {
     this.setBusy(row.name, 'Removing…');
     this.api.removeSandbox(row.provider, row.name, true).subscribe({
       next: () => { this.setBusy(row.name, null); this.refreshSandboxes(); },
-      error: (e) => { this.setBusy(row.name, null); this.notice.set('✗ ' + (e?.message || 'remove failed')); },
+      error: (e) => {
+        this.setBusy(row.name, null);
+        if (isProviderDisabled(e)) { this.notice.set(`${row.typeLabel} is switched off in Huddle.`); this.refreshSandboxes(); return; }
+        this.notice.set('✗ ' + (e?.message || 'remove failed'));
+      },
     });
   }
+
+  // ── Provider on/off and recreate ──────────────────────────────────────────
+  isRecreating(p: ProviderStatus): boolean { return !!p.recreate?.running; }
+  failedRecreates(p: ProviderStatus) { return (p.recreate?.results ?? []).filter(r => !r.ok); }
+  providerBusyLabel(id: string): string | undefined { return this.providerBusy()[id]; }
+
+  toggleProvider(p: ProviderStatus): void {
+    const on = !p.enabled;
+    if (on && p.unavailableReason) return;
+    const question = on
+      ? `Switch ${p.label} on in Huddle?\n\n` +
+        `All sandbox network traffic will go through the Huddle firewall. To do that, EVERY sandbox on this machine ` +
+        `is recreated — also the ones Huddle did not create. Anything inside a sandbox outside its workspace folders ` +
+        `(installed packages, files in the home folder, …) is lost; the workspace folders live on the host and stay.\n\n` +
+        `Sandboxes that cannot be recreated are stopped.`
+      : `Switch ${p.label} off in Huddle?\n\n` +
+        `Sandbox network traffic then no longer goes through the Huddle firewall: ${p.label} gets its own proxy ` +
+        `setting back and its daemon is restarted. Huddle will no longer list or create sandboxes.`;
+    if (!confirm(question)) return;
+    this.setProviderState(p.id, on ? 'Switching on…' : 'Switching off…', [], '');
+    this.api.setEnvironmentEnabled(p.id, on).subscribe({
+      next: (r) => {
+        const failedStep = (r.steps ?? []).find(s => s.code !== 0);
+        this.setProviderState(p.id, null, failedStep ? r.steps : [],
+          failedStep ? (failedStep.stderr?.trim() || `${failedStep.label} failed`) : '');
+        this.modal.notifySandboxesChanged();
+      },
+      error: (e) => {
+        this.setProviderState(p.id, null, [], isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'switching failed');
+        this.refreshSandboxes();
+      },
+    });
+  }
+
+  recreateAll(p: ProviderStatus): void {
+    if (!confirm(`Recreate every ${p.label} sandbox on this machine?\n\n` +
+      `This includes sandboxes Huddle did not create. Anything inside a sandbox outside its workspace folders is lost; ` +
+      `the workspace folders live on the host and stay. Sandboxes that cannot be recreated are stopped.`)) return;
+    this.setProviderState(p.id, 'Starting…', [], '');
+    this.api.recreateEnvironment(p.id).subscribe({
+      next: () => { this.setProviderState(p.id, null, [], ''); this.refreshSandboxes(); },
+      error: (e) => {
+        const msg = isProviderDisabled(e) ? `${p.label} is switched off in Huddle.`
+          : isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'recreate failed';
+        this.setProviderState(p.id, null, [], msg);
+      },
+    });
+  }
+
+  private setProviderState(id: string, busy: string | null, steps: SandboxStep[], error: string): void {
+    const b = { ...this.providerBusy() };
+    if (busy) b[id] = busy; else delete b[id];
+    this.providerBusy.set(b);
+    this.providerSteps.set({ ...this.providerSteps(), [id]: steps });
+    this.providerError.set({ ...this.providerError(), [id]: error });
+  }
+
+  // While a recreate runs, ask for the provider status every few seconds; once
+  // it is done, reload the whole list (the sandboxes were replaced).
+  private schedulePoll(): void {
+    this.stopPolling();
+    if (!this.providers().some(p => this.isRecreating(p))) return;
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = null;
+      this.api.listEnvironments().subscribe({
+        next: ({ providers }) => {
+          const list = providers ?? [];
+          if (list.some(p => this.isRecreating(p))) { this.providers.set(list); this.schedulePoll(); }
+          else this.refreshSandboxes();
+        },
+        error: () => this.schedulePoll(),
+      });
+    }, DevEnvironmentsComponent.POLL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = null; }
+  }
+
+  static readonly POLL_MS = 3000;
 }

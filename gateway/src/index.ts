@@ -8,6 +8,9 @@ import { createContainerProxy } from './socket-proxy';
 import { restoreSshRelays } from './ssh-link';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
+import { sbxProvider } from './environments';
+import { sbxEgressIdentify } from './environments/sbx-store';
+import { SBX_PROXY_PORT } from './environments/sbx-egress';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -25,6 +28,14 @@ initDb();
 runSettingsMigration();
 initCa();
 createProxyServer();
+// Egress of Docker Sandboxes (docs/host-pipe.md, "sbx egress"). The sbx daemon
+// on the host connects here through the loopback port `huddle init` published
+// and names the sandbox with its proxy secret. No TLS interception: sandboxes do
+// not trust the Huddle CA.
+createProxyServer(SBX_PROXY_PORT, {
+  intercept: false,
+  identify: sbxEgressIdentify(() => sbxProvider.onResetSecretSeen()),
+});
 createApiServer().catch(err => {
   console.error('[api] failed to start', err);
   process.exit(1);

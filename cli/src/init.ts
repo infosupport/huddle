@@ -33,6 +33,9 @@ const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
  * gateway/src/ssh-access.ts.
  */
 export const SSH_RELAY_PORTS = '2200-2219';
+// Host port of the gateway's sbx egress proxy (docs/host-pipe.md). Published on
+// loopback only: the sbx daemon runs on this machine, nothing else needs it.
+const SBX_PROXY_HOST_PORT = process.env.HUDDLE_SBX_PROXY_PORT ?? '32768';
 
 export interface InitOptions {
   runtime?: string;
@@ -186,6 +189,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-e', `HUDDLE_OPERATOR_TOKEN=${operatorToken}`);
   dockerArgs.push('-p', `${HOST_PORT}:3000`);
   dockerArgs.push('-p', `127.0.0.1:${SSH_RELAY_PORTS}:${SSH_RELAY_PORTS}`);
+  dockerArgs.push('-p', `127.0.0.1:${SBX_PROXY_HOST_PORT}:3128`, '-e', `HUDDLE_SBX_PROXY_HOST_PORT=${SBX_PROXY_HOST_PORT}`);
   dockerArgs.push('-v', `${VOLUME}:/data`);
   dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);

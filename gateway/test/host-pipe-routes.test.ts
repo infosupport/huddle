@@ -18,6 +18,7 @@ let app: FastifyInstance;
 let db: typeof import('../src/db');
 let HostPipeError: typeof import('../src/host-pipe').HostPipeError;
 let ToolFailedError: typeof import('../src/environments/types').ToolFailedError;
+let ProviderDisabledError: typeof import('../src/environments/types').ProviderDisabledError;
 
 // Per test in te stellen gedrag
 let pipeCall: (op: string, args: any) => Promise<any>;
@@ -25,12 +26,26 @@ let pipeStatus: () => any;
 let existing: SandboxInfo[];
 let removeImpl: (name: string, opts: { force: boolean }) => Promise<void>;
 const removed: { name: string; force: boolean }[] = [];
+let enabled = true;
+const recreates: string[] = [];
 
 const fake: EnvironmentProvider = {
   id: 'fake',
   label: 'Fake',
-  status: async () => ({ id: 'fake', label: 'Fake', available: true, version: '1', agents: ['a'] }),
-  list: async () => existing,
+  status: async () => ({ id: 'fake', label: 'Fake', enabled, available: true, version: '1', agents: ['a'] }),
+  list: async () => {
+    if (!enabled) throw new ProviderDisabledError('off');
+    return existing;
+  },
+  isEnabled: () => enabled,
+  setEnabled: async (on) => {
+    enabled = on;
+    return [{ label: 'Toggle', command: 'fake toggle', code: 0, stdout: '', stderr: '' }];
+  },
+  recreateAll: async (reason) => {
+    recreates.push(reason);
+    return { running: true, reason, startedAt: 'now', results: [] };
+  },
   create: async (spec) => ({
     name: spec.name || 'gen-1',
     ok: spec.agent !== 'fail',
@@ -44,7 +59,7 @@ describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
     db = await import('../src/db');
     db.initDb();
     ({ HostPipeError } = await import('../src/host-pipe'));
-    ({ ToolFailedError } = await import('../src/environments/types'));
+    ({ ToolFailedError, ProviderDisabledError } = await import('../src/environments/types'));
     const { registerHostPipeRoutes } = await import('../src/host-pipe-routes');
     const Fastify = (await import('fastify')).default;
     app = Fastify({ logger: false });
@@ -63,6 +78,8 @@ describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
   beforeEach(() => {
     db.db.exec('DELETE FROM sandboxes');
     removed.length = 0;
+    recreates.length = 0;
+    enabled = true;
     existing = [];
     pipeCall = async () => ({ path: '', folders: [], truncated: false, max: 2000 });
     pipeStatus = () => ({ online: true, version: '1.2.3', platform: 'linux', tools: ['sbx'], updatedAt: 'x' });
@@ -119,7 +136,7 @@ describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
 
   it('GET /api/environments geeft provider-status; offline → 503', async () => {
     let r = await app.inject({ method: 'GET', url: '/api/environments' });
-    expect(r.json()).toEqual({ providers: [{ id: 'fake', label: 'Fake', available: true, version: '1', agents: ['a'] }] });
+    expect(r.json()).toEqual({ providers: [{ id: 'fake', label: 'Fake', enabled: true, available: true, version: '1', agents: ['a'] }] });
     const orig = fake.status;
     fake.status = async () => { throw new HostPipeError('host_pipe_offline'); };
     r = await app.inject({ method: 'GET', url: '/api/environments' });
@@ -222,5 +239,31 @@ describe.skipIf(!sqliteAvailable)('host pipe routes', () => {
     const r = await app.inject({ method: 'DELETE', url: '/api/environments/fake/sandboxes/mine' });
     expect(r.statusCode).toBe(503);
     expect(db.hasSandbox('fake', 'mine')).toBe(true);
+  });
+
+  it('PUT /api/environments/:provider zet aan/uit, met audit; ongeldige body → 400', async () => {
+    let r = await app.inject({ method: 'PUT', url: '/api/environments/fake', payload: { enabled: false } });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ enabled: false, steps: [{ label: 'Toggle' }] });
+    const audit = db.db.prepare(`SELECT action FROM audit_log WHERE domain = 'fake' ORDER BY id DESC LIMIT 1`).get() as any;
+    expect(audit.action).toBe('admin:provider-disable');
+    r = await app.inject({ method: 'PUT', url: '/api/environments/fake', payload: { enabled: 'yes' } });
+    expect(r.statusCode).toBe(400);
+    r = await app.inject({ method: 'PUT', url: '/api/environments/nope', payload: { enabled: true } });
+    expect(r.statusCode).toBe(404);
+  });
+
+  it('uitgeschakelde provider → 409 provider_disabled', async () => {
+    enabled = false;
+    const r = await app.inject({ method: 'GET', url: '/api/environments/fake/sandboxes' });
+    expect(r.statusCode).toBe(409);
+    expect(r.json().error).toBe('provider_disabled');
+  });
+
+  it('POST /api/environments/:provider/recreate start een recreate', async () => {
+    const r = await app.inject({ method: 'POST', url: '/api/environments/fake/recreate' });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ running: true });
+    expect(recreates).toEqual(['requested in the portal']);
   });
 });
