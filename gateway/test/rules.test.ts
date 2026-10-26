@@ -96,6 +96,18 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     });
   });
 
+  describe('a Docker Sandbox (scope sbx:<name>) gets the global rules too', () => {
+    const SBX = 'sbx:box';
+    it('global allow and deny count, its own rule wins over a global one', () => {
+      setRule('allowed.test', null, 'allow');
+      setRule('denied.test', null, 'deny');
+      expect(checkRule('allowed.test', SBX).status).toBe('allow');
+      expect(checkRule('denied.test', SBX).status).toBe('deny');
+      setRule('allowed.test', SBX, 'deny');
+      expect(checkRule('allowed.test', SBX).status).toBe('deny');
+    });
+  });
+
   describe('per-container rules', () => {
     it('allow for an allowed domain', () => {
       setRule('example.com', CID, 'allow');

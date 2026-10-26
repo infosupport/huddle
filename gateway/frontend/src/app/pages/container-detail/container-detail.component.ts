@@ -8,15 +8,14 @@ import { StateService } from '../../core/services/state.service';
 import { ModalService } from '../../core/services/modal.service';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
 import { Rule } from '../../core/models/rule.model';
-import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
-import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
+import { PathRequestRow, PendingRequestsComponent, buildDomainRequests, buildPathRequests } from '../../shared/components/pending-requests/pending-requests.component';
 import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
 import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { ContainerTerminalComponent } from '../../shared/components/container-terminal/container-terminal.component';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { DockerRightsPanelComponent } from '../../shared/components/docker-rights-panel/docker-rights-panel.component';
 import { FirewallGroupsPanelComponent } from '../firewall/firewall-groups-panel.component';
-import { BehaviorSubject, skip, forkJoin, Observable } from 'rxjs';
+import { BehaviorSubject, skip } from 'rxjs';
 
 interface DetailData {
   inspect: any;
@@ -28,14 +27,6 @@ interface DetailData {
 
 type DetailTab = 'firewall' | 'docker' | 'noot' | 'terminal';
 type RulesTab  = 'allow' | 'deny' | 'path';
-
-/** A path sub-request row for the pending inbox flat list */
-interface PathRequestRow {
-  rule: Rule;
-  domain: string;
-  path_pattern: string;
-  last_path: string | null;
-}
 
 // Only hand the OS a JetBrains Gateway link: anything else the gateway might
 // return, such as a javascript: URL, would run in the portal's origin.
@@ -50,7 +41,7 @@ function openGatewayLink(link: string): string {
 @Component({
   selector: 'app-container-detail',
   standalone: true,
-  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PieMenuComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent, FirewallGroupsPanelComponent],
+  imports: [AsyncPipe, RouterLink, RelTimePipe, DatePipe, FormsModule, PendingRequestsComponent, PathAllowlistComponent, ContainerTerminalComponent, IconComponent, DockerRightsPanelComponent, FirewallGroupsPanelComponent],
   templateUrl: './container-detail.component.html',
   styleUrl: './container-detail.component.css',
 })
@@ -63,95 +54,7 @@ export class ContainerDetailComponent implements OnInit {
 
   get nowTs(): number { return Math.floor(Date.now() / 1000); }
 
-  readonly pieConfig: PieMenuConfig = {
-    families: [
-      {
-        id: 'approve', label: 'Allow', tone: 'green', icon: 'approve',
-        variants: [{ id: 'approve-all', label: 'For everyone', icon: 'approve-all' }],
-      },
-      {
-        id: 'temp', label: 'Temporary 5 min', tone: 'blue', icon: 'timer',
-        variants: [
-          { id: 'temp-10', label: 'Temporary 10 min', icon: 'timer-long' },
-          { id: 'later',   label: 'Hide',              icon: 'later'      },
-        ],
-      },
-      {
-        id: 'deny', label: 'Deny', tone: 'red', icon: 'deny',
-        variants: [{ id: 'deny-all', label: 'For everyone', icon: 'deny-all' }],
-      },
-      { id: 'pathmode', label: 'Path allowlist', tone: 'neutral', icon: 'filter' },
-    ],
-  };
-
-  /** Pie for path sub-requests — same layout as the firewall inbox:
-   *  path-related actions on the left (0=top,1=right,2=bottom,3=left). */
-  readonly pieConfigPath: PieMenuConfig = {
-    families: [
-      { id: 'path-allow', label: 'Allow exact', tone: 'green', icon: 'approve' },
-      { id: 'path-later', label: 'Dismiss', tone: 'neutral', icon: 'later' },
-      { id: 'path-deny', label: 'Deny', tone: 'red', icon: 'deny' },
-      { id: 'path-prefix', label: 'Allow prefix/*', tone: 'blue', icon: 'filter' },
-    ],
-  };
-
-  /** Pending path sub-requests across this container's path-mode domains
-   *  (container-scoped + global markers), flattened for the inbox — mirrors
-   *  the firewall view's pathRequested list. */
-  pathRequests(rules: Rule[], globalRules: Rule[]): PathRequestRow[] {
-    const domains = [...buildPathDomains(rules), ...buildPathDomains(globalRules)];
-    return domains.flatMap(pd =>
-      pd.requested
-        .filter(r => !!r.path_pattern)
-        .map(r => ({
-          rule: r,
-          domain: pd.domain,
-          path_pattern: r.path_pattern!,
-          last_path: (r as any).last_path ?? null,
-        })),
-    ).sort((a, b) => b.rule.last_seen - a.rule.last_seen);
-  }
-
-  onPathPieAction(actionId: string, row: PathRequestRow): void {
-    const { rule } = row;
-    switch (actionId) {
-      case 'path-allow':
-        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, row.path_pattern)
-          .subscribe(() => this.reload());
-        break;
-      case 'path-prefix': {
-        const prefix = this.toPrefix(row.path_pattern);
-        this.api.resolveRule(rule.id, 'allow', 'rule', undefined, prefix)
-          .subscribe(() => this.reload());
-        break;
-      }
-      case 'path-deny':
-        this.api.resolveRule(rule.id, 'deny', 'rule', undefined, row.path_pattern)
-          .subscribe(() => this.reload());
-        break;
-      case 'path-later':
-        this.deleteRule(rule);
-        break;
-    }
-  }
-
-  private toPrefix(path: string): string {
-    const parts = path.replace(/\/+$/, '').split('/');
-    return parts.slice(0, -1).join('/') + '/*';
-  }
-
-  onPieAction(actionId: string, rule: Rule): void {
-    switch (actionId) {
-      case 'approve':     this.allowRule(rule); break;
-      case 'approve-all': this.modal.openConfirm(rule, 'allow'); break;
-      case 'temp':        this.allowTimed(rule, 5); break;
-      case 'temp-10':     this.allowTimed(rule, 10); break;
-      case 'later':       this.deleteRule(rule); break;
-      case 'deny':        this.denyRule(rule); break;
-      case 'deny-all':    this.modal.openConfirm(rule, 'deny'); break;
-      case 'pathmode':    this.enablePathMode(rule); break;
-    }
-  }
+  pathRequests(rules: Rule[], globalRules: Rule[]): PathRequestRow[] { return buildPathRequests(rules, globalRules); }
 
   pathDomains(rules: Rule[]) { return buildPathDomains(rules); }
   excludePathMode(rules: Rule[]) { return excludePathModeRules(rules); }
@@ -165,11 +68,6 @@ export class ContainerDetailComponent implements OnInit {
       return [];
     }
   }
-
-  enablePathMode(rule: Rule): void {
-    this.api.setPathMode(rule.id, true).subscribe(() => { this.state.loadAll(); this.load(); });
-  }
-  reload(): void { this.state.loadAll(); this.load(); }
 
   name = '';
   get shortName(): string { return this.name.replace(/^devcontainer-/, ''); }
@@ -315,95 +213,12 @@ export class ContainerDetailComponent implements OnInit {
 
   allowRules(rules: Rule[]) { return rules.filter(r => r.status === 'allow'); }
   denyRules(rules: Rule[]) { return rules.filter(r => r.status === 'deny'); }
-  requestedRules(rules: Rule[]) { return rules.filter(r => r.status === 'requested').sort((a, b) => b.last_seen - a.last_seen); }
+  requestedRules(rules: Rule[]) { return buildDomainRequests(rules); }
   tempAllowRules(rules: Rule[]) {
     const now = Math.floor(Date.now() / 1000);
     return rules.filter(r => r.status === 'allow' && r.expires_at && r.expires_at > now);
   }
   permanentAllowRules(rules: Rule[]) { return rules.filter(r => r.status === 'allow' && !r.expires_at); }
-
-  allowRule(rule: Rule): void {
-    this.api.resolveRule(rule.id, 'allow').subscribe(() => { this.state.loadAll(); this.load(); });
-  }
-  denyRule(rule: Rule): void {
-    this.api.resolveRule(rule.id, 'deny').subscribe(() => { this.state.loadAll(); this.load(); });
-  }
-  deleteRule(rule: Rule): void {
-    this.api.deleteRule(rule.id).subscribe(() => { this.state.loadAll(); this.load(); });
-  }
-  allowTimed(rule: Rule, minutes: number): void {
-    const expires_at = Math.floor(Date.now() / 1000) + minutes * 60;
-    this.api.resolveRule(rule.id, 'allow', 'rule', expires_at).subscribe(() => { this.state.loadAll(); this.load(); });
-  }
-
-  // ── Pending selection (per section: domain requests vs path requests) ────────
-  pendingSel = new Set<number>();
-  pendingChecked(id: number): boolean { return this.pendingSel.has(id); }
-  togglePending(id: number): void {
-    this.pendingSel.has(id) ? this.pendingSel.delete(id) : this.pendingSel.add(id);
-  }
-  private allChecked(ids: number[]): boolean { return ids.length > 0 && ids.every((i) => this.pendingSel.has(i)); }
-  private toggleAll(ids: number[]): void {
-    if (ids.every((i) => this.pendingSel.has(i))) ids.forEach((i) => this.pendingSel.delete(i));
-    else ids.forEach((i) => this.pendingSel.add(i));
-  }
-  private selectedCount(ids: number[]): number { return ids.filter((i) => this.pendingSel.has(i)).length; }
-
-  domainAllChecked(rs: Rule[]): boolean { return this.allChecked(rs.map((r) => r.id)); }
-  toggleDomainAll(rs: Rule[]): void { this.toggleAll(rs.map((r) => r.id)); }
-  domainSelectedCount(rs: Rule[]): number { return this.selectedCount(rs.map((r) => r.id)); }
-  pathAllChecked(rows: PathRequestRow[]): boolean { return this.allChecked(rows.map((p) => p.rule.id)); }
-  togglePathAll(rows: PathRequestRow[]): void { this.toggleAll(rows.map((p) => p.rule.id)); }
-  pathSelectedCount(rows: PathRequestRow[]): number { return this.selectedCount(rows.map((p) => p.rule.id)); }
-
-  private afterBulk(ids: number[]): void {
-    ids.forEach((i) => this.pendingSel.delete(i));
-    this.state.loadAll();
-    this.load();
-  }
-
-  // Bulk pie for domain requests — same config/actions as a single row (pieConfig).
-  onBulkPie(actionId: string, requested: Rule[]): void {
-    const rules = requested.filter((r) => this.pendingSel.has(r.id));
-    if (!rules.length) return;
-    // Global allow/deny changes policy for ALL containers, beyond this one. Match
-    // the confirmation the single-item global actions use.
-    if (actionId === 'approve-all' || actionId === 'deny-all') {
-      const verb = actionId === 'approve-all' ? 'Allow' : 'Deny';
-      if (!confirm(`${verb} ${rules.length} request${rules.length !== 1 ? 's' : ''} globally — for ALL containers? This changes global firewall policy.`)) return;
-    }
-    const now = Math.floor(Date.now() / 1000);
-    const call = (r: Rule): Observable<unknown> => {
-      switch (actionId) {
-        case 'approve':     return this.api.resolveRule(r.id, 'allow', 'rule');
-        case 'approve-all': return this.api.resolveRule(r.id, 'allow', 'global');
-        case 'temp':        return this.api.resolveRule(r.id, 'allow', 'rule', now + 5 * 60);
-        case 'temp-10':     return this.api.resolveRule(r.id, 'allow', 'rule', now + 10 * 60);
-        case 'later':       return this.api.deleteRule(r.id) as unknown as Observable<unknown>;
-        case 'deny':        return this.api.resolveRule(r.id, 'deny', 'rule');
-        case 'deny-all':    return this.api.resolveRule(r.id, 'deny', 'global');
-        case 'pathmode':    return this.api.setPathMode(r.id, true);
-        default:            return this.api.resolveRule(r.id, 'allow', 'rule');
-      }
-    };
-    forkJoin(rules.map(call)).subscribe(() => this.afterBulk(rules.map((r) => r.id)));
-  }
-
-  // Bulk pie for path sub-requests — mirrors pieConfigPath / onPathPieAction.
-  onBulkPathPie(actionId: string, pathReq: PathRequestRow[]): void {
-    const rows = pathReq.filter((p) => this.pendingSel.has(p.rule.id));
-    if (!rows.length) return;
-    const call = (row: PathRequestRow): Observable<unknown> => {
-      switch (actionId) {
-        case 'path-allow':  return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);
-        case 'path-prefix': return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, this.toPrefix(row.path_pattern));
-        case 'path-deny':   return this.api.resolveRule(row.rule.id, 'deny', 'rule', undefined, row.path_pattern);
-        case 'path-later':  return this.api.deleteRule(row.rule.id) as unknown as Observable<unknown>;
-        default:            return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);
-      }
-    };
-    forkJoin(rows.map(call)).subscribe(() => this.afterBulk(rows.map((p) => p.rule.id)));
-  }
 
   copyPassword(): void {
     if (!this.sudoPassword) return;
