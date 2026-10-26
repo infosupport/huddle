@@ -601,6 +601,18 @@ describe('SbxProvider egress', () => {
   it('buildIdeLink: Windows-pad wordt weggelaten', () => {
     expect(buildIdeLink('vscode', 'b.sbx', 'C:\\proj')).toBe('vscode://vscode-remote/ssh-remote+b.sbx');
     expect(buildIdeLink('jetbrains', 'b.sbx')).not.toMatch(/projectPath/);
+    expect(buildIdeLink('vscode', 'b.sbx', '/w/a#b?c d')).toBe('vscode://vscode-remote/ssh-remote+b.sbx/w/a%23b%3Fc%20d');
+  });
+
+  it('verwijderen dat in de rij wacht terwijl sbx uitgaat → geweigerd, geen sbx rm', async () => {
+    const store = memStore({ originalProxy: 'http://corp:8080' });
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }]); // uit: set, restart
+    const p = sbx(pipe, store);
+    const off = p.setEnabled(false);
+    const rm = p.remove('box', { force: true });
+    await off;
+    await expect(rm).rejects.toBeInstanceOf(ProviderDisabledError);
+    expect(pipe.calls.some((c) => c.args.args[0] === 'rm')).toBe(false);
   });
 
   it('reset-secret gezien: één recreate tegelijk, daarna afkoelen', async () => {

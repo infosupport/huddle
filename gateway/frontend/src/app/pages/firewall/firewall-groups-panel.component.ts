@@ -141,7 +141,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                     <span>Apply to</span>
                     <select [(ngModel)]="applyScope" name="applyScope">
                       <option value="">Global</option>
-                      @for (c of containers(); track c) { <option [value]="c">{{ shortName(c) }}</option> }
+                      @for (c of applyScopes(); track c) { <option [value]="c">{{ shortName(c) }}</option> }
                     </select>
                     <button type="button" class="btn btn-ghost btn--sm" (click)="applySelected()">Apply</button>
                     <button type="button" class="btn btn-ghost btn--sm" [class.on]="editing()" (click)="startGroupEdit()"><app-icon name="settings" [size]="13" /> Rename / edit</button>
@@ -491,7 +491,15 @@ export class FirewallGroupsPanelComponent implements OnInit {
     return this.selectedGroup()?.description || 'No description.';
   }
 
+  // Scoped to one environment (a container, or a sandbox such as `sbx:<name>`,
+  // which is not in the container list): Apply targets that one by default.
+  applyScopes(): string[] {
+    const list = this.containers();
+    return this.container && !list.includes(this.container) ? [this.container, ...list] : list;
+  }
+
   ngOnInit(): void {
+    if (this.container) this.applyScope = this.container;
     this.loadGroups();
     this.state.containers$.subscribe((cs) => this.containers.set(cs.map((c) => c.name)));
     this.state.rules$.subscribe((rs) => this.allRules.set(rs));

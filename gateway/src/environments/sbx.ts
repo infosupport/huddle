@@ -240,7 +240,7 @@ export function specFromListing(info: SandboxInfo): SandboxSpec | null {
 export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): string {
   const posix = folder && folder.startsWith('/') ? folder : undefined;
   if (ide === 'vscode') {
-    return `vscode://vscode-remote/ssh-remote+${encodeURIComponent(sshHost)}${posix ? encodeURI(posix) : ''}`;
+    return `vscode://vscode-remote/ssh-remote+${encodeURIComponent(sshHost)}${posix ? posix.split('/').map(encodeURIComponent).join('/') : ''}`;
   }
   const params: [string, string][] = [['type', 'ssh'], ['deploy', 'true'], ['host', sshHost], ['port', '22']];
   if (posix) params.push(['projectPath', posix]);
@@ -416,6 +416,8 @@ export class SbxProvider implements EnvironmentProvider {
     if (!SANDBOX_NAME_RE.test(name)) throw new InvalidSpecError('invalid sandbox name');
     // In the queue, so it cannot land between a recreate's rm and create.
     await this.exclusive(async () => {
+      // Switched off while this waited in the queue: the sandbox is the user's again.
+      if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
       const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
       if (r.code !== 0) throw failure(r, 'sbx rm failed');
       this.removedSinceListing.add(name);
