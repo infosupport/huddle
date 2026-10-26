@@ -32,6 +32,11 @@ also keeps `config.json` (with the operator token) out of containers.
   `{ "v": 1, "pid": 123, "version": "<cli version>", "platform": "win32|darwin|linux", "tools": ["sbx"], "startedAt": "<iso>", "updatedAt": "<iso>" }`
   The gateway treats the agent as **offline** when the file is missing or `updatedAt` is older than 10 s.
 - On start the agent deletes leftover `*.in`, `*.busy`, `*.out`, `*.tmp` older than 1 hour.
+- The pipe folder is the user's alone. `huddle init` and the agent create it `0700`, and the agent refuses to
+  serve from a symlink, from a folder another user owns, or from below a parent others can write to (its own
+  parent is closed to group and others). Files are written `0600`. Requests carry no further authentication:
+  whoever can write there is the user or root, and can run `sbx` directly anyway. On Windows the folder
+  inherits the profile's ACL.
 
 ## Protocol (v1)
 
@@ -187,7 +192,9 @@ under a rule scope of its own: `sbx:<name>`.
     tried again. A recreate that is still running leaves the sandboxes it has not reached yet alone.
 - **Gateway restart.** Once the host pipe answers, the gateway first reads `proxy.sandbox`. If sbx is on but
   the setting no longer points at Huddle, the gateway stopped in the middle of a switch-off: it restarts the
-  daemon and marks sbx off. Otherwise it lists the sandboxes. If any has no known
+  daemon and marks sbx off. If sbx is off but the user's setting is still saved, it stopped in the middle of a
+  switch-on: it puts the user's setting back (when it still points at Huddle), restarts the daemon and stays
+  off. Otherwise it lists the sandboxes. If any has no known
   secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
   it tries again every 30 s.
 - **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone. Paths are not visible in it, so a

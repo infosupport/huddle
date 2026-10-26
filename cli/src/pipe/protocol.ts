@@ -60,9 +60,36 @@ export class PipeError extends Error {
  * never reads a half-written file. Rename within one folder is atomic on every
  * platform, including across the Docker bind mount.
  */
+/**
+ * Creates the pipe folder owner-only, or makes an existing one so. Whoever can
+ * write a request into it can run the allowlisted host tools, so on POSIX it
+ * must be ours (not a symlink) and closed to everyone else, and its parent must
+ * not let anyone else swap it out. Throws when that cannot be made true. On
+ * Windows a folder under the user profile is private already.
+ */
+export function ensurePrivateDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') return;
+  const uid = process.getuid();
+  const st = fs.lstatSync(dir);
+  if (!st.isDirectory()) throw new Error(`${dir} is not a directory (a symlink is not accepted)`);
+  if (st.uid !== uid) throw new Error(`${dir} belongs to uid ${st.uid}, not to you: refusing to use it as the host pipe`);
+  // The parent: ours (then closed to writes by others), or root's and either not
+  // writable by others or sticky (like /tmp), where nobody else can rename ours.
+  const parent = path.dirname(dir);
+  const ps = fs.statSync(parent);
+  const pmode = ps.mode & 0o7777;
+  if (ps.uid === uid) {
+    if (pmode & 0o022) fs.chmodSync(parent, pmode & ~0o022);
+  } else if (ps.uid !== 0 || ((pmode & 0o022) && !(pmode & 0o1000))) {
+    throw new Error(`${parent} can be changed by other users: refusing to serve the host pipe below it`);
+  }
+  if ((fs.statSync(dir).mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
+}
+
 export function writeJsonAtomic(file: string, data: unknown): void {
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data));
+  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 

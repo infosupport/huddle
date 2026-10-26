@@ -384,7 +384,7 @@ describe('SbxProvider egress', () => {
     const pipe = fakePipe([{ code: 0, stdout: 'http://x:y@127.0.0.1:32768' }, { code: 0 }, { code: 0 }, { code: 0, stdout: '[]' }]);
     const p = sbx(pipe, store);
     await p.setEnabled(true);
-    expect(store.originalProxy()).toBeNull();
+    expect(store.originalProxy()).toBe(''); // de standaard, niet de achtergebleven Huddle-URL
     await vi.waitFor(() => expect(p['recreate']?.running).toBe(false));
   });
 
@@ -418,6 +418,7 @@ describe('SbxProvider egress', () => {
     expect(store.enabled()).toBe(false);
     expect(pipe.calls[3].args.args).toEqual(['settings', 'set', 'proxy.sandbox', 'http://corp:8080']);
     expect(pipe.calls).toHaveLength(4); // geen recreate
+    expect(store.originalProxy()).toBeNull();
   });
 
   it('uit: eigen proxy terugzetten mislukt → blijft aan met identiteiten, opnieuw te proberen', async () => {
@@ -518,6 +519,67 @@ describe('SbxProvider egress', () => {
     const pipe2 = fakePipe([{ code: 0, stdout: '' }, { code: 1 }]);
     expect(await sbx(pipe2, store2).reconcile()).toBe(false);
     expect(store2.enabled()).toBe(true);
+  });
+
+  it('reconcile: gestopt midden in aanzetten (uit, maar setting wijst naar Huddle) → terugdraaien', async () => {
+    const store = memStore({ enabled: false, originalProxy: 'http://corp:8080' });
+    const pipe = fakePipe([{ code: 0, stdout: 'http://_huddle-reset:x@127.0.0.1:32768' }, { code: 0 }, { code: 0 }]);
+    expect(await sbx(pipe, store).reconcile()).toBe(true);
+    expect(pipe.calls.map((c) => c.args.args)).toEqual([
+      ['settings', 'get', 'proxy.sandbox'],
+      ['settings', 'set', 'proxy.sandbox', 'http://corp:8080'],
+      ['daemon', 'restart'],
+    ]);
+    expect(store.enabled()).toBe(false);
+    expect(store.originalProxy()).toBeNull();
+
+    // Gewoon uit (niets bewaard): geen enkele call naar de host.
+    const idle = fakePipe([]);
+    expect(await sbx(idle, memStore({ enabled: false })).reconcile()).toBe(true);
+    expect(idle.calls).toHaveLength(0);
+
+    // Herstart mislukt → later opnieuw, het merkteken blijft.
+    const store2 = memStore({ enabled: false, originalProxy: '' });
+    const pipe2 = fakePipe([{ code: 0, stdout: 'http://corp:8080' }, { code: 1 }]);
+    expect(await sbx(pipe2, store2).reconcile()).toBe(false);
+    expect(store2.originalProxy()).toBe('');
+  });
+
+  it('verwijderen tijdens een recreate → die box komt niet terug', async () => {
+    const store = memStore();
+    store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
+    store.saveIdentity('b', 'h', { name: 'b', agent: 'shell', workspaces: [ws('/b')] });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const replies: Reply[] = [
+      { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'b' }]) }, // ls
+      { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 },                  // a: rm, set, create, reset
+      { code: 0 },                                                         // rm b (portal)
+    ];
+    const calls: any[] = [];
+    const pipe = {
+      calls,
+      call: async (op: string, args: any, opts: any) => {
+        calls.push({ op, args, opts });
+        if (args.args[0] === 'rm' && args.args[2] === 'a') await gate;
+        const r = replies.shift();
+        if (!r) throw new Error('unexpected call');
+        return { stdout: '', stderr: '', ...(r as any) };
+      },
+    };
+    const p = new SbxProvider(pipe as any, store, PORT);
+    await p.recreateAll('test');
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+    const rm = p.remove('b', { force: false });
+    await Promise.resolve();
+    expect(calls).toHaveLength(2); // wacht in de rij tot a klaar is
+    release();
+    await rm;
+    await vi.waitFor(() => expect(p['recreate']?.running).toBe(false));
+    expect(calls.map((c) => c.args.args.slice(0, 2).join(' ')).filter((c) => c.startsWith('rm'))).toEqual(['rm --force', 'rm b']);
+    expect(calls.some((c) => c.args.args[0] === 'create' && c.args.args[2] === 'b')).toBe(false);
+    expect(store.identified('b')).toBe(false);
+    expect(p['recreate']!.results.find((r) => r.name === 'b')).toMatchObject({ ok: false, message: expect.stringMatching(/removed/) });
   });
 
   it('reset-secret gezien: één recreate tegelijk, daarna afkoelen', async () => {

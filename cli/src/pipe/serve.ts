@@ -19,6 +19,7 @@ import {
   PipeReply,
   PipeRequest,
   POLL_MS,
+  ensurePrivateDir,
   PROTOCOL_VERSION,
   STALE_FILE_MS,
   readHeartbeat,
@@ -110,7 +111,7 @@ export function servePipe(opts: ServeOptions): ServeHandle {
   const { dir } = opts;
   const maxEntries = opts.maxEntries ?? MAX_FOLDER_ENTRIES;
   const log = opts.log ?? (() => {});
-  fs.mkdirSync(dir, { recursive: true });
+  ensurePrivateDir(dir);
 
   const startedAt = new Date().toISOString();
   const version = cliVersion();
@@ -151,7 +152,7 @@ export function servePipe(opts: ServeOptions): ServeHandle {
       names = await fs.promises.readdir(dir);
     } catch {
       // The folder went away (e.g. ~/.huddle was removed); recreate and carry on.
-      try { fs.mkdirSync(dir, { recursive: true }); } catch { /* retry next tick */ }
+      try { ensurePrivateDir(dir); } catch { /* retry next tick */ }
     }
     for (const name of names) {
       const m = REQUEST_RE.exec(name);

@@ -261,6 +261,9 @@ export class SbxProvider implements EnvironmentProvider {
   private queue: Promise<unknown> = Promise.resolve();
   private recreate: RecreateState | undefined;
   private recreating: Promise<void> | undefined;
+  // Removed through Huddle since the running recreate listed the sandboxes: it
+  // must not bring them back.
+  private removedSinceListing = new Set<string>();
 
   constructor(
     private readonly pipe: PipeCall = hostPipe,
@@ -391,8 +394,12 @@ export class SbxProvider implements EnvironmentProvider {
   async remove(name: string, opts: { force: boolean }): Promise<void> {
     this.requireEnabled();
     if (!SANDBOX_NAME_RE.test(name)) throw new InvalidSpecError('invalid sandbox name');
-    const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
-    if (r.code !== 0) throw failure(r, 'sbx rm failed');
+    // In the queue, so it cannot land between a recreate's rm and create.
+    await this.exclusive(async () => {
+      const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
+      if (r.code !== 0) throw failure(r, 'sbx rm failed');
+      this.removedSinceListing.add(name);
+    });
   }
 
   async setEnabled(enabled: boolean): Promise<SandboxStep[]> {
@@ -416,15 +423,22 @@ export class SbxProvider implements EnvironmentProvider {
     const current = await this.run(['settings', 'get', 'proxy.sandbox']);
     if (current.code !== 0) throw failure(current, 'sbx settings get failed');
     const value = current.stdout.trim();
+    // Saved before anything changes: while off, a saved setting also says a
+    // switch-on was under way (see finishInterruptedSwitchOn).
     if (!isHuddleProxyUrl(value, this.hostPort as number)) this.store.setOriginalProxy(value);
+    else if (this.store.originalProxy() === null) this.store.setOriginalProxy('');
     const set = await this.step(steps, 'Route new sandboxes through Huddle', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]);
-    if (set.code !== 0) throw failure(set, 'sbx settings set failed');
+    if (set.code !== 0) {
+      this.store.setOriginalProxy(null);
+      throw failure(set, 'sbx settings set failed');
+    }
     // Fail closed: after the restart every existing sandbox presents the reset
     // secret and is denied until it is recreated. Without it, a sandbox that
     // cannot be recreated would keep its old, direct way out.
     const restart = await this.step(steps, 'Restart the sbx daemon so running sandboxes go through Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
     if (restart.code !== 0) {
-      await this.restoreOriginal(steps).catch(() => undefined);
+      const restored = await this.restoreOriginal(steps).catch(() => undefined);
+      if (restored?.code === 0) this.store.setOriginalProxy(null);
       throw failure(restart, 'sbx daemon restart failed');
     }
     this.store.setEnabled(true);
@@ -481,11 +495,13 @@ export class SbxProvider implements EnvironmentProvider {
   /**
    * At gateway start. A gateway that stopped in the middle of a create or a
    * recreate does not know the secret of some sandboxes, and those get nothing
-   * but 407s: recreate everything then. False when the host could not be
-   * asked (pipe not up yet), so the caller tries again later.
+   * but 407s: recreate everything then. A switch-on or switch-off it stopped
+   * in is undone or finished first. False when the host could not be asked
+   * (pipe not up yet), so the caller tries again later.
    */
   async reconcile(): Promise<boolean> {
-    if (!this.isEnabled() || this.hostPort === null) return true;
+    if (this.hostPort === null) return true;
+    if (!this.isEnabled()) return this.exclusive(() => this.finishInterruptedSwitchOn()).catch(() => false);
     let listed: SandboxInfo[];
     try {
       if (!(await this.exclusive(() => this.finishInterruptedSwitchOff()))) return false;
@@ -518,6 +534,26 @@ export class SbxProvider implements EnvironmentProvider {
     return true;
   }
 
+  // A gateway that stopped inside switchOn() is off, but `proxy.sandbox` and
+  // maybe every running sandbox point at Huddle: new sandboxes would get only
+  // 407s and Huddle would never put the user's setting back. Undo it: setting
+  // back, daemon restart. False when that could not be done.
+  private async finishInterruptedSwitchOn(): Promise<boolean> {
+    if (this.isEnabled() || this.store.originalProxy() === null) return true;
+    const current = await this.run(['settings', 'get', 'proxy.sandbox']);
+    if (current.code !== 0) return false;
+    if (isHuddleProxyUrl(current.stdout.trim(), this.hostPort as number)) {
+      const restore = await this.restoreOriginal([]);
+      if (restore.code !== 0) return false;
+    }
+    // Also when the setting is the user's again: the crash may have come after
+    // the restart that handed the running sandboxes Huddle's reset secret.
+    const restart = await this.run(['daemon', 'restart'], CREATE_TIMEOUT_MS);
+    if (restart.code !== 0) return false;
+    this.store.setOriginalProxy(null);
+    return true;
+  }
+
   /** The reset secret reached the gateway: recreate, unless that just happened. */
   onResetSecretSeen(): void {
     if (!this.isEnabled() || this.recreating) return;
@@ -538,6 +574,7 @@ export class SbxProvider implements EnvironmentProvider {
   private async recreateEach(state: RecreateState): Promise<void> {
     // Every old secret goes first: whichever box still holds one is denied.
     this.store.clearIdentities();
+    this.removedSinceListing.clear();
     // Switched off meanwhile: the sandboxes left are the user's again, untouched.
     const switchedOff = (name: string) => state.results.push({ name, ok: false, message: 'not recreated: Docker Sandbox was switched off in Huddle' });
     for (const info of await this.listAll()) {
@@ -552,14 +589,23 @@ export class SbxProvider implements EnvironmentProvider {
         continue;
       }
       const steps: SandboxStep[] = [];
+      let removed = false;
       try {
         const args = buildCreateArgs({ ...spec, name: info.name });
         const ok = await this.exclusive(async () => {
           if (!this.isEnabled()) return false;
+          if (this.removedSinceListing.has(info.name)) {
+            removed = true;
+            return false;
+          }
           const rm = await this.step(steps, 'Remove sandbox', ['rm', '--force', info.name]);
           if (rm.code !== 0) return false;
           return this.createWithSecret({ ...spec, name: info.name }, args, steps);
         });
+        if (removed) {
+          state.results.push({ name: info.name, ok: false, message: 'not recreated: removed in the meantime' });
+          continue;
+        }
         if (!ok && !this.isEnabled() && steps.length === 0) {
           switchedOff(info.name);
           continue;

@@ -8,7 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { dim, green, yellow } from '../utils';
-import { HEARTBEAT_FILE, Heartbeat, LOG_FILE, PIPE_DIR, heartbeatFresh, readHeartbeat } from './protocol';
+import { HEARTBEAT_FILE, Heartbeat, LOG_FILE, PIPE_DIR, ensurePrivateDir, heartbeatFresh, readHeartbeat } from './protocol';
 import { servePipe } from './serve';
 
 const LOG_PATH = path.join(PIPE_DIR, LOG_FILE);
@@ -79,14 +79,14 @@ export interface PipeStartResult {
  */
 export async function startPipeAgent(): Promise<PipeStartResult> {
   try {
-    fs.mkdirSync(PIPE_DIR, { recursive: true });
+    ensurePrivateDir(PIPE_DIR);
     const old = await stopRunning();
     rotateLog();
 
     // dist/pipe/command.js -> dist/index.js: the entry of THIS install, not
     // whatever `huddle` resolves to on PATH.
     const entry = path.join(__dirname, '..', 'index.js');
-    const logFd = fs.openSync(LOG_PATH, 'a');
+    const logFd = fs.openSync(LOG_PATH, 'a', 0o600);
     let pid: number | undefined;
     try {
       const child = spawn(process.execPath, [entry, 'pipe', 'serve'], {

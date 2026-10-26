@@ -6,7 +6,7 @@ import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import os from 'os';
 import { hostAgentLogsMountArgs, hostCodexIndexMountArgs, hostCodexLogsMountArgs } from './host-logs';
-import { PIPE_DIR } from './pipe/protocol';
+import { PIPE_DIR, ensurePrivateDir } from './pipe/protocol';
 import { startPipeAgent } from './pipe/command';
 import fs from 'fs';
 
@@ -179,7 +179,11 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
   // The host pipe lives inside the ~/.huddle mount; create it now so the
   // gateway sees the folder from its first start, before the agent runs.
-  fs.mkdirSync(PIPE_DIR, { recursive: true });
+  try {
+    ensurePrivateDir(PIPE_DIR);
+  } catch (err) {
+    console.log(yellow(`  Host pipe folder not usable: ${err instanceof Error ? err.message : err}`));
+  }
   // Build the container command as an argv array (runArgs → execFileSync, no
   // shell). The folder paths below come from config and are operator-writable via
   // the settings API, so they must never reach a shell as a string.

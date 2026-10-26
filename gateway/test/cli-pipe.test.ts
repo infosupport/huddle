@@ -10,7 +10,7 @@ import crypto from 'crypto';
 import { servePipe, cleanStale, type ServeHandle } from '../../cli/src/pipe/serve';
 import { toHuddlePath, isAbsoluteHostPath } from '../../cli/src/pipe/fs-list';
 import { execTool } from '../../cli/src/pipe/tools';
-import { readHeartbeat, heartbeatFresh, writeJsonAtomic } from '../../cli/src/pipe/protocol';
+import { readHeartbeat, heartbeatFresh, writeJsonAtomic, ensurePrivateDir } from '../../cli/src/pipe/protocol';
 
 const isWin = process.platform === 'win32';
 
@@ -285,6 +285,26 @@ describe('host pipe internals', () => {
     expect(r.code).toBe(0);
     expect(r.stdout.startsWith('x'.repeat(100))).toBe(true);
     expect(r.stdout).toContain('output truncated at 100 bytes');
+  });
+
+  it.skipIf(isWin)('ensurePrivateDir: owner-only folder, parent closed to others, symlink refused', () => {
+    const parent = tmpDir('huddle-priv-');
+    fs.chmodSync(parent, 0o777);
+    const dir = path.join(parent, 'pipe');
+    fs.mkdirSync(dir, { mode: 0o777 });
+    fs.chmodSync(dir, 0o777);
+    ensurePrivateDir(dir);
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(parent).mode & 0o022).toBe(0);
+
+    const fresh = path.join(parent, 'new');
+    ensurePrivateDir(fresh);
+    expect(fs.statSync(fresh).mode & 0o777).toBe(0o700);
+
+    const link = path.join(parent, 'link');
+    fs.symlinkSync(dir, link);
+    expect(() => ensurePrivateDir(link)).toThrow(/symlink/);
+    fs.rmSync(parent, { recursive: true, force: true });
   });
 
   it('cleanStale skips ids that are still in flight', () => {
