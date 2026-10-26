@@ -63,6 +63,7 @@ describe('ssh.host', () => {
     expect(publicKey).toMatch(/^ssh-ed25519 /);
     const conf = fs.readFileSync(path.join(dirs.huddle, 'hosts', 'my-dc.huddle.conf'), 'utf8');
     expect(conf).toContain('Host my-dc.huddle\n');
+    expect(conf).toContain('  HostName 127.0.0.1\n');
     expect(conf).toContain('  Port 2201\n');
     expect(conf).toContain('  User vscode\n');
     expect(conf).toContain('  IdentityFile ~/.huddle/ssh/id_ed25519\n');
