@@ -46,6 +46,7 @@ function memStore(init: { enabled?: boolean; originalProxy?: string | null } = {
     setOriginalProxy: (v) => { original = v; },
     saveIdentity: (name, hash, spec) => { identities.set(name, { hash, spec }); },
     spec: (name) => identities.get(name)?.spec ?? null,
+    identified: (name) => !!identities.get(name)?.hash,
     clearIdentities: () => { for (const v of identities.values()) v.hash = null; },
   };
   return store;
@@ -404,6 +405,101 @@ describe('SbxProvider egress', () => {
     const pipe2 = fakePipe([{ code: 0 }, { code: 0 }]);
     await sbx(pipe2, memStore()).setEnabled(false);
     expect(pipe2.calls[0].args.args).toEqual(['settings', 'unset', 'proxy.sandbox']);
+  });
+
+  it('aan: daemon-herstart mislukt → eigen proxy terug, blijft uit, fout naar boven', async () => {
+    const store = memStore({ enabled: false });
+    const pipe = fakePipe([
+      { code: 0, stdout: 'http://corp:8080' }, { code: 0 },  // get, set reset
+      { code: 1, stderr: 'daemon kaput' },                   // restart
+      { code: 0 },                                           // set corp terug
+    ]);
+    await expect(sbx(pipe, store).setEnabled(true)).rejects.toBeInstanceOf(ToolFailedError);
+    expect(store.enabled()).toBe(false);
+    expect(pipe.calls[3].args.args).toEqual(['settings', 'set', 'proxy.sandbox', 'http://corp:8080']);
+    expect(pipe.calls).toHaveLength(4); // geen recreate
+  });
+
+  it('uit: eigen proxy terugzetten mislukt → blijft aan met identiteiten, opnieuw te proberen', async () => {
+    const store = memStore({ originalProxy: 'http://corp:8080' });
+    store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
+    const pipe = fakePipe([{ code: 1, stderr: 'nope' }]);
+    await expect(sbx(pipe, store).setEnabled(false)).rejects.toBeInstanceOf(ToolFailedError);
+    expect(store.enabled()).toBe(true);
+    expect(store.identities.get('a')?.hash).toBe('h');
+    expect(store.originalProxy()).toBe('http://corp:8080');
+  });
+
+  it('uit: daemon-herstart mislukt → blijft aan', async () => {
+    const store = memStore({ originalProxy: 'http://corp:8080' });
+    const pipe = fakePipe([{ code: 0 }, { code: 1, stderr: 'nope' }]);
+    await expect(sbx(pipe, store).setEnabled(false)).rejects.toBeInstanceOf(ToolFailedError);
+    expect(store.enabled()).toBe(true);
+  });
+
+  it('uit: gemaskeerde eigen proxy (wachtwoord niet bewaard) → unset en zeg het', async () => {
+    const store = memStore({ originalProxy: 'http://me:***@corp:8080' });
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }]);
+    const steps = await sbx(pipe, store).setEnabled(false);
+    expect(pipe.calls[0].args.args).toEqual(['settings', 'unset', 'proxy.sandbox']);
+    expect(steps[0].label).toMatch(/set it again/);
+  });
+
+  it('uit tijdens een recreate → de rest wordt niet meer herbouwd', async () => {
+    const store = memStore();
+    store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
+    store.saveIdentity('b', 'h', { name: 'b', agent: 'shell', workspaces: [ws('/b')] });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const replies: Reply[] = [
+      { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'b' }]) }, // ls
+      { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 },                  // a: rm, set, create, reset
+      { code: 0 }, { code: 0 },                                            // uit: unset, restart
+    ];
+    const calls: any[] = [];
+    const pipe = {
+      calls,
+      call: async (op: string, args: any, opts: any) => {
+        calls.push({ op, args, opts });
+        if (args.args[0] === 'rm' && args.args[2] === 'a') await gate;
+        const r = replies.shift();
+        if (!r) throw new Error('unexpected call');
+        return { stdout: '', stderr: '', ...(r as any) };
+      },
+    };
+    const p = new SbxProvider(pipe as any, store, PORT);
+    await p.recreateAll('test');
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+    const off = p.setEnabled(false);
+    release();
+    await off;
+    await vi.waitFor(() => expect(p['recreate']?.running).toBe(false));
+    expect(calls.some((c) => c.args.args[0] === 'rm' && c.args.args[2] === 'b')).toBe(false);
+    expect(store.enabled()).toBe(false);
+    expect(p['recreate']!.results.find((r) => r.name === 'b')).toMatchObject({ ok: false, message: expect.stringMatching(/switched off/) });
+  });
+
+  it('reconcile: box zonder bekend secret → alles herbouwen; pipe offline → false', async () => {
+    const offline = Object.assign(new Error('offline'), { code: 'host_pipe_offline' });
+    expect(await sbx(fakePipe([offline])).reconcile()).toBe(false);
+
+    const known = memStore();
+    known.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
+    const quiet = fakePipe([{ code: 0, stdout: JSON.stringify([{ name: 'a' }]) }]);
+    const p1 = sbx(quiet, known);
+    expect(await p1.reconcile()).toBe(true);
+    expect(p1['recreate']).toBeUndefined();
+
+    const pipe = fakePipe([
+      { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'lost' }]) }, // ls (reconcile)
+      { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'lost' }]) }, // ls (recreate)
+      { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 },                    // a
+      { code: 0 },                                                          // stop lost
+    ]);
+    const p2 = sbx(pipe, known);
+    expect(await p2.reconcile()).toBe(true);
+    await vi.waitFor(() => expect(p2['recreate']?.running).toBe(false));
+    expect(p2['recreate']!.reason).toMatch(/gateway restarted/);
   });
 
   it('reset-secret gezien: één recreate tegelijk, daarna afkoelen', async () => {

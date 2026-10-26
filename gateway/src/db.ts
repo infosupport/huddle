@@ -624,6 +624,13 @@ export function sandboxByProxySecretHash(provider: string, secretHash: string): 
   return row?.name ?? null;
 }
 
+export function sandboxProxySecretHash(provider: string, name: string): string | null {
+  const row = db
+    .prepare('SELECT proxy_secret_hash FROM sandboxes WHERE provider = ? AND name = ?')
+    .get(provider, name) as { proxy_secret_hash: string | null } | undefined;
+  return row?.proxy_secret_hash ?? null;
+}
+
 export function sandboxSpecJson(provider: string, name: string): string | null {
   const row = db
     .prepare('SELECT spec_json FROM sandboxes WHERE provider = ? AND name = ?')

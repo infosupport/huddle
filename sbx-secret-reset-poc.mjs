@@ -266,13 +266,15 @@ async function main() {
 }
 
 async function cleanup(original) {
-  if (original && original.includes(`:${PORT}`)) {
+  // Een eigen poc-url (achtergebleven na een crash) zet ik niet terug.
+  const ownPocUrl = Boolean(original && original.includes(`:${PORT}`));
+  const toRestore = ownPocUrl ? null : original;
+  if (ownPocUrl) {
     console.log(`\n!! de oude waarde was een eigen poc-url (${mask(original)}), die zet ik niet terug`);
-    original = null;
   }
-  if (original) {
-    const r = await setProxy(original);
-    console.log(r.code === 0 ? `\nproxy.sandbox teruggezet op ${mask(original)}` : '\n!! proxy.sandbox NIET teruggezet, zet hem zelf terug');
+  if (toRestore) {
+    const r = await setProxy(toRestore);
+    console.log(r.code === 0 ? `\nproxy.sandbox teruggezet op ${mask(toRestore)}` : '\n!! proxy.sandbox NIET teruggezet, zet hem zelf terug');
   } else {
     let done = false;
     for (const argv of [['settings', 'unset', 'proxy.sandbox'], ['settings', 'set', 'proxy.sandbox', '']]) {

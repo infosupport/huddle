@@ -7,18 +7,25 @@ import {
   deleteSetting,
   getSetting,
   sandboxByProxySecretHash,
+  sandboxProxySecretHash,
   sandboxSpecJson,
   saveSandboxIdentity,
   setSetting,
 } from '../db';
 import type { SbxStore } from './sbx';
 import type { SandboxSpec } from './types';
-import { RESET_USER, hashProxySecret, newProxySecret, parseProxyAuthorization, sameSecret } from './sbx-egress';
+import { RESET_USER, hashProxySecret, newProxySecret, parseProxyAuthorization, redactProxyUrls, sameSecret } from './sbx-egress';
 
 const PROVIDER = 'sbx';
 const ENABLED_KEY = 'sbx.egress.enabled';
 const RESET_KEY = 'sbx.egress.resetSecret';
 const ORIGINAL_PROXY_KEY = 'sbx.egress.originalProxy';
+
+// The user's own proxy URL as it was, password included. Only in memory: the DB
+// gets it with the password masked, so a copy of the data volume does not hand
+// out the user's upstream proxy credential. After a gateway restart the masked
+// value is all there is, and switching off unsets instead (see restoreOriginal).
+let originalProxyInMemory: string | null = null;
 
 export const dbSbxStore: SbxStore = {
   enabled: () => getSetting(ENABLED_KEY) === '1',
@@ -31,8 +38,13 @@ export const dbSbxStore: SbxStore = {
     }
     return secret;
   },
-  originalProxy: () => getSetting(ORIGINAL_PROXY_KEY),
-  setOriginalProxy: (value) => (value === null ? deleteSetting(ORIGINAL_PROXY_KEY) : setSetting(ORIGINAL_PROXY_KEY, value)),
+  originalProxy: () => originalProxyInMemory ?? getSetting(ORIGINAL_PROXY_KEY),
+  setOriginalProxy(value) {
+    originalProxyInMemory = value;
+    if (value === null) deleteSetting(ORIGINAL_PROXY_KEY);
+    else setSetting(ORIGINAL_PROXY_KEY, redactProxyUrls(value));
+  },
+  identified: (name) => sandboxProxySecretHash(PROVIDER, name) !== null,
   saveIdentity: (name, secretHash, spec) => saveSandboxIdentity(PROVIDER, name, secretHash, JSON.stringify(spec)),
   spec(name) {
     const json = sandboxSpecJson(PROVIDER, name);

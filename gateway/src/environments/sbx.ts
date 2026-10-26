@@ -235,12 +235,17 @@ export interface SbxStore {
   setEnabled(on: boolean): void;
   /** The reset secret, minted on first use and then kept (it must survive a gateway restart). */
   resetSecret(): string;
-  /** The `proxy.sandbox` value from before Huddle took it over, '' for unset. Null: none saved. */
+  /**
+   * The `proxy.sandbox` value from before Huddle took it over, '' for unset.
+   * Null: none saved. May come back with its password masked (`:***@`).
+   */
   originalProxy(): string | null;
   setOriginalProxy(value: string | null): void;
   saveIdentity(name: string, secretHash: string, spec: SandboxSpec): void;
   spec(name: string): SandboxSpec | null;
   clearIdentities(): void;
+  /** Whether the gateway knows this sandbox's current proxy secret. */
+  identified(name: string): boolean;
 }
 
 // After a recreate that the reset secret triggered, ignore the reset secret for
@@ -360,6 +365,8 @@ export class SbxProvider implements EnvironmentProvider {
    * sandbox anyone creates would get this box's identity.
    */
   private async createWithSecret(spec: SandboxSpec & { name: string }, args: string[], steps: SandboxStep[]): Promise<boolean> {
+    // Switched off while this waited in the queue: the setting is the user's again.
+    if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
     const secret = newProxySecret();
     const set = await this.step(steps, 'Route the sandbox through Huddle', ['settings', 'set', 'proxy.sandbox', sbxProxyUrl(spec.name, secret, this.hostPort as number)]);
     if (set.code !== 0) return false;
@@ -393,38 +400,61 @@ export class SbxProvider implements EnvironmentProvider {
       throw new InvalidSpecError(NO_PORT);
     }
     const steps: SandboxStep[] = [];
-    await this.exclusive(async () => {
-      if (enabled) {
-        if (this.isEnabled()) return;
-        // Remember the user's own setting, to put back when switched off. Never our
-        // own URL (left behind by a crash): restoring that would keep pointing here.
-        const current = await this.run(['settings', 'get', 'proxy.sandbox']);
-        if (current.code !== 0) throw failure(current, 'sbx settings get failed');
-        const value = current.stdout.trim();
-        if (!isHuddleProxyUrl(value, this.hostPort as number)) this.store.setOriginalProxy(value);
-        const set = await this.step(steps, 'Route new sandboxes through Huddle', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]);
-        if (set.code !== 0) throw failure(set, 'sbx settings set failed');
-        this.store.setEnabled(true);
-        // Fail closed right away: after the restart every existing sandbox presents
-        // the reset secret and is denied until it is recreated. Without it, a
-        // sandbox that cannot be recreated would keep its old, direct way out.
-        await this.step(steps, 'Restart the sbx daemon so running sandboxes go through Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
-      } else {
-        if (!this.isEnabled()) return;
-        this.store.setEnabled(false);
-        this.store.clearIdentities();
-        const original = this.store.originalProxy() ?? '';
-        const restore = original
-          ? await this.step(steps, 'Restore your own sandbox proxy', ['settings', 'set', 'proxy.sandbox', original])
-          : await this.step(steps, 'Restore the default sandbox proxy', ['settings', 'unset', 'proxy.sandbox']);
-        if (restore.code === 0) this.store.setOriginalProxy(null);
-        // Running sandboxes keep the Huddle proxy until sbx rebuilds their network.
-        await this.step(steps, 'Restart the sbx daemon so running sandboxes drop Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
-      }
-    });
+    await this.exclusive(() => (enabled ? this.switchOn(steps) : this.switchOff(steps)));
     // Every sandbox that exists now still has the old (or no) Huddle identity.
     if (enabled && this.isEnabled()) await this.recreateAll('switched on');
     return steps;
+  }
+
+  // Call inside exclusive(). Only marked on once the daemon restart worked: until
+  // then existing sandboxes may still have their old, direct way out, and saying
+  // "on" would be a lie. Any failure puts the user's own setting back.
+  private async switchOn(steps: SandboxStep[]): Promise<void> {
+    if (this.isEnabled()) return;
+    // Remember the user's own setting, to put back when switched off. Never our
+    // own URL (left behind by a crash): restoring that would keep pointing here.
+    const current = await this.run(['settings', 'get', 'proxy.sandbox']);
+    if (current.code !== 0) throw failure(current, 'sbx settings get failed');
+    const value = current.stdout.trim();
+    if (!isHuddleProxyUrl(value, this.hostPort as number)) this.store.setOriginalProxy(value);
+    const set = await this.step(steps, 'Route new sandboxes through Huddle', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]);
+    if (set.code !== 0) throw failure(set, 'sbx settings set failed');
+    // Fail closed: after the restart every existing sandbox presents the reset
+    // secret and is denied until it is recreated. Without it, a sandbox that
+    // cannot be recreated would keep its old, direct way out.
+    const restart = await this.step(steps, 'Restart the sbx daemon so running sandboxes go through Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
+    if (restart.code !== 0) {
+      await this.restoreOriginal(steps).catch(() => undefined);
+      throw failure(restart, 'sbx daemon restart failed');
+    }
+    this.store.setEnabled(true);
+  }
+
+  // Call inside exclusive(). Stays on until the user's setting is back and the
+  // daemon has dropped Huddle, so a failure leaves something to retry: switched
+  // off with sandboxes still pointing here, every one of them would get a 407.
+  private async switchOff(steps: SandboxStep[]): Promise<void> {
+    if (!this.isEnabled()) return;
+    const restore = await this.restoreOriginal(steps);
+    if (restore.code !== 0) throw failure(restore, 'restoring proxy.sandbox failed');
+    // Running sandboxes keep the Huddle proxy until sbx rebuilds their network.
+    const restart = await this.step(steps, 'Restart the sbx daemon so running sandboxes drop Huddle', ['daemon', 'restart'], CREATE_TIMEOUT_MS);
+    if (restart.code !== 0) throw failure(restart, 'sbx daemon restart failed');
+    this.store.setEnabled(false);
+    this.store.clearIdentities();
+    this.store.setOriginalProxy(null);
+  }
+
+  private restoreOriginal(steps: SandboxStep[]): Promise<RunResult> {
+    const original = this.store.originalProxy() ?? '';
+    // A saved setting whose password was not kept (see SbxStore.originalProxy)
+    // cannot be put back as it was: unset, and say so.
+    if (original.includes(':***@')) {
+      return this.step(steps, 'Your own sandbox proxy had a password, which Huddle did not keep: set it again with `sbx settings set proxy.sandbox`', ['settings', 'unset', 'proxy.sandbox']);
+    }
+    return original
+      ? this.step(steps, 'Restore your own sandbox proxy', ['settings', 'set', 'proxy.sandbox', original])
+      : this.step(steps, 'Restore the default sandbox proxy', ['settings', 'unset', 'proxy.sandbox']);
   }
 
   /**
@@ -448,6 +478,26 @@ export class SbxProvider implements EnvironmentProvider {
     return structuredClone(state);
   }
 
+  /**
+   * At gateway start. A gateway that stopped in the middle of a create or a
+   * recreate does not know the secret of some sandboxes, and those get nothing
+   * but 407s: recreate everything then. False when the host could not be
+   * asked (pipe not up yet), so the caller tries again later.
+   */
+  async reconcile(): Promise<boolean> {
+    if (!this.isEnabled() || this.hostPort === null) return true;
+    let listed: SandboxInfo[];
+    try {
+      listed = await this.listAll();
+    } catch {
+      return false;
+    }
+    if (!this.recreating && listed.some((s) => !this.store.identified(s.name))) {
+      await this.recreateAll('the gateway restarted without the secret of every sandbox');
+    }
+    return true;
+  }
+
   /** The reset secret reached the gateway: recreate, unless that just happened. */
   onResetSecretSeen(): void {
     if (!this.isEnabled() || this.recreating) return;
@@ -460,13 +510,21 @@ export class SbxProvider implements EnvironmentProvider {
   // is the reset secret, which would set off another recreate of everything.
   // Stopped it is quiet (best effort: it may already be gone).
   private async stopUnrouted(name: string): Promise<void> {
+    // Switched off meanwhile: the sandbox is the user's again, leave it running.
+    if (!this.isEnabled()) return;
     await this.run(['stop', name]).catch(() => undefined);
   }
 
   private async recreateEach(state: RecreateState): Promise<void> {
     // Every old secret goes first: whichever box still holds one is denied.
     this.store.clearIdentities();
+    // Switched off meanwhile: the sandboxes left are the user's again, untouched.
+    const switchedOff = (name: string) => state.results.push({ name, ok: false, message: 'not recreated: Docker Sandbox was switched off in Huddle' });
     for (const info of await this.listAll()) {
+      if (!this.isEnabled()) {
+        switchedOff(info.name);
+        continue;
+      }
       const spec = this.store.spec(info.name) ?? specFromListing(info);
       if (!spec) {
         await this.stopUnrouted(info.name);
@@ -477,10 +535,15 @@ export class SbxProvider implements EnvironmentProvider {
       try {
         const args = buildCreateArgs({ ...spec, name: info.name });
         const ok = await this.exclusive(async () => {
+          if (!this.isEnabled()) return false;
           const rm = await this.step(steps, 'Remove sandbox', ['rm', '--force', info.name]);
           if (rm.code !== 0) return false;
           return this.createWithSecret({ ...spec, name: info.name }, args, steps);
         });
+        if (!ok && !this.isEnabled() && steps.length === 0) {
+          switchedOff(info.name);
+          continue;
+        }
         const failed = steps.find((s) => s.code !== 0);
         if (!ok) await this.stopUnrouted(info.name);
         state.results.push(ok ? { name: info.name, ok } : { name: info.name, ok, message: failed ? `${failed.label}: ${(failed.stderr || failed.stdout).trim().slice(0, 500)}` : 'failed' });

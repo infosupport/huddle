@@ -173,14 +173,27 @@ under a rule scope of its own: `sbx:<name>`.
   - Anything inside a sandbox outside its workspaces is lost; the workspaces are host folders and stay.
   - A sandbox that cannot be recreated is stopped, so it does not keep setting off the reset secret.
 - **Switching on:**
-  - Saves the user's own `proxy.sandbox`, unless it already points at Huddle.
+  - Saves the user's own `proxy.sandbox`, unless it already points at Huddle. The database keeps it
+    with its password masked; the full value lives in gateway memory only. After a gateway restart a
+    password cannot be put back, so switching off unsets the setting and the step says to set it again.
   - Sets the reset URL.
   - Restarts the sbx daemon. From then on every existing sandbox is denied until it has been recreated.
-  - Then recreates everything.
+  - Only now is sbx marked on, and everything is recreated. If the restart fails, the user's own setting
+    is put back, sbx stays off, and the error is returned.
 - **Switching off:**
-  - Forgets all secrets.
   - Restores the saved `proxy.sandbox`, or unsets it.
   - Restarts the daemon, so running sandboxes drop Huddle.
-- **No TLS interception.** Sandboxes do not trust the Huddle CA, and sbx intercepts some hosts itself.
-  CONNECT is therefore a raw tunnel decided on the host alone, and path-mode rules do not apply to
-  sandboxes. The `huddle` host is closed to them entirely.
+  - Only when both worked: marked off, and every secret forgotten. A failure leaves sbx on, so it can be
+    tried again. A recreate that is still running leaves the sandboxes it has not reached yet alone.
+- **Gateway restart.** Once the host pipe answers, the gateway lists the sandboxes. If any has no known
+  secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
+  it tries again every 30 s.
+- **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone, so path-mode rules do
+  not apply to sandboxes. The `huddle` host is closed to them entirely. Interception needs two kinds of
+  trust that sbx has no setting for:
+  - The sandboxes must trust the Huddle CA. Possible with a mixin kit (`files/home/*.crt` plus
+    `update-ca-certificates`) on every create.
+  - The sbx daemon on the host must trust it as well. For the hosts it injects credentials into
+    (`forward` mode), it terminates TLS itself, and its upstream TLS goes through Huddle. This is
+    undocumented.
+

@@ -36,6 +36,15 @@ createProxyServer(SBX_PROXY_PORT, {
   intercept: false,
   identify: sbxEgressIdentify(() => sbxProvider.onResetSecretSeen()),
 });
+// Sandboxes whose secret the gateway lost (it stopped mid-create) are recreated
+// once the host pipe answers; until then, try again every 30 s.
+const SBX_RECONCILE_RETRY_MS = 30_000;
+function reconcileSbx(): void {
+  sbxProvider.reconcile()
+    .catch((err) => { console.error('[sbx] reconcile failed:', err?.message ?? err); return true; })
+    .then((done) => { if (!done) setTimeout(reconcileSbx, SBX_RECONCILE_RETRY_MS).unref(); });
+}
+reconcileSbx();
 createApiServer().catch(err => {
   console.error('[api] failed to start', err);
   process.exit(1);
