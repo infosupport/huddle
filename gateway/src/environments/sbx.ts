@@ -321,18 +321,20 @@ interface SbxLinksResult {
 
 /**
  * vscode://vscode-remote/ssh-remote+<host><folder> for VS Code Remote-SSH, or a
- * JetBrains Gateway connect link. Both use the ssh alias as host, so the ssh
- * config `sbx setup ssh` wrote decides how to get there and as whom. A folder
- * that is not an absolute POSIX path (a Windows path) is left out.
+ * JetBrains Toolbox SSH link (jetbrains://gateway/ssh/environment; Gateway's own
+ * jetbrains-gateway:// links are on their way out). Both use the ssh alias as
+ * host and no user or port, so the ssh config `sbx setup ssh` wrote decides how
+ * to get there and as whom. No ideHint: Toolbox asks which IDE. A folder that is
+ * not an absolute POSIX path (a Windows path) is left out.
  */
 export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): string {
   const posix = folder && folder.startsWith('/') ? folder : undefined;
   if (ide === 'vscode') {
     return `vscode://vscode-remote/ssh-remote+${encodeURIComponent(sshHost)}${posix ? posix.split('/').map(encodeURIComponent).join('/') : ''}`;
   }
-  const params: [string, string][] = [['type', 'ssh'], ['deploy', 'true'], ['host', sshHost], ['port', '22']];
-  if (posix) params.push(['projectPath', posix]);
-  return 'jetbrains-gateway://connect#' + params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const params: [string, string][] = [['h', sshHost], ['launchIde', 'true']];
+  if (posix) params.push(['projectHint', posix]);
+  return 'jetbrains://gateway/ssh/environment?' + params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 }
 
 /** What the provider keeps between runs (the DB in production, see sbx-store.ts). */

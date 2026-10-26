@@ -611,7 +611,7 @@ describe('SbxProvider egress', () => {
     const p = sbx(pipe, store);
     expect(await p.ideLink('box', 'vscode')).toEqual({ link: 'vscode://vscode-remote/ssh-remote+box.sbx/home/me/proj', sshHost: 'box.sbx' });
     expect((await p.ideLink('box', 'jetbrains')).link)
-      .toBe('jetbrains-gateway://connect#type=ssh&deploy=true&host=box.sbx&port=22&projectPath=%2Fhome%2Fme%2Fproj');
+      .toBe('jetbrains://gateway/ssh/environment?h=box.sbx&launchIde=true&projectHint=%2Fhome%2Fme%2Fproj');
     expect(pipe.calls.map((c) => c.args.args).filter((a) => a[0] === 'setup')).toEqual([['setup', 'ssh']]);
 
     await expect(sbx(fakePipe([{ code: 0, stdout: '[]' }])).ideLink('gone', 'vscode')).rejects.toBeInstanceOf(InvalidSpecError);
@@ -620,7 +620,7 @@ describe('SbxProvider egress', () => {
 
   it('buildIdeLink: Windows-pad wordt weggelaten', () => {
     expect(buildIdeLink('vscode', 'b.sbx', 'C:\\proj')).toBe('vscode://vscode-remote/ssh-remote+b.sbx');
-    expect(buildIdeLink('jetbrains', 'b.sbx')).not.toMatch(/projectPath/);
+    expect(buildIdeLink('jetbrains', 'b.sbx')).toBe('jetbrains://gateway/ssh/environment?h=b.sbx&launchIde=true');
     expect(buildIdeLink('vscode', 'b.sbx', '/w/a#b?c d')).toBe('vscode://vscode-remote/ssh-remote+b.sbx/w/a%23b%3Fc%20d');
   });
 

@@ -75,14 +75,14 @@ export class SandboxDetailComponent {
     this.api.resolveRule(rule.id, status, 'rule', expires).subscribe(() => this.state.loadAll());
   }
 
-  // The link opens VS Code (Remote-SSH) or JetBrains Gateway on this machine;
+  // The link opens VS Code (Remote-SSH) or the JetBrains Toolbox App on this machine;
   // both reach the sandbox through the `<name>.sbx` alias `sbx setup ssh` wrote.
   connectIde(ide: 'vscode' | 'jetbrains'): void {
     this.ideStatus.set('Preparing SSH…');
     this.api.getSandboxIdeLink(this.provider, this.name, ide).subscribe({
       next: ({ link, sshHost }) => {
         this.sshHost.set(sshHost);
-        const prefix = ide === 'vscode' ? 'vscode://' : 'jetbrains-gateway://';
+        const prefix = ide === 'vscode' ? 'vscode://' : 'jetbrains://gateway/ssh/environment?';
         if (typeof link !== 'string' || !link.startsWith(prefix)) { this.ideStatus.set('Unexpected link from the gateway; not opened.'); return; }
         this.ideStatus.set('');
         window.open(link, '_self');
