@@ -207,6 +207,11 @@ under a rule scope of its own: `sbx:<name>`.
   off. Otherwise it lists the sandboxes. If any has no known
   secret (the gateway stopped in the middle of a create), it recreates them all. Until the pipe answers,
   it tries again every 30 s.
+- **One firewall: Huddle's.** sbx's own network policy would ask a second time for what Huddle already
+  allowed. So every sandbox Huddle creates gets `sbx policy allow network --sandbox <name> "**"`: before the
+  create when sbx takes it, else right after (a failure shows in the steps; the sandbox then still asks). The
+  rule goes before `sbx rm`, and for every sandbox on switch-off, when sbx's policy is the only firewall again.
+  Deny rules (yours or an organization's) still win, and under organization governance local allows do nothing.
 - **Folder mappings.** Settings → Folder mappings with a host folder go into every sandbox too (Docker
   volumes stay devcontainer-only). Before the create, `sbx.links` links them into
   `~/.huddle/sbx/links/<name>/rw` and `/ro`; those go to `sbx create` as two extra workspaces, `ro` with

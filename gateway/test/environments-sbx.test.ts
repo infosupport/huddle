@@ -14,6 +14,7 @@ import {
   defaultSandboxName,
   parseSbxLsJson,
   parseSbxLsTable,
+  allowAllArgs,
   buildIdeLink,
 } from '../src/environments/sbx';
 import { InvalidSpecError, ProviderDisabledError, ToolFailedError } from '../src/environments/types';
@@ -27,18 +28,32 @@ type Reply = { code: number; stdout?: string; stderr?: string } | Error;
 
 // `sbx.links` (folder mappings) wordt apart beantwoord en vastgelegd, zodat de
 // tool.run-volgorde in `calls` hetzelfde blijft.
-function fakePipe(replies: Reply[], linksReply: (args: any) => any = () => ({ rw: null, ro: null, skipped: [] })) {
+// `sbx policy` (the allow-all rule per sandbox) and `sbx.links` are answered
+// apart from `replies` and recorded in policyCalls / linkCalls.
+function fakePipe(
+  replies: Reply[],
+  linksReply: (args: any) => any = () => ({ rw: null, ro: null, skipped: [] }),
+  policyReply: (args: string[]) => Reply = () => ({ code: 0 }),
+) {
   const calls: { op: string; args: any; opts: any }[] = [];
   const linkCalls: any[] = [];
+  const policyCalls: string[][] = [];
   return {
     calls,
     linkCalls,
+    policyCalls,
     call: async (op: string, args: any, opts: any) => {
       if (op === 'sbx.links') {
         linkCalls.push(args);
         const r = linksReply(args);
         if (r instanceof Error) throw r;
         return r;
+      }
+      if (op === 'tool.run' && args?.args?.[0] === 'policy') {
+        policyCalls.push(args.args);
+        const r = policyReply(args.args);
+        if (r instanceof Error) throw r;
+        return { stdout: '', stderr: '', ...r } as any;
       }
       calls.push({ op, args, opts });
       const r = replies.shift();
@@ -258,6 +273,8 @@ describe('SbxProvider', () => {
     await p.remove('box', { force: true });
     await expect(p.remove('box', { force: false })).rejects.toThrow('no such sandbox');
     expect(pipe.calls.map((c) => c.args.args)).toEqual([['rm', 'box'], ['rm', '--force', 'box'], ['rm', 'box']]);
+    // Eerst de allow-all regel: een latere box met deze naam buiten Huddle mag niet overal heen.
+    expect(pipe.policyCalls).toEqual(Array(3).fill(['policy', 'rm', 'network', '--sandbox', 'box', '**']));
     await expect(p.remove('--all', { force: false })).rejects.toBeInstanceOf(InvalidSpecError);
   });
 });
@@ -310,6 +327,34 @@ describe('SbxProvider egress', () => {
     // Geen secret in wat de portal te zien krijgt.
     expect(JSON.stringify(r.steps)).not.toContain(secret);
     expect(JSON.stringify(r.steps)).not.toContain('RESETSECRET');
+  });
+
+  it('create: sbx-policy laat alles door naar Huddle, vóór de create als sbx dat al neemt', async () => {
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }]);
+    const r = await sbx(pipe, memStore()).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(r.ok).toBe(true);
+    expect(pipe.policyCalls).toEqual([['policy', 'allow', 'network', '--sandbox', 'box', '**']]);
+    expect(r.steps.map((s) => s.label)).not.toContain('Leave the firewall to Huddle (sbx policy)');
+    expect(allowAllArgs('rm', 'x')).toEqual(['policy', 'rm', 'network', '--sandbox', 'x', '**']);
+  });
+
+  it('create: sbx neemt de regel pas na de create → daarna, en mislukt dat ook dan blijft de create gelukt', async () => {
+    let n = 0;
+    const pipe = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }], undefined, () => (++n === 1 ? { code: 1, stderr: 'no such sandbox' } : { code: 0 }));
+    const r = await sbx(pipe, memStore()).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(r.ok).toBe(true);
+    expect(pipe.policyCalls).toHaveLength(2);
+    expect(r.steps.find((s) => s.label === 'Leave the firewall to Huddle (sbx policy)')).toMatchObject({ code: 0, command: 'sbx policy allow network --sandbox box "**"' });
+
+    const never = fakePipe([{ code: 0 }, { code: 0 }, { code: 0 }], undefined, () => ({ code: 1, stderr: 'nope' }));
+    const r2 = await sbx(never, memStore()).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(r2.ok).toBe(true);
+    expect(r2.steps.find((s) => s.label === 'Leave the firewall to Huddle (sbx policy)')?.code).toBe(1);
+
+    // Een mislukte create krijgt geen tweede poging.
+    const failed = fakePipe([{ code: 0 }, { code: 1 }, { code: 0 }], undefined, () => ({ code: 1 }));
+    await sbx(failed, memStore()).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+    expect(failed.policyCalls).toHaveLength(1);
   });
 
   it('create mislukt → toch terug naar reset, geen identiteit', async () => {
@@ -410,20 +455,24 @@ describe('SbxProvider egress', () => {
   it('uit: identiteiten weg, eigen proxy terug, daemon herstart', async () => {
     const store = memStore({ originalProxy: 'http://corp:8080' });
     store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }]);
-    await sbx(pipe, store).setEnabled(false);
+    const pipe = fakePipe([{ code: 0, stdout: JSON.stringify([{ name: 'a' }]) }, { code: 0 }, { code: 0 }]);
+    const steps = await sbx(pipe, store).setEnabled(false);
     expect(pipe.calls.map((c) => c.args.args)).toEqual([
+      ['ls', '--json'],
       ['settings', 'set', 'proxy.sandbox', 'http://corp:8080'],
       ['daemon', 'restart'],
     ]);
+    // Weer van de gebruiker: sbx' eigen firewall beslist weer, de allow-all regel gaat weg.
+    expect(pipe.policyCalls).toEqual([['policy', 'rm', 'network', '--sandbox', 'a', '**']]);
+    expect(steps[0].label).toBe('Hand a back to the sbx firewall');
     expect(store.enabled()).toBe(false);
     expect(store.identities.get('a')?.hash).toBeNull();
     expect(store.originalProxy()).toBeNull();
 
     // Zonder eigen instelling: unset.
-    const pipe2 = fakePipe([{ code: 0 }, { code: 0 }]);
+    const pipe2 = fakePipe([{ code: 0, stdout: '[]' }, { code: 0 }, { code: 0 }]);
     await sbx(pipe2, memStore()).setEnabled(false);
-    expect(pipe2.calls[0].args.args).toEqual(['settings', 'unset', 'proxy.sandbox']);
+    expect(pipe2.calls[1].args.args).toEqual(['settings', 'unset', 'proxy.sandbox']);
   });
 
   it('aan: daemon-herstart mislukt → eigen proxy terug, blijft uit, fout naar boven', async () => {
@@ -443,7 +492,7 @@ describe('SbxProvider egress', () => {
   it('uit: eigen proxy terugzetten mislukt → blijft aan met identiteiten, opnieuw te proberen', async () => {
     const store = memStore({ originalProxy: 'http://corp:8080' });
     store.saveIdentity('a', 'h', { name: 'a', agent: 'shell', workspaces: [ws('/a')] });
-    const pipe = fakePipe([{ code: 1, stderr: 'nope' }]);
+    const pipe = fakePipe([{ code: 0, stdout: '[]' }, { code: 1, stderr: 'nope' }]);
     await expect(sbx(pipe, store).setEnabled(false)).rejects.toBeInstanceOf(ToolFailedError);
     expect(store.enabled()).toBe(true);
     expect(store.identities.get('a')?.hash).toBe('h');
@@ -452,16 +501,16 @@ describe('SbxProvider egress', () => {
 
   it('uit: daemon-herstart mislukt → blijft aan', async () => {
     const store = memStore({ originalProxy: 'http://corp:8080' });
-    const pipe = fakePipe([{ code: 0 }, { code: 1, stderr: 'nope' }]);
+    const pipe = fakePipe([{ code: 0, stdout: '[]' }, { code: 0 }, { code: 1, stderr: 'nope' }]);
     await expect(sbx(pipe, store).setEnabled(false)).rejects.toBeInstanceOf(ToolFailedError);
     expect(store.enabled()).toBe(true);
   });
 
   it('uit: gemaskeerde eigen proxy (wachtwoord niet bewaard) → unset en zeg het', async () => {
     const store = memStore({ originalProxy: 'http://me:***@corp:8080' });
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }]);
+    const pipe = fakePipe([{ code: 0, stdout: '[]' }, { code: 0 }, { code: 0 }]);
     const steps = await sbx(pipe, store).setEnabled(false);
-    expect(pipe.calls[0].args.args).toEqual(['settings', 'unset', 'proxy.sandbox']);
+    expect(pipe.calls[1].args.args).toEqual(['settings', 'unset', 'proxy.sandbox']);
     expect(steps[0].label).toMatch(/set it again/);
   });
 
@@ -474,13 +523,14 @@ describe('SbxProvider egress', () => {
     const replies: Reply[] = [
       { code: 0, stdout: JSON.stringify([{ name: 'a' }, { name: 'b' }]) }, // ls
       { code: 0 }, { code: 0 }, { code: 0 }, { code: 0 },                  // a: rm, set, create, reset
-      { code: 0 }, { code: 0 },                                            // uit: unset, restart
+      { code: 0, stdout: '[]' }, { code: 0 }, { code: 0 },                 // uit: ls, unset, restart
     ];
     const calls: any[] = [];
     const pipe = {
       calls,
       call: async (op: string, args: any, opts: any) => {
         if (op === 'sbx.links') return { rw: null, ro: null, skipped: [] };
+        if (args?.args?.[0] === 'policy') return { code: 0, stdout: '', stderr: '' };
         calls.push({ op, args, opts });
         if (args.args[0] === 'rm' && args.args[2] === 'a') await gate;
         const r = replies.shift();
@@ -581,6 +631,7 @@ describe('SbxProvider egress', () => {
       calls,
       call: async (op: string, args: any, opts: any) => {
         if (op === 'sbx.links') return { rw: null, ro: null, skipped: [] };
+        if (args?.args?.[0] === 'policy') return { code: 0, stdout: '', stderr: '' };
         calls.push({ op, args, opts });
         if (args.args[0] === 'rm' && args.args[2] === 'a') await gate;
         const r = replies.shift();
@@ -626,7 +677,7 @@ describe('SbxProvider egress', () => {
 
   it('verwijderen dat in de rij wacht terwijl sbx uitgaat → geweigerd, geen sbx rm', async () => {
     const store = memStore({ originalProxy: 'http://corp:8080' });
-    const pipe = fakePipe([{ code: 0 }, { code: 0 }]); // uit: set, restart
+    const pipe = fakePipe([{ code: 0, stdout: '[]' }, { code: 0 }, { code: 0 }]); // uit: ls, set, restart
     const p = sbx(pipe, store);
     const off = p.setEnabled(false);
     const rm = p.remove('box', { force: true });

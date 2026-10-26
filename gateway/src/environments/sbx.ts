@@ -337,6 +337,14 @@ export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): st
   return 'jetbrains://gateway/ssh/environment?' + params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 }
 
+/**
+ * `sbx policy allow|rm network --sandbox <name> "**"`: every host, for one sandbox.
+ * Only for a sandbox routed through Huddle, whose firewall then decides alone.
+ */
+export function allowAllArgs(verb: 'allow' | 'rm', name: string): string[] {
+  return ['policy', verb, 'network', '--sandbox', name, '**'];
+}
+
 /** What the provider keeps between runs (the DB in production, see sbx-store.ts). */
 export interface SbxStore {
   enabled(): boolean;
@@ -485,6 +493,10 @@ export class SbxProvider implements EnvironmentProvider {
     const secret = newProxySecret();
     const set = await this.step(steps, 'Route the sandbox through Huddle', ['settings', 'set', 'proxy.sandbox', sbxProxyUrl(spec.name, secret, this.hostPort as number)]);
     if (set.code !== 0) return false;
+    // Huddle is this sandbox's firewall, so sbx's own policy lets everything
+    // through to it instead of asking a second time. Set before the create when
+    // sbx takes a rule for a sandbox that does not exist yet, else right after.
+    const allowedEarly = await this.run(allowAllArgs('allow', spec.name)).then((r) => r.code === 0, () => false);
     let created: RunResult | undefined;
     try {
       created = await this.step(steps, 'Create sandbox', [...args, ...mappings.paths], CREATE_TIMEOUT_MS);
@@ -495,6 +507,12 @@ export class SbxProvider implements EnvironmentProvider {
       );
     }
     if (created?.code !== 0) return false;
+    if (!allowedEarly) {
+      // A sandbox that still asks works, it only prompts: not a failed create.
+      await this.step(steps, 'Leave the firewall to Huddle (sbx policy)', allowAllArgs('allow', spec.name)).catch((err) => {
+        steps.push({ label: 'Leave the firewall to Huddle (sbx policy)', command: '', code: -1, stdout: '', stderr: String(err?.message ?? err) });
+      });
+    }
     this.store.saveIdentity(spec.name, hashProxySecret(secret), {
       name: spec.name,
       agent: spec.agent,
@@ -564,6 +582,9 @@ export class SbxProvider implements EnvironmentProvider {
     await this.exclusive(async () => {
       // Switched off while this waited in the queue: the sandbox is the user's again.
       if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
+      // Its allow-all rule first: a rule left behind would let a later sandbox
+      // with this name, created outside Huddle, go anywhere.
+      await this.run(allowAllArgs('rm', name)).catch(() => undefined);
       const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
       if (r.code !== 0) throw failure(r, 'sbx rm failed');
       this.removedSinceListing.add(name);
@@ -636,6 +657,12 @@ export class SbxProvider implements EnvironmentProvider {
   // off with sandboxes still pointing here, every one of them would get a 407.
   private async switchOff(steps: SandboxStep[]): Promise<void> {
     if (!this.isEnabled()) return;
+    // The sandboxes are the user's again, without Huddle in the way: sbx's own
+    // policy decides for them again, so their allow-all rule goes. Shown per box;
+    // one that could not be removed does not keep Huddle on.
+    for (const info of await this.listAll().catch(() => [] as SandboxInfo[])) {
+      await this.step(steps, `Hand ${info.name} back to the sbx firewall`, allowAllArgs('rm', info.name)).catch(() => undefined);
+    }
     const restore = await this.restoreOriginal(steps);
     if (restore.code !== 0) throw failure(restore, 'restoring proxy.sandbox failed');
     // Running sandboxes keep the Huddle proxy until sbx rebuilds their network.
