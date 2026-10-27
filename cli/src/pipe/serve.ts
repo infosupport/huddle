@@ -27,6 +27,7 @@ import {
 } from './protocol';
 import { fsList, toHuddlePath } from './fs-list';
 import { availableTools, toolRun, toolsInfo } from './tools';
+import { sbxKit } from './sbx-kit';
 import { sbxLinks } from './sbx-links';
 import { sshHost, sshKey } from './ssh-hosts';
 
@@ -67,6 +68,8 @@ async function dispatch(req: PipeRequest, maxEntries: number): Promise<unknown> 
       return toolRun(args);
     case 'sbx.links':
       return sbxLinks(args);
+    case 'sbx.kit':
+      return sbxKit(args);
     case 'ssh.key':
       return sshKey(args);
     case 'ssh.host':

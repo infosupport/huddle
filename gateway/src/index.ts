@@ -9,7 +9,7 @@ import { restoreSshRelays } from './ssh-link';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 import { sbxProvider } from './environments';
-import { sbxEgressIdentify } from './environments/sbx-store';
+import { sbxEgressIdentify, sbxTrustsHuddleCa } from './environments/sbx-store';
 import { SBX_PROXY_PORT } from './environments/sbx-egress';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
@@ -30,10 +30,10 @@ initCa();
 createProxyServer();
 // Egress of Docker Sandboxes (docs/host-pipe.md, "sbx egress"). The sbx daemon
 // on the host connects here through the loopback port `huddle init` published
-// and names the sandbox with its proxy secret. No TLS interception: sandboxes do
-// not trust the Huddle CA.
+// and names the sandbox with its proxy secret. TLS is inspected only for a sandbox
+// created with the Huddle CA kit (cli/src/pipe/sbx-kit.ts); others do not trust it.
 createProxyServer(SBX_PROXY_PORT, {
-  intercept: false,
+  intercept: sbxTrustsHuddleCa,
   identify: sbxEgressIdentify(() => sbxProvider.onResetSecretSeen()),
 });
 // Sandboxes whose secret the gateway lost (it stopped mid-create) are recreated

@@ -10,6 +10,7 @@ import { hostPipe, HostPipe } from '../host-pipe';
 import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError, hostHuddleHome } from '../host-path';
 import { HostFolderMapping, listFolderMappings } from '../host-config';
 import { containerPathError } from '../workspace-root';
+import { getCaCertPem } from '../tls-ca';
 import {
   EnvironmentProvider,
   IdeKind,
@@ -341,6 +342,14 @@ export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): st
  * `sbx policy allow|rm network --sandbox <name> "**"`: every host, for one sandbox.
  * Only for a sandbox routed through Huddle, whose firewall then decides alone.
  */
+/** The kit the host agent writes for the Huddle CA (cli/src/pipe/sbx-kit.ts). */
+const CA_KIT = 'huddle-ca';
+// What an sbx without kits says to `create --kit`.
+const NO_KIT_RE = /(unknown|undefined|unrecognized) (flag|option)[^\n]*kit|flag provided but not defined:? -+kit/i;
+
+/** What the gateway keeps of a sandbox: its spec, and whether it trusts the Huddle CA. */
+export type StoredSandboxSpec = SandboxSpec & { huddleCa?: boolean };
+
 // What `sbx policy rm` says when there was no such rule: nothing left to remove.
 const NO_RULE_RE = /not found|no (matching )?(rule|polic)|does not exist|doesn't exist/i;
 
@@ -391,6 +400,7 @@ export class SbxProvider implements EnvironmentProvider {
     private readonly store: SbxStore,
     private readonly hostPort: number | null = sbxProxyHostPort(),
     private readonly folderMappings: () => HostFolderMapping[] = listFolderMappings,
+    private readonly caPem: () => string = getCaCertPem,
   ) {}
 
   private run(args: string[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<RunResult> {
@@ -505,6 +515,7 @@ export class SbxProvider implements EnvironmentProvider {
     // Switched off while this waited in the queue: the setting is the user's again.
     if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
     const mappings = await this.prepareFolderMappings(spec.name, steps);
+    const kit = await this.prepareCaKit(steps);
     const secret = newProxySecret();
     const set = await this.step(steps, 'Route the sandbox through Huddle', ['settings', 'set', 'proxy.sandbox', sbxProxyUrl(spec.name, secret, this.hostPort as number)]);
     if (set.code !== 0) return false;
@@ -513,8 +524,15 @@ export class SbxProvider implements EnvironmentProvider {
     // sbx takes a rule for a sandbox that does not exist yet, else right after.
     const allowedEarly = await this.run(allowAllArgs('allow', spec.name)).then((r) => r.code === 0, () => false);
     let created: RunResult | undefined;
+    let trustsCa = kit !== null;
     try {
-      created = await this.step(steps, 'Create sandbox', [...args, ...mappings.paths], CREATE_TIMEOUT_MS);
+      const createArgs = [...args, ...mappings.paths];
+      created = await this.step(steps, 'Create sandbox', kit ? [createArgs[0], '--kit', kit, ...createArgs.slice(1)] : createArgs, CREATE_TIMEOUT_MS);
+      // An sbx without kits: create it as before, without TLS inspection.
+      if (kit && created.code !== 0 && NO_KIT_RE.test(`${created.stderr}\n${created.stdout}`)) {
+        trustsCa = false;
+        created = await this.step(steps, 'Create sandbox (this sbx has no kits: no TLS inspection)', createArgs, CREATE_TIMEOUT_MS);
+      }
     } finally {
       await this.step(steps, 'Reset the proxy for the next sandbox', ['settings', 'set', 'proxy.sandbox', this.resetUrl()]).then(
         (r) => { if (r.code !== 0) created = undefined; },
@@ -528,11 +546,13 @@ export class SbxProvider implements EnvironmentProvider {
         steps.push({ label: 'Leave the firewall to Huddle (sbx policy)', command: '', code: -1, stdout: '', stderr: String(err?.message ?? err) });
       });
     }
-    this.store.saveIdentity(spec.name, hashProxySecret(secret), {
+    const stored: StoredSandboxSpec = {
       name: spec.name,
       agent: spec.agent,
       workspaces: spec.workspaces.map((w) => ({ path: normalizeHostPath(w.path), readOnly: w.readOnly === true })),
-    });
+    };
+    if (trustsCa) stored.huddleCa = true;
+    this.store.saveIdentity(spec.name, hashProxySecret(secret), stored);
     // The sandbox exists and is routed: a mapping that could not be linked shows
     // in the steps, it does not undo the create.
     if (mappings.links.length) {
@@ -541,6 +561,37 @@ export class SbxProvider implements EnvironmentProvider {
       });
     }
     return true;
+  }
+
+  /**
+   * Has the host agent write the kit that makes a sandbox trust the Huddle CA
+   * (cli/src/pipe/sbx-kit.ts), and returns its folder for `sbx create --kit`.
+   * Null when there is none (an older host agent): the sandbox is then created
+   * without it, and its TLS is not inspected.
+   */
+  private async prepareCaKit(steps: SandboxStep[]): Promise<string | null> {
+    const label = 'Prepare the Huddle CA (TLS inspection)';
+    const skip = (why: string) => { steps.push({ label, command: '', code: 0, stdout: '', stderr: `no TLS inspection for this sandbox: ${why}` }); return null; };
+    let caPem: string;
+    try {
+      caPem = this.caPem();
+    } catch (err: any) {
+      return skip(err?.message ?? String(err));
+    }
+    let res: { dir?: unknown };
+    try {
+      res = await this.pipe.call<{ dir?: unknown }>('sbx.kit', { caPem });
+    } catch (err: any) {
+      return skip(err?.message ?? String(err));
+    }
+    // Only ever Huddle's own kit folder.
+    const dir = normalizeHostPath(String(res?.dir ?? ''));
+    const home = hostHuddleHome();
+    if (hostPathError(dir) || !dir.endsWith(`/sbx/kits/${CA_KIT}`) || (home && dir.toLowerCase() !== `${home}/sbx/kits/${CA_KIT}`.toLowerCase())) {
+      return skip(`unexpected folder from the host (${dir})`);
+    }
+    steps.push({ label, command: '', code: 0, stdout: dir, stderr: '' });
+    return dir;
   }
 
   /**

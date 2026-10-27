@@ -211,6 +211,11 @@ export class ApiService {
     return this.handle(this.http.post<Rule>(`/api/rules/${id}/path-mode`, { enabled }));
   }
 
+  /** enabled = TLS inspection OFF for this domain. */
+  setNoIntercept(id: number, enabled: boolean): Observable<Rule> {
+    return this.handle(this.http.post<Rule>(`/api/rules/${id}/no-intercept`, { enabled }));
+  }
+
   deleteRule(id: number): Observable<void> {
     return this.handle(this.http.delete<void>(`/api/rules/${id}`));
   }

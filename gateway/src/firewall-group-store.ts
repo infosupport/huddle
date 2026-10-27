@@ -22,6 +22,7 @@ import {
   GROUP_ENVELOPE_VERSION,
   type GroupEnvelope,
   type ShareableGroupRule,
+  shareable,
 } from './firewall-group-envelope';
 
 export interface ImportGroupSummary {
@@ -80,7 +81,7 @@ function existingRuleIndex(rules: Array<{ domain: string }>): Map<string, Existi
 // what a group contains. It is a plain literal — building it from an interpolated
 // column list would put a constructed string into db.prepare() for no gain, and
 // apply's narrower de-duplication is done in memberRulesForScope() instead.
-const MEMBER_RULES_SQL = `SELECT DISTINCT r.domain, r.container_id, r.status, r.path_pattern, r.path_mode, r.expires_at
+const MEMBER_RULES_SQL = `SELECT DISTINCT r.domain, r.container_id, r.status, r.path_pattern, r.path_mode, r.no_intercept, r.expires_at
      FROM rules r
     WHERE r.group_id = ?
        OR (
@@ -111,7 +112,7 @@ function memberRulesForScope(groupId: number): Omit<ShareableGroupRule, 'contain
   const seen = new Set<string>();
   const members: Omit<ShareableGroupRule, 'container_id'>[] = [];
   for (const { container_id: _ignored, ...m } of memberRules(groupId)) {
-    const key = JSON.stringify([m.domain, m.status, m.path_pattern, m.path_mode, m.expires_at]);
+    const key = JSON.stringify([m.domain, m.status, m.path_pattern, m.path_mode, m.no_intercept, m.expires_at]);
     if (seen.has(key)) continue;
     seen.add(key);
     members.push(m);
@@ -124,7 +125,7 @@ function memberRulesForScope(groupId: number): Omit<ShareableGroupRule, 'contain
 export function exportGroup(groupId: number): GroupEnvelope | null {
   const group = getGroup(groupId);
   if (!group) return null;
-  const rules = memberRules(groupId);
+  const rules = memberRules(groupId).map(shareable);
   return {
     version: GROUP_ENVELOPE_VERSION,
     kind: GROUP_ENVELOPE_KIND,
@@ -218,7 +219,7 @@ function importEnvelopeRule(r: ShareableGroupRule, ctx: ImportRuleContext): Impo
   const hit = ctx.existing.get(key);
   if (!hit) {
     const res = ctx.insertRule.run(
-      r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode,
+      r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode, r.no_intercept ?? 0,
       ctx.groupId, ctx.addedBy, ctx.source,
     );
     // Keep the index in step with what we just wrote: the batch was read before
@@ -232,7 +233,7 @@ function importEnvelopeRule(r: ShareableGroupRule, ctx: ImportRuleContext): Impo
   // reclassify it as startup-folder and delete it on the next reload).
   if (ctx.source === 'startup-folder' && hit.source !== 'startup-folder') return 'skipped';
 
-  ctx.updateRule.run(r.status, r.expires_at, r.path_mode, ctx.groupId, ctx.source, hit.id);
+  ctx.updateRule.run(r.status, r.expires_at, r.path_mode, r.no_intercept ?? 0, ctx.groupId, ctx.source, hit.id);
   return 'updated';
 }
 
@@ -245,11 +246,11 @@ export function importGroupEnvelope(
   const addedBy = opts.addedBy ?? null;
 
   const insertRule = db.prepare(
-    `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, group_id, added_by, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, no_intercept, group_id, added_by, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const updateRule = db.prepare(
-    `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, group_id = ?, source = ?, updated_at = unixepoch()
+    `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, no_intercept = ?, group_id = ?, source = ?, updated_at = unixepoch()
       WHERE id = ?`,
   );
 
@@ -315,14 +316,14 @@ export function applyGroup(
   const members = memberRulesForScope(groupId);
 
   const insertRule = db.prepare(
-    `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, group_id, added_by, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual')`,
+    `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, no_intercept, group_id, added_by, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual')`,
   );
   // Refresh an existing rule's policy AND make it a member of the group being
   // applied — the group defines this rule in this scope, so leaving it outside
   // the group would hide it from the group's own export/apply/delete.
   const updateRule = db.prepare(
-    `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, group_id = ?, updated_at = unixepoch() WHERE id = ?`,
+    `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, no_intercept = ?, group_id = ?, updated_at = unixepoch() WHERE id = ?`,
   );
 
   let applied = 0;
@@ -333,10 +334,10 @@ export function applyGroup(
       const key = ruleKey(m.domain, container, m.path_pattern);
       const hit = existing.get(key);
       if (hit) {
-        updateRule.run(m.status, m.expires_at, m.path_mode, groupId, hit.id);
+        updateRule.run(m.status, m.expires_at, m.path_mode, m.no_intercept ?? 0, groupId, hit.id);
         updated++;
       } else {
-        const res = insertRule.run(m.domain, container, m.status, m.expires_at, m.path_pattern, m.path_mode, groupId, addedBy);
+        const res = insertRule.run(m.domain, container, m.status, m.expires_at, m.path_pattern, m.path_mode, m.no_intercept ?? 0, groupId, addedBy);
         // The index was read before the loop; record the insert so two members
         // that collapse onto the same identity in this scope can never insert
         // twice and trip the unique index.

@@ -36,6 +36,7 @@ import { normalizeHostPath, hostPathError, huddleHomeMountError } from './host-p
 import { registerHostPipeRoutes } from './host-pipe-routes';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
+import { parseNoIntercept, shareable } from './firewall-group-envelope';
 import {
   listDevcontainers,
   inspectContainer,
@@ -92,6 +93,7 @@ interface Rule {
   expires_at: number | null;
   path_pattern: string | null;
   path_mode: number;
+  no_intercept: number;
   created_at: number;
   updated_at: number;
   last_seen: number;
@@ -106,6 +108,8 @@ interface ShareableRule {
   status: RuleStatus;
   path_pattern: string | null;
   path_mode: number;
+  /** Only present (as 1) when TLS inspection is off, so older Huddles still import the rest. */
+  no_intercept?: number;
   expires_at: number | null;
 }
 
@@ -419,12 +423,39 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(400).send({ error: 'path_mode only applies to a host-only rule (without path_pattern)' });
       }
       if (enabled) {
-        db.prepare(`UPDATE rules SET path_mode = 1, status = 'deny', updated_at = unixepoch() WHERE id = ?`).run(id);
+        // Path rules are only enforced on inspected TLS, so path mode turns inspection back on.
+        db.prepare(`UPDATE rules SET path_mode = 1, no_intercept = 0, status = 'deny', updated_at = unixepoch() WHERE id = ?`).run(id);
       } else {
         db.prepare(`UPDATE rules SET path_mode = 0, updated_at = unixepoch() WHERE id = ?`).run(id);
       }
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       logAudit({ containerId: rule.container_id, domain: rule.domain, action: `admin:path-mode-${enabled ? 'on' : 'off'}`, ruleId: id });
+      notifyStateChanged();
+      return updated;
+    }
+  );
+
+  // Switch TLS inspection off (or back on) for a domain. Operates on the host-only
+  // rule, like path mode, and applies wherever that rule applies: a devcontainer,
+  // a sandbox or globally. The proxy then keeps a raw tunnel — for clients that
+  // pin certificates or cannot trust the Huddle CA — so request content and path
+  // rules no longer apply; that is why a path-mode domain cannot have it.
+  app.post<{ Params: { id: string }; Body: { enabled: boolean } }>(
+    '/api/rules/:id/no-intercept',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const enabled = req.body?.enabled === true;
+      const rule = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule | undefined;
+      if (!rule) return reply.code(404).send({ error: 'not_found' });
+      if (rule.path_pattern !== null) {
+        return reply.code(400).send({ error: 'TLS inspection can only be switched off on a host-only rule (without path_pattern)' });
+      }
+      if (enabled && rule.path_mode === 1) {
+        return reply.code(400).send({ error: 'path mode needs TLS inspection; switch path mode off first' });
+      }
+      db.prepare(`UPDATE rules SET no_intercept = ?, updated_at = unixepoch() WHERE id = ?`).run(enabled ? 1 : 0, id);
+      const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
+      logAudit({ containerId: rule.container_id, domain: rule.domain, action: `admin:tls-inspection-${enabled ? 'off' : 'on'}`, ruleId: id });
       notifyStateChanged();
       return updated;
     }
@@ -476,7 +507,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // Only the shareable fields travel along; volatile columns (id/last_seen/
   // request_count/created_at) stay local. `container` filters by scope just like
   // GET /api/rules (one container or '__global__').
-  const RULE_IMPORT_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'expires_at']);
+  const RULE_IMPORT_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'no_intercept', 'expires_at']);
 
   // Validate one incoming rule fail-closed: unknown key → reject, and
   // check every field's type. Returns a normalized ShareableRule;
@@ -498,11 +529,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (path_pattern !== null && typeof path_pattern !== 'string') throw new Error('path_pattern must be a string or null');
     const path_mode = r.path_mode === undefined || r.path_mode === null ? 0 : r.path_mode;
     if (path_mode !== 0 && path_mode !== 1) throw new Error('path_mode must be 0 or 1');
+    const no_intercept = parseNoIntercept(r.no_intercept, path_pattern, path_mode);
     const expires_at = r.expires_at === undefined || r.expires_at === null ? null : r.expires_at;
     if (expires_at !== null && (typeof expires_at !== 'number' || !Number.isFinite(expires_at))) {
       throw new Error('expires_at must be a number or null');
     }
-    return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, expires_at };
+    return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, no_intercept, expires_at };
   }
 
   app.get<{ Querystring: { container?: string } }>('/api/rules/export', async (req) => {
@@ -518,10 +550,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
     }
     const sql =
-      `SELECT domain, container_id, status, path_pattern, path_mode, expires_at FROM rules` +
+      `SELECT domain, container_id, status, path_pattern, path_mode, no_intercept, expires_at FROM rules` +
       (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
       ` ORDER BY domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, '')`;
-    const rules = db.prepare(sql).all(...params) as ShareableRule[];
+    const rules = (db.prepare(sql).all(...params) as ShareableRule[]).map(shareable);
     return { version: 1, exported_at: Math.floor(Date.now() / 1000), rules };
   });
 
@@ -561,10 +593,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
          AND COALESCE(path_pattern, '') = COALESCE(?, '')`
     );
     const insertRule = db.prepare(
-      `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, no_intercept) VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
     const updateRule = db.prepare(
-      `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, updated_at = unixepoch() WHERE id = ?`
+      `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, no_intercept = ?, updated_at = unixepoch() WHERE id = ?`
     );
 
     let imported = 0;
@@ -597,10 +629,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
         const existing = findExisting.get(r.domain, r.container_id, r.path_pattern) as { id: number } | undefined;
         if (existing) {
-          updateRule.run(r.status, r.expires_at, r.path_mode, existing.id);
+          updateRule.run(r.status, r.expires_at, r.path_mode, r.no_intercept ?? 0, existing.id);
           updated++;
         } else {
-          insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode);
+          insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode, r.no_intercept ?? 0);
           imported++;
         }
       }
@@ -644,7 +676,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!group) return reply.code(404).send({ error: 'not_found' });
     const rules = db
       .prepare(
-        `SELECT id, domain, container_id, status, expires_at, path_pattern, path_mode,
+        `SELECT id, domain, container_id, status, expires_at, path_pattern, path_mode, no_intercept,
                 last_path, group_id, added_by, source, created_at, updated_at, last_seen, request_count
            FROM rules WHERE group_id = ? ORDER BY last_seen DESC`,
       )

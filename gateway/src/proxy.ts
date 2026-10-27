@@ -5,7 +5,7 @@ import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
 import { URL } from 'url';
-import { checkRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
+import { checkRule, isPathMode, isNoIntercept, canonicalizeHost, normalizePathname } from './rules';
 import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
@@ -386,14 +386,16 @@ export interface ProxyServerOptions {
   identify?: (req: http.IncomingMessage) => string | null;
   /**
    * TLS interception on 443 (default on). Off for callers that do not trust the
-   * Huddle CA: CONNECT is then a raw tunnel decided on the host alone.
+   * Huddle CA: CONNECT is then a raw tunnel decided on the host alone. A function
+   * decides per caller (by the scope `identify` returned).
    */
-  intercept?: boolean;
+  intercept?: boolean | ((containerId: string | null) => boolean);
 }
 
 export function createProxyServer(port: number = PROXY_PORT, opts: ProxyServerOptions = {}): http.Server {
   const server = http.createServer();
-  const intercept = opts.intercept !== false;
+  const inspects = (containerId: string | null) =>
+    typeof opts.intercept === 'function' ? opts.intercept(containerId) : opts.intercept !== false;
 
   server.on('request', async (req, res) => {
     let containerId: string | null;
@@ -706,12 +708,14 @@ export function createProxyServer(port: number = PROXY_PORT, opts: ProxyServerOp
     // must be open so that MITM sees the path after TLS termination and can enforce
     // per request (see the innerHttp handler). Only meaningful if we can
     // inspect: 443 + not cert-pinned. Otherwise it stays closed host-only.
-    const pathModeTunnel =
-      status !== 'allow' &&
-      intercept &&
-      port === 443 &&
-      !NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) &&
-      isPathMode(hostname, containerId);
+    // Not inspected: switched off for this listener, by env (NO_INTERCEPT_DOMAINS)
+    // or by an operator ("TLS inspection off" on the domain's rule).
+    const raw =
+      !inspects(containerId) ||
+      port !== 443 ||
+      NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) ||
+      isNoIntercept(hostname, containerId);
+    const pathModeTunnel = status !== 'allow' && !raw && isPathMode(hostname, containerId);
     if (status !== 'allow' && !pathModeTunnel) {
       logAudit({
         containerId,
@@ -729,7 +733,7 @@ export function createProxyServer(port: number = PROXY_PORT, opts: ProxyServerOp
     // Domains with cert-pinning cannot go through MITM. For those domains
     // we fall back to the old raw TCP tunnel; request/response content
     // then stays invisible in the audit log (only CONNECT recorded).
-    if (!intercept || NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) || port !== 443) {
+    if (raw) {
       // Path rules are only enforced after MITM; a raw tunnel to a path-mode
       // domain (e.g. CONNECT host:80) would skip every path deny.
       if (isPathMode(hostname, containerId)) {

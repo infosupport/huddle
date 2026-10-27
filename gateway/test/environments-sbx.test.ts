@@ -20,6 +20,7 @@ import {
 import { InvalidSpecError, ProviderDisabledError, ToolFailedError } from '../src/environments/types';
 import { hashProxySecret, parseProxyAuthorization, redactProxyUrls, isHuddleProxyUrl, sbxProxyHostPort } from '../src/environments/sbx-egress';
 import { HostPipeError } from '../src/host-pipe';
+import { sbxTrustsHuddleCa } from '../src/environments/sbx-store';
 
 // De sbx-provider praat alleen via hostPipe.call('tool.run', ...). Hier stubben
 // we die call: we leggen vast welke argv naar de host gaat en spelen sbx-output terug.
@@ -249,7 +250,7 @@ describe('SbxProvider', () => {
       timeoutMs: 15 * 60_000,
     });
     expect(call.opts.timeoutMs).toBeGreaterThan(15 * 60_000);
-    expect(r.steps[1]).toEqual(
+    expect(r.steps[2]).toEqual(
       { label: 'Create sandbox', command: `sbx create --name ${r.name} claude T:/projects/app "/my docs:ro"`, code: 0, stdout: 'created', stderr: '' },
     );
   });
@@ -258,7 +259,62 @@ describe('SbxProvider', () => {
     const r = await sbx(fakePipe([{ code: 0 }, { code: 1, stderr: 'already exists' }, { code: 0 }])).create({
       name: 'box', agent: 'shell', workspaces: [ws('/a')],
     });
-    expect(r).toMatchObject({ name: 'box', ok: false, steps: [{ code: 0 }, { code: 1, stderr: 'already exists' }, { code: 0 }] });
+    expect(r).toMatchObject({ name: 'box', ok: false, steps: [{ code: 0 }, { code: 0 }, { code: 1, stderr: 'already exists' }, { code: 0 }] });
+  });
+
+  describe('create met de Huddle CA (TLS-inspectie)', () => {
+    const KIT = '/home/u/.huddle/sbx/kits/huddle-ca';
+    const PEM = '-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n';
+    // fakePipe plus het sbx.kit-antwoord van de host agent.
+    const withKit = (replies: any[], kit: unknown = { dir: KIT }) => {
+      const pipe = fakePipe(replies);
+      const kitCalls: any[] = [];
+      const call = pipe.call;
+      pipe.call = async (op: string, args: any, opts: any) => {
+        if (op !== 'sbx.kit') return call(op, args, opts);
+        kitCalls.push(args);
+        if (kit instanceof Error) throw kit;
+        return kit as any;
+      };
+      return Object.assign(pipe, { kitCalls });
+    };
+    const make = (pipe: any, store = memStore()) => new SbxProvider(pipe, store, PORT, () => [], () => PEM);
+
+    it('geeft --kit mee en onthoudt dat de sandbox de CA vertrouwt', async () => {
+      const store = memStore();
+      const pipe = withKit([{ code: 0 }, { code: 0 }, { code: 0 }]);
+      const r = await make(pipe, store).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+      expect(r.ok).toBe(true);
+      expect(pipe.kitCalls).toEqual([{ caPem: PEM }]);
+      expect(pipe.calls[1].args.args).toEqual(['create', '--kit', KIT, '--name', 'box', 'shell', '/a']);
+      expect(store.spec('box')).toMatchObject({ huddleCa: true });
+      expect(sbxTrustsHuddleCa('sbx:box', store)).toBe(true);
+      expect(sbxTrustsHuddleCa('sbx:other', store)).toBe(false);
+      expect(sbxTrustsHuddleCa('devcontainer', store)).toBe(false);
+      expect(sbxTrustsHuddleCa(null, store)).toBe(false);
+    });
+
+    it('een sbx zonder kits: opnieuw zonder --kit, en dan geen inspectie', async () => {
+      const store = memStore();
+      const pipe = withKit([{ code: 0 }, { code: 1, stderr: 'Error: unknown flag: --kit' }, { code: 0 }, { code: 0 }]);
+      const r = await make(pipe, store).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+      expect(r.ok).toBe(true);
+      expect(pipe.calls[2].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
+      expect(store.spec('box')?.huddleCa).toBeUndefined();
+      expect(sbxTrustsHuddleCa('sbx:box', store)).toBe(false);
+    });
+
+    it('een oude host agent of een vreemde map: zonder kit, met een notitie', async () => {
+      for (const kit of [new Error("unknown op 'sbx.kit'"), { dir: '/etc' }]) {
+        const store = memStore();
+        const pipe = withKit([{ code: 0 }, { code: 0 }, { code: 0 }], kit);
+        const r = await make(pipe, store).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+        expect(r.ok).toBe(true);
+        expect(pipe.calls[1].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
+        expect(r.steps[0].stderr).toMatch(/no TLS inspection/);
+        expect(sbxTrustsHuddleCa('sbx:box', store)).toBe(false);
+      }
+    });
   });
 
   it('create: ongeldige invoer bereikt de host niet', async () => {

@@ -66,6 +66,7 @@ Error codes: `bad_request`, `unknown_op`, `not_found`, `not_allowed`, `tool_miss
 | `fs.list` | `{ path?: string }` | `HostFolderListing` (below). No `path` → the roots. |
 | `tool.run` | `{ tool: string, args: string[], timeoutMs?: number }` | `{ code: number, stdout: string, stderr: string }` |
 | `sbx.links` | `{ name: string, links: { id, hostPath, readOnly }[] }` | `{ rw: string \| null, ro: string \| null, skipped: { id, reason }[] }` |
+| `sbx.kit` | `{ caPem: string }` | `{ dir: string }` |
 | `ssh.key` | `{}` | `{ publicKey: string }` |
 | `ssh.host` | `{ alias, port, user, hostKey }` or `{ alias, remove: true }` | `{ publicKey: string \| null }` |
 
@@ -97,6 +98,10 @@ Only allowlisted tools that are actually installed are listed in the heartbeat's
 The old folder is removed first without following any link in it; an empty `links` only removes it. A
 mapping that does not exist, is not a folder, resolves into `~/.huddle`, or contains `~/.huddle` while
 writable is left out and listed in `skipped`. `rw`/`ro` are the host paths of the folders that got links.
+
+**`sbx.kit`**: writes `~/.huddle/sbx/kits/huddle-ca/`, an sbx v2 mixin kit that makes a sandbox trust the
+Huddle CA (see "TLS inspection" under sbx egress), and returns its host path. `caPem` must be one PEM
+certificate; the files are rewritten on every call, with LF line endings.
 
 **`ssh.key`** / **`ssh.host`**: SSH into a devcontainer (Connect IDE) without setting up a key, like `sbx setup ssh`
 does for sandboxes. `ssh.key` makes Huddle's own ed25519 key pair in `~/.huddle/ssh/id_ed25519` once (on the host,
@@ -156,8 +161,8 @@ argv only, via `tool.run` with tool `sbx`:
 
 - status: `sbx version`
 - list: `sbx ls --json` (fall back to parsing the `sbx ls` table)
-- create: `sbx create --name <name> <agent> <path> [<path>[:ro] ...]` (first workspace is never read-only),
-  timeout 15 min
+- create: `sbx create [--kit <huddle-ca kit>] --name <name> <agent> <path> [<path>[:ro] ...]` (first workspace is
+  never read-only), timeout 15 min
 - remove: `sbx rm [--force] <name>`, then `sbx.links` with no links
 - folder mappings: see below
 
@@ -237,12 +242,23 @@ under a rule scope of its own: `sbx:<name>`.
   The first time per gateway run that runs `sbx setup ssh` on the host, which makes every sandbox reachable as
   `<name>.sbx` from the host's ssh config. The link (VS Code Remote-SSH, or the JetBrains Toolbox App's `jetbrains://gateway/ssh/environment`) points at that alias and
   opens the first workspace folder when it is a POSIX path. SSH is inbound and does not go through the Huddle proxy.
-- **No TLS interception (yet).** CONNECT is a raw tunnel decided on the host alone. Paths are not visible in it, so a
-  path-mode domain is denied to sandboxes, and the `huddle` host is closed to them entirely. Interception needs two kinds of
-  trust that sbx has no setting for:
-  - The sandboxes must trust the Huddle CA. Possible with a mixin kit (`files/home/*.crt` plus
-    `update-ca-certificates`) on every create.
-  - The sbx daemon on the host must trust it as well. For the hosts it injects credentials into
-    (`forward` mode), it terminates TLS itself, and its upstream TLS goes through Huddle. This is
-    undocumented.
+- **TLS inspection**, as close to a devcontainer as sbx allows. Every create gets `--kit` with the kit
+  `sbx.kit` wrote: as root at create it puts the Huddle CA (and sbx's own proxy CA, from
+  `PROXY_CA_CERT_B64`) in the system store with `update-ca-certificates`; `NODE_EXTRA_CA_CERTS`,
+  `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` point at that system bundle (not at the Huddle CA alone, which
+  would break sbx's credential proxy); and on every start a background watcher imports the CA into the
+  keystore of each JetBrains backend under `~/.cache/JetBrains/RemoteDev/dist`. A sandbox created that way
+  is stored with `huddleCa`, and only for those the sbx listener terminates TLS; for others (an older host
+  agent or an sbx without kits, which then gets a create without `--kit`) CONNECT stays a raw tunnel, decided
+  on the host alone, where path-mode domains are denied. The `huddle` host stays closed to sandboxes either way.
+  This holds for the paths where sbx passes TLS through to Huddle (`forward-bypass`, `transparent` in
+  `sbx policy log`). For hosts sbx injects credentials into (`forward`), sbx's daemon on the host terminates
+  TLS itself and makes the upstream TLS through Huddle, and it does not trust the Huddle CA: switch TLS
+  inspection off for such a domain in the firewall (below).
+- **TLS inspection off, per domain.** A host-only rule can have `no_intercept` (Firewall → a rule's menu, or
+  `POST /api/rules/:id/no-intercept { enabled }`): the proxy then keeps a raw tunnel for that domain, for
+  devcontainers and sandboxes alike, wherever the rule applies (its container, sandbox, or globally; a
+  `*.` rule covers its subdomains). It is kept in rule and group exports (only when on, so older Huddles
+  still import the file). Path mode needs inspection, so the two exclude each other; putting a domain
+  in path mode switches inspection back on.
 

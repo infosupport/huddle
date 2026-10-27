@@ -12,7 +12,7 @@ import {
   saveSandboxIdentity,
   setSetting,
 } from '../db';
-import type { SbxStore } from './sbx';
+import type { SbxStore, StoredSandboxSpec } from './sbx';
 import type { SandboxSpec } from './types';
 import { RESET_USER, hashProxySecret, newProxySecret, parseProxyAuthorization, redactProxyUrls, sameSecret } from './sbx-egress';
 
@@ -77,6 +77,15 @@ export function identifySbxCaller(header: string | string[] | undefined, store: 
   return name && sameSecret(name, cred.user) ? { kind: 'sandbox', name } : { kind: 'unknown' };
 }
 
+
+/**
+ * The `intercept` of the sbx egress listener: inspect TLS only for a sandbox that
+ * was created trusting the Huddle CA (scope `sbx:<name>`).
+ */
+export function sbxTrustsHuddleCa(scope: string | null, store: SbxStore = dbSbxStore): boolean {
+  if (!scope?.startsWith('sbx:')) return false;
+  return (store.spec(scope.slice(4)) as StoredSandboxSpec | null)?.huddleCa === true;
+}
 
 /**
  * The `identify` of the sbx egress listener: a known sandbox becomes rule scope

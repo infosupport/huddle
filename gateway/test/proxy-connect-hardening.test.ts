@@ -132,6 +132,13 @@ describe.skipIf(!sqliteAvailable)('egress proxy CONNECT / identity hardening', (
     expect(await connectStatus(`127.0.0.1:${rawTargetPort}`)).toMatch(/^HTTP\/1\.1 403/);
   });
 
+  it('keeps the path-mode tunnel closed when TLS inspection is off (paths cannot be seen)', async () => {
+    db.exec(`UPDATE rules SET status = 'deny', path_mode = 1 WHERE domain = '127.0.0.1'`);
+    expect(await connectStatus('127.0.0.1:443')).toMatch(/^HTTP\/1\.1 200/); // inspected: admitted
+    db.exec(`UPDATE rules SET no_intercept = 1 WHERE domain = '127.0.0.1'`);
+    expect(await connectStatus('127.0.0.1:443')).toMatch(/^HTTP\/1\.1 403/);
+  });
+
   it('does not forward X-Huddle-Ext upstream', async () => {
     expect(await proxyGet('/x', { 'x-huddle-ext': 'some-ext' })).toBe(200);
     expect(lastUpstreamHeaders?.['x-huddle-ext']).toBeUndefined();

@@ -168,6 +168,12 @@ export function initDb(): void {
   if (!cols.some(c => c.name === 'path_mode')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_mode INTEGER NOT NULL DEFAULT 0');
   }
+  // no_intercept marks a host-only rule as "TLS inspection off": the proxy keeps
+  // a raw tunnel for that domain (for clients that pin certificates or do not
+  // trust the Huddle CA), for devcontainers and sandboxes alike.
+  if (!cols.some(c => c.name === 'no_intercept')) {
+    db.exec('ALTER TABLE rules ADD COLUMN no_intercept INTEGER NOT NULL DEFAULT 0');
+  }
   // last_path stores the most recently seen full path that triggered a (grouped)
   // requested path rule, as a concrete example for the operator.
   if (!cols.some(c => c.name === 'last_path')) {
