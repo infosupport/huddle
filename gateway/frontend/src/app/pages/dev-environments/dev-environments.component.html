@@ -4,10 +4,6 @@
     <button class="btn btn-ghost btn-sm" (click)="refreshSandboxes()" [disabled]="loadingSandboxes()">
       @if (loadingSandboxes()) { <span class="spinner"></span> Loading… } @else { Refresh }
     </button>
-    <button class="btn btn--accent" (click)="modal.openStart()">
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-      Create dev environment
-    </button>
   </div>
 </div>
 
@@ -20,7 +16,12 @@
 }
 
 <section class="env-section">
-  <h2 class="section-title">Devcontainers</h2>
+  <div class="section-head">
+    <h2 class="section-title">Devcontainers</h2>
+    <button class="btn btn--accent btn-sm section-add" (click)="modal.openStart()" title="Start devcontainer">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg> Devcontainer
+    </button>
+  </div>
   <div class="card">
     <table class="data-table">
       <thead>
@@ -56,7 +57,7 @@
             </td>
           </tr>
         } @empty {
-          <tr><td colspan="4"><p class="empty-note">No devcontainers yet — use Create dev environment.</p></td></tr>
+          <tr><td colspan="4"><p class="empty-note">No devcontainers yet — use + Devcontainer.</p></td></tr>
         }
       </tbody>
     </table>
@@ -69,6 +70,11 @@
       <h2 class="section-title">{{ p.label }}</h2>
       <span class="state" [class.state--on]="p.enabled">{{ p.enabled ? 'On' : 'Off' }}</span>
       <a class="section-link" routerLink="/settings" fragment="dev-environments">{{ p.enabled ? 'Switch off' : 'Switch on' }} / recreate in Settings →</a>
+      <button class="btn btn--accent btn-sm" (click)="modal.openSandbox(p.id)"
+              [disabled]="!p.enabled || !p.available || !!p.recreate?.running"
+              [title]="!p.enabled ? p.label + ' is switched off in Huddle' : !p.available ? p.label + ' is unavailable' : 'Create ' + p.label">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg> {{ p.label }}
+      </button>
     </div>
     @if (p.recreate?.running) {
       <p class="loading-row"><span class="spinner"></span>
@@ -116,7 +122,7 @@
               @if (loadingSandboxes()) {
                 <tr><td colspan="4"><p class="empty-note"><span class="spinner"></span> Loading sandboxes… (asking the host agent)</p></td></tr>
               } @else {
-                <tr><td colspan="4"><p class="empty-note">No sandboxes yet — use Create dev environment.</p></td></tr>
+                <tr><td colspan="4"><p class="empty-note">No sandboxes yet — use + {{ p.label }}.</p></td></tr>
               }
             }
             @if (loadingSandboxes() && sandboxRows(p.id).length) {

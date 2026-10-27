@@ -19,6 +19,10 @@ export class ModalService {
   closeSnapshot(): void { this.snapshotOpen.set(false); }
   openStart(): void { this.startOpen.set(true); }
   closeStart(): void { this.startOpen.set(false); }
+  /** The environment provider the create-sandbox modal is open for, or null when closed. */
+  sandboxProvider = signal<string | null>(null);
+  openSandbox(providerId: string): void { this.sandboxProvider.set(providerId); }
+  closeSandbox(): void { this.sandboxProvider.set(null); }
 
   // Bumped when a sandbox is created/removed so list views (Dev Environments) can
   // refresh — sandboxes aren't in StateService (they come from the host agent).

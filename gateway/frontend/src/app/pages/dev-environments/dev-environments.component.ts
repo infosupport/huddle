@@ -161,7 +161,7 @@ export class DevEnvironmentsComponent {
   deleteContainer(name: string): void { if (confirm(`Delete container "${name}"?`)) this.api.deleteContainer(name).subscribe(() => this.state.loadAll()); }
   snapshot(name: string): void { this.modal.openSnapshot(name); }
 
-  // sandbox actions (create is handled by the shared "Create dev environment" modal)
+  // sandbox actions (create is handled by the create-sandbox modal, opened from the section's +)
   deleteSandbox(row: EnvRow): void {
     if (!confirm(`Remove sandbox "${row.name}"? This deletes the sandbox and everything inside it.`)) return;
     this.setBusy(row.name, 'Removing…');

@@ -1,0 +1,139 @@
+@if (open) {
+  <!-- Closes on mousedown, not click: releasing a text selection that started
+       inside the box must not count as "clicked outside". -->
+  <div class="modal" (mousedown)="close()">
+    <div class="modal-box modal-box--wide sc-xwide" (mousedown)="$event.stopPropagation()">
+      <div class="modal-header">
+        <span class="sc-head-icon"><app-icon name="layers" [size]="18" /></span>
+        <div class="sc-head-text">
+          <h2>Create {{ provider?.label ?? 'sandbox' }}</h2>
+          <p>A sandbox for an AI agent, with its traffic through the Huddle firewall.</p>
+        </div>
+        <button class="modal-close" (click)="close()" aria-label="Close" title="Close"><app-icon name="x" [size]="18" /></button>
+      </div>
+      <div class="modal-body">
+        @if (unusableHint) {
+          <p class="form-error">{{ unusableHint }}
+            @if (provider && !provider.enabled) {
+              <a routerLink="/settings" fragment="dev-environments" (click)="close()">Switch it on in Settings</a>.
+            }
+          </p>
+        }
+        <div class="sc-grid">
+          <!-- ── Essential settings ─────────────────────────────────────── -->
+          <div class="sc-col">
+            <h3 class="sc-col-title">Essential settings</h3>
+            <p class="sc-col-sub muted">Basic information for your sandbox.</p>
+
+            <div class="sc-field">
+              <label for="sbx-name">Name</label>
+              <input id="sbx-name" type="text" [(ngModel)]="sbxName" placeholder="auto (huddle-<folder>-…)" />
+              <p class="mount-hint muted">A recognisable name for your sandbox.</p>
+            </div>
+
+            <div class="sc-field">
+              <div class="sc-label">Project folders</div>
+              <p class="mount-hint muted">The first folder is where the agent starts; every folder is mounted inside the sandbox at its own host path.</p>
+
+              @for (m of mounts; track $index; let i = $index) {
+                <div class="mount-row sc-mount-row">
+                  <app-folder-select class="mount-host" [value]="m.hostPath" browseMode="icon"
+                                     placeholder="C:/projects/my-repo/backend" [multiple]="true"
+                                     pickerSubtitle="Ctrl-click to pick several — each extra folder gets its own row."
+                                     (valueChange)="onHostPathInput(m, $event)"
+                                     (valuesChange)="onMountPicked($event)" />
+                  <div class="mount-target muted">
+                    <app-icon name="chevron-right" [size]="12" />
+                    <div class="mount-path-field">
+                      <input type="text" [value]="m.hostPath.trim()" disabled
+                             [class.mount-target-input--tint]="m.hostPath.trim()"
+                             [class.mount-target-input--ro]="m.hostPath.trim() && m.readOnly"
+                             title="Sandboxes mount every folder at its own host path — this can't be changed here."
+                             placeholder="same path as on the host" aria-label="Path inside the sandbox" />
+                      @if (showRoToggle(m, i)) {
+                        <button type="button" class="mount-ro-toggle" [title]="mountRoLabel(m)"
+                                [attr.aria-label]="mountRoLabel(m)" [attr.aria-pressed]="m.readOnly"
+                                (click)="m.readOnly = !m.readOnly">
+                          <app-icon [name]="m.readOnly ? 'eye' : 'pen'" [size]="14" />
+                        </button>
+                      }
+                    </div>
+                  </div>
+                  <button type="button" class="sc-map-x" (click)="removeMount(i)" [disabled]="mounts.length === 1" title="Remove folder"><app-icon name="x" [size]="15" /></button>
+                </div>
+              }
+              <div class="mount-add">
+                <div class="sc-split-btn">
+                  <button type="button" class="btn btn-sm sc-split-main" (click)="addMount()"><app-icon name="plus" [size]="14" /> Add folder</button>
+                  <button type="button" class="btn btn-sm sc-split-chevron" (click)="toggleAddMenu($event)" title="More ways to add folders">
+                    <app-icon name="chevron-down" [size]="14" />
+                  </button>
+                  @if (addMenuOpen) {
+                    <div class="sc-split-menu" (click)="$event.stopPropagation()">
+                      <button type="button" (click)="openFolderPicker()">Browse…</button>
+                    </div>
+                  }
+                </div>
+              </div>
+              <p class="mount-hint muted">Sandbox traffic goes through the Huddle firewall. Settings → Folder mappings come along too (host folders only, not Docker volumes) and are linked to their container path inside the sandbox.</p>
+            </div>
+          </div>
+
+          <!-- ── Sandbox settings ───────────────────────────────────────── -->
+          <div class="sc-col">
+            <div class="sc-col-head">
+              <div>
+                <h3 class="sc-col-title">Sandbox settings</h3>
+                <p class="sc-col-sub muted">The agent that runs in the sandbox.</p>
+              </div>
+            </div>
+            <div class="sc-field">
+              <label for="sbx-agent">Agent</label>
+              <select id="sbx-agent" [(ngModel)]="sbxAgent" [disabled]="!usable">
+                @for (a of provider?.agents ?? []; track a) {
+                  <option [value]="a">{{ a }}</option>
+                }
+              </select>
+              <p class="mount-hint muted">The CLI agent that runs inside the sandbox.</p>
+            </div>
+          </div>
+        </div>
+
+        @if (folderPickerOpen) {
+          <app-folder-picker-modal [multiple]="true"
+                                   title="Add folders"
+                                   subtitle="Every folder you pick becomes its own row."
+                                   (pickedMany)="onFoldersPicked($event)"
+                                   (cancel)="folderPickerOpen = false" />
+        }
+
+        @if (error) { <p class="form-error">{{ error }}</p> }
+        @if (status) { <p class="form-status">{{ status }}</p> }
+        @if (sandboxSteps.length) {
+          <ul class="sc-steps">
+            @for (step of sandboxSteps; track $index) {
+              <li>
+                <b>{{ step.label }}</b> — exit {{ step.code }}<br />
+                <code>{{ step.command }}</code>
+                @if (step.stderr || step.stdout) { <pre>{{ step.stderr || step.stdout }}</pre> }
+              </li>
+            }
+          </ul>
+        }
+      </div>
+      <div class="modal-footer sc-foot-panel">
+        <img class="sc-foot-art" src="/assets/penguin-create.webp" alt="" width="64" height="64">
+        <div class="sc-foot-text">
+          <b>Ready to build something great?</b>
+          <span>Your sandbox will be created in a secure, isolated space.</span>
+        </div>
+        <div class="sc-foot-actions">
+          <button class="btn btn-ghost" (click)="close()">Cancel</button>
+          <button class="btn btn-primary" [disabled]="loading || !usable" (click)="confirm()">
+            @if (loading) { Working… } @else { Create sandbox }
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+}
