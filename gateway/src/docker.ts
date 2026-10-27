@@ -7,6 +7,7 @@ import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
+import { normalizeHostPath, huddleHomeMountError } from './host-path';
 import { sanitizeResolvConf } from './dns-egress';
 import {
   needsHuddleLayer,
@@ -1077,6 +1078,9 @@ function buildFolderMounts(containerName: string, mountStyle: WindowsMountStyle)
     const target = m.containerPath;
     const readOnly = m.readOnly;
     if (m.hostPath && m.hostPath.trim()) {
+      // The API refuses these too, but config.json is hand-editable.
+      const problem = huddleHomeMountError(normalizeHostPath(m.hostPath), readOnly);
+      if (problem) throw new Error(`Folder mapping "${m.name}": host path ${problem}`);
       result.push({ Type: 'bind', Source: toLinuxPath(m.hostPath.trim(), mountStyle), Target: target, ReadOnly: readOnly });
     } else if (m.volumeName && m.volumeName.trim()) {
       const volName = m.volumeName.trim().replace('{containerName}', containerName);
@@ -1208,6 +1212,8 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // the individual mount (issue #93). Needed for the folder mappings below too,
   // which exist even for an empty container — hence outside the `!empty` block.
   const mountStyle = await detectWindowsMountStyle();
+  // Before any worktree is made: a refused folder mapping must not leave one behind.
+  const folderMounts = buildFolderMounts(containerName, mountStyle);
   const workspaceMounts: FolderMount[] = [];
   let sourcesPathLabel = '';
   if (!empty) {
@@ -1224,7 +1230,6 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     }
   }
 
-  const folderMounts = buildFolderMounts(containerName, mountStyle);
 
   // The RemoteDev distro volume is JB-only; VS Code does not need it.
   const mounts = [
