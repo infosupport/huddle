@@ -7,6 +7,8 @@ import { readConfig, updateConfig, CONFIG_DIR } from './config';
 import os from 'os';
 import { hostAgentLogsMountArgs, hostCodexIndexMountArgs, hostCodexLogsMountArgs } from './host-logs';
 import fs from 'fs';
+import { PIPE_DIR, ensurePrivateDir } from './pipe/protocol';
+import { startPipeAgent } from './pipe/command';
 
 export const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
@@ -172,6 +174,13 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   const extFolder = cfg.extensionsFolder?.trim();
   if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
   if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
+  // The host pipe lives inside the ~/.huddle mount; create it now so the
+  // gateway sees the folder from its first start, before the agent runs.
+  try {
+    ensurePrivateDir(PIPE_DIR);
+  } catch (err) {
+    console.log(yellow(`  Host pipe folder not usable: ${err instanceof Error ? err.message : err}`));
+  }
   // Build the container command as an argv array (runArgs → execFileSync, no
   // shell). The folder paths below come from config and are operator-writable via
   // the settings API, so they must never reach a shell as a string.
@@ -186,7 +195,7 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
   dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
   // Its host path, so the gateway can refuse mounts that would expose it (the
-  // operator token in config.json, the host pipe) to a devcontainer or sandbox.
+  // operator token in config.json, the host pipe, Huddle's SSH key) to a devcontainer.
   dockerArgs.push('-e', `HUDDLE_HOST_HOME_DIR=${CONFIG_DIR}`);
   if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
   if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
@@ -206,6 +215,16 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // gateway cleans that up itself (see dns-egress.ts / the startup sanitize in
   // index.ts).
   runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
+
+  // The host pipe sets up SSH on the host for Connect IDE (docs/host-pipe.md).
+  // Restarting it here means it always runs the CLI that was just installed.
+  // It is an extra, so a failure only warns.
+  const pipe = await startPipeAgent();
+  if (pipe.ok) {
+    console.log(dim(`Host pipe: running (pid ${pipe.pid})`));
+  } else {
+    console.log(yellow(`[!] Host pipe did not start: ${pipe.error}. Run: huddle pipe start`));
+  }
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));

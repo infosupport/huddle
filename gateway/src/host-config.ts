@@ -65,8 +65,6 @@ export interface HostConfig {
   defaultCpus?: string;
   folderMappings?: HostFolderMapping[];
   hostAgentLogs?: boolean;
-  /** OpenSSH public key(s) allowed to SSH into devcontainers, one per line. */
-  sshPublicKey?: string;
   [k: string]: unknown;
 }
 
@@ -253,18 +251,6 @@ export function hostAgentLogsMounted(): boolean {
   const isDir = (p: string) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
   const isFile = (p: string) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
   return isDir(HOST_AGENT_LOGS_MOUNT) || isDir(HOST_CODEX_LOGS_MOUNT) || isFile(HOST_CODEX_INDEX_MOUNT);
-}
-
-// ── SSH public key (inbound SSH via JetBrains Gateway) ───────────────────────
-
-export function getSshPublicKey(): string {
-  const v = readHostConfig().sshPublicKey;
-  return typeof v === 'string' ? v : '';
-}
-
-/** Expects an already-validated value (see normalizeSshPublicKeys); empty clears it. */
-export function setSshPublicKey(value: string): boolean {
-  return updateHostConfig({ sshPublicKey: value || undefined });
 }
 
 // ── Resource limits (#98) ─────────────────────────────────────────────────────

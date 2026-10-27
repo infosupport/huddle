@@ -16,8 +16,6 @@ export interface HuddleSettings {
   extensionsFolder: string;
   firewallRulesFolder: string;
   hostConfigMounted?: boolean;
-  /** OpenSSH public key(s) for "Connect IDE" (SSH), one per line. */
-  sshPublicKey?: string;
 }
 
 export interface ApprovedHostPort {

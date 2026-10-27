@@ -37,12 +37,12 @@ interface PathRequestRow {
   last_path: string | null;
 }
 
-// Only hand the OS a JetBrains Gateway link: anything else the gateway might
+// Only hand the OS a JetBrains Toolbox SSH link: anything else the gateway might
 // return, such as a javascript: URL, would run in the portal's origin.
-const GATEWAY_LINK_PREFIX = 'jetbrains-gateway://';
+const TOOLBOX_LINK_PREFIX = 'jetbrains://gateway/ssh/environment?';
 
-function openGatewayLink(link: string): string {
-  if (typeof link !== 'string' || !link.startsWith(GATEWAY_LINK_PREFIX)) return 'Unexpected link from the gateway; not opened.';
+function openToolboxLink(link: string): string {
+  if (typeof link !== 'string' || !link.startsWith(TOOLBOX_LINK_PREFIX)) return 'Unexpected link from the gateway; not opened.';
   window.open(link, '_self');
   return '';
 }
@@ -415,12 +415,12 @@ export class ContainerDetailComponent implements OnInit {
 
   setTab(t: DetailTab): void { this.activeTab = t; }
 
-  // Sets up the relay + sshd on the gateway side (can take a moment the first
-  // time) and hands the jetbrains-gateway:// link to the OS, which opens Gateway.
+  // Sets up the relay, sshd and the host's `<name>.huddle` ssh alias (can take a
+  // moment the first time) and hands the link to the OS, which opens Toolbox.
   openSsh(): void {
     this.sshLinkStatus = 'Preparing SSH...';
     this.api.getSshLink(this.name).subscribe({
-      next: ({ link }) => { this.sshLinkStatus = openGatewayLink(link); },
+      next: ({ link }) => { this.sshLinkStatus = openToolboxLink(link); },
       error: (err) => { this.sshLinkStatus = err.message; },
     });
   }

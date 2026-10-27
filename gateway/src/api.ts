@@ -23,8 +23,6 @@ import {
   hostConfigAvailable,
   getResourceDefaults,
   setResourceDefaults,
-  getSshPublicKey,
-  setSshPublicKey,
   listFolderMappings,
   getFolderMapping,
   createFolderMapping,
@@ -58,7 +56,6 @@ import {
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
 import { prepareSshLink, removeSshRelay, SshLinkError } from './ssh-link';
-import { normalizeSshPublicKeys } from './ssh-access';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -1200,10 +1197,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── SSH link (JetBrains Gateway over SSH) ────────────────────────────────
-  // Sets up the relay + sshd on demand and returns a jetbrains-gateway:// link
-  // to localhost:<relay port>. Idempotent: clicking again after a container
-  // restart starts sshd again and refreshes the authorized key.
+  // ── SSH link (JetBrains Toolbox over SSH) ────────────────────────────────
+  // Sets up the relay, sshd and the host's `<name>.huddle` ssh alias on demand
+  // and returns a Toolbox link to that alias. Idempotent: clicking again after a
+  // container restart starts sshd again and refreshes the key and host key.
   app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ssh-link', async (req, reply) => {
     const { name } = req.params;
     try {
@@ -1371,22 +1368,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
       hostConfigMounted: hostConfigAvailable(),
       hostAgentLogs: getHostAgentLogs(),
       hostAgentLogsMounted: hostAgentLogsMounted(),
-      sshPublicKey: getSshPublicKey(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean; sshPublicKey?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs, sshPublicKey } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs } = req.body;
       if (hostAgentLogs !== undefined && typeof hostAgentLogs !== 'boolean') {
         return reply.code(400).send({ error: 'hostAgentLogs must be true or false' });
-      }
-      // Validate before writing anything, so a bad key does not leave a half-saved form.
-      let sshKeys: string | undefined;
-      if (sshPublicKey !== undefined) {
-        try { sshKeys = normalizeSshPublicKeys(sshPublicKey); }
-        catch (err: any) { return reply.code(400).send({ error: 'invalid_ssh_public_key', message: err.message }); }
       }
       let restartRequired = false;
       let persisted = true;
@@ -1407,10 +1397,6 @@ export async function createApiServer(): Promise<FastifyInstance> {
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
-      }
-      // Takes effect on the next "Connect via SSH" click, which rewrites authorized_keys.
-      if (sshKeys !== undefined) {
-        persisted = setSshPublicKey(sshKeys) && persisted;
       }
       // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
       if (hostAgentLogs !== undefined) {

@@ -9,6 +9,7 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runPipe } from './pipe/command';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -28,7 +29,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'extension', 'ext', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'extension', 'ext', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'pipe', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -138,6 +139,11 @@ Usage:
                                      can offer them where a host path is needed
                                      (the portal runs in a container and cannot
                                      browse your host)
+  huddle pipe status                 Show whether the host pipe is online (lets the
+                                     portal set up SSH for Connect IDE)
+  huddle pipe start|stop             Start (or replace) / stop the host pipe in the
+                                     background (huddle init starts it for you)
+  huddle pipe serve                  Run the host pipe in the foreground (debugging)
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
@@ -400,6 +406,11 @@ async function main(): Promise<void> {
       console.error('Usage: huddle extension <list|install <dir>|remove <id>>');
       process.exit(1);
     }
+    return;
+  }
+
+  if (cmd === 'pipe') {
+    await runPipe({ action: positional[1] });
     return;
   }
 
