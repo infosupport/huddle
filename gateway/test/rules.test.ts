@@ -430,6 +430,14 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
       expect(isNoIntercept('a.test', CID)).toBe(false);
       expect(isPathMode('a.test', CID)).toBe(true);
     });
+
+    it('the marker of a refined team-folder path rule stays folder-owned', () => {
+      db.prepare(`INSERT INTO rules (domain, container_id, status, path_pattern, source) VALUES ('t.test', ?, 'allow', '/api/*', 'startup-folder')`).run(CID);
+      const { id } = db.prepare(`SELECT id FROM rules WHERE domain = 't.test'`).get() as { id: number };
+      settlePathRule(id);
+      const marker = db.prepare(`SELECT source FROM rules WHERE domain = 't.test' AND path_pattern IS NULL`).get() as { source: string };
+      expect(marker.source).toBe('startup-folder');
+    });
   });
 
   describe('regression: path argument does not change host-only behavior', () => {

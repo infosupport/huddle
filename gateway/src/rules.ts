@@ -459,9 +459,11 @@ export function ensurePathModeMarker(domain: string, containerId: string | null,
 // from before (a path row with no_intercept/path_mode is an invalid combination,
 // also for import) and establish the domain's path-mode marker, like a new path rule.
 export function settlePathRule(id: number): void {
-  const rule = db.prepare(`SELECT domain, container_id, path_pattern FROM rules WHERE id = ?`)
-    .get(id) as { domain: string; container_id: string | null; path_pattern: string | null } | undefined;
+  const rule = db.prepare(`SELECT domain, container_id, path_pattern, group_id, source FROM rules WHERE id = ?`)
+    .get(id) as { domain: string; container_id: string | null; path_pattern: string | null; group_id: number | null; source: string } | undefined;
   if (!rule || rule.path_pattern === null) return;
   db.prepare(`UPDATE rules SET no_intercept = 0, path_mode = 0 WHERE id = ? AND (no_intercept <> 0 OR path_mode <> 0)`).run(id);
-  ensurePathModeMarker(rule.domain, rule.container_id);
+  // The marker belongs to whoever owns the path rule (e.g. a team folder), so a
+  // folder reload that drops the path rule drops its marker too.
+  ensurePathModeMarker(rule.domain, rule.container_id, rule.group_id ?? undefined, rule.source);
 }
