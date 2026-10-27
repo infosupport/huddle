@@ -1,12 +1,14 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { AfterViewInit, Component, inject, OnInit, signal } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ApiService, HuddleSettings, FolderMapping } from '../../core/services/api.service';
 import { FolderSelectComponent } from '../../shared/components/folder-select/folder-select.component';
+import { EnvironmentProvidersComponent } from './environment-providers.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [FormsModule, FolderSelectComponent],
+  imports: [FormsModule, FolderSelectComponent, EnvironmentProvidersComponent],
   template: `
     <div class="page-header">
       <h1>Settings</h1>
@@ -127,6 +129,15 @@ import { FolderSelectComponent } from '../../shared/components/folder-select/fol
       </details>
     </div>
 
+    <div class="card" id="dev-environments">
+      <h2>Dev environments</h2>
+      <p class="hint">
+        Next to devcontainers, Huddle can manage sandboxes of other environment providers. Switch a provider on to
+        list and create its sandboxes on the Dev Environments page, with their traffic through the Huddle firewall.
+      </p>
+      <app-environment-providers />
+    </div>
+
     <div class="card card--new">
       <div class="tmd-head">
         <span class="tmd-folder" aria-hidden="true"></span>
@@ -207,8 +218,9 @@ import { FolderSelectComponent } from '../../shared/components/folder-select/fol
     .btn-ghost:disabled { opacity: 0.5; cursor: default; }
   `]
 })
-export class SettingsComponent implements OnInit {
+export class SettingsComponent implements OnInit, AfterViewInit {
   private api = inject(ApiService);
+  private route = inject(ActivatedRoute);
 
   resources: HuddleSettings = { defaultMemory: '', defaultCpus: '', extensionsFolder: '', firewallRulesFolder: '' };
   mappings = signal<FolderMapping[]>([]);
@@ -229,6 +241,12 @@ export class SettingsComponent implements OnInit {
       error: (e) => this.error.set(e.message),
     });
     this.loadMappings();
+  }
+
+  // Links like /settings#dev-environments (from the Dev Environments page) land on that card.
+  ngAfterViewInit(): void {
+    const id = this.route.snapshot.fragment;
+    if (id) setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: 'start' }));
   }
 
   private loadMappings(): void {

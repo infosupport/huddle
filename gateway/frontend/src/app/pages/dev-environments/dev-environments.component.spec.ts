@@ -5,8 +5,8 @@ import { ApiService, ProviderStatus, RecreateState } from '../../core/services/a
 import { StateService } from '../../core/services/state.service';
 import { ModalService } from '../../core/services/modal.service';
 
-// Switching an environment provider on/off and following the recreate it starts.
-describe('DevEnvironments provider toggle', () => {
+// Listing the sandboxes of each provider and following a recreate.
+describe('DevEnvironments providers', () => {
   let providers: ProviderStatus[];
   let api: any;
 
@@ -46,40 +46,13 @@ describe('DevEnvironments provider toggle', () => {
     expect(api.listSandboxes).not.toHaveBeenCalled();
   });
 
-  it('asks for confirmation before switching on and does nothing when cancelled', () => {
+  it('puts the sandboxes of each provider in their own section', () => {
+    providers = [sbx({ enabled: true })];
+    api.listSandboxes.mockReturnValue(of({ sandboxes: [{ name: 'box', provider: 'sbx', status: 'running' }] }));
     const c = create();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    c.toggleProvider(c.providers()[0]);
-    expect(confirmSpy).toHaveBeenCalledOnce();
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/recreated/);
-    expect(api.setEnvironmentEnabled).not.toHaveBeenCalled();
-  });
-
-  it('switches on after confirmation', () => {
-    const c = create();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    c.toggleProvider(c.providers()[0]);
-    expect(api.setEnvironmentEnabled).toHaveBeenCalledWith('sbx', true);
-    expect(c.providerBusyLabel('sbx')).toBeUndefined();
-  });
-
-  it('cannot be switched on while the provider reports an unavailableReason', () => {
-    providers = [sbx({ unavailableReason: 'egress port not published' })];
-    const c = create();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    c.toggleProvider(c.providers()[0]);
-    expect(confirmSpy).not.toHaveBeenCalled();
-    expect(api.setEnvironmentEnabled).not.toHaveBeenCalled();
-  });
-
-  it('shows the steps when switching fails on a step', () => {
-    const c = create();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const steps = [{ label: 'restart daemon', command: 'sbx daemon restart', code: 1, stdout: '', stderr: 'boom' }];
-    api.setEnvironmentEnabled.mockReturnValue(of({ enabled: false, steps }));
-    c.toggleProvider(c.providers()[0]);
-    expect(c.providerSteps()['sbx']).toEqual(steps);
-    expect(c.providerError()['sbx']).toBe('boom');
+    expect(c.sandboxRows('sbx').map(r => r.name)).toEqual(['box']);
+    expect(c.sandboxRows('other')).toEqual([]);
+    expect(c.containerRows()).toEqual([]);
   });
 
   it('treats a 409 provider_disabled listing as no sandboxes, not as a failure', () => {

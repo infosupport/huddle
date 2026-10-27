@@ -6,7 +6,7 @@ import { StateService } from '../../core/services/state.service';
 import { forkJoin, of } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 import {
-  ApiService, HOST_PIPE_OFFLINE_HINT, ProviderStatus, SandboxInfo, SandboxStep, isHostPipeOffline, isProviderDisabled,
+  ApiService, HOST_PIPE_OFFLINE_HINT, ProviderStatus, SandboxInfo, isHostPipeOffline, isProviderDisabled,
 } from '../../core/services/api.service';
 import { ModalService } from '../../core/services/modal.service';
 import { Container } from '../../core/models/container.model';
@@ -32,8 +32,9 @@ interface EnvRow {
   managed?: boolean;
 }
 
-// Dev Environments — one list for devcontainers and the sandboxes of every
-// environment provider (GET /api/environments). Every row opens its detail page.
+// Dev Environments — a section for devcontainers and one for the sandboxes of
+// every environment provider (GET /api/environments). Every row opens its detail
+// page. Providers are switched on/off in Settings.
 @Component({
   selector: 'app-dev-environments',
   standalone: true,
@@ -58,13 +59,9 @@ export class DevEnvironmentsComponent {
   busy = signal<Record<string, string>>({});
   notice = signal<string | null>(null);
 
-  /** Provider id → what is going on while switching it on/off or starting a recreate. */
-  providerBusy = signal<Record<string, string>>({});
-  /** The steps the last switch on/off ran, per provider. */
-  providerSteps = signal<Record<string, SandboxStep[]>>({});
-  /** The last switch on/off or recreate failure, per provider. */
-  providerError = signal<Record<string, string>>({});
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  containerRows = computed(() => this.rows().filter(r => r.type === 'container'));
 
   rows = computed<EnvRow[]>(() => {
     const rules = this.rules();
@@ -178,61 +175,10 @@ export class DevEnvironmentsComponent {
     });
   }
 
-  // ── Provider on/off and recreate ──────────────────────────────────────────
+  // ── Providers (switched on/off and recreated in Settings) ────────────────
   isRecreating(p: ProviderStatus): boolean { return !!p.recreate?.running; }
-  failedRecreates(p: ProviderStatus) { return (p.recreate?.results ?? []).filter(r => !r.ok); }
-  providerBusyLabel(id: string): string | undefined { return this.providerBusy()[id]; }
-
-  toggleProvider(p: ProviderStatus): void {
-    const on = !p.enabled;
-    if (on && p.unavailableReason) return;
-    const question = on
-      ? `Switch ${p.label} on in Huddle?\n\n` +
-        `All sandbox network traffic will go through the Huddle firewall. To do that, EVERY sandbox on this machine ` +
-        `is recreated — also the ones Huddle did not create. Anything inside a sandbox outside its workspace folders ` +
-        `(installed packages, files in the home folder, …) is lost; the workspace folders live on the host and stay.\n\n` +
-        `Sandboxes that cannot be recreated are stopped.`
-      : `Switch ${p.label} off in Huddle?\n\n` +
-        `Sandbox network traffic then no longer goes through the Huddle firewall: ${p.label} gets its own proxy ` +
-        `setting back and its daemon is restarted. Huddle will no longer list or create sandboxes.`;
-    if (!confirm(question)) return;
-    this.setProviderState(p.id, on ? 'Switching on…' : 'Switching off…', [], '');
-    this.api.setEnvironmentEnabled(p.id, on).subscribe({
-      next: (r) => {
-        const failedStep = (r.steps ?? []).find(s => s.code !== 0);
-        this.setProviderState(p.id, null, failedStep ? r.steps : [],
-          failedStep ? (failedStep.stderr?.trim() || `${failedStep.label} failed`) : '');
-        this.modal.notifySandboxesChanged();
-      },
-      error: (e) => {
-        this.setProviderState(p.id, null, [], isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'switching failed');
-        this.refreshSandboxes();
-      },
-    });
-  }
-
-  recreateAll(p: ProviderStatus): void {
-    if (!confirm(`Recreate every ${p.label} sandbox on this machine?\n\n` +
-      `This includes sandboxes Huddle did not create. Anything inside a sandbox outside its workspace folders is lost; ` +
-      `the workspace folders live on the host and stay. Sandboxes that cannot be recreated are stopped.`)) return;
-    this.setProviderState(p.id, 'Starting…', [], '');
-    this.api.recreateEnvironment(p.id).subscribe({
-      next: () => { this.setProviderState(p.id, null, [], ''); this.refreshSandboxes(); },
-      error: (e) => {
-        const msg = isProviderDisabled(e) ? `${p.label} is switched off in Huddle.`
-          : isHostPipeOffline(e) ? HOST_PIPE_OFFLINE_HINT : e?.message || 'recreate failed';
-        this.setProviderState(p.id, null, [], msg);
-      },
-    });
-  }
-
-  private setProviderState(id: string, busy: string | null, steps: SandboxStep[], error: string): void {
-    const b = { ...this.providerBusy() };
-    if (busy) b[id] = busy; else delete b[id];
-    this.providerBusy.set(b);
-    this.providerSteps.set({ ...this.providerSteps(), [id]: steps });
-    this.providerError.set({ ...this.providerError(), [id]: error });
-  }
+  /** The sandbox rows of one provider, for its section. */
+  sandboxRows(providerId: string): EnvRow[] { return this.rows().filter(r => r.type === 'sandbox' && r.provider === providerId); }
 
   // While a recreate runs, ask for the provider status every few seconds; once
   // it is done, reload the whole list (the sandboxes were replaced).
