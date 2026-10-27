@@ -4,9 +4,13 @@ import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
+import os from 'os';
+import { hostAgentLogsMountArgs, hostCodexIndexMountArgs, hostCodexLogsMountArgs } from './host-logs';
 import fs from 'fs';
+import { PIPE_DIR, ensurePrivateDir } from './pipe/protocol';
+import { startPipeAgent } from './pipe/command';
 
-const CONTAINER = 'huddle';
+export const CONTAINER = 'huddle';
 const VOLUME = 'huddle-data';
 /**
  * The shared, internal network that `huddle init` creates (`--internal`, so it
@@ -23,6 +27,12 @@ export const INTERNAL_NET = 'devcontainer-net';
  */
 export const HOST_SOCKET_DIR = '/tmp/dc-sockets';
 const HOST_PORT = process.env.HUDDLE_PORT ?? '3000';
+/**
+ * Ports of the per-devcontainer SSH relays (JetBrains Gateway over SSH), bound to
+ * the host's loopback only. Kept in sync with SSH_RELAY_PORT_MIN/MAX in
+ * gateway/src/ssh-access.ts.
+ */
+export const SSH_RELAY_PORTS = '2200-2219';
 
 export interface InitOptions {
   runtime?: string;
@@ -164,6 +174,13 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   const extFolder = cfg.extensionsFolder?.trim();
   if (fwFolder) console.log(dim(`  Mounting firewall-rules folder: ${fwFolder} -> /firewall-rules`));
   if (extFolder) console.log(dim(`  Mounting extensions folder:     ${extFolder} -> /extensions`));
+  // The host pipe lives inside the ~/.huddle mount; create it now so the
+  // gateway sees the folder from its first start, before the agent runs.
+  try {
+    ensurePrivateDir(PIPE_DIR);
+  } catch (err) {
+    console.log(yellow(`  Host pipe folder not usable: ${err instanceof Error ? err.message : err}`));
+  }
   // Build the container command as an argv array (runArgs → execFileSync, no
   // shell). The folder paths below come from config and are operator-writable via
   // the settings API, so they must never reach a shell as a string.
@@ -172,12 +189,23 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push('-e', `HUDDLE_RUNTIME=${runtime.name}`);
   dockerArgs.push('-e', `HUDDLE_OPERATOR_TOKEN=${operatorToken}`);
   dockerArgs.push('-p', `${HOST_PORT}:3000`);
+  dockerArgs.push('-p', `127.0.0.1:${SSH_RELAY_PORTS}:${SSH_RELAY_PORTS}`);
   dockerArgs.push('-v', `${VOLUME}:/data`);
   dockerArgs.push('-v', `${runtime.socketPath}:/var/run/docker.sock`);
   dockerArgs.push('-v', `${hostTmpSockets}:/tmp/dc-sockets`);
   dockerArgs.push('-v', `${CONFIG_DIR}:/huddle-home:rw`, '-e', 'HUDDLE_HOME_DIR=/huddle-home');
+  // Its host path, so the gateway can refuse mounts that would expose it (the
+  // operator token in config.json, the host pipe, Huddle's SSH key) to a devcontainer.
+  dockerArgs.push('-e', `HUDDLE_HOST_HOME_DIR=${CONFIG_DIR}`);
   if (fwFolder) dockerArgs.push('-v', `${fwFolder}:/firewall-rules:rw`);
   if (extFolder) dockerArgs.push('-v', `${extFolder}:/extensions:ro`);
+  const hostLogs = hostAgentLogsMountArgs(cfg, os.homedir());
+  if (hostLogs.length) console.log(dim('  Mounting host Claude logs (read-only) for extensions'));
+  dockerArgs.push(...hostLogs);
+  const hostCodexLogs = hostCodexLogsMountArgs(cfg, os.homedir());
+  if (hostCodexLogs.length) console.log(dim('  Mounting host Codex logs (read-only) for extensions'));
+  dockerArgs.push(...hostCodexLogs);
+  dockerArgs.push(...hostCodexIndexMountArgs(cfg, os.homedir()));
   dockerArgs.push(...gatewayEnvArgs(images));
   dockerArgs.push(IMAGE);
   runArgs(rt, dockerArgs);
@@ -187,6 +215,16 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   // gateway cleans that up itself (see dns-egress.ts / the startup sanitize in
   // index.ts).
   runArgsSilent(rt, ['network', 'connect', INTERNAL_NET, CONTAINER]);
+
+  // The host pipe sets up SSH on the host for Connect IDE (docs/host-pipe.md).
+  // Restarting it here means it always runs the CLI that was just installed.
+  // It is an extra, so a failure only warns.
+  const pipe = await startPipeAgent();
+  if (pipe.ok) {
+    console.log(dim(`Host pipe: running (pid ${pipe.pid})`));
+  } else {
+    console.log(yellow(`[!] Host pipe did not start: ${pipe.error}. Run: huddle pipe start`));
+  }
 
   console.log();
   console.log(green(`[OK] Huddle is running at http://localhost:${HOST_PORT}`));

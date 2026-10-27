@@ -121,6 +121,19 @@ describe('createContainerProxy socket-layout', () => {
     await connect(path.join(dir, 'dc-c.sock'));
   });
 
+  // Headers worden vóór autorisatie gebufferd in het gedeelde gateway-proces;
+  // een client die nooit CRLFCRLF stuurt mag die buffer niet onbegrensd laten
+  // groeien (finding: unbounded header buffer).
+  it('sluit een verbinding waarvan de headers groter worden dan 64 KiB', async () => {
+    servers.push(await createContainerProxy('dc-d', dir));
+    const c = net.createConnection(path.join(dir, 'dc-d', 'docker.sock'));
+    c.on('error', () => {});
+    const closed = new Promise<void>(r => c.on('close', () => r()));
+    c.write('GET /containers/json HTTP/1.1\r\nX-Pad: ' + 'a'.repeat(70 * 1024));
+    await closed;
+    expect(c.destroyed).toBe(true);
+  });
+
   // containerName vloeit via path.join() in de socket-paden. De naam komt uit
   // huddle's eigen orchestratie, maar we dwingen de Docker-naamgrammatica
   // expliciet af zodat `..`/`/`/leidende punt onmogelijk buiten socketDir kunnen

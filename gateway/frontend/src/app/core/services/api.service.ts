@@ -271,8 +271,8 @@ export class ApiService {
     return this.handle(this.http.post<{ airlocked: boolean }>(`/api/docker/containers/${name}/airlock`, { airlocked }));
   }
 
-  getIdeLink(name: string): Observable<{ link: string }> {
-    return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ide-link`));
+  getSshLink(name: string): Observable<{ link: string }> {
+    return this.handle(this.http.get<{ link: string }>(`/api/docker/containers/${name}/ssh-link`));
   }
 
   getContainerIds(): Observable<string[]> {

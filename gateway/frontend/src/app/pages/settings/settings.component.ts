@@ -305,6 +305,7 @@ huddle indexfolder --list     <span class="cmd-note"># what is indexed right now
     .field { margin-bottom: 16px; flex: 1; }
     .field-row { display: flex; gap: 16px; flex-wrap: wrap; }
     label { display: block; margin-bottom: 4px; font-size: 0.9em; color: var(--muted, #888); }
+    textarea { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-family: monospace; font-size: 0.85em; box-sizing: border-box; resize: vertical; }
     input[type=text], input:not([type]) { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 0.95em; box-sizing: border-box; }
     .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.9em; cursor: pointer; }
     .actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }

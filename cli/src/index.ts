@@ -4,10 +4,12 @@ import fs from 'fs';
 import path from 'path';
 import { setBaseUrl, ApiError } from './api';
 import { runStart } from './start';
+import { runExtensionList, runExtensionInstall, runExtensionRemove } from './extension';
 import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, runFirewallImport, runFirewallGroup, runFirewallFolder } from './firewall';
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runPipe } from './pipe/command';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -27,7 +29,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'extension', 'ext', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'pipe', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -137,6 +139,11 @@ Usage:
                                      can offer them where a host path is needed
                                      (the portal runs in a container and cannot
                                      browse your host)
+  huddle pipe status                 Show whether the host pipe is online (lets the
+                                     portal set up SSH for Connect IDE)
+  huddle pipe start|stop             Start (or replace) / stop the host pipe in the
+                                     background (huddle init starts it for you)
+  huddle pipe serve                  Run the host pipe in the foreground (debugging)
   huddle firewall list [options]     Show firewall requests
   huddle fw list [options]           Alias for firewall list
   huddle firewall add <domain>       Add a custom firewall rule (wildcards
@@ -152,6 +159,13 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle extension list              List installed gateway extensions
+  huddle ext list                    Alias for extension list
+  huddle extension install <dir>     Install or update the extension in a folder
+                                     (--force replaces another extension with the
+                                     same id, --restart reloads the gateway process
+                                     on the engine that runs Huddle, or --runtime)
+  huddle extension remove <id>       Remove an installed extension
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -172,7 +186,8 @@ Start options:
   --workspace-root <path>            Container path the IDE opens as project root when using
                                      --mount (default: common parent of the mount targets)
   --name <name>                      Container name (default: devcontainer-<foldername>)
-  --image <image>                    Use a specific image
+  --image <image>                    Use a specific image. Any Debian/Ubuntu/Alpine image works:
+                                     Huddle builds it once with its own layer on top
   --empty                            Empty container without a workspace
 
 Migrate options:
@@ -361,6 +376,41 @@ async function main(): Promise<void> {
       console.error(`Unknown firewall subcommand: ${subCmd}`);
       process.exit(1);
     }
+    return;
+  }
+
+  if (cmd === 'extension' || cmd === 'ext') {
+    const subCmd = sub ?? 'list';
+    if (subCmd === 'list') {
+      await runExtensionList();
+    } else if (subCmd === 'install') {
+      const dir = positional[2];
+      if (!dir) {
+        console.error('Usage: huddle extension install <dir> [--force] [--restart] [--runtime <docker|podman>]');
+        process.exit(1);
+      }
+      await runExtensionInstall(dir, {
+        force: flagBool(flags, 'force'),
+        restart: flagBool(flags, 'restart'),
+        runtime: flagString(flags, 'runtime'),
+      });
+    } else if (subCmd === 'remove' || subCmd === 'rm') {
+      const id = positional[2];
+      if (!id) {
+        console.error('Usage: huddle extension remove <id>');
+        process.exit(1);
+      }
+      await runExtensionRemove(id);
+    } else {
+      console.error(`Unknown extension subcommand: ${subCmd}`);
+      console.error('Usage: huddle extension <list|install <dir>|remove <id>>');
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (cmd === 'pipe') {
+    await runPipe({ action: positional[1] });
     return;
   }
 

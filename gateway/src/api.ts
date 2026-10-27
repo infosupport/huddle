@@ -16,6 +16,9 @@ import {
 } from './firewall-groups';
 import {
   readHostConfig,
+  getHostAgentLogs,
+  setHostAgentLogs,
+  hostAgentLogsMounted,
   setHostFolder,
   hostConfigAvailable,
   getResourceDefaults,
@@ -29,7 +32,7 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
+import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError } from './host-path';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
 import { ensurePathModeMarker } from './rules';
 import {
@@ -47,12 +50,12 @@ import {
   cleanupContainerNetwork,
   resolveContainerByIp,
   isIdeName,
-  execContainerOutput,
   execInContainer,
   type StartParams,
   type IdeName,
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
+import { prepareSshLink, removeSshRelay, SshLinkError } from './ssh-link';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -71,7 +74,8 @@ import {
   removeExtension,
   listExtensions,
   extDispatch,
-  EXT_DIR,
+  extensionAssetType,
+  extensionDir,
 } from './extensions/registry';
 
 const API_PORT = 3000;
@@ -893,6 +897,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      await removeSshRelay(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
@@ -954,10 +959,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
             // Host paths go through the one normalizer (host-path.ts): the value
             // may be typed in the modal, picked from the folder index or sent by
             // the CLI, and on Windows all three spell the same folder
-            // differently (`T:\p`, `t:/p/`, `T:/p`).
+            // differently (`T:\p`, `t:/p/`, `T:/p`). Workspace mounts are read-write.
             const hostPath = normalizeHostPath(m.hostPath ?? '');
             const containerPath = (m.containerPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-            const hostProblem = hostPathError(hostPath);
+            const hostProblem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, false);
             if (hostProblem) throw new Error(`Host path ${hostProblem}: "${m.hostPath ?? ''}"`);
             const pathProblem = containerPathError(containerPath);
             if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
@@ -971,7 +976,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       const fwd = normalizeHostPath(workspaceDir ?? '');
       if (!empty && !normalizedMounts) {
-        const problem = hostPathError(fwd);
+        const problem = hostPathError(fwd) ?? huddleHomeMountError(fwd, false);
         if (problem) return reply.code(400).send({ error: `workspaceDir ${problem}: "${workspaceDir ?? ''}"` });
       }
       const leaf = empty
@@ -1192,31 +1197,19 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── IDE gateway link ─────────────────────────────────────────────────────
-  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ide-link', async (req, reply) => {
+  // ── SSH link (JetBrains Toolbox over SSH) ────────────────────────────────
+  // Sets up the relay, sshd and the host's `<name>.huddle` ssh alias on demand
+  // and returns a Toolbox link to that alias. Idempotent: clicking again after a
+  // container restart starts sshd again and refreshes the key and host key.
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ssh-link', async (req, reply) => {
+    const { name } = req.params;
     try {
-      const inspect = await inspectContainer(req.params.name);
-      const labels = inspect?.Config?.Labels;
-      const workspacePath: string | undefined = labels?.['com.intellij.devcontainer.workspace.path'];
-      if (!workspacePath) return reply.code(404).send({ error: 'workspace path label not found' });
-      const ide = labels?.['com.devcontainer.ide'];
-      // VS Code installs its own backend on attach and does not write a
-      // jetbrains-gateway:// link; a deep link does not exist here.
-      if (ide === 'vscode') {
-        return reply.code(404).send({ error: 'VS Code does not use a JetBrains deep-link' });
-      }
-      // Rider and IntelliJ both run remote-dev-server.sh, which writes the gateway
-      // link to <workspace>/rider-client-diagnose.log.
-      const logFile = `${workspacePath}/rider-client-diagnose.log`;
-      const output = await execContainerOutput(inspect.Id, [
-        'sh', '-c',
-        `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${logFile}" 2>/dev/null | tail -1`,
-      ]);
-      const links = output.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('jetbrains-gateway://'));
-      if (links.length === 0) return reply.code(404).send({ error: 'IDE backend not started yet — please wait and try again' });
-      return { link: links[links.length - 1] };
+      const link = await prepareSshLink(name);
+      logAudit({ containerId: name, domain: 'ssh', action: 'ssh:link' });
+      return { link };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      const status = err instanceof SshLinkError ? err.status : 500;
+      return reply.code(status).send({ error: err.message });
     }
   });
 
@@ -1306,7 +1299,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!/^[a-z0-9-]+$/.test(req.params.id)) {
       return reply.code(400).send({ error: 'invalid id' });
     }
-    removeExtension(req.params.id);
+    try {
+      removeExtension(req.params.id);
+    } catch (err: any) {
+      return reply.code(409).send({ error: err.message });
+    }
     notifyStateChanged();
     return { ok: true };
   });
@@ -1329,13 +1326,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
   }
 
   // Serve an extension's static frontend assets from
-  // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
+  // the frontend/ folder of the copy that was loaded (bundled, uploaded or team). The resolved path must stay within that folder,
   // otherwise it is a traversal attempt (e.g. ../../).
   app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
     const { id } = req.params;
     if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('invalid id');
     const subPath = req.params['*'] || 'index.html';
-    const baseDir = path.join(EXT_DIR, id, 'frontend');
+    const dir = extensionDir(id);
+    if (!dir) return reply.code(404).send('Not found');
+    const baseDir = path.join(dir, 'frontend');
     const filePath = path.join(baseDir, subPath);
     if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
       return reply.code(403).send('forbidden');
@@ -1343,7 +1342,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       return reply.code(404).send('Not found');
     }
-    return reply.send(fs.createReadStream(filePath));
+    reply.header('x-content-type-options', 'nosniff');
+    return reply.type(extensionAssetType(filePath)).send(fs.createReadStream(filePath));
   });
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
@@ -1366,13 +1366,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
       firewallRulesFolder: host.firewallRulesFolder ?? '',
       // Whether the CLI config is actually mounted; the portal warns if not.
       hostConfigMounted: hostConfigAvailable(),
+      hostAgentLogs: getHostAgentLogs(),
+      hostAgentLogsMounted: hostAgentLogsMounted(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs } = req.body;
+      if (hostAgentLogs !== undefined && typeof hostAgentLogs !== 'boolean') {
+        return reply.code(400).send({ error: 'hostAgentLogs must be true or false' });
+      }
       let restartRequired = false;
       let persisted = true;
       // Resource limits go into the same config file, but need no remount: the
@@ -1392,6 +1397,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
+      }
+      // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
+      if (hostAgentLogs !== undefined) {
+        persisted = setHostAgentLogs(hostAgentLogs) && persisted;
+        if (hostAgentLogs && !hostAgentLogsMounted()) restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };
@@ -1415,7 +1425,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // Windows translated to the engine's prefix at container-create time.
       const hostPath = normalizeHostPath(host_path);
       if (hostPath) {
-        const problem = hostPathError(hostPath);
+        const problem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, read_only === 1);
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
       }
       const id = createFolderMapping({
@@ -1437,7 +1447,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/folder-mappings/:id',
     async (req, reply) => {
       const id = Number(req.params.id);
-      if (!getFolderMapping(id)) return reply.code(404).send({ error: 'not_found' });
+      const current = getFolderMapping(id);
+      if (!current) return reply.code(404).send({ error: 'not_found' });
       let patch;
       try {
         patch = fromWirePatch(req.body);
@@ -1450,6 +1461,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         const problem = patch.hostPath ? hostPathError(patch.hostPath) : null;
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
       }
+      // Checked on the merged mapping: making a home-folder mapping writable is a
+      // patch of read_only alone.
+      const merged = { ...current, ...patch };
+      const homeProblem = merged.hostPath ? huddleHomeMountError(merged.hostPath, merged.readOnly) : null;
+      if (homeProblem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${homeProblem}` });
       if (!updateFolderMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
       notifyStateChanged();
       return { ok: true };

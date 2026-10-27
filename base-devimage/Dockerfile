@@ -43,6 +43,15 @@ RUN mkdir -p /home/vscode/.claude/agents /home/vscode/.claude/skills \
                               /home/vscode/.copilot /home/vscode/.config \
                               /home/vscode/.ai
 
+# openssh-server voor "Connect via SSH" (JetBrains Gateway). sshd draait niet
+# standaard: Huddle configureert en start hem pas bij het opvragen van de SSH-link
+# (gateway/src/ssh-access.ts), met een eigen config en een host key per container.
+# De host keys die het pakket bij installatie maakt worden verwijderd, anders
+# deelt elke container van deze image dezelfde host key.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+    && rm -f /etc/ssh/ssh_host_* \
+    && rm -rf /var/lib/apt/lists/*
+
 # Verwijder sudo-rechten van vscode (mcr base geeft ze standaard, wij willen dit niet)
 RUN gpasswd -d vscode sudo 2>/dev/null || true \
     && find /etc/sudoers.d -name '*vscode*' -delete 2>/dev/null || true
