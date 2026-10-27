@@ -35,7 +35,8 @@ import { containerPathError, defaultMultiMountWorkspace } from './workspace-root
 import { normalizeHostPath, hostPathError, huddleHomeMountError } from './host-path';
 import { registerHostPipeRoutes } from './host-pipe-routes';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
-import { ensurePathModeMarker } from './rules';
+import { ensurePathModeMarker, settlePathRule } from './rules';
+import { sbxTrustsHuddleCa } from './environments/sbx-store';
 import { parseNoIntercept, shareable } from './firewall-group-envelope';
 import {
   listDevcontainers,
@@ -304,6 +305,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(409).send({ error: 'duplicate', message: err.message });
       }
       if (result.changes === 0) return reply.code(404).send({ error: 'not_found' });
+      settlePathRule(id);
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       if (updated.container_id === null && updated.path_pattern === null && (status === 'allow' || status === 'deny')) {
         db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(updated.domain);
@@ -366,6 +368,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(409).send({ error: 'duplicate', message: err.message });
       }
 
+      settlePathRule(id);
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       if (updated.container_id === null && updated.path_pattern === null) {
         db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(updated.domain);
@@ -395,6 +398,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       return reply.code(409).send({ error: 'duplicate', message: err.message });
     }
 
+    settlePathRule(globalRule.id);
     const updatedGlobal = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(globalRule.id) as Rule;
     if (globalPathPattern === null) {
       db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(rule.domain);
@@ -769,8 +773,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!getGroup(id)) return reply.code(404).send({ error: 'not_found' });
       const raw = req.body?.container;
       const container = raw === undefined || raw === null || raw === '__global__' || raw === '' ? null : raw;
-      const res = applyGroup(id, container);
-      return { ok: true, ...res };
+      const { pathRules, ...res } = applyGroup(id, container);
+      // A sandbox without the Huddle CA kit (or with an outdated one) gets a raw
+      // TLS tunnel: its path rules can never match, so HTTPS to those domains is
+      // blocked. Say so instead of failing silently.
+      const warning = pathRules && container?.startsWith('sbx:') && !sbxTrustsHuddleCa(container)
+        ? `${pathRules} path rule(s) can't take effect in ${container.slice(4)}: its HTTPS traffic isn't inspected. Recreate the sandbox so it trusts the Huddle CA.`
+        : undefined;
+      return { ok: true, ...res, ...(warning ? { warning } : {}) };
     },
   );
 

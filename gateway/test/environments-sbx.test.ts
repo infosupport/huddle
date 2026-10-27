@@ -287,11 +287,29 @@ describe('SbxProvider', () => {
       expect(r.ok).toBe(true);
       expect(pipe.kitCalls).toEqual([{ caPem: PEM }]);
       expect(pipe.calls[1].args.args).toEqual(['create', '--kit', KIT, '--name', 'box', 'shell', '/a']);
-      expect(store.spec('box')).toMatchObject({ huddleCa: true });
-      expect(sbxTrustsHuddleCa('sbx:box', store)).toBe(true);
-      expect(sbxTrustsHuddleCa('sbx:other', store)).toBe(false);
-      expect(sbxTrustsHuddleCa('devcontainer', store)).toBe(false);
-      expect(sbxTrustsHuddleCa(null, store)).toBe(false);
+      expect(store.spec('box')).toMatchObject({ huddleCa: true, caSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      expect(sbxTrustsHuddleCa('sbx:box', store, () => PEM)).toBe(true);
+      expect(sbxTrustsHuddleCa('sbx:other', store, () => PEM)).toBe(false);
+      expect(sbxTrustsHuddleCa('devcontainer', store, () => PEM)).toBe(false);
+      expect(sbxTrustsHuddleCa(null, store, () => PEM)).toBe(false);
+    });
+
+    it('een nieuwe Huddle CA: geen inspectie meer, en reconcile maakt de sandbox opnieuw', async () => {
+      const store = memStore();
+      await make(withKit([{ code: 0 }, { code: 0 }, { code: 0 }]), store).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+      const NEW_PEM = PEM.replace('AA==', 'AQ==');
+      expect(sbxTrustsHuddleCa('sbx:box', store, () => NEW_PEM)).toBe(false);
+      // A sandbox from before the CA was stored keeps being inspected.
+      store.saveIdentity('old', 'h', { name: 'old', agent: 'shell', workspaces: [ws('/b')], huddleCa: true });
+      expect(sbxTrustsHuddleCa('sbx:old', store, () => NEW_PEM)).toBe(true);
+
+      const provider = new SbxProvider(withKit([]), store, PORT, () => [], () => NEW_PEM);
+      const recreate = vi.spyOn(provider, 'recreateAll').mockResolvedValue(undefined as any);
+      vi.spyOn(provider as any, 'finishInterruptedSwitchOff').mockResolvedValue(true);
+      vi.spyOn(provider as any, 'listAll').mockResolvedValue([{ name: 'box', provider: 'sbx' }]);
+      store.setEnabled(true);
+      expect(await provider.reconcile()).toBe(true);
+      expect(recreate).toHaveBeenCalledWith('the Huddle CA changed');
     });
 
     it('een sbx zonder kits: opnieuw zonder --kit, en dan geen inspectie', async () => {

@@ -34,6 +34,14 @@ export function hashProxySecret(secret: string): string {
   return crypto.createHash('sha256').update(secret, 'utf8').digest('hex');
 }
 
+// Which Huddle CA a sandbox was made to trust: the CA is regenerated when its
+// files are lost, and a sandbox that trusts the old one cannot be inspected.
+let lastCa: { pem: string; sha: string } | null = null;
+export function caFingerprint(caPem: string): string {
+  if (lastCa?.pem !== caPem) lastCa = { pem: caPem, sha: crypto.createHash('sha256').update(caPem, 'utf8').digest('hex') };
+  return lastCa.sha;
+}
+
 /** The proxy URL the sbx daemon gets: it runs on the host, the listener is on host loopback. */
 export function sbxProxyUrl(user: string, secret: string, port: number): string {
   return `http://${user}:${secret}@127.0.0.1:${port}`;

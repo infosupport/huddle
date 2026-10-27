@@ -105,6 +105,7 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     const again = groups.applyGroup(g.id, 'devcontainer-x');
     expect(again.applied).toBe(0);
     expect(again.updated).toBe(3);
+    expect(again.pathRules).toBe(1);
     const scoped = dbMod.db.prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-x'").get() as { n: number };
     // The domain rule, the path rule, and the host-only path-mode marker that
     // admits it over HTTPS.

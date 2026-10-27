@@ -310,7 +310,7 @@ export function applyGroup(
   groupId: number,
   container: string | null,
   addedBy: string | null = null,
-): { applied: number; updated: number } {
+): { applied: number; updated: number; pathRules: number } {
   const group = getGroup(groupId);
   if (!group) throw new Error('group not found');
   const members = memberRulesForScope(groupId);
@@ -360,7 +360,7 @@ export function applyGroup(
     path: `group=${group.name} applied=${applied} updated=${updated}`,
   });
   notifyStateChanged();
-  return { applied, updated };
+  return { applied, updated, pathRules: members.filter((m) => m.path_pattern !== null).length };
 }
 
 // ── Source re-tagging (used by the folder write-back) ───────────────────────────

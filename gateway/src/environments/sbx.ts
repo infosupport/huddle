@@ -27,6 +27,7 @@ import {
 } from './types';
 import {
   RESET_USER,
+  caFingerprint,
   hashProxySecret,
   isHuddleProxyUrl,
   newProxySecret,
@@ -348,7 +349,9 @@ const CA_KIT = 'huddle-ca';
 const NO_KIT_RE = /(unknown|undefined|unrecognized) (flag|option)[^\n]*kit|flag provided but not defined:? -+kit/i;
 
 /** What the gateway keeps of a sandbox: its spec, and whether it trusts the Huddle CA. */
-export type StoredSandboxSpec = SandboxSpec & { huddleCa?: boolean };
+// huddleCa: created with the Huddle CA kit; caSha256: of which CA (missing on
+// sandboxes from before it was stored).
+export type StoredSandboxSpec = SandboxSpec & { huddleCa?: boolean; caSha256?: string };
 
 // What `sbx policy rm` says when there was no such rule: nothing left to remove.
 const NO_RULE_RE = /not found|no (matching )?(rule|polic)|does not exist|doesn't exist/i;
@@ -551,7 +554,10 @@ export class SbxProvider implements EnvironmentProvider {
       agent: spec.agent,
       workspaces: spec.workspaces.map((w) => ({ path: normalizeHostPath(w.path), readOnly: w.readOnly === true })),
     };
-    if (trustsCa) stored.huddleCa = true;
+    if (trustsCa) {
+      stored.huddleCa = true;
+      try { stored.caSha256 = caFingerprint(this.caPem()); } catch { /* the kit was just made from it */ }
+    }
     this.store.saveIdentity(spec.name, hashProxySecret(secret), stored);
     // The sandbox exists and is routed: a mapping that could not be linked shows
     // in the steps, it does not undo the create.
@@ -795,10 +801,22 @@ export class SbxProvider implements EnvironmentProvider {
     } catch {
       return false;
     }
-    if (!this.recreating && listed.some((s) => !this.store.identified(s.name))) {
+    if (this.recreating) return true;
+    if (listed.some((s) => !this.store.identified(s.name))) {
       await this.recreateAll('the gateway restarted without the secret of every sandbox');
+    } else if (listed.some((s) => this.trustsOldCa(s.name))) {
+      await this.recreateAll('the Huddle CA changed');
     }
     return true;
+  }
+
+  // Created trusting a Huddle CA that is no longer the current one (its files
+  // were lost and it was regenerated): the listener does not inspect its TLS
+  // (sbxTrustsHuddleCa) until a recreate gives it a kit with the current CA.
+  private trustsOldCa(name: string): boolean {
+    const spec = this.store.spec(name) as StoredSandboxSpec | null;
+    if (!spec?.huddleCa || !spec.caSha256) return false;
+    try { return spec.caSha256 !== caFingerprint(this.caPem()); } catch { return false; }
   }
 
   // A gateway that stopped inside switchOff() after the user's setting was put

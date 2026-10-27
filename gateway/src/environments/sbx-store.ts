@@ -14,7 +14,8 @@ import {
 } from '../db';
 import type { SbxStore, StoredSandboxSpec } from './sbx';
 import type { SandboxSpec } from './types';
-import { RESET_USER, hashProxySecret, newProxySecret, parseProxyAuthorization, redactProxyUrls, sameSecret } from './sbx-egress';
+import { getCaCertPem } from '../tls-ca';
+import { RESET_USER, caFingerprint, hashProxySecret, newProxySecret, parseProxyAuthorization, redactProxyUrls, sameSecret } from './sbx-egress';
 
 const PROVIDER = 'sbx';
 const ENABLED_KEY = 'sbx.egress.enabled';
@@ -80,11 +81,20 @@ export function identifySbxCaller(header: string | string[] | undefined, store: 
 
 /**
  * The `intercept` of the sbx egress listener: inspect TLS only for a sandbox that
- * was created trusting the Huddle CA (scope `sbx:<name>`).
+ * was created trusting the current Huddle CA (scope `sbx:<name>`). One that trusts
+ * a CA since regenerated gets a raw tunnel, so it keeps working, until reconcile
+ * recreates it.
  */
-export function sbxTrustsHuddleCa(scope: string | null, store: SbxStore = dbSbxStore): boolean {
+export function sbxTrustsHuddleCa(
+  scope: string | null,
+  store: SbxStore = dbSbxStore,
+  caPem: () => string = getCaCertPem,
+): boolean {
   if (!scope?.startsWith('sbx:')) return false;
-  return (store.spec(scope.slice(4)) as StoredSandboxSpec | null)?.huddleCa === true;
+  const spec = store.spec(scope.slice(4)) as StoredSandboxSpec | null;
+  if (spec?.huddleCa !== true) return false;
+  if (!spec.caSha256) return true;
+  try { return spec.caSha256 === caFingerprint(caPem()); } catch { return false; }
 }
 
 /**

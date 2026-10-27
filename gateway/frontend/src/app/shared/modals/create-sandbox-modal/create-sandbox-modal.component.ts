@@ -370,6 +370,9 @@ export class CreateSandboxModalComponent {
     if (!this.sbxAgent) return 'Pick an agent';
     const folders = this.workspaces();
     if (folders.length === 0) return 'Add at least one folder';
+    // Empty rows are dropped, so a read-only row can end up first; the provider
+    // would then make it writable without asking.
+    if (folders[0].readOnly) return `${folders[0].path} is marked read-only, but the first folder is where the agent starts and is always writable. Put a writable folder first.`;
     const seen = new Set<string>();
     for (const f of folders) {
       const key = f.path.replace(/[\\/]+$/, '').toLowerCase();

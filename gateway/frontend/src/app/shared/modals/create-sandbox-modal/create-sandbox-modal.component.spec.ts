@@ -63,4 +63,14 @@ describe('CreateSandboxModal', () => {
     c.removeMount(0);
     expect(c.mounts[0].readOnly).toBe(false);
   });
+
+  it('refuses a read-only folder that would become the first one', () => {
+    const c = open('sbx');
+    c.addMount();
+    c.mounts[1].hostPath = 'C:/docs';
+    c.mounts[1].readOnly = true;
+    c.confirm();
+    expect(api.createSandbox).not.toHaveBeenCalled();
+    expect(c.error).toMatch(/read-only/);
+  });
 });

@@ -268,8 +268,8 @@ export class ApiService {
     return this.handle(this.http.delete<{ ok: true }>(`/api/groups/${groupId}/rules/${ruleId}`));
   }
 
-  applyGroup(groupId: number, container: string | null): Observable<{ ok: true; applied: number; updated: number }> {
-    return this.handle(this.http.post<{ ok: true; applied: number; updated: number }>(`/api/groups/${groupId}/apply`, { container }));
+  applyGroup(groupId: number, container: string | null): Observable<{ ok: true; applied: number; updated: number; warning?: string }> {
+    return this.handle(this.http.post<{ ok: true; applied: number; updated: number; warning?: string }>(`/api/groups/${groupId}/apply`, { container }));
   }
 
   exportGroup(groupId: number): Observable<unknown> {

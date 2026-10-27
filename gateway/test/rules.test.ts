@@ -32,6 +32,7 @@ let matchPath: typeof import('../src/rules').matchPath;
 let firstSegmentPattern: typeof import('../src/rules').firstSegmentPattern;
 let isPathMode: typeof import('../src/rules').isPathMode;
 let isNoIntercept: typeof import('../src/rules').isNoIntercept;
+let settlePathRule: typeof import('../src/rules').settlePathRule;
 let ensurePathModeMarker: typeof import('../src/rules').ensurePathModeMarker;
 let canonicalizeHost: typeof import('../src/rules').canonicalizeHost;
 let normalizePathname: typeof import('../src/rules').normalizePathname;
@@ -63,6 +64,7 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     firstSegmentPattern = rulesMod.firstSegmentPattern;
     isPathMode = rulesMod.isPathMode;
     isNoIntercept = rulesMod.isNoIntercept;
+    settlePathRule = rulesMod.settlePathRule;
     ensurePathModeMarker = rulesMod.ensurePathModeMarker;
     canonicalizeHost = rulesMod.canonicalizeHost;
     normalizePathname = rulesMod.normalizePathname;
@@ -414,6 +416,17 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     it('is switched back on when the domain goes into path mode', () => {
       setRule('a.test', CID, 'allow'); off('a.test', CID);
       ensurePathModeMarker('a.test', CID);
+      expect(isNoIntercept('a.test', CID)).toBe(false);
+      expect(isPathMode('a.test', CID)).toBe(true);
+    });
+
+    it('a TLS-off host rule refined to a path rule becomes a working path rule', () => {
+      setRule('a.test', CID, 'allow'); off('a.test', CID);
+      const { id } = db.prepare(`SELECT id FROM rules WHERE domain = 'a.test'`).get() as { id: number };
+      db.prepare(`UPDATE rules SET path_pattern = '/api/*' WHERE id = ?`).run(id);
+      settlePathRule(id);
+      const row = db.prepare(`SELECT no_intercept, path_mode FROM rules WHERE id = ?`).get(id) as { no_intercept: number; path_mode: number };
+      expect(row).toEqual({ no_intercept: 0, path_mode: 0 });
       expect(isNoIntercept('a.test', CID)).toBe(false);
       expect(isPathMode('a.test', CID)).toBe(true);
     });

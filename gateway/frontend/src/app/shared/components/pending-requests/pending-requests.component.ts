@@ -8,7 +8,7 @@ import { RelTimePipe } from '../../pipes/rel-time.pipe';
 import { IconComponent } from '../icon/icon.component';
 import { PieMenuComponent } from '../pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../pie-menu/pie-menu.model';
-import { buildPathDomains, excludePathModeRules } from '../path-allowlist/path-allowlist.util';
+import { buildPathDomains, confirmGlobalPaths, excludePathModeRules } from '../path-allowlist/path-allowlist.util';
 
 /** A path sub-request row for the pending inbox flat list */
 export interface PathRequestRow {
@@ -142,18 +142,8 @@ export class PendingRequestsComponent {
   }
 
   onPathPieAction(actionId: string, row: PathRequestRow): void {
-    if (!this.confirmGlobalPaths([row])) return;
+    if (!confirmGlobalPaths([row])) return;
     this.pathCall(actionId, row).subscribe(() => this.done());
-  }
-
-  // A path request of a global path-mode domain has no container: acting on it
-  // changes the global path policy for every container and sandbox, so ask
-  // first, like the global domain actions do.
-  private confirmGlobalPaths(rows: PathRequestRow[]): boolean {
-    const global = rows.filter((p) => !p.rule.container_id);
-    if (!global.length) return true;
-    const what = global.length === 1 ? `${global[0].domain}${global[0].path_pattern}` : `${global.length} path requests`;
-    return confirm(`${what} belongs to a global path allowlist — this changes it for ALL containers and sandboxes. Continue?`);
   }
 
   onBulkPie(actionId: string): void {
@@ -171,7 +161,7 @@ export class PendingRequestsComponent {
   onBulkPathPie(actionId: string): void {
     const rows = this.pathRequests.filter((p) => this.selected.has(p.rule.id));
     if (!rows.length) return;
-    if (!this.confirmGlobalPaths(rows)) return;
+    if (!confirmGlobalPaths(rows)) return;
     forkJoin(rows.map((row) => this.pathCall(actionId, row))).subscribe(() => this.done(rows.map((p) => p.rule.id)));
   }
 

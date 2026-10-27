@@ -730,7 +730,8 @@ export class FirewallGroupsPanelComponent implements OnInit {
         const total = r.applied + r.updated;
         this.note.set(
           `Group "${g.name}" now applies to ${scope}: ${total} rule(s) active there ` +
-            `(${r.applied} added, ${r.updated} already present and refreshed). They stay part of "${g.name}".`,
+            `(${r.applied} added, ${r.updated} already present and refreshed). They stay part of "${g.name}".` +
+            (r.warning ? ` ${r.warning}` : ''),
         );
         this.reloadAfterMutation();
       },
