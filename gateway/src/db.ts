@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import type { TrustedImage } from './custom-image';
 
 const DB_PATH = process.env.DB_PATH || '/data/huddle.db';
 
@@ -87,25 +88,16 @@ export function initDb(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
-    -- Indexed host folders: the portal runs in a container and cannot browse the
-    -- host filesystem, so 'huddle indexfolder' walks the host once and stores the
-    -- folders it finds here. The portal then offers them as choices wherever a
-    -- host path is typed. Machine-local scan output — deliberately DB and not
-    -- config.json (unlike the team-managed settings in #69/#98): another machine's
-    -- folder list is noise, not shared configuration.
-    -- Paths are stored normalized (forward slashes, upper-case drive letter;
-    -- see host-path.ts) and compared case-insensitively so the backslashed,
-    -- lower-cased spelling of a Windows folder is the same entry — Windows
-    -- treats them as one folder.
-    CREATE TABLE IF NOT EXISTS indexed_folders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      path TEXT NOT NULL,
-      label TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL DEFAULT 'cli',
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    -- Sandboxes Huddle created through an environment provider (host pipe, see
+    -- docs/host-pipe.md). Provider-agnostic: one row per (provider, name). Huddle
+    -- only ever removes a sandbox that has a row here, so a box the user made by
+    -- hand with the provider's own CLI is never touched from the portal.
+    CREATE TABLE IF NOT EXISTS sandboxes (
+      provider TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (provider, name)
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_indexed_folders_path
-      ON indexed_folders (path COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS approved_host_ports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       container_id TEXT NOT NULL,
@@ -115,6 +107,20 @@ export function initDb(): void {
       description TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE(container_id, host_port, protocol)
+    );
+    -- Inbound SSH (JetBrains Gateway): the host-loopback port of each
+    -- devcontainer's SSH relay, kept stable across gateway restarts so a saved
+    -- Gateway connection keeps working.
+    CREATE TABLE IF NOT EXISTS ssh_relays (
+      container_name TEXT PRIMARY KEY,
+      port INTEGER NOT NULL UNIQUE
+    );
+    -- Image IDs Huddle produced itself (snapshots, images with the Huddle layer).
+    -- Only these run without the layer; labels on an image can be forged.
+    CREATE TABLE IF NOT EXISTS trusted_images (
+      image_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('snapshot', 'derived')),
+      layer_version TEXT
     );
     -- Firewall groups (#69): a named, reusable bundle of firewall rules for a
     -- product/service (OpenAI, GitHub, ...). Rules point at a group via
@@ -134,6 +140,21 @@ export function initDb(): void {
       ON firewall_groups (name COLLATE NOCASE);
   `);
 
+  // The folder index ('huddle indexfolder') is gone: the portal now browses the
+  // host live through the host pipe (fs.list), so the stored snapshot is dead data.
+  db.exec('DROP TABLE IF EXISTS indexed_folders');
+
+  // Sandbox egress identity (docs/host-pipe.md): the SHA-256 of the proxy secret
+  // a sandbox was created with, and the spec it was created from so it can be
+  // recreated with a fresh secret.
+  const sandboxCols = db.prepare('PRAGMA table_info(sandboxes)').all() as { name: string }[];
+  if (!sandboxCols.some((c) => c.name === 'proxy_secret_hash')) {
+    db.exec('ALTER TABLE sandboxes ADD COLUMN proxy_secret_hash TEXT');
+  }
+  if (!sandboxCols.some((c) => c.name === 'spec_json')) {
+    db.exec('ALTER TABLE sandboxes ADD COLUMN spec_json TEXT');
+  }
+
   const cols = db.prepare("PRAGMA table_info(rules)").all() as {name:string}[];
   if (!cols.some(c => c.name === 'expires_at')) {
     db.exec('ALTER TABLE rules ADD COLUMN expires_at INTEGER');
@@ -146,6 +167,12 @@ export function initDb(): void {
   // the operator can allow them one by one.
   if (!cols.some(c => c.name === 'path_mode')) {
     db.exec('ALTER TABLE rules ADD COLUMN path_mode INTEGER NOT NULL DEFAULT 0');
+  }
+  // no_intercept marks a host-only rule as "TLS inspection off": the proxy keeps
+  // a raw tunnel for that domain (for clients that pin certificates or do not
+  // trust the Huddle CA), for devcontainers and sandboxes alike.
+  if (!cols.some(c => c.name === 'no_intercept')) {
+    db.exec('ALTER TABLE rules ADD COLUMN no_intercept INTEGER NOT NULL DEFAULT 0');
   }
   // last_path stores the most recently seen full path that triggered a (grouped)
   // requested path rule, as a concrete example for the operator.
@@ -245,6 +272,10 @@ export function getSetting(key: string): string | null {
 export function setSetting(key: string, value: string): void {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
     .run(key, value);
+}
+
+export function deleteSetting(key: string): void {
+  db.prepare('DELETE FROM settings WHERE key = ?').run(key);
 }
 
 // ── Container airlock ────────────────────────────────────────────────────────
@@ -563,67 +594,71 @@ export function validateUpdateKeys<K extends string>(
   return keys.filter((k): k is K => permitted.includes(k));
 }
 
-// ── Indexed host folders ──────────────────────────────────────────────────────
+// ── Sandboxes (environment providers) ─────────────────────────────────────────
 
-// Populated by `huddle indexfolder` on the host and editable in Settings. Paths
-// must already be normalized by the caller (normalizeHostPath in host-path.ts);
-// this layer only stores and dedupes them.
-export interface IndexedFolder {
-  id: number;
-  path: string;
-  label: string;
-  source: string;
+// Which sandboxes Huddle created, per provider. The provider itself is the
+// source of truth for what exists; this table only answers "may Huddle remove
+// it?" (docs/host-pipe.md: Huddle only removes sandboxes it created).
+export interface SandboxRecord {
+  provider: string;
+  name: string;
   created_at: number;
 }
 
-// Upper bound on the index. `huddle indexfolder` at the wrong spot (a home
-// directory, a drive root) can discover tens of thousands of folders; that would
-// bloat the DB and turn the portal's picker into something unusable. The CLI
-// stops well before this, and the API reports what it refused rather than
-// silently truncating.
-export const MAX_INDEXED_FOLDERS = 2000;
-
-export function listIndexedFolders(): IndexedFolder[] {
-  return db.prepare('SELECT * FROM indexed_folders ORDER BY path COLLATE NOCASE ASC').all() as IndexedFolder[];
+// Upsert that keeps the identity columns: the provider may already have stored
+// the proxy secret for this create.
+export function recordSandbox(provider: string, name: string): void {
+  db.prepare(
+    'INSERT INTO sandboxes (provider, name) VALUES (?, ?) ON CONFLICT(provider, name) DO UPDATE SET created_at = unixepoch()',
+  ).run(provider, name);
 }
 
-export function countIndexedFolders(): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM indexed_folders').get() as { n: number }).n;
+/** Stores (or replaces) a sandbox's proxy identity; also marks it as Huddle's. */
+export function saveSandboxIdentity(provider: string, name: string, secretHash: string, specJson: string): void {
+  db.prepare(
+    `INSERT INTO sandboxes (provider, name, proxy_secret_hash, spec_json) VALUES (?, ?, ?, ?)
+     ON CONFLICT(provider, name) DO UPDATE SET created_at = unixepoch(),
+       proxy_secret_hash = excluded.proxy_secret_hash, spec_json = excluded.spec_json`,
+  ).run(provider, name, secretHash, specJson);
 }
 
-export function getIndexedFolderByPath(path: string): IndexedFolder | undefined {
-  return db.prepare('SELECT * FROM indexed_folders WHERE path = ? COLLATE NOCASE').get(path) as IndexedFolder | undefined;
+/** The sandbox whose proxy secret hashes to `secretHash`, if any. */
+export function sandboxByProxySecretHash(provider: string, secretHash: string): string | null {
+  const row = db
+    .prepare('SELECT name FROM sandboxes WHERE provider = ? AND proxy_secret_hash = ?')
+    .get(provider, secretHash) as { name: string } | undefined;
+  return row?.name ?? null;
 }
 
-// Insert, or refresh the label/source of an existing entry. Returns 'added' or
-// 'updated' so a bulk index can report both without a second query.
-export function upsertIndexedFolder(f: { path: string; label: string; source: string }): 'added' | 'updated' {
-  const existing = getIndexedFolderByPath(f.path);
-  if (existing) {
-    db.prepare('UPDATE indexed_folders SET label = ?, source = ? WHERE id = ?').run(f.label, f.source, existing.id);
-    return 'updated';
-  }
-  db.prepare('INSERT INTO indexed_folders (path, label, source) VALUES (?, ?, ?)').run(f.path, f.label, f.source);
-  return 'added';
+export function sandboxProxySecretHash(provider: string, name: string): string | null {
+  const row = db
+    .prepare('SELECT proxy_secret_hash FROM sandboxes WHERE provider = ? AND name = ?')
+    .get(provider, name) as { proxy_secret_hash: string | null } | undefined;
+  return row?.proxy_secret_hash ?? null;
 }
 
-export function deleteIndexedFolder(id: number): void {
-  db.prepare('DELETE FROM indexed_folders WHERE id = ?').run(id);
+export function sandboxSpecJson(provider: string, name: string): string | null {
+  const row = db
+    .prepare('SELECT spec_json FROM sandboxes WHERE provider = ? AND name = ?')
+    .get(provider, name) as { spec_json: string | null } | undefined;
+  return row?.spec_json ?? null;
 }
 
-// Clear the whole index, or only the subtree under `root` so re-indexing one
-// project does not throw away the folders indexed from elsewhere. The LIKE
-// pattern is escaped: a path may legitimately contain '%' or '_'.
-export function clearIndexedFolders(root?: string): number {
-  if (!root) return db.prepare('DELETE FROM indexed_folders').run().changes;
-  // The subtree prefix has to be built, not glued on: a root already ends in a
-  // slash ('T:/', '/'), and 'T:/' + '/%' matched nothing, so clearing a whole
-  // drive from the portal silently removed zero rows.
-  const prefix = root.endsWith('/') ? root : `${root}/`;
-  const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
-  return db.prepare(
-    "DELETE FROM indexed_folders WHERE path = ? COLLATE NOCASE OR path LIKE ? || '%' ESCAPE '\\' COLLATE NOCASE"
-  ).run(root, escaped).changes;
+/** Revokes every proxy secret of a provider (the records themselves stay). */
+export function clearSandboxIdentities(provider: string): void {
+  db.prepare('UPDATE sandboxes SET proxy_secret_hash = NULL WHERE provider = ?').run(provider);
+}
+
+export function hasSandbox(provider: string, name: string): boolean {
+  return !!db.prepare('SELECT 1 FROM sandboxes WHERE provider = ? AND name = ?').get(provider, name);
+}
+
+export function deleteSandbox(provider: string, name: string): void {
+  db.prepare('DELETE FROM sandboxes WHERE provider = ? AND name = ?').run(provider, name);
+}
+
+export function listSandboxRecords(provider: string): SandboxRecord[] {
+  return db.prepare('SELECT provider, name, created_at FROM sandboxes WHERE provider = ? ORDER BY name ASC').all(provider) as SandboxRecord[];
 }
 
 // ── Firewall Groups (#69) ─────────────────────────────────────────────────────
@@ -738,4 +773,39 @@ export function isHostPortApproved(containerId: string, hostPort: number, protoc
   return !!db.prepare(
     'SELECT id FROM approved_host_ports WHERE container_id = ? AND host_port = ? AND protocol = ?'
   ).get(containerId, hostPort, protocol);
+}
+
+// ── SSH relay ports ───────────────────────────────────────────────────────────
+
+export function getSshRelayPort(containerName: string): number | null {
+  const row = db.prepare('SELECT port FROM ssh_relays WHERE container_name = ?').get(containerName) as { port: number } | undefined;
+  return row?.port ?? null;
+}
+
+export function listSshRelayPorts(): { container_name: string; port: number }[] {
+  return db.prepare('SELECT container_name, port FROM ssh_relays').all() as { container_name: string; port: number }[];
+}
+
+export function setSshRelayPort(containerName: string, port: number): void {
+  db.prepare('INSERT INTO ssh_relays (container_name, port) VALUES (?, ?)').run(containerName, port);
+}
+
+export function deleteSshRelayPort(containerName: string): void {
+  db.prepare('DELETE FROM ssh_relays WHERE container_name = ?').run(containerName);
+}
+
+// Docker reports image IDs as sha256:<hex>; Podman may omit the prefix.
+const normalizeImageId = (id: string) => id.replace(/^sha256:/, '');
+
+export function recordTrustedImage(imageId: string, trusted: TrustedImage): void {
+  db.prepare('INSERT OR REPLACE INTO trusted_images (image_id, kind, layer_version) VALUES (?, ?, ?)')
+    .run(normalizeImageId(imageId), trusted.kind, trusted.kind === 'derived' ? trusted.layerVersion : null);
+}
+
+export function getTrustedImage(imageId: string): TrustedImage | null {
+  const row = db.prepare('SELECT kind, layer_version FROM trusted_images WHERE image_id = ?')
+    .get(normalizeImageId(imageId)) as { kind: string; layer_version: string | null } | undefined;
+  if (row?.kind === 'snapshot') return { kind: 'snapshot' };
+  if (row?.kind === 'derived' && row.layer_version) return { kind: 'derived', layerVersion: row.layer_version };
+  return null;
 }

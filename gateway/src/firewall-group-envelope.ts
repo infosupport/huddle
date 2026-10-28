@@ -22,6 +22,8 @@ export interface ShareableGroupRule {
   status: RuleStatus;
   path_pattern: string | null;
   path_mode: number;
+  /** Only present (as 1) when TLS inspection is off, so older Huddles still import the rest. */
+  no_intercept?: number;
   expires_at: number | null;
 }
 
@@ -33,7 +35,26 @@ export interface GroupEnvelope {
   rules: ShareableGroupRule[];
 }
 
-const RULE_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'expires_at']);
+const RULE_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'no_intercept', 'expires_at']);
+
+// no_intercept ("TLS inspection off"): 0/1, and only on a host-only rule that is
+// not in path mode (path rules need inspection). Absent means 0.
+export function parseNoIntercept(raw: unknown, pathPattern: unknown, pathMode: unknown): number {
+  const v = raw === undefined || raw === null ? 0 : raw;
+  if (v !== 0 && v !== 1) throw new Error('no_intercept must be 0 or 1');
+  if (v === 1 && (pathPattern !== null || pathMode === 1)) {
+    throw new Error('no_intercept only applies to a host-only rule that is not in path mode');
+  }
+  return v;
+}
+
+// A rule as it is exported: no_intercept only when it is on, so an export without
+// it stays importable by a Huddle that does not know the field.
+export function shareable<T extends { no_intercept?: number }>(r: T): T {
+  if (r.no_intercept) return r;
+  const { no_intercept: _off, ...rest } = r;
+  return rest as T;
+}
 
 // Validate one incoming rule fail-closed (unknown key → reject, every field
 // type-checked). Mirrors the flat-import validator so both paths behave alike.
@@ -52,11 +73,12 @@ export function validateGroupRule(raw: unknown): ShareableGroupRule {
   if (path_pattern !== null && typeof path_pattern !== 'string') throw new Error('path_pattern must be a string or null');
   const path_mode = r.path_mode === undefined || r.path_mode === null ? 0 : r.path_mode;
   if (path_mode !== 0 && path_mode !== 1) throw new Error('path_mode must be 0 or 1');
+  const no_intercept = parseNoIntercept(r.no_intercept, path_pattern, path_mode);
   const expires_at = r.expires_at === undefined || r.expires_at === null ? null : r.expires_at;
   if (expires_at !== null && (typeof expires_at !== 'number' || !Number.isFinite(expires_at))) {
     throw new Error('expires_at must be a number or null');
   }
-  return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, expires_at };
+  return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, no_intercept, expires_at };
 }
 
 // Validate a whole envelope fail-closed. Accepts the versioned `kind` envelope;

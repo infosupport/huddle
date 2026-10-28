@@ -3,8 +3,9 @@ import { Routes } from '@angular/router';
 export const routes: Routes = [
   { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
   { path: 'dashboard', loadComponent: () => import('./pages/dashboard/dashboard.component').then(m => m.DashboardComponent) },
-  { path: 'containers', loadComponent: () => import('./pages/containers/containers.component').then(m => m.ContainersComponent) },
-  { path: 'container/:name', loadComponent: () => import('./pages/container-detail/container-detail.component').then(m => m.ContainerDetailComponent) },
+  { path: 'dev-environments', loadComponent: () => import('./pages/dev-environments/dev-environments.component').then(m => m.DevEnvironmentsComponent) },
+  { path: 'dev-environments/container/:name', loadComponent: () => import('./pages/container-detail/container-detail.component').then(m => m.ContainerDetailComponent) },
+  { path: 'dev-environments/sandbox/:provider/:name', loadComponent: () => import('./pages/sandbox-detail/sandbox-detail.component').then(m => m.SandboxDetailComponent) },
   { path: 'firewall', loadComponent: () => import('./pages/firewall/firewall.component').then(m => m.FirewallComponent) },
   { path: 'docker-access', loadComponent: () => import('./pages/docker-access/docker-access.component').then(m => m.DockerAccessComponent) },
 { path: 'network-log', loadComponent: () => import('./pages/audit/audit.component').then(m => m.AuditComponent) },

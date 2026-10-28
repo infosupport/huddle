@@ -2,14 +2,14 @@
 //
 // Huddle's portal runs in a container and cannot see the host filesystem, so
 // every host path arrives as text: typed in the modal, typed in Settings, or
-// indexed by `huddle indexfolder` on the host. On Windows that text can look
+// picked from the host folder browser (fs.list over the host pipe). On Windows that text can look
 // like `T:\projects\huddle`, `t:/projects/huddle` or `T:\projects\huddle\`, all
 // meaning the same folder. Normalising once, on ingest, keeps the rest of the
 // gateway from having to care:
 //  - backslashes become forward slashes (Docker's mount `Source` and
 //    toLinuxPath() in docker.ts both accept that form),
 //  - a drive letter is upper-cased and repeated/trailing slashes collapse, so
-//    two spellings of one folder dedupe to a single index entry,
+//    two spellings of one folder compare as a single folder,
 //  - UNC paths (`\\server\share`) keep their leading double slash.
 // Translating a host path to the path the ENGINE mounts (/mnt/<drive>/… or
 // /run/desktop/mnt/host/<drive>/…) stays in docker.ts: that depends on the
@@ -53,4 +53,31 @@ export function hostPathError(p: string): string | null {
 export function hostPathLeaf(p: string): string {
   const segments = p.split('/').filter(Boolean);
   return segments.length ? segments[segments.length - 1] : p;
+}
+
+// Huddle's own host folder (~/.huddle), as `huddle init` passes it in
+// HUDDLE_HOST_HOME_DIR; null when the gateway was started without it. It holds
+// config.json (with the operator token) and the host pipe (pipe/), which runs
+// allowlisted tools on the host for whoever can write a request file. A mount
+// that exposes it would hand a devcontainer or sandbox those powers, so:
+//  - ~/.huddle itself and everything inside it is never mounted;
+//  - a folder that contains it (the home folder, a drive root) only read-only.
+// Compared case-insensitively: Windows and macOS file systems are, and on Linux
+// this only over-refuses. Symlinks are not resolved (the gateway can't see the host).
+export function hostHuddleHome(): string | null {
+  return normalizeHostPath(process.env.HUDDLE_HOST_HOME_DIR ?? '') || null;
+}
+
+export function huddleHomeMountError(p: string, readOnly: boolean, home: string | null = hostHuddleHome()): string | null {
+  if (!home) return null;
+  const path = p.toLowerCase();
+  const huddle = home.toLowerCase();
+  const withSlash = (s: string) => (s.endsWith('/') ? s : `${s}/`);
+  if (path === huddle || path.startsWith(withSlash(huddle))) {
+    return `must not be Huddle's own folder (${home}) or inside it`;
+  }
+  if (!readOnly && huddle.startsWith(withSlash(path))) {
+    return `contains Huddle's own folder (${home}), so it can only be mounted read-only`;
+  }
+  return null;
 }

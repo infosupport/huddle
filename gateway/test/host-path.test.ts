@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from '../src/host-path';
+import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError } from '../src/host-path';
 
 // Host paths komen als tekst binnen: getypt in de modal, getypt in Settings, of
-// gescand door `huddle indexfolder` op de host. Op Windows spelt elk van die
+// gekozen in de host-mappenbrowser (fs.list via de host pipe). Op Windows spelt elk van die
 // drie dezelfde map anders. normalizeHostPath is het enige punt waar dat wordt
-// gladgestreken; deze test pint die vorm vast, want de index dedupliceert erop
+// gladgestreken; deze test pint die vorm vast, want vergelijkingen leunen erop
 // en docker.ts (toLinuxPath) rekent erop.
 describe('normalizeHostPath', () => {
   it('zet backslashes om en maakt de driveletter hoofdletter', () => {
@@ -70,5 +70,33 @@ describe('hostPathLeaf', () => {
     expect(hostPathLeaf('T:/projects/huddle')).toBe('huddle');
     expect(hostPathLeaf('/home/me/app')).toBe('app');
     expect(hostPathLeaf('C:/')).toBe('C:');
+  });
+});
+
+// ~/.huddle bevat het operator-token (config.json) en de host pipe; een mount die
+// hem blootstelt geeft een devcontainer of sandbox die macht.
+describe('huddleHomeMountError', () => {
+  const home = 'C:/Users/me/.huddle';
+
+  it('weigert ~/.huddle zelf en alles erin, ook read-only en anders gespeld', () => {
+    expect(huddleHomeMountError('C:/Users/me/.huddle', true, home)).toMatch(/own folder/);
+    expect(huddleHomeMountError('c:/users/ME/.Huddle/pipe', true, home)).toMatch(/own folder/);
+  });
+
+  it('een map die hem bevat alleen read-only', () => {
+    expect(huddleHomeMountError('C:/Users/me', false, home)).toMatch(/read-only/);
+    expect(huddleHomeMountError('C:/', false, home)).toMatch(/read-only/);
+    expect(huddleHomeMountError('C:/Users/me', true, home)).toBeNull();
+    expect(huddleHomeMountError('/', false, '/home/me/.huddle')).toMatch(/read-only/);
+  });
+
+  it('laat buren en gelijkende namen door', () => {
+    expect(huddleHomeMountError('C:/Users/me/.huddle-old', false, home)).toBeNull();
+    expect(huddleHomeMountError('C:/Users/me/projects', false, home)).toBeNull();
+    expect(huddleHomeMountError('D:/', false, home)).toBeNull();
+  });
+
+  it('zonder bekende ~/.huddle (oude CLI) geen controle', () => {
+    expect(huddleHomeMountError('C:/Users/me/.huddle', false, null)).toBeNull();
   });
 });

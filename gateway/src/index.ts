@@ -5,8 +5,12 @@ import { createApiServer } from './api';
 import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptables, execInContainer } from './docker';
 import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
+import { restoreSshRelays } from './ssh-link';
 import { initCa } from './tls-ca';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
+import { sbxProvider } from './environments';
+import { sbxEgressIdentify, sbxTrustsHuddleCa } from './environments/sbx-store';
+import { SBX_PROXY_PORT } from './environments/sbx-egress';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
 // Without this handler Node.js crashes the process on unhandled 'error' events
@@ -24,6 +28,23 @@ initDb();
 runSettingsMigration();
 initCa();
 createProxyServer();
+// Egress of Docker Sandboxes (docs/host-pipe.md, "sbx egress"). The sbx daemon
+// on the host connects here through the loopback port `huddle init` published
+// and names the sandbox with its proxy secret. TLS is inspected only for a sandbox
+// created with the Huddle CA kit (cli/src/pipe/sbx-kit.ts); others do not trust it.
+createProxyServer(SBX_PROXY_PORT, {
+  intercept: sbxTrustsHuddleCa,
+  identify: sbxEgressIdentify(() => sbxProvider.onResetSecretSeen()),
+});
+// Sandboxes whose secret the gateway lost (it stopped mid-create) are recreated
+// once the host pipe answers; until then, try again every 30 s.
+const SBX_RECONCILE_RETRY_MS = 30_000;
+function reconcileSbx(): void {
+  sbxProvider.reconcile()
+    .catch((err) => { console.error('[sbx] reconcile failed:', err?.message ?? err); return true; })
+    .then((done) => { if (!done) setTimeout(reconcileSbx, SBX_RECONCILE_RETRY_MS).unref(); });
+}
+reconcileSbx();
 createApiServer().catch(err => {
   console.error('[api] failed to start', err);
   process.exit(1);
@@ -39,6 +60,8 @@ async function initContainerProxies(): Promise<void> {
     if (containers.length) {
       console.log(`[socket-proxy] restored ${containers.length} proxy socket(s)`);
     }
+    // SSH relays (inbound JetBrains Gateway SSH) for devcontainers that still exist.
+    await restoreSshRelays(new Set(containers.map(c => c.name)));
   } catch (err: any) {
     console.error('[socket-proxy] init failed:', err.message);
   }

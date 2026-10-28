@@ -5,7 +5,7 @@ import tls from 'tls';
 import stream from 'stream';
 import zlib from 'zlib';
 import { URL } from 'url';
-import { checkRule, isPathMode, canonicalizeHost, normalizePathname } from './rules';
+import { checkRule, isPathMode, isNoIntercept, canonicalizeHost, normalizePathname } from './rules';
 import { resolveContainerByIp } from './docker';
 import { logAudit, updateAuditResponse } from './db';
 import { signLeafCert } from './tls-ca';
@@ -98,9 +98,39 @@ function send502(res: http.ServerResponse, message: string): void {
 // Reason phrase per status so the status line is never self-contradictory
 // (e.g. "400 Forbidden"). rejectSocket serves both CONNECT and Upgrade denials.
 const REJECT_REASON: Record<number, string> = {
-  400: 'Bad Request', 403: 'Forbidden', 426: 'Upgrade Required',
+  400: 'Bad Request', 403: 'Forbidden', 407: 'Proxy Authentication Required', 426: 'Upgrade Required',
   502: 'Bad Gateway', 504: 'Gateway Timeout',
 };
+
+const AUTH_REQUIRED_BODY = JSON.stringify({
+  error: 'PROXY_AUTH_REQUIRED',
+  message: 'Huddle does not know this caller. A sandbox that Huddle routes must be recreated from the Huddle portal.',
+});
+
+// 407 for a caller that `identify` did not recognize, on either a response or a
+// raw socket (CONNECT/Upgrade). Logged without a container: nobody vouched for it.
+function rejectUnknownCaller(target: http.ServerResponse | stream.Duplex, domain: string, method: string | undefined): void {
+  logAudit({ containerId: null, domain, action: 'deny', ruleId: null, method: method ?? null, resStatus: 407 });
+  if (target instanceof http.ServerResponse) {
+    target.writeHead(407, {
+      'proxy-authenticate': 'Basic realm="huddle"',
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(AUTH_REQUIRED_BODY),
+      connection: 'close',
+    });
+    target.end(AUTH_REQUIRED_BODY);
+    return;
+  }
+  target.write(
+    `HTTP/1.1 407 ${REJECT_REASON[407]}\r\n` +
+      `proxy-authenticate: Basic realm="huddle"\r\n` +
+      `content-type: application/json\r\n` +
+      `content-length: ${Buffer.byteLength(AUTH_REQUIRED_BODY)}\r\n` +
+      `connection: close\r\n\r\n` +
+      AUTH_REQUIRED_BODY
+  );
+  target.end();
+}
 
 function rejectSocket(socket: stream.Duplex, status: number, blockStatus: string, domain: string, containerId?: string | null): void {
   const body = JSON.stringify({
@@ -331,17 +361,54 @@ function handleTokenExchangeResponse(
   });
 }
 
+// Extension server-side fetches (extensions/loader.ts) are identified via the
+// X-Huddle-Ext header, but only when the connection comes from the gateway
+// itself on loopback. Honoring it from a devcontainer would let that container
+// pick its own identity and skip its airlock and per-container deny rules.
+// The header is always removed so it never reaches the upstream.
+async function resolveIdentity(req: http.IncomingMessage): Promise<string | null> {
+  const remote = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '');
+  const extHeader = req.headers['x-huddle-ext'];
+  delete req.headers['x-huddle-ext'];
+  if (extHeader && (remote === '127.0.0.1' || remote === '::1'))
+    return `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`;
+  return resolveContainerByIp(remote);
+}
+
 // `port` defaults to the fixed proxy port; tests bind on 0 (a free
 // ephemeral port) so the path-forwarding behavior can be tested hermetically.
-export function createProxyServer(port: number = PROXY_PORT): http.Server {
+export interface ProxyServerOptions {
+  /**
+   * Who is calling, as the rule scope (containerId). Replaces resolveIdentity()
+   * (the devcontainer by source IP, or an extension by X-Huddle-Ext). Null: unknown
+   * caller, answered with 407 before anything else is looked at.
+   */
+  identify?: (req: http.IncomingMessage) => string | null;
+  /**
+   * TLS interception on 443 (default on). Off for callers that do not trust the
+   * Huddle CA: CONNECT is then a raw tunnel decided on the host alone. A function
+   * decides per caller (by the scope `identify` returned).
+   */
+  intercept?: boolean | ((containerId: string | null) => boolean);
+}
+
+export function createProxyServer(port: number = PROXY_PORT, opts: ProxyServerOptions = {}): http.Server {
   const server = http.createServer();
+  const inspects = (containerId: string | null) =>
+    typeof opts.intercept === 'function' ? opts.intercept(containerId) : opts.intercept !== false;
 
   server.on('request', async (req, res) => {
-    // Extension server-side fetch is identified via the X-Huddle-Ext header
-    const extHeader = req.headers['x-huddle-ext'];
-    const containerId = extHeader
-      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
-      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    let containerId: string | null;
+    if (opts.identify) {
+      delete req.headers['x-huddle-ext'];
+      containerId = opts.identify(req);
+      if (containerId === null) {
+        rejectUnknownCaller(res, req.url ?? '', req.method);
+        return;
+      }
+    } else {
+      containerId = await resolveIdentity(req);
+    }
     const rawUrl = req.url || '';
 
     let target: URL;
@@ -383,7 +450,8 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     let ruleId: number | null;
     if (host === 'huddle') {
       // Self-traffic: devcontainers may only reach a fixed set of huddle paths.
-      const allowed =
+      // Callers with their own identity (sandboxes) none at all.
+      const allowed = !opts.identify &&
         (target.port === '3000' && req.method === 'POST' && normPath === '/api/audit/sudo');
       if (!allowed) {
         logAudit({
@@ -418,7 +486,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     }
 
     const outgoingHeaders: http.OutgoingHttpHeaders = { ...req.headers };
-    delete outgoingHeaders['proxy-connection'];
+    stripProxyHeaders(outgoingHeaders);
 
     const reqChunks: Buffer[] = [];
     let reqBytes = 0;
@@ -434,7 +502,7 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
       ruleId,
       method: req.method ?? null,
       path: forwardPath,
-      reqHeaders: headersToJson(req.headers),
+      reqHeaders: auditReqHeaders(req.headers),
     });
     let completed = false;
     const complete = (resStatus: number | null, resHeaders?: http.IncomingHttpHeaders) => {
@@ -498,10 +566,17 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   // firewall enforcement as the request path: canonicalize the host, decide on the
   // normalized path, forward the original encoded bytes.
   server.on('upgrade', async (req, clientSocket, head) => {
-    const extHeader = req.headers['x-huddle-ext'];
-    const containerId = extHeader
-      ? `ext:${String(extHeader).replace(/[^a-z0-9-]/g, '')}`
-      : await resolveContainerByIp(req.socket.remoteAddress ?? '');
+    let containerId: string | null;
+    if (opts.identify) {
+      delete req.headers['x-huddle-ext'];
+      containerId = opts.identify(req);
+      if (containerId === null) {
+        rejectUnknownCaller(clientSocket, req.url ?? '', req.method);
+        return;
+      }
+    } else {
+      containerId = await resolveIdentity(req);
+    }
     const rawUrl = req.url || '';
 
     let target: URL;
@@ -579,11 +654,29 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
   });
 
   server.on('connect', async (req, clientSocket, head) => {
-    const containerId = await resolveContainerByIp(
-      (clientSocket as net.Socket).remoteAddress ?? ''
-    );
+    let containerId: string | null;
+    if (opts.identify) {
+      containerId = opts.identify(req);
+      if (containerId === null) {
+        rejectUnknownCaller(clientSocket, req.url ?? '', 'CONNECT');
+        return;
+      }
+    } else {
+      containerId = await resolveContainerByIp((clientSocket as net.Socket).remoteAddress ?? '');
+    }
     const [rawHostname, portStr] = (req.url || '').split(':');
-    const port = Number(portStr) || 443;
+    // Strict port grammar: net.connect throws synchronously on an out-of-range
+    // or non-integer port, which would escape this async listener and take
+    // down the shared gateway process.
+    if (portStr !== undefined && !/^\d{1,5}$/.test(portStr)) {
+      rejectSocket(clientSocket, 400, 'deny', '', null);
+      return;
+    }
+    const port = portStr === undefined ? 443 : Number(portStr);
+    if (port < 1 || port > 65535) {
+      rejectSocket(clientSocket, 400, 'deny', '', null);
+      return;
+    }
 
     // Canonicalize the CONNECT host the same way as the plain-HTTP path
     // (`new URL().hostname`) so both paths match, log, generate the cert and
@@ -615,11 +708,14 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // must be open so that MITM sees the path after TLS termination and can enforce
     // per request (see the innerHttp handler). Only meaningful if we can
     // inspect: 443 + not cert-pinned. Otherwise it stays closed host-only.
-    const pathModeTunnel =
-      status !== 'allow' &&
-      port === 443 &&
-      !NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) &&
-      isPathMode(hostname, containerId);
+    // Not inspected: switched off for this listener, by env (NO_INTERCEPT_DOMAINS)
+    // or by an operator ("TLS inspection off" on the domain's rule).
+    const raw =
+      !inspects(containerId) ||
+      port !== 443 ||
+      NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) ||
+      isNoIntercept(hostname, containerId);
+    const pathModeTunnel = status !== 'allow' && !raw && isPathMode(hostname, containerId);
     if (status !== 'allow' && !pathModeTunnel) {
       logAudit({
         containerId,
@@ -637,8 +733,25 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
     // Domains with cert-pinning cannot go through MITM. For those domains
     // we fall back to the old raw TCP tunnel; request/response content
     // then stays invisible in the audit log (only CONNECT recorded).
-    if (NO_INTERCEPT_DOMAINS.has(hostname.toLowerCase()) || port !== 443) {
+    if (raw) {
+      // Path rules are only enforced after MITM; a raw tunnel to a path-mode
+      // domain (e.g. CONNECT host:80) would skip every path deny.
+      if (isPathMode(hostname, containerId)) {
+        logAudit({
+          containerId,
+          domain: hostname,
+          port,
+          action: 'deny',
+          ruleId,
+          method: 'CONNECT',
+          resStatus: 403,
+        });
+        rejectSocket(clientSocket, 403, 'deny', hostname, containerId);
+        return;
+      }
+      let established = false;
       const upstream = net.connect(port, hostname, () => {
+        established = true;
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         logAudit({
           containerId,
@@ -654,8 +767,15 @@ export function createProxyServer(port: number = PROXY_PORT): http.Server {
         clientSocket.pipe(upstream, { end: false });
         upstream.on('end', () => clientSocket.destroy());
         clientSocket.on('end', () => upstream.destroy());
+        // Destroyed instead of ended (by the 'end' above, or a reset) is
+        // 'close' only: without this the client socket stays half-open forever.
+        upstream.on('close', () => clientSocket.destroy());
       });
-      upstream.on('error', () => clientSocket.destroy());
+      // Before the 200 the client is still waiting for an answer: give it one.
+      upstream.on('error', () => {
+        if (established) clientSocket.destroy();
+        else clientSocket.end('HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\nconnection: close\r\n\r\n');
+      });
       clientSocket.on('error', () => upstream.destroy());
       return;
     }

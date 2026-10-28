@@ -11,6 +11,7 @@ interface RuleRow {
   container_id: string | null;
   path_pattern: string | null;
   path_mode: number;
+  no_intercept: number;
 }
 
 // ── Pure match helpers (no DB) ───────────────────────────────────────────────
@@ -221,16 +222,21 @@ function prepareStmts() {
     // are moreover stored lowercase (see checkRule + db.ts migration) — this is
     // the belt-and-suspenders SQL side.
     selectPerContainer: db.prepare<[string, string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND container_id = ?`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode, no_intercept FROM rules WHERE domain = ? COLLATE NOCASE AND container_id = ?`
     ),
     selectGlobal: db.prepare<[string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain = ? COLLATE NOCASE AND container_id IS NULL`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode, no_intercept FROM rules WHERE domain = ? COLLATE NOCASE AND container_id IS NULL`
     ),
     selectWildcardPerContainer: db.prepare<[string]>(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain LIKE '*.%' AND container_id = ?`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode, no_intercept FROM rules WHERE domain LIKE '*.%' AND container_id = ?`
     ),
     selectWildcardGlobal: db.prepare(
-      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode FROM rules WHERE domain LIKE '*.%' AND container_id IS NULL`
+      `SELECT id, domain, status, expires_at, container_id, path_pattern, path_mode, no_intercept FROM rules WHERE domain LIKE '*.%' AND container_id IS NULL`
+    ),
+    // Host-only "TLS inspection off" rules for one scope plus global. There are
+    // few of them, so one query per CONNECT and the domain match in JS.
+    selectNoIntercept: db.prepare<[string]>(
+      `SELECT domain FROM rules WHERE no_intercept = 1 AND path_pattern IS NULL AND (container_id IS NULL OR container_id = ?)`
     ),
     touchRule: db.prepare<[number]>(
       `UPDATE rules SET last_seen = unixepoch(), request_count = request_count + 1 WHERE id = ?`
@@ -398,6 +404,14 @@ export function isPathMode(domain: string, containerId: string | null): boolean 
   return rows.some(r => r.path_pattern === null && r.path_mode === 1);
 }
 
+// Is TLS inspection switched off for this domain? I.e. does a host-only rule with
+// no_intercept=1 apply to this container or globally, exactly or via a *. wildcard.
+// The proxy then keeps a raw tunnel instead of terminating TLS.
+export function isNoIntercept(domain: string, containerId: string | null): boolean {
+  const rows = s().selectNoIntercept.all(containerId ?? '') as { domain: string }[];
+  return rows.some(r => matchDomain(r.domain, domain));
+}
+
 // Ensure a domain is in path-allowlist mode after a path-scoped rule is created.
 // A path rule is inert over HTTPS unless a host-only marker (path_pattern IS NULL)
 // with path_mode=1 exists: the proxy only sees the host at CONNECT and admits the
@@ -430,11 +444,26 @@ export function ensurePathModeMarker(domain: string, containerId: string | null,
   }
   if (marker.path_mode !== 1) {
     const status = marker.status === 'requested' ? 'deny' : marker.status;
-    db.prepare(`UPDATE rules SET path_mode = 1, status = ?, updated_at = unixepoch() WHERE id = ?`).run(status, marker.id);
+    // Path rules are only enforced on inspected TLS, so path mode turns inspection back on.
+    db.prepare(`UPDATE rules SET path_mode = 1, no_intercept = 0, status = ?, updated_at = unixepoch() WHERE id = ?`).run(status, marker.id);
   }
   // Adopt an ungrouped marker into the group, but never move one that already
   // belongs somewhere: an implicit row must not be stolen from another group.
   if (groupId !== undefined && marker.group_id == null) {
     db.prepare(`UPDATE rules SET group_id = ?, updated_at = unixepoch() WHERE id = ?`).run(groupId, marker.id);
   }
+}
+
+// After an update or resolve: a rule that now has a path_pattern is a path rule,
+// which only fires on inspected TLS. Drop the host-only flags it may still carry
+// from before (a path row with no_intercept/path_mode is an invalid combination,
+// also for import) and establish the domain's path-mode marker, like a new path rule.
+export function settlePathRule(id: number): void {
+  const rule = db.prepare(`SELECT domain, container_id, path_pattern, group_id, source FROM rules WHERE id = ?`)
+    .get(id) as { domain: string; container_id: string | null; path_pattern: string | null; group_id: number | null; source: string } | undefined;
+  if (!rule || rule.path_pattern === null) return;
+  db.prepare(`UPDATE rules SET no_intercept = 0, path_mode = 0 WHERE id = ? AND (no_intercept <> 0 OR path_mode <> 0)`).run(id);
+  // The marker belongs to whoever owns the path rule (e.g. a team folder), so a
+  // folder reload that drops the path rule drops its marker too.
+  ensurePathModeMarker(rule.domain, rule.container_id, rule.group_id ?? undefined, rule.source);
 }

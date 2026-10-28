@@ -1,0 +1,136 @@
+<div class="page-header">
+  <h1>Dev Environments</h1>
+  <div class="actions">
+    <button class="btn btn-ghost btn-sm" (click)="refreshSandboxes()" [disabled]="loadingSandboxes()">
+      @if (loadingSandboxes()) { <span class="spinner"></span> Loading… } @else { Refresh }
+    </button>
+  </div>
+</div>
+
+@if (notice()) { <p class="notice">{{ notice() }}</p> }
+@for (p of unavailable(); track p.id) {
+  <p class="notice">{{ p.label }} unavailable{{ p.error ? ': ' + p.error : '' }}</p>
+}
+@for (f of failed(); track f.id) {
+  <p class="notice">Could not list {{ f.label }} sandboxes: {{ f.error }} — showing the last known list; use Refresh to retry.</p>
+}
+
+<section class="env-section">
+  <div class="section-head">
+    <h2 class="section-title">Devcontainers</h2>
+    <button class="btn btn--accent btn-sm section-add" (click)="modal.openStart()" title="Start devcontainer">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg> Devcontainer
+    </button>
+  </div>
+  <div class="card">
+    <table class="data-table">
+      <thead>
+        <tr><th>Environment</th><th>Status</th><th>Requested</th><th class="col-actions">Actions</th></tr>
+      </thead>
+      <tbody>
+        @for (e of containerRows(); track e.name) {
+          <tr class="clickable" (click)="openDetail(e)">
+            <td>
+              <div class="container-cell">
+                <div class="cc-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+                </div>
+                <div>
+                  <div class="name">{{ e.short }}</div>
+                  <div class="sub"><code>{{ e.name }}</code></div>
+                </div>
+              </div>
+            </td>
+            <td><span class="status" [ngClass]="e.running ? 'status--running' : 'status--stopped'">{{ e.statusLabel }}</span></td>
+            <td>
+              @if (e.requested > 0) {
+                <a class="badge-pill yellow" [routerLink]="detailLink(e)">{{ e.requested }}</a>
+              } @else {
+                <span class="badge-pill muted">0</span>
+              }
+            </td>
+            <td class="col-actions" (click)="$event.stopPropagation()">
+              <button class="btn btn-ghost btn-sm" [routerLink]="detailLink(e)">Detail</button>
+              @if (!e.running) { <button class="btn btn--accent btn-sm" (click)="startContainer(e.name)">Start</button> }
+              <button class="btn btn-delete btn-sm" (click)="snapshot(e.name)">Snapshot</button>
+              <button class="btn btn-delete btn-sm" (click)="deleteContainer(e.name)">Delete</button>
+            </td>
+          </tr>
+        } @empty {
+          <tr><td colspan="4"><p class="empty-note">No devcontainers yet — use + Devcontainer.</p></td></tr>
+        }
+      </tbody>
+    </table>
+  </div>
+</section>
+
+@for (p of providers(); track p.id) {
+  <section class="env-section">
+    <div class="section-head">
+      <h2 class="section-title">{{ p.label }}</h2>
+      <span class="state" [class.state--on]="p.enabled">{{ p.enabled ? 'On' : 'Off' }}</span>
+      <a class="section-link" routerLink="/settings" fragment="dev-environments">{{ p.enabled ? 'Switch off' : 'Switch on' }} / recreate in Settings →</a>
+      <button class="btn btn--accent btn-sm" (click)="modal.openSandbox(p.id)"
+              [disabled]="!p.enabled || !p.available || !!p.recreate?.running"
+              [title]="!p.enabled ? p.label + ' is switched off in Huddle' : !p.available ? p.label + ' is unavailable' : 'Create ' + p.label">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg> {{ p.label }}
+      </button>
+    </div>
+    @if (p.recreate?.running) {
+      <p class="loading-row"><span class="spinner"></span>
+        Recreating sandboxes ({{ p.recreate?.reason }})… {{ p.recreate?.results?.length }} done so far. Sandboxes are unavailable meanwhile.</p>
+    }
+    <div class="card">
+      @if (!p.enabled) {
+        <p class="empty-note">{{ p.label }} is switched off in Huddle — its sandboxes are not listed or created here.
+          <a routerLink="/settings" fragment="dev-environments">Switch it on in Settings</a>.</p>
+      } @else {
+        <table class="data-table">
+          <thead>
+            <tr><th>Sandbox</th><th>Status</th><th>Requested</th><th class="col-actions">Actions</th></tr>
+          </thead>
+          <tbody>
+            @for (e of sandboxRows(p.id); track e.name) {
+              <tr class="clickable" (click)="openDetail(e)">
+                <td>
+                  <div class="container-cell">
+                    <div class="cc-icon">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+                    </div>
+                    <div>
+                      <div class="name">{{ e.short }}</div>
+                      <div class="sub"><code>{{ e.workspaces || e.name }}</code></div>
+                    </div>
+                  </div>
+                </td>
+                <td><span class="status" [ngClass]="e.running ? 'status--running' : 'status--stopped'">{{ e.statusLabel }}</span></td>
+                <td>
+                  @if (e.requested > 0) {
+                    <a class="badge-pill yellow" [routerLink]="detailLink(e)">{{ e.requested }}</a>
+                  } @else {
+                    <span class="badge-pill muted">0</span>
+                  }
+                </td>
+                <td class="col-actions" (click)="$event.stopPropagation()">
+                  <button class="btn btn-ghost btn-sm" [routerLink]="detailLink(e)">Detail</button>
+                  @if (e.managed) {
+                    <button class="btn btn-delete btn-sm" (click)="deleteSandbox(e)" [disabled]="!!isBusy(e.name)">{{ isBusy(e.name) || 'Remove' }}</button>
+                  }
+                </td>
+              </tr>
+            } @empty {
+              @if (loadingSandboxes()) {
+                <tr><td colspan="4"><p class="empty-note"><span class="spinner"></span> Loading sandboxes… (asking the host agent)</p></td></tr>
+              } @else {
+                <tr><td colspan="4"><p class="empty-note">No sandboxes yet — use + {{ p.label }}.</p></td></tr>
+              }
+            }
+            @if (loadingSandboxes() && sandboxRows(p.id).length) {
+              <tr><td colspan="4"><p class="loading-row"><span class="spinner"></span> Loading sandboxes…</p></td></tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  </section>
+}

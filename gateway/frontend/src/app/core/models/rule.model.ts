@@ -13,6 +13,8 @@ export interface Rule {
   expires_at?: number | null;
   path_pattern?: string | null;
   path_mode?: number;
+  /** 1 = TLS inspection off for this domain: the proxy keeps a raw tunnel. */
+  no_intercept?: number;
   last_path?: string | null;
   group_id?: number | null;
   added_by?: string | null;

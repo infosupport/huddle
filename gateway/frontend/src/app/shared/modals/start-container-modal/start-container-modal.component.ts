@@ -4,7 +4,6 @@ import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 import { DockerImage } from '../../../core/models/container.model';
-import { IndexedFolder } from '../../../core/services/api.service';
 import { FmtBytesPipe } from '../../pipes/fmt-bytes.pipe';
 import { FolderSelectComponent } from '../../components/folder-select/folder-select.component';
 import { FolderPickerModalComponent } from '../folder-picker-modal/folder-picker-modal.component';
@@ -39,11 +38,11 @@ export class StartContainerModalComponent {
   private state = inject(StateService);
 
   images: DockerImage[] = [];
-  // Host folders indexed by `huddle indexfolder`; loaded once per open and passed
-  // to every folder input, so N mount rows do not each fetch the same list.
-  indexedFolders: IndexedFolder[] = [];
   baseImage = '';
   selectedImage = '';
+  // Sentinel option value for a free-text image reference.
+  readonly CUSTOM_IMAGE = '__custom__';
+  customImage = '';
   ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
   mode: 'single' | 'multi' = 'single';
   workspace = '';
@@ -80,12 +79,6 @@ export class StartContainerModalComponent {
     this.loading = false;
     this.restoreRemembered();
     this.loadImagesForIde();
-    this.api.getIndexedFolders().subscribe({
-      next: r => { this.indexedFolders = r.folders; },
-      // No index is a normal state (nobody ran `huddle indexfolder` yet), and the
-      // inputs still take free text — so a failure here must not block the modal.
-      error: () => { this.indexedFolders = []; },
-    });
   }
 
   // The IDE choice drives both the default base image and the snapshot filter.
@@ -121,7 +114,7 @@ export class StartContainerModalComponent {
   // Picking the folders of a multi-folder container one dialog at a time is a
   // lot of clicking for what is one decision. Browse once, Ctrl-click the
   // folders, and every one of them lands as its own row. Purely additive: rows
-  // already filled in (including hand-typed paths that are not indexed) stay,
+  // already filled in (including hand-typed paths) stay,
   // and a folder that is already mounted is not added twice.
   onFoldersPicked(paths: string[]): void {
     this.folderPickerOpen = false;
@@ -211,8 +204,12 @@ export class StartContainerModalComponent {
     this.updateAutoName();
   }
 
+  private imageToStart(): string {
+    return this.selectedImage === this.CUSTOM_IMAGE ? this.customImage.trim() : this.selectedImage;
+  }
+
   private validate(): string | null {
-    if (!this.selectedImage || !this.containerName) return 'All fields are required';
+    if (!this.imageToStart() || !this.containerName) return 'All fields are required';
     if (this.empty) return null;
     if (this.mode === 'multi') {
       if (this.mounts.length === 0) return 'Add at least one folder';
@@ -236,10 +233,12 @@ export class StartContainerModalComponent {
     if (err) { this.error = err; return; }
     this.error = '';
     this.loading = true;
-    this.status = 'Starting container…';
+    this.status = this.selectedImage === this.CUSTOM_IMAGE
+      ? 'Preparing custom image (first time takes a few minutes)…'
+      : 'Starting container…';
     const isMulti = this.mode === 'multi' && !this.empty;
     this.api.startContainer({
-      image: this.selectedImage,
+      image: this.imageToStart(),
       ide: this.ide,
       workspace: this.mode === 'single' ? this.workspace : '',
       mounts: isMulti

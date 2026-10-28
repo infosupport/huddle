@@ -50,3 +50,13 @@ export function buildPathDomains(rules: Rule[]): PathDomainVm[] {
     })
     .sort((a, b) => a.domain.localeCompare(b.domain));
 }
+
+// A path request of a global path-mode domain has no container: acting on it
+// changes the global path policy for every container and sandbox, so ask first,
+// like the global domain actions do. True when nothing global is involved.
+export function confirmGlobalPaths(rows: { rule: Rule; domain: string; path_pattern: string }[]): boolean {
+  const global = rows.filter((p) => !p.rule.container_id);
+  if (!global.length) return true;
+  const what = global.length === 1 ? `${global[0].domain}${global[0].path_pattern}` : `${global.length} path requests`;
+  return confirm(`${what} belongs to a global path allowlist — this changes it for ALL containers and sandboxes. Continue?`);
+}

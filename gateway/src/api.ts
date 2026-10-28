@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -16,6 +16,9 @@ import {
 } from './firewall-groups';
 import {
   readHostConfig,
+  getHostAgentLogs,
+  setHostAgentLogs,
+  hostAgentLogsMounted,
   setHostFolder,
   hostConfigAvailable,
   getResourceDefaults,
@@ -29,9 +32,12 @@ import {
   fromWirePatch,
 } from './host-config';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
+import { normalizeHostPath, hostPathError, huddleHomeMountError } from './host-path';
+import { registerHostPipeRoutes } from './host-pipe-routes';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
-import { ensurePathModeMarker } from './rules';
+import { ensurePathModeMarker, settlePathRule } from './rules';
+import { sbxTrustsHuddleCa } from './environments/sbx-store';
+import { parseNoIntercept, shareable } from './firewall-group-envelope';
 import {
   listDevcontainers,
   inspectContainer,
@@ -47,12 +53,12 @@ import {
   cleanupContainerNetwork,
   resolveContainerByIp,
   isIdeName,
-  execContainerOutput,
   execInContainer,
   type StartParams,
   type IdeName,
 } from './docker';
 import { grantSudo, revokeSudo } from './sudo-grant';
+import { prepareSshLink, removeSshRelay, SshLinkError } from './ssh-link';
 import {
   getOperatorToken,
   isAuthenticated,
@@ -71,7 +77,8 @@ import {
   removeExtension,
   listExtensions,
   extDispatch,
-  EXT_DIR,
+  extensionAssetType,
+  extensionDir,
 } from './extensions/registry';
 
 const API_PORT = 3000;
@@ -87,6 +94,7 @@ interface Rule {
   expires_at: number | null;
   path_pattern: string | null;
   path_mode: number;
+  no_intercept: number;
   created_at: number;
   updated_at: number;
   last_seen: number;
@@ -101,6 +109,8 @@ interface ShareableRule {
   status: RuleStatus;
   path_pattern: string | null;
   path_mode: number;
+  /** Only present (as 1) when TLS inspection is off, so older Huddles still import the rest. */
+  no_intercept?: number;
   expires_at: number | null;
 }
 
@@ -295,6 +305,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(409).send({ error: 'duplicate', message: err.message });
       }
       if (result.changes === 0) return reply.code(404).send({ error: 'not_found' });
+      settlePathRule(id);
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       if (updated.container_id === null && updated.path_pattern === null && (status === 'allow' || status === 'deny')) {
         db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(updated.domain);
@@ -357,6 +368,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(409).send({ error: 'duplicate', message: err.message });
       }
 
+      settlePathRule(id);
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       if (updated.container_id === null && updated.path_pattern === null) {
         db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(updated.domain);
@@ -386,6 +398,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       return reply.code(409).send({ error: 'duplicate', message: err.message });
     }
 
+    settlePathRule(globalRule.id);
     const updatedGlobal = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(globalRule.id) as Rule;
     if (globalPathPattern === null) {
       db.prepare(`DELETE FROM rules WHERE domain = ? AND status = 'requested' AND path_pattern IS NULL`).run(rule.domain);
@@ -414,12 +427,39 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(400).send({ error: 'path_mode only applies to a host-only rule (without path_pattern)' });
       }
       if (enabled) {
-        db.prepare(`UPDATE rules SET path_mode = 1, status = 'deny', updated_at = unixepoch() WHERE id = ?`).run(id);
+        // Path rules are only enforced on inspected TLS, so path mode turns inspection back on.
+        db.prepare(`UPDATE rules SET path_mode = 1, no_intercept = 0, status = 'deny', updated_at = unixepoch() WHERE id = ?`).run(id);
       } else {
         db.prepare(`UPDATE rules SET path_mode = 0, updated_at = unixepoch() WHERE id = ?`).run(id);
       }
       const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
       logAudit({ containerId: rule.container_id, domain: rule.domain, action: `admin:path-mode-${enabled ? 'on' : 'off'}`, ruleId: id });
+      notifyStateChanged();
+      return updated;
+    }
+  );
+
+  // Switch TLS inspection off (or back on) for a domain. Operates on the host-only
+  // rule, like path mode, and applies wherever that rule applies: a devcontainer,
+  // a sandbox or globally. The proxy then keeps a raw tunnel — for clients that
+  // pin certificates or cannot trust the Huddle CA — so request content and path
+  // rules no longer apply; that is why a path-mode domain cannot have it.
+  app.post<{ Params: { id: string }; Body: { enabled: boolean } }>(
+    '/api/rules/:id/no-intercept',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const enabled = req.body?.enabled === true;
+      const rule = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule | undefined;
+      if (!rule) return reply.code(404).send({ error: 'not_found' });
+      if (rule.path_pattern !== null) {
+        return reply.code(400).send({ error: 'TLS inspection can only be switched off on a host-only rule (without path_pattern)' });
+      }
+      if (enabled && rule.path_mode === 1) {
+        return reply.code(400).send({ error: 'path mode needs TLS inspection; switch path mode off first' });
+      }
+      db.prepare(`UPDATE rules SET no_intercept = ?, updated_at = unixepoch() WHERE id = ?`).run(enabled ? 1 : 0, id);
+      const updated = db.prepare(`SELECT * FROM rules WHERE id = ?`).get(id) as Rule;
+      logAudit({ containerId: rule.container_id, domain: rule.domain, action: `admin:tls-inspection-${enabled ? 'off' : 'on'}`, ruleId: id });
       notifyStateChanged();
       return updated;
     }
@@ -471,7 +511,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
   // Only the shareable fields travel along; volatile columns (id/last_seen/
   // request_count/created_at) stay local. `container` filters by scope just like
   // GET /api/rules (one container or '__global__').
-  const RULE_IMPORT_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'expires_at']);
+  const RULE_IMPORT_FIELDS = new Set(['domain', 'container_id', 'status', 'path_pattern', 'path_mode', 'no_intercept', 'expires_at']);
 
   // Validate one incoming rule fail-closed: unknown key → reject, and
   // check every field's type. Returns a normalized ShareableRule;
@@ -493,11 +533,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (path_pattern !== null && typeof path_pattern !== 'string') throw new Error('path_pattern must be a string or null');
     const path_mode = r.path_mode === undefined || r.path_mode === null ? 0 : r.path_mode;
     if (path_mode !== 0 && path_mode !== 1) throw new Error('path_mode must be 0 or 1');
+    const no_intercept = parseNoIntercept(r.no_intercept, path_pattern, path_mode);
     const expires_at = r.expires_at === undefined || r.expires_at === null ? null : r.expires_at;
     if (expires_at !== null && (typeof expires_at !== 'number' || !Number.isFinite(expires_at))) {
       throw new Error('expires_at must be a number or null');
     }
-    return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, expires_at };
+    return { domain: r.domain, container_id, status: r.status, path_pattern, path_mode, no_intercept, expires_at };
   }
 
   app.get<{ Querystring: { container?: string } }>('/api/rules/export', async (req) => {
@@ -513,10 +554,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
     }
     const sql =
-      `SELECT domain, container_id, status, path_pattern, path_mode, expires_at FROM rules` +
+      `SELECT domain, container_id, status, path_pattern, path_mode, no_intercept, expires_at FROM rules` +
       (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
       ` ORDER BY domain COLLATE NOCASE, COALESCE(container_id, ''), COALESCE(path_pattern, '')`;
-    const rules = db.prepare(sql).all(...params) as ShareableRule[];
+    const rules = (db.prepare(sql).all(...params) as ShareableRule[]).map(shareable);
     return { version: 1, exported_at: Math.floor(Date.now() / 1000), rules };
   });
 
@@ -556,10 +597,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
          AND COALESCE(path_pattern, '') = COALESCE(?, '')`
     );
     const insertRule = db.prepare(
-      `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO rules (domain, container_id, status, expires_at, path_pattern, path_mode, no_intercept) VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
     const updateRule = db.prepare(
-      `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, updated_at = unixepoch() WHERE id = ?`
+      `UPDATE rules SET status = ?, expires_at = ?, path_mode = ?, no_intercept = ?, updated_at = unixepoch() WHERE id = ?`
     );
 
     let imported = 0;
@@ -592,10 +633,10 @@ export async function createApiServer(): Promise<FastifyInstance> {
 
         const existing = findExisting.get(r.domain, r.container_id, r.path_pattern) as { id: number } | undefined;
         if (existing) {
-          updateRule.run(r.status, r.expires_at, r.path_mode, existing.id);
+          updateRule.run(r.status, r.expires_at, r.path_mode, r.no_intercept ?? 0, existing.id);
           updated++;
         } else {
-          insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode);
+          insertRule.run(r.domain, r.container_id, r.status, r.expires_at, r.path_pattern, r.path_mode, r.no_intercept ?? 0);
           imported++;
         }
       }
@@ -639,7 +680,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!group) return reply.code(404).send({ error: 'not_found' });
     const rules = db
       .prepare(
-        `SELECT id, domain, container_id, status, expires_at, path_pattern, path_mode,
+        `SELECT id, domain, container_id, status, expires_at, path_pattern, path_mode, no_intercept,
                 last_path, group_id, added_by, source, created_at, updated_at, last_seen, request_count
            FROM rules WHERE group_id = ? ORDER BY last_seen DESC`,
       )
@@ -732,8 +773,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
       if (!getGroup(id)) return reply.code(404).send({ error: 'not_found' });
       const raw = req.body?.container;
       const container = raw === undefined || raw === null || raw === '__global__' || raw === '' ? null : raw;
-      const res = applyGroup(id, container);
-      return { ok: true, ...res };
+      const { pathRules, ...res } = applyGroup(id, container);
+      // A sandbox without the Huddle CA kit (or with an outdated one) gets a raw
+      // TLS tunnel: its path rules can never match, so HTTPS to those domains is
+      // blocked. Say so instead of failing silently.
+      const warning = pathRules && container?.startsWith('sbx:') && !sbxTrustsHuddleCa(container)
+        ? `${pathRules} path rule(s) can't take effect in ${container.slice(4)}: its HTTPS traffic isn't inspected. Recreate the sandbox so it trusts the Huddle CA.`
+        : undefined;
+      return { ok: true, ...res, ...(warning ? { warning } : {}) };
     },
   );
 
@@ -893,6 +940,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      await removeSshRelay(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
@@ -952,12 +1000,12 @@ export async function createApiServer(): Promise<FastifyInstance> {
           const seen = new Set<string>();
           normalizedMounts = mounts.map((m) => {
             // Host paths go through the one normalizer (host-path.ts): the value
-            // may be typed in the modal, picked from the folder index or sent by
-            // the CLI, and on Windows all three spell the same folder
-            // differently (`T:\p`, `t:/p/`, `T:/p`).
+            // may be typed in the modal, picked from the host folder browser or
+            // sent by the CLI, and on Windows all three spell the same folder
+            // differently (`T:\p`, `t:/p/`, `T:/p`). Workspace mounts are read-write.
             const hostPath = normalizeHostPath(m.hostPath ?? '');
             const containerPath = (m.containerPath ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-            const hostProblem = hostPathError(hostPath);
+            const hostProblem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, false);
             if (hostProblem) throw new Error(`Host path ${hostProblem}: "${m.hostPath ?? ''}"`);
             const pathProblem = containerPathError(containerPath);
             if (pathProblem) throw new Error(`Container path ${pathProblem}: "${m.containerPath}"`);
@@ -971,7 +1019,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       }
       const fwd = normalizeHostPath(workspaceDir ?? '');
       if (!empty && !normalizedMounts) {
-        const problem = hostPathError(fwd);
+        const problem = hostPathError(fwd) ?? huddleHomeMountError(fwd, false);
         if (problem) return reply.code(400).send({ error: `workspaceDir ${problem}: "${workspaceDir ?? ''}"` });
       }
       const leaf = empty
@@ -1192,31 +1240,19 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── IDE gateway link ─────────────────────────────────────────────────────
-  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ide-link', async (req, reply) => {
+  // ── SSH link (JetBrains Toolbox over SSH) ────────────────────────────────
+  // Sets up the relay, sshd and the host's `<name>.huddle` ssh alias on demand
+  // and returns a Toolbox link to that alias. Idempotent: clicking again after a
+  // container restart starts sshd again and refreshes the key and host key.
+  app.get<{ Params: { name: string } }>('/api/docker/containers/:name/ssh-link', async (req, reply) => {
+    const { name } = req.params;
     try {
-      const inspect = await inspectContainer(req.params.name);
-      const labels = inspect?.Config?.Labels;
-      const workspacePath: string | undefined = labels?.['com.intellij.devcontainer.workspace.path'];
-      if (!workspacePath) return reply.code(404).send({ error: 'workspace path label not found' });
-      const ide = labels?.['com.devcontainer.ide'];
-      // VS Code installs its own backend on attach and does not write a
-      // jetbrains-gateway:// link; a deep link does not exist here.
-      if (ide === 'vscode') {
-        return reply.code(404).send({ error: 'VS Code does not use a JetBrains deep-link' });
-      }
-      // Rider and IntelliJ both run remote-dev-server.sh, which writes the gateway
-      // link to <workspace>/rider-client-diagnose.log.
-      const logFile = `${workspacePath}/rider-client-diagnose.log`;
-      const output = await execContainerOutput(inspect.Id, [
-        'sh', '-c',
-        `grep -rho 'jetbrains-gateway://[^ ]*' /.jbdevcontainer/JetBrains/ "${logFile}" 2>/dev/null | tail -1`,
-      ]);
-      const links = output.trim().split('\n').map(l => l.trim()).filter(l => l.startsWith('jetbrains-gateway://'));
-      if (links.length === 0) return reply.code(404).send({ error: 'IDE backend not started yet — please wait and try again' });
-      return { link: links[links.length - 1] };
+      const link = await prepareSshLink(name);
+      logAudit({ containerId: name, domain: 'ssh', action: 'ssh:link' });
+      return { link };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      const status = err instanceof SshLinkError ? err.status : 500;
+      return reply.code(status).send({ error: err.message });
     }
   });
 
@@ -1306,7 +1342,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!/^[a-z0-9-]+$/.test(req.params.id)) {
       return reply.code(400).send({ error: 'invalid id' });
     }
-    removeExtension(req.params.id);
+    try {
+      removeExtension(req.params.id);
+    } catch (err: any) {
+      return reply.code(409).send({ error: err.message });
+    }
     notifyStateChanged();
     return { ok: true };
   });
@@ -1329,13 +1369,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
   }
 
   // Serve an extension's static frontend assets from
-  // <EXT_DIR>/<id>/frontend/. The resolved path must stay within that folder,
+  // the frontend/ folder of the copy that was loaded (bundled, uploaded or team). The resolved path must stay within that folder,
   // otherwise it is a traversal attempt (e.g. ../../).
   app.get<{ Params: { id: string; '*': string } }>('/ext/:id/*', async (req, reply) => {
     const { id } = req.params;
     if (!/^[a-z0-9-]+$/.test(id)) return reply.code(400).send('invalid id');
     const subPath = req.params['*'] || 'index.html';
-    const baseDir = path.join(EXT_DIR, id, 'frontend');
+    const dir = extensionDir(id);
+    if (!dir) return reply.code(404).send('Not found');
+    const baseDir = path.join(dir, 'frontend');
     const filePath = path.join(baseDir, subPath);
     if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
       return reply.code(403).send('forbidden');
@@ -1343,7 +1385,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       return reply.code(404).send('Not found');
     }
-    return reply.send(fs.createReadStream(filePath));
+    reply.header('x-content-type-options', 'nosniff');
+    return reply.type(extensionAssetType(filePath)).send(fs.createReadStream(filePath));
   });
 
   // Serve Angular index.html for any non-API route (hash routing — browser never sends fragment)
@@ -1366,13 +1409,18 @@ export async function createApiServer(): Promise<FastifyInstance> {
       firewallRulesFolder: host.firewallRulesFolder ?? '',
       // Whether the CLI config is actually mounted; the portal warns if not.
       hostConfigMounted: hostConfigAvailable(),
+      hostAgentLogs: getHostAgentLogs(),
+      hostAgentLogsMounted: hostAgentLogsMounted(),
     };
   });
 
-  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string } }>(
+  app.post<{ Body: { defaultMemory?: string; defaultCpus?: string; extensionsFolder?: string; firewallRulesFolder?: string; hostAgentLogs?: boolean } }>(
     '/api/settings',
     async (req, reply) => {
-      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder } = req.body;
+      const { defaultMemory, defaultCpus, extensionsFolder, firewallRulesFolder, hostAgentLogs } = req.body;
+      if (hostAgentLogs !== undefined && typeof hostAgentLogs !== 'boolean') {
+        return reply.code(400).send({ error: 'hostAgentLogs must be true or false' });
+      }
       let restartRequired = false;
       let persisted = true;
       // Resource limits go into the same config file, but need no remount: the
@@ -1392,6 +1440,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `${key} ${problem}` });
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
+      }
+      // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
+      if (hostAgentLogs !== undefined) {
+        persisted = setHostAgentLogs(hostAgentLogs) && persisted;
+        if (hostAgentLogs && !hostAgentLogsMounted()) restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };
@@ -1415,7 +1468,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       // Windows translated to the engine's prefix at container-create time.
       const hostPath = normalizeHostPath(host_path);
       if (hostPath) {
-        const problem = hostPathError(hostPath);
+        const problem = hostPathError(hostPath) ?? huddleHomeMountError(hostPath, read_only === 1);
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
       }
       const id = createFolderMapping({
@@ -1437,7 +1490,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     '/api/folder-mappings/:id',
     async (req, reply) => {
       const id = Number(req.params.id);
-      if (!getFolderMapping(id)) return reply.code(404).send({ error: 'not_found' });
+      const current = getFolderMapping(id);
+      if (!current) return reply.code(404).send({ error: 'not_found' });
       let patch;
       try {
         patch = fromWirePatch(req.body);
@@ -1450,6 +1504,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         const problem = patch.hostPath ? hostPathError(patch.hostPath) : null;
         if (problem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${problem}` });
       }
+      // Checked on the merged mapping: making a home-folder mapping writable is a
+      // patch of read_only alone.
+      const merged = { ...current, ...patch };
+      const homeProblem = merged.hostPath ? huddleHomeMountError(merged.hostPath, merged.readOnly) : null;
+      if (homeProblem) return reply.code(400).send({ error: 'invalid_host_path', message: `host_path ${homeProblem}` });
       if (!updateFolderMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
       notifyStateChanged();
       return { ok: true };
@@ -1467,97 +1526,8 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
-  // ── Indexed host folders ──────────────────────────────────────────────────
-  // Huddle's portal runs in a container: it cannot open a file dialog on the
-  // host, so a host path has always had to be typed from memory. `huddle
-  // indexfolder` walks the host once and posts what it found here; the portal
-  // then offers those folders wherever a host path is needed. Operators can also
-  // add or remove single entries from Settings.
-  app.get('/api/indexed-folders', async () => ({
-    folders: listIndexedFolders(),
-    max: MAX_INDEXED_FOLDERS,
-  }));
-
-  app.post<{ Body: { path?: string; paths?: string[]; root?: string; source?: string; replace?: boolean } }>(
-    '/api/indexed-folders',
-    async (req, reply) => {
-      const { path: single, paths, root, source, replace } = req.body ?? {};
-      const raw = [...(Array.isArray(paths) ? paths : []), ...(single ? [single] : [])];
-      if (raw.length === 0) return reply.code(400).send({ error: 'no_paths' });
-      // 'cli' when a scan posted the batch, 'manual' when an operator typed one
-      // entry in Settings — the portal shows which is which, and re-running the
-      // scan must not silently relabel a hand-added folder as machine-found.
-      const src = source === 'manual' ? 'manual' : 'cli';
-
-      // Replace is scoped to the subtree that was just re-scanned, so indexing
-      // one project again never discards folders indexed from anywhere else.
-      // Without a usable root there is no subtree to scope to, and falling back
-      // to "clear everything" would turn a re-index of one project into total
-      // index loss. Refuse instead — wiping the index is the DELETE endpoint's
-      // job, and that one is explicit about it.
-      const normalizedRoot = root ? normalizeHostPath(root) : '';
-      if (replace && !normalizedRoot) {
-        return reply.code(400).send({ error: 'root_required', message: 'replace requires a non-empty root' });
-      }
-      let added = 0;
-      let updated = 0;
-      let skipped = 0;
-      const invalid: { path: string; error: string }[] = [];
-      const validPaths: string[] = [];
-      for (const candidate of raw) {
-        if (typeof candidate !== 'string') { invalid.push({ path: String(candidate), error: 'must be a string' }); continue; }
-        const normalized = normalizeHostPath(candidate);
-        const err = hostPathError(normalized);
-        if (err) { invalid.push({ path: candidate, error: err }); continue; }
-        validPaths.push(normalized);
-      }
-      // A replace must be all-or-nothing: validating the whole batch before
-      // clearing anything means a malformed entry rejects the request instead
-      // of deleting the old subtree and leaving it that way (finding: replace
-      // deletes before the batch is validated).
-      if (replace && invalid.length > 0) {
-        return reply.code(400).send({ error: 'invalid_paths', invalid });
-      }
-      let removed = 0;
-      if (replace) removed = clearIndexedFolders(normalizedRoot);
-
-      // Dedupe inside the batch too: the caller may well send two spellings of
-      // the same folder, and 'skipped' should not depend on insertion order.
-      const seen = new Set<string>();
-      let total = countIndexedFolders();
-      for (const normalized of validPaths) {
-        const key = normalized.toLowerCase();
-        if (seen.has(key)) { skipped++; continue; }
-        seen.add(key);
-        if (total >= MAX_INDEXED_FOLDERS) { skipped++; continue; }
-        const result = upsertIndexedFolder({ path: normalized, label: hostPathLeaf(normalized), source: src });
-        if (result === 'added') { added++; total++; } else { updated++; }
-      }
-      notifyStateChanged();
-      return { added, updated, skipped, removed, invalid, total, max: MAX_INDEXED_FOLDERS };
-    }
-  );
-
-  app.delete<{ Params: { id: string } }>(
-    '/api/indexed-folders/:id',
-    async (req) => {
-      deleteIndexedFolder(Number(req.params.id));
-      notifyStateChanged();
-      return { ok: true };
-    }
-  );
-
-  // Clearing the whole index (or one subtree) is a separate, explicit call so a
-  // malformed single-entry delete can never wipe the list.
-  app.delete<{ Querystring: { root?: string } }>(
-    '/api/indexed-folders',
-    async (req) => {
-      const root = req.query?.root ? normalizeHostPath(req.query.root) : undefined;
-      const removed = clearIndexedFolders(root);
-      notifyStateChanged();
-      return { removed };
-    }
-  );
+  // ── Host pipe: host folders + environments (docs/host-pipe.md) ─────────────
+  registerHostPipeRoutes(app);
 
   // ── Approved Host Ports (per container) ──────────────────────────────────────
   app.get<{ Params: { name: string } }>(

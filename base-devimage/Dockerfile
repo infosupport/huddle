@@ -24,8 +24,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Global CLIs
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @github/copilot opencode-ai 
+# Global CLIs, elk in een eigen laag: samen ~1,3 GB (native binaries). Kleinere
+# lagen downloaden parallel, en een update van één CLI raakt alleen zijn eigen
+# laag en de lagen erna.
+RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+RUN npm install -g @openai/codex && npm cache clean --force
+RUN npm install -g @github/copilot && npm cache clean --force
+RUN npm install -g opencode-ai && npm cache clean --force
 
 # markitdown: converteert PDF/Office/HTML/afbeeldingen → Markdown.
 # Wordt gebruikt door de markitdown-skill (.ai/claude/skills/markitdown.md).
@@ -42,6 +47,15 @@ RUN mkdir -p /home/vscode/.claude/agents /home/vscode/.claude/skills \
     && chown -R vscode:vscode /home/vscode/.claude /home/vscode/.codex \
                               /home/vscode/.copilot /home/vscode/.config \
                               /home/vscode/.ai
+
+# openssh-server voor "Connect via SSH" (JetBrains Gateway). sshd draait niet
+# standaard: Huddle configureert en start hem pas bij het opvragen van de SSH-link
+# (gateway/src/ssh-access.ts), met een eigen config en een host key per container.
+# De host keys die het pakket bij installatie maakt worden verwijderd, anders
+# deelt elke container van deze image dezelfde host key.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server \
+    && rm -f /etc/ssh/ssh_host_* \
+    && rm -rf /var/lib/apt/lists/*
 
 # Verwijder sudo-rechten van vscode (mcr base geeft ze standaard, wij willen dit niet)
 RUN gpasswd -d vscode sudo 2>/dev/null || true \

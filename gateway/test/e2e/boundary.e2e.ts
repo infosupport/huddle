@@ -171,7 +171,9 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       });
 
       // Finding #8 (MEDIUM) — cross-container volume-diefstal: een volume dat aan
-      // een ANDERE devcontainer toebehoort mag niet gemount worden.
+      // een ANDERE devcontainer toebehoort mag niet gemount worden. Sinds de
+      // audit-fix mag alleen een volume met huddle.parent=<zichzelf> gemount
+      // worden, dus de weigering noemt dat eigendom.
       it('weigert het mounten van andermans named volume (finding #8)', async () => {
         // Operator/host maakt een volume dat aan een peer-devcontainer toebehoort.
         run('docker', ['volume', 'rm', '-f', 'e2e-victimvol']);
@@ -180,7 +182,7 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
         try {
           const r = execIn(E2E_NAME, `docker create --name e2e-steal -v e2e-victimvol:/loot ${E2E_IMAGE} cat /loot/s.txt`);
           expect(r.status).not.toBe(0);
-          expect(`${r.stdout}${r.stderr}`).toMatch(/owned by another devcontainer/i);
+          expect(`${r.stdout}${r.stderr}`).toMatch(/must be created by this devcontainer/i);
           execIn(E2E_NAME, 'docker rm -f e2e-steal 2>/dev/null || true');
         } finally {
           run('docker', ['volume', 'rm', '-f', 'e2e-victimvol']);
