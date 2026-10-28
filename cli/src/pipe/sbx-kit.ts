@@ -40,8 +40,9 @@ setup:
   install:
     - command: "sh ${IN_BOX}/install.sh"
       user: "0"
+  # startup takes the command as argv, install as one string (sbx's schema).
   startup:
-    - command: "sh ${IN_BOX}/jbr-watch.sh"
+    - command: ["sh", "${IN_BOX}/jbr-watch.sh"]
 `;
 
 const INSTALL = `#!/bin/sh

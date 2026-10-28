@@ -22,6 +22,8 @@ describe('sbx.kit', () => {
     expect(spec).toContain('schemaVersion: "2"\nkind: mixin\nname: huddle-ca\n');
     expect(spec).toContain('NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-certificates.crt');
     expect(spec).toMatch(/command: "sh \/home\/agent\/\.huddle-ca\/install\.sh"\n\s+user: "0"/);
+    // sbx wants startup's command as a list: a string fails `sbx create` ("cannot unmarshal !!str into []string").
+    expect(spec).toContain('startup:\n    - command: ["sh", "/home/agent/.huddle-ca/jbr-watch.sh"]\n');
     const home = path.join(dir, 'files', 'home', '.huddle-ca');
     expect(fs.readFileSync(path.join(home, 'huddle-ca.crt'), 'utf8')).toBe(PEM);
     expect(fs.readFileSync(path.join(home, 'install.sh'), 'utf8')).toContain('update-ca-certificates');
