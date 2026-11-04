@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 // runtime.ts), but the CLI has no test runner of its own. Gateway runs vitest
 // (and that is what CI executes), so we test the parsing here. Only pure
 // functions without a daemon dependency — no live docker needed.
-import { parseDockerContextSocket, isRancherDesktopSocket } from '../../cli/src/runtime';
+import { parseDockerContextSocket, isRancherDesktopSocket, dockerMountSocket } from '../../cli/src/runtime';
 
 describe('parseDockerContextSocket (#81)', () => {
   it('extracts the unix socket path from the rancher-desktop context', () => {
@@ -96,5 +96,30 @@ describe('isRancherDesktopSocket (#81)', () => {
     expect(isRancherDesktopSocket('/run/user/1000/docker.sock')).toBe(false);
     expect(isRancherDesktopSocket(undefined)).toBe(false);
     expect(isRancherDesktopSocket(null)).toBe(false);
+  });
+});
+
+// Regression: the Rancher Desktop context socket (~/.rd/docker.sock) is a
+// host-side forwarder into the VM. Mounting it made dockerd (inside the VM) try
+// to mkdir it: "operation not supported". Always mount the engine-side socket.
+describe('dockerMountSocket', () => {
+  it('mounts the VM-side socket for Rancher Desktop on macOS, not ~/.rd/docker.sock', () => {
+    expect(dockerMountSocket('/Users/x/.rd/docker.sock', 'darwin'))
+      .toEqual({ socketPath: '/var/run/docker.sock', isRemote: true });
+  });
+
+  it('mounts the VM-side socket for Rancher Desktop on Linux and treats it as remote', () => {
+    expect(dockerMountSocket('/home/x/.rd/docker.sock', 'linux'))
+      .toEqual({ socketPath: '/var/run/docker.sock', isRemote: true });
+  });
+
+  it('keeps native Docker on Linux local', () => {
+    expect(dockerMountSocket('/var/run/docker.sock', 'linux'))
+      .toEqual({ socketPath: '/var/run/docker.sock', isRemote: false });
+  });
+
+  it('uses the Windows-style engine path when no unix context socket exists (npipe)', () => {
+    expect(dockerMountSocket(undefined, 'win32'))
+      .toEqual({ socketPath: '//var/run/docker.sock', isRemote: true });
   });
 });
