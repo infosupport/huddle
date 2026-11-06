@@ -4,7 +4,11 @@ export type RuntimeName = 'docker' | 'podman';
 
 export interface ContainerRuntime {
   name: RuntimeName;
-  /** Path on the host to the container socket, mounted as /var/run/docker.sock. */
+  /**
+   * Path to the container socket AS SEEN BY THE ENGINE, i.e. the bind-mount
+   * source for /var/run/docker.sock. For VM-based engines this is a path inside
+   * the VM, not necessarily a path on the host where the CLI runs.
+   */
   socketPath: string;
   /** Name of the default bridge network ('bridge' for Docker, 'podman' for Podman). */
   defaultNetwork: string;
@@ -63,16 +67,17 @@ function podmanSocketPath(): string {
   return '/run/podman/podman.sock';
 }
 
-function dockerSocketPath(): string {
-  return process.platform === 'win32' ? '//var/run/docker.sock' : '/var/run/docker.sock';
-}
-
 /**
  * Extracts the unix socket path from the JSON of `docker context inspect`. The
  * active context determines which engine the `docker` command talks to; Rancher
  * Desktop (dockerd/moby mode) sets a `rancher-desktop` context whose
  * `Endpoints.docker.Host` points to `unix:///<home>/.rd/docker.sock` instead of
  * the default `/var/run/docker.sock`.
+ *
+ * The result is only used to DETECT the engine (see buildRuntime), never as a
+ * bind-mount source: a context socket is the path the CLI uses to reach the
+ * daemon, which for VM-based engines is a host-side forwarder that the daemon
+ * itself cannot mount.
  *
  * Pure function so we can test the parsing in isolation. Returns `null` for
  * non-parsable input or a non-unix endpoint (npipe:// on Windows,
@@ -92,10 +97,10 @@ export function parseDockerContextSocket(json: string): string | null {
   if (typeof host !== 'string' || !host.startsWith('unix://')) return null;
   const path = host.slice('unix://'.length);
   if (!path.startsWith('/')) return null;
-  // The returned path is interpolated into a `docker run -v "<path>:..."` shell
-  // command (init.ts), where it is DOUBLE-QUOTED. The `Host` from `docker context
-  // inspect` is attacker-influenceable (whoever can create/activate a docker
-  // context controls the value), so restrict it to characters that occur in a real
+  // The `Host` from `docker context inspect` is attacker-influenceable (whoever
+  // can create/activate a docker context controls the value). The path is only
+  // used for detection now, but keep it as defense in depth should it ever reach
+  // a shell command again: restrict it to characters that occur in a real
   // socket path: allow spaces (legal in e.g. macOS `/Users/First Last/.rd/...`)
   // but never the metacharacters that stay dangerous inside double quotes
   // ($, backtick, ", \) or the command separators (;, |, &, (), newline).
@@ -115,6 +120,32 @@ function dockerContextSocket(): string | undefined {
   return parseDockerContextSocket(json) ?? undefined;
 }
 
+/**
+ * Determines the docker socket to bind-mount (as seen by the engine) and
+ * whether the engine runs in a VM, given the active context's socket.
+ *
+ * Rancher Desktop (dockerd/moby mode) looks like an ordinary Docker engine, but
+ * its context points to `~/.rd/docker.sock`. That is a host-side forwarder into
+ * the Lima VM that only the CLI can use: bind-mount sources are resolved by
+ * dockerd INSIDE the VM, where that file is not a usable socket (dockerd then
+ * tries to mkdir it: "operation not supported"). Inside the VM dockerd listens
+ * on the standard /var/run/docker.sock, so we always mount that — the same
+ * engine-side reasoning as for /tmp/dc-sockets in init.ts.
+ *
+ * Pure function so we can test it without a daemon.
+ */
+export function dockerMountSocket(
+  contextSocket: string | null | undefined,
+  platform: NodeJS.Platform,
+): { socketPath: string; isRemote: boolean } {
+  return {
+    socketPath: platform === 'win32' ? '//var/run/docker.sock' : '/var/run/docker.sock',
+    // Docker Desktop (macOS/Windows) and Rancher Desktop (every OS, Lima/WSL)
+    // run in a VM; native Docker on Linux does not.
+    isRemote: isRancherDesktopSocket(contextSocket) || platform !== 'linux',
+  };
+}
+
 function podmanIsRemote(): boolean {
   // On macOS/Windows Podman always runs in a `podman machine` VM; on Linux too
   // the client can point at a remote socket. `ServiceIsRemote` is the
@@ -132,21 +163,15 @@ function buildRuntime(name: RuntimeName): ContainerRuntime {
       securityOpts: ['label=disable'],
     };
   }
-  // Rancher Desktop (dockerd/moby mode) looks like an ordinary Docker engine,
-  // but the socket is not at /var/run/docker.sock: the active docker context
-  // points to `~/.rd/docker.sock`. Follow that context so we bind-mount the
-  // correct socket; otherwise we fall back to the default location (real native
-  // Docker, Docker Desktop). Rancher Desktop runs the engine in a VM (Lima/WSL)
-  // on EVERY platform, so it is always 'remote'.
-  const contextSocket = dockerContextSocket();
-  const isRancher = isRancherDesktopSocket(contextSocket);
+  // The active docker context only tells us WHICH engine this is (Rancher
+  // Desktop or not); the mount source is always the engine-side socket. See
+  // dockerMountSocket().
+  const { socketPath, isRemote } = dockerMountSocket(dockerContextSocket(), process.platform);
   return {
     name,
-    socketPath: isRancher ? contextSocket! : dockerSocketPath(),
+    socketPath,
     defaultNetwork: 'bridge',
-    // Docker Desktop (macOS/Windows) and Rancher Desktop run in a VM; native
-    // Docker on Linux does not.
-    isRemote: isRancher || process.platform !== 'linux',
+    isRemote,
     securityOpts: [],
   };
 }

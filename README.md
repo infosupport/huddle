@@ -198,9 +198,10 @@ engine to `dockerd (moby)` under **Preferences → Container Engine**.
 
 In dockerd mode Rancher Desktop looks like a normal Docker engine, so `huddle init`
 auto-detects it (`--runtime docker`, which is also the default). The one difference
-is the socket location: Rancher Desktop puts its Docker socket at `~/.rd/docker.sock`
-instead of `/var/run/docker.sock`. Huddle reads the active `docker context` and
-mounts that socket automatically — no extra configuration needed. Rancher Desktop
+is the socket location: Rancher Desktop's docker context points to `~/.rd/docker.sock`,
+a host-side forwarder into its VM. Huddle uses the active `docker context` to detect
+Rancher Desktop and mounts the engine's own `/var/run/docker.sock` from inside the VM
+— no extra configuration needed. Rancher Desktop
 runs the engine inside a VM on every OS, so Huddle treats it as a remote engine (as
 it does Docker Desktop).
 
@@ -208,8 +209,8 @@ If auto-detection ever fails, make sure the `rancher-desktop` context is active
 (`docker context use rancher-desktop`) and that `docker info` works, then re-run
 `huddle init --runtime docker`.
 
-> Note: Rancher Desktop must share the socket path (and `/tmp/dc-sockets`, used for
-> the per-container proxy sockets) into its VM. The defaults cover this, but if you
+> Note: Rancher Desktop must make `/tmp/dc-sockets` (used for the per-container
+> proxy sockets) available inside its VM. The defaults cover this, but if you
 > customized the VM's mounts you may need to add those paths back.
 
 ---
@@ -693,7 +694,8 @@ Yes. `huddle init` automatically detects Docker or Podman; you can force it with
 
 **Does Huddle work with Rancher Desktop?**
 Yes, in **dockerd (moby)** mode (not `containerd`/`nerdctl`). Huddle auto-detects it
-as Docker and reads the `~/.rd/docker.sock` socket from the active docker context.
+as Docker from the active docker context (`~/.rd/docker.sock`) and mounts the
+engine's socket from inside the VM.
 See [Rancher Desktop](#rancher-desktop) under Getting Started.
 
 **Does Huddle intercept HTTPS traffic?**
