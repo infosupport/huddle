@@ -9,6 +9,11 @@ import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
 import { forkJoin, Observable } from 'rxjs';
 
 type Bucket = number | 'all' | 'ungrouped';
+
+const TLS_OFF_CONFIRM = (what: string) =>
+  `Turn TLS inspection off for ${what}?\n\nHuddle then passes the encrypted traffic through as-is: it still decides on the host, ` +
+  `but no longer sees requests, paths or responses in the audit log. Use it for clients that pin certificates or do not trust the Huddle CA. ` +
+  `This applies to devcontainers and sandboxes and is kept in exports.`;
 type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
 
 // The firewall rules view (#69). One shared, scope-aware component used by the
@@ -141,7 +146,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                     <span>Apply to</span>
                     <select [(ngModel)]="applyScope" name="applyScope">
                       <option value="">Global</option>
-                      @for (c of containers(); track c) { <option [value]="c">{{ shortName(c) }}</option> }
+                      @for (c of applyScopes(); track c) { <option [value]="c">{{ shortName(c) }}</option> }
                     </select>
                     <button type="button" class="btn btn-ghost btn--sm" (click)="applySelected()">Apply</button>
                     <button type="button" class="btn btn-ghost btn--sm" [class.on]="editing()" (click)="startGroupEdit()"><app-icon name="settings" [size]="13" /> Rename / edit</button>
@@ -165,6 +170,8 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                 </div>
                 <button type="button" class="btn btn-ghost btn--sm" (click)="bulkPathMode()">Path mode</button>
                 <button type="button" class="btn btn-ghost btn--sm" (click)="bulkFlip()">Flip allow/deny</button>
+                <button type="button" class="btn btn-ghost btn--sm" (click)="bulkTls(false)">TLS inspection off</button>
+                <button type="button" class="btn btn-ghost btn--sm" (click)="bulkTls(true)">TLS inspection on</button>
                 <button type="button" class="btn btn-ghost btn--sm grp__bulk-del" (click)="bulkDelete()"><app-icon name="trash" [size]="14" /> Delete</button>
                 <button type="button" class="btn btn-ghost btn--sm grp__bulk-clear" (click)="clearSelection()">Clear</button>
               </div>
@@ -198,6 +205,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                         </button>
                       } @else {
                         <span class="pill" [class.pill--allow]="r.status === 'allow'" [class.pill--deny]="r.status === 'deny'">{{ r.status === 'allow' ? 'Allowed' : 'Denied' }}</span>
+                        @if (r.no_intercept) { <span class="pill pill--notls" title="TLS inspection is off: a raw tunnel, request content is not seen">TLS off</span> }
                       }
                     </td>
                     <td class="grp__scope">
@@ -217,6 +225,9 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
                             @for (g of groups(); track g.id) { <button type="button" (click)="assign(r, g.id)">{{ g.name }}</button> }
                           }
                           @if (r.group_id != null) { <button type="button" (click)="removeFromGroup(r)">Remove from group</button> }
+                          @if (!isPath(r)) {
+                            <button type="button" (click)="setTls(r, !r.no_intercept)">{{ r.no_intercept ? 'Turn TLS inspection on' : 'Turn TLS inspection off' }}</button>
+                          }
                           <button type="button" class="danger" (click)="deleteRule(r)">Delete rule</button>
                         </div>
                       }
@@ -265,6 +276,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
     .pill--new { background: var(--info-soft); color: var(--info); font-size: 0.6em; font-weight: 700; letter-spacing: .04em; padding: 3px 7px; border-radius: 999px; text-transform: uppercase; }
     .pill--shared { background: var(--accent-soft); color: var(--accent-strong); }
     .pill--folder { background: var(--info-soft); color: var(--info); }
+    .pill--notls { background: var(--warning-soft); color: var(--warning); margin-left: 6px; }
     .grp__note { margin: 12px 0 0; font-size: 0.85em; color: var(--text-muted); }
 
     .grp__add { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
@@ -491,7 +503,15 @@ export class FirewallGroupsPanelComponent implements OnInit {
     return this.selectedGroup()?.description || 'No description.';
   }
 
+  // Scoped to one environment (a container, or a sandbox such as `sbx:<name>`,
+  // which is not in the container list): Apply targets that one by default.
+  applyScopes(): string[] {
+    const list = this.containers();
+    return this.container && !list.includes(this.container) ? [this.container, ...list] : list;
+  }
+
   ngOnInit(): void {
+    if (this.container) this.applyScope = this.container;
     this.loadGroups();
     this.state.containers$.subscribe((cs) => this.containers.set(cs.map((c) => c.name)));
     this.state.rules$.subscribe((rs) => this.allRules.set(rs));
@@ -710,7 +730,8 @@ export class FirewallGroupsPanelComponent implements OnInit {
         const total = r.applied + r.updated;
         this.note.set(
           `Group "${g.name}" now applies to ${scope}: ${total} rule(s) active there ` +
-            `(${r.applied} added, ${r.updated} already present and refreshed). They stay part of "${g.name}".`,
+            `(${r.applied} added, ${r.updated} already present and refreshed). They stay part of "${g.name}".` +
+            (r.warning ? ` ${r.warning}` : ''),
         );
         this.reloadAfterMutation();
       },
@@ -741,6 +762,13 @@ export class FirewallGroupsPanelComponent implements OnInit {
     this.openMenu.set(null);
     if (r.group_id == null) return;
     this.api.removeRuleFromGroup(r.group_id, r.id).subscribe({ next: () => this.reloadAfterMutation(), error: (e) => this.note.set(e.message) });
+  }
+  // TLS inspection off keeps a raw tunnel for the domain: for a client that pins
+  // certificates or cannot trust the Huddle CA. Huddle then only sees the host.
+  setTls(r: Rule, off: boolean): void {
+    this.openMenu.set(null);
+    if (off && !confirm(TLS_OFF_CONFIRM(r.domain))) return;
+    this.api.setNoIntercept(r.id, off).subscribe({ next: () => this.reloadAfterMutation(), error: (e) => this.note.set(e.message) });
   }
   deleteRule(r: Rule): void {
     this.openMenu.set(null);
@@ -787,6 +815,12 @@ export class FirewallGroupsPanelComponent implements OnInit {
     if (!rows.length) { this.note.set('No convertible rows selected (already path mode).'); return; }
     this.bulkRun(rows.map((r) => this.api.setPathMode(r.id, true)), `Enabled path mode on ${rows.length} domain(s)`);
   }
+  bulkTls(inspect: boolean): void {
+    const rows = this.selectedRows().filter((r) => !this.isPath(r) && (inspect ? !!r.no_intercept : !r.no_intercept));
+    if (!rows.length) { this.note.set(inspect ? 'No rows with TLS inspection off selected.' : 'No rows to switch TLS inspection off for (path-mode domains need it).'); return; }
+    if (!inspect && !confirm(TLS_OFF_CONFIRM(`${rows.length} domain(s)`))) return;
+    this.bulkRun(rows.map((r) => this.api.setNoIntercept(r.id, !inspect)), `TLS inspection ${inspect ? 'on' : 'off'} for ${rows.length} domain(s)`);
+  }
   bulkFlip(): void {
     const rows = this.selectedRows().filter((r) => !this.isPath(r));
     if (!rows.length) { this.note.set('No allow/deny rows selected to flip.'); return; }
@@ -825,6 +859,8 @@ export class FirewallGroupsPanelComponent implements OnInit {
       status: r.status,
       path_pattern: r.path_pattern ?? null,
       path_mode: r.path_mode ?? 0,
+      // Only when off, like the backend export, so older Huddles import the file.
+      ...(r.no_intercept ? { no_intercept: 1 } : {}),
       expires_at: r.expires_at ?? null,
     }));
     return { version: 1, exported_at: Math.floor(Date.now() / 1000), rules };

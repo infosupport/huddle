@@ -11,6 +11,7 @@ interface Rule {
   expires_at: number | null;
   path_pattern: string | null;
   path_mode: number;
+  no_intercept?: number;
   request_count: number;
   last_seen: number;
   last_path?: string | null;

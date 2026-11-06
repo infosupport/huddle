@@ -21,6 +21,8 @@ export interface HuddleConfig {
   // ~/.huddle/config.json; changes apply on the next `huddle restart`.
   firewallRulesFolder?: string;
   extensionsFolder?: string;
+  // Mount the host's Claude and Codex session logs read-only, for extensions that read them.
+  hostAgentLogs?: boolean;
   // Team-managed devcontainer defaults (#98). The gateway reads these straight
   // from this file when it creates a container, so an edit applies to the next
   // container without a restart. The CLI only needs to preserve them on write.
@@ -161,7 +163,10 @@ let tmpSeq = 0;
  * config.
  */
 export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  // The config holds the operator token: owner-only. chmod as well, because
+  // mkdir's mode does not tighten a directory created by an older version.
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(CONFIG_DIR, 0o700);
   const token = acquireLock();
   if (token === null) {
     throw new Error(
@@ -176,7 +181,7 @@ export function updateConfig(patch: Partial<HuddleConfig>): HuddleConfig {
     for (const [k, v] of Object.entries(next)) {
       if (v === undefined) delete next[k];
     }
-    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(tmp, CONFIG_PATH);
     return next as HuddleConfig;
   } catch (err) {

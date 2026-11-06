@@ -1,0 +1,123 @@
+:host { display: block; }
+
+/* ===== Pending rows ===== */
+.req-card {
+  padding: 12px 14px 10px;
+  gap: 0;
+}
+
+.req-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  transition: background .14s;
+}
+
+.req-row:hover {
+  background: var(--surface-2);
+}
+
+/* ── Pending: per-type sections + bulk selection ── */
+.req-row__chk { flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+.req-row.is-selected { background: var(--accent-soft); }
+.req-group + .req-group { margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+.req-group__head { display: flex; align-items: center; gap: 10px; padding: 4px 10px 8px; }
+.req-group__sel { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.req-group__sel input { cursor: pointer; width: 16px; height: 16px; }
+.req-group__title { font-size: 0.95em; font-weight: 600; color: var(--text); }
+.req-group__title .em { color: var(--accent); font-style: normal; }
+.req-group__n { font-size: 0.78em; font-weight: 600; color: var(--text-dim); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.req-group__bulk { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.req-bulk__n { font-size: 0.85em; font-weight: 600; color: var(--accent-strong); }
+
+.req-row__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--info-soft);
+  color: var(--info);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.req-row__icon--path { background: var(--accent-soft); color: var(--accent); }
+
+.req-row__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.req-row__host { color: var(--text-muted); }
+
+.req-row__tag {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 11px; color: var(--text-muted);
+  background: var(--surface-hover);
+  padding: 2px 8px; border-radius: 6px;
+  white-space: nowrap; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.req-row__tag--path { background: var(--accent-soft); color: var(--accent); }
+.req-row__sample {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 11.5px; color: var(--text-dim);
+  margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.req-row__domain {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.req-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.req-row__meta b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.req-row__meta .sep {
+  color: var(--text-dim);
+}
+
+.req-row app-pie-menu {
+  flex-shrink: 0;
+  margin-right: 56px;
+}
+/* Keep the radial fan-out inside the card: the bulk pie sits flush right, so give
+   it the same right margin the per-row pie has above. */
+.req-group__bulk app-pie-menu {
+  flex-shrink: 0;
+  margin-right: 56px;
+}
+
+/* ===== Empty state ===== */
+.fw-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.fw-empty span {
+  font-size: 12.5px;
+}

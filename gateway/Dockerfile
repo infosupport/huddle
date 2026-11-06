@@ -28,6 +28,6 @@ COPY --from=builder /app/dist ./dist
 COPY package.json ./
 COPY extensions ./extensions
 ENV DB_PATH=/data/huddle.db
-ENV EXT_DIR=/app/extensions
+ENV BUNDLED_EXT_DIR=/app/extensions
 EXPOSE 80 3000
 CMD ["node", "dist/index.js"]

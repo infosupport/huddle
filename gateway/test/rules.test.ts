@@ -31,6 +31,8 @@ let matchDomain: typeof import('../src/rules').matchDomain;
 let matchPath: typeof import('../src/rules').matchPath;
 let firstSegmentPattern: typeof import('../src/rules').firstSegmentPattern;
 let isPathMode: typeof import('../src/rules').isPathMode;
+let isNoIntercept: typeof import('../src/rules').isNoIntercept;
+let settlePathRule: typeof import('../src/rules').settlePathRule;
 let ensurePathModeMarker: typeof import('../src/rules').ensurePathModeMarker;
 let canonicalizeHost: typeof import('../src/rules').canonicalizeHost;
 let normalizePathname: typeof import('../src/rules').normalizePathname;
@@ -61,6 +63,8 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
     matchPath = rulesMod.matchPath;
     firstSegmentPattern = rulesMod.firstSegmentPattern;
     isPathMode = rulesMod.isPathMode;
+    isNoIntercept = rulesMod.isNoIntercept;
+    settlePathRule = rulesMod.settlePathRule;
     ensurePathModeMarker = rulesMod.ensurePathModeMarker;
     canonicalizeHost = rulesMod.canonicalizeHost;
     normalizePathname = rulesMod.normalizePathname;
@@ -93,6 +97,18 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
       expect(isPathMode('example.com', null)).toBe(true);  // path-mode -> CONNECT admitted
       expect(checkRule('example.com', null, '/get').status).toBe('allow');
       expect(checkRule('example.com', null, '/other').status).not.toBe('allow');
+    });
+  });
+
+  describe('a Docker Sandbox (scope sbx:<name>) gets the global rules too', () => {
+    const SBX = 'sbx:box';
+    it('global allow and deny count, its own rule wins over a global one', () => {
+      setRule('allowed.test', null, 'allow');
+      setRule('denied.test', null, 'deny');
+      expect(checkRule('allowed.test', SBX).status).toBe('allow');
+      expect(checkRule('denied.test', SBX).status).toBe('deny');
+      setRule('allowed.test', SBX, 'deny');
+      expect(checkRule('allowed.test', SBX).status).toBe('deny');
     });
   });
 
@@ -379,6 +395,48 @@ describe.skipIf(!sqliteAvailable)('checkRule', () => {
       setRule('github.com', null, 'deny', null, null, 1);
       expect(isPathMode('github.com', CID)).toBe(true);
       expect(isPathMode('elsewhere.test', CID)).toBe(false);
+    });
+  });
+
+  describe('TLS inspection off (no_intercept)', () => {
+    const off = (domain: string, containerId: string | null) =>
+      db.prepare(`UPDATE rules SET no_intercept = 1 WHERE domain = ? AND COALESCE(container_id, '') = COALESCE(?, '')`).run(domain, containerId);
+
+    it('applies per container, globally and through a wildcard', () => {
+      setRule('a.test', CID, 'allow'); off('a.test', CID);
+      setRule('b.test', null, 'allow'); off('b.test', null);
+      setRule('*.c.test', null, 'allow'); off('*.c.test', null);
+      expect(isNoIntercept('a.test', CID)).toBe(true);
+      expect(isNoIntercept('a.test', 'other')).toBe(false);
+      expect(isNoIntercept('b.test', 'sbx:box')).toBe(true);
+      expect(isNoIntercept('api.c.test', CID)).toBe(true);
+      expect(isNoIntercept('d.test', CID)).toBe(false);
+    });
+
+    it('is switched back on when the domain goes into path mode', () => {
+      setRule('a.test', CID, 'allow'); off('a.test', CID);
+      ensurePathModeMarker('a.test', CID);
+      expect(isNoIntercept('a.test', CID)).toBe(false);
+      expect(isPathMode('a.test', CID)).toBe(true);
+    });
+
+    it('a TLS-off host rule refined to a path rule becomes a working path rule', () => {
+      setRule('a.test', CID, 'allow'); off('a.test', CID);
+      const { id } = db.prepare(`SELECT id FROM rules WHERE domain = 'a.test'`).get() as { id: number };
+      db.prepare(`UPDATE rules SET path_pattern = '/api/*' WHERE id = ?`).run(id);
+      settlePathRule(id);
+      const row = db.prepare(`SELECT no_intercept, path_mode FROM rules WHERE id = ?`).get(id) as { no_intercept: number; path_mode: number };
+      expect(row).toEqual({ no_intercept: 0, path_mode: 0 });
+      expect(isNoIntercept('a.test', CID)).toBe(false);
+      expect(isPathMode('a.test', CID)).toBe(true);
+    });
+
+    it('the marker of a refined team-folder path rule stays folder-owned', () => {
+      db.prepare(`INSERT INTO rules (domain, container_id, status, path_pattern, source) VALUES ('t.test', ?, 'allow', '/api/*', 'startup-folder')`).run(CID);
+      const { id } = db.prepare(`SELECT id FROM rules WHERE domain = 't.test'`).get() as { id: number };
+      settlePathRule(id);
+      const marker = db.prepare(`SELECT source FROM rules WHERE domain = 't.test' AND path_pattern IS NULL`).get() as { source: string };
+      expect(marker.source).toBe('startup-folder');
     });
   });
 

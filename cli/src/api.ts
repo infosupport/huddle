@@ -19,6 +19,17 @@ export function setBaseUrl(url: string): void {
 export async function apiCall<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['content-type'] = 'application/json';
+  return send<T>(method, path, body !== undefined ? JSON.stringify(body) : undefined, headers);
+}
+
+/** POSTs one file as multipart/form-data (field `file`), e.g. an extension zip. */
+export async function uploadFile<T>(path: string, fileName: string, data: Buffer): Promise<T> {
+  const form = new FormData();
+  form.append('file', new Blob([new Uint8Array(data)]), fileName);
+  return send<T>('POST', path, form, {});
+}
+
+async function send<T>(method: string, path: string, body: BodyInit | undefined, headers: Record<string, string>): Promise<T> {
   // Operator-auth: stuur het token als Bearer mee zodat de CLI de control-plane
   // -auth passeert. Zonder token krijgen we een 401 met een duidelijke hint.
   const token = operatorToken();
@@ -26,11 +37,7 @@ export async function apiCall<T>(method: string, path: string, body?: unknown): 
 
   let res: Response;
   try {
-    res = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    res = await fetch(`${baseUrl}${path}`, { method, headers, body });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new ApiError(`Cannot reach Huddle API at ${baseUrl}: ${detail}`);

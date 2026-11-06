@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeHostPath, hostPathError, hostPathLeaf } from '../src/host-path';
+import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError, resolvedHuddleHomeError } from '../src/host-path';
+import { HostPipeError } from '../src/host-pipe';
 
 // Host paths komen als tekst binnen: getypt in de modal, getypt in Settings, of
-// gescand door `huddle indexfolder` op de host. Op Windows spelt elk van die
+// gekozen in de host-mappenbrowser (fs.list via de host pipe). Op Windows spelt elk van die
 // drie dezelfde map anders. normalizeHostPath is het enige punt waar dat wordt
-// gladgestreken; deze test pint die vorm vast, want de index dedupliceert erop
+// gladgestreken; deze test pint die vorm vast, want vergelijkingen leunen erop
 // en docker.ts (toLinuxPath) rekent erop.
 describe('normalizeHostPath', () => {
   it('zet backslashes om en maakt de driveletter hoofdletter', () => {
@@ -70,5 +71,88 @@ describe('hostPathLeaf', () => {
     expect(hostPathLeaf('T:/projects/huddle')).toBe('huddle');
     expect(hostPathLeaf('/home/me/app')).toBe('app');
     expect(hostPathLeaf('C:/')).toBe('C:');
+  });
+});
+
+// ~/.huddle bevat het operator-token (config.json) en de host pipe; een mount die
+// hem blootstelt geeft een devcontainer of sandbox die macht.
+describe('huddleHomeMountError', () => {
+  const home = 'C:/Users/me/.huddle';
+
+  it('weigert ~/.huddle zelf en alles erin, ook read-only en anders gespeld', () => {
+    expect(huddleHomeMountError('C:/Users/me/.huddle', true, home)).toMatch(/own folder/);
+    expect(huddleHomeMountError('c:/users/ME/.Huddle/pipe', true, home)).toMatch(/own folder/);
+  });
+
+  it('een map die hem bevat alleen read-only', () => {
+    expect(huddleHomeMountError('C:/Users/me', false, home)).toMatch(/read-only/);
+    expect(huddleHomeMountError('C:/', false, home)).toMatch(/read-only/);
+    expect(huddleHomeMountError('C:/Users/me', true, home)).toBeNull();
+    expect(huddleHomeMountError('/', false, '/home/me/.huddle')).toMatch(/read-only/);
+  });
+
+  it('laat buren en gelijkende namen door', () => {
+    expect(huddleHomeMountError('C:/Users/me/.huddle-old', false, home)).toBeNull();
+    expect(huddleHomeMountError('C:/Users/me/projects', false, home)).toBeNull();
+    expect(huddleHomeMountError('D:/', false, home)).toBeNull();
+  });
+
+  it('zonder bekende ~/.huddle (oude CLI) geen controle', () => {
+    expect(huddleHomeMountError('C:/Users/me/.huddle', false, null)).toBeNull();
+  });
+});
+
+// De gateway ziet geen host-links: de host agent lost ze op (fs.resolve) en
+// dezelfde ~/.huddle-regel geldt dan voor waar het pad echt naartoe wijst.
+describe('resolvedHuddleHomeError', () => {
+  const home = '/home/me/.huddle';
+  const resolver = (map: Record<string, string | null>) => {
+    const calls: any[] = [];
+    return {
+      calls,
+      call: async (op: string, args: any) => {
+        calls.push({ op, args });
+        return { paths: args.paths.map((p: string) => (p in map ? map[p] : p)) } as any;
+      },
+    };
+  };
+
+  it('weigert een link naar ~/.huddle of erin', async () => {
+    const pipe = resolver({ '/home/me/proj': '/home/me/.huddle/pipe' });
+    const err = await resolvedHuddleHomeError([{ path: '/home/me/proj', readOnly: false }], pipe, home);
+    expect(err).toMatch(/own folder.*"\/home\/me\/proj" leads to \/home\/me\/\.huddle\/pipe/);
+    expect(pipe.calls).toEqual([{ op: 'fs.resolve', args: { paths: [home, '/home/me/proj'] } }]);
+  });
+
+  it('een link naar een map rond ~/.huddle alleen read-only', async () => {
+    const pipe = resolver({ '/data/me': '/home/me' });
+    expect(await resolvedHuddleHomeError([{ path: '/data/me', readOnly: false }], pipe, home)).toMatch(/read-only/);
+    expect(await resolvedHuddleHomeError([{ path: '/data/me', readOnly: true }], pipe, home)).toBeNull();
+  });
+
+  it('kijkt ook naar waar ~/.huddle zelf echt staat', async () => {
+    const pipe = resolver({ [home]: '/srv/huddle-home', '/home/me/proj': '/srv/huddle-home/config' });
+    expect(await resolvedHuddleHomeError([{ path: '/home/me/proj', readOnly: true }], pipe, home)).toMatch(/own folder/);
+  });
+
+  it('laat gewone en ontbrekende mappen door', async () => {
+    const pipe = resolver({ '/gone': null });
+    expect(await resolvedHuddleHomeError([{ path: '/home/me/proj', readOnly: false }, { path: '/gone', readOnly: false }], pipe, home)).toBeNull();
+  });
+
+  it('zonder agent of met een oude agent alleen de check op naam; andere fouten weigeren', async () => {
+    const failing = (code: string) => ({ call: async () => { throw new HostPipeError(code, code); } });
+    const m = [{ path: '/home/me/proj', readOnly: false }];
+    expect(await resolvedHuddleHomeError(m, failing('host_pipe_offline'), home)).toBeNull();
+    expect(await resolvedHuddleHomeError(m, failing('unknown_op'), home)).toBeNull();
+    await expect(resolvedHuddleHomeError(m, failing('host_pipe_timeout'), home)).rejects.toThrow('host_pipe_timeout');
+    await expect(resolvedHuddleHomeError(m, { call: async () => ({ paths: [] }) as any }, home)).rejects.toThrow(/fs.resolve/);
+  });
+
+  it('vraagt niets zonder bekende ~/.huddle of zonder mappen', async () => {
+    const pipe = resolver({});
+    expect(await resolvedHuddleHomeError([{ path: '/a', readOnly: false }], pipe, null)).toBeNull();
+    expect(await resolvedHuddleHomeError([], pipe, home)).toBeNull();
+    expect(pipe.calls).toEqual([]);
   });
 });

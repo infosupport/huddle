@@ -108,17 +108,19 @@ export async function runStart(opts: StartOptions): Promise<void> {
     return;
   }
 
-  console.log(`Open in JetBrains Gateway: ${cyan('Remote Development > Dev Containers')} -> ${bold(result.containerName)}`);
-  await tryPrintIdeLink(result.containerName);
+  await tryPrintSshLink(result.containerName);
 }
 
-async function tryPrintIdeLink(containerName: string): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+// Same link as the portal's Connect IDE button: sets up sshd, the localhost
+// relay and the `<name>.huddle` ssh alias (key made by the host agent), and
+// returns a JetBrains Toolbox link. Best-effort: without the host agent, or on an
+// older image, the portal button explains what is missing.
+async function tryPrintSshLink(containerName: string): Promise<void> {
   try {
-    const res = await get<{ link?: string }>(`/api/docker/containers/${encodeURIComponent(containerName)}/ide-link`);
-    if (res?.link) console.log(dim(`Gateway-link: ${res.link}`));
-  } catch {
-    // The IDE link is best-effort; JetBrains may still be starting the backend.
+    const res = await get<{ link?: string }>(`/api/docker/containers/${encodeURIComponent(containerName)}/ssh-link`);
+    if (res?.link) console.log(`Open in JetBrains Toolbox: ${cyan(res.link)}  (or: ssh ${containerName}.huddle)`);
+  } catch (err: any) {
+    console.log(dim(`No SSH link yet (${err?.message ?? err}); use Connect IDE in the Huddle portal.`));
   }
 }
 

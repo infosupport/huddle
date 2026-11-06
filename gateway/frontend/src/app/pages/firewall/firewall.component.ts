@@ -9,7 +9,7 @@ import { Rule } from '../../core/models/rule.model';
 import { PieMenuComponent } from '../../shared/components/pie-menu/pie-menu.component';
 import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { PathAllowlistComponent } from '../../shared/components/path-allowlist/path-allowlist.component';
-import { buildPathDomains, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
+import { buildPathDomains, confirmGlobalPaths, excludePathModeRules } from '../../shared/components/path-allowlist/path-allowlist.util';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 import { FirewallGroupsPanelComponent } from './firewall-groups-panel.component';
 import { map, forkJoin, Observable } from 'rxjs';
@@ -143,6 +143,7 @@ export class FirewallComponent {
   }
 
   onPathPieAction(actionId: string, row: PathRequestRow): void {
+    if (!confirmGlobalPaths([row])) return;
     const { rule } = row;
     switch (actionId) {
       case 'path-allow':
@@ -348,6 +349,7 @@ export class FirewallComponent {
   onBulkPathPie(actionId: string, pathReq: PathRequestRow[]): void {
     const rows = pathReq.filter((p) => this.pendingSel.has(p.rule.id));
     if (!rows.length) return;
+    if (!confirmGlobalPaths(rows)) return;
     const call = (row: PathRequestRow): Observable<unknown> => {
       switch (actionId) {
         case 'path-allow':  return this.api.resolveRule(row.rule.id, 'allow', 'rule', undefined, row.path_pattern);

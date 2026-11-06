@@ -9,7 +9,7 @@
       </div>
     </div>
 
-    <a class="kpi" routerLink="/containers">
+    <a class="kpi" routerLink="/dev-environments">
       <div class="kpi__head">
         <span class="kpi__label">Containers</span>
         <span class="kpi__icon">
@@ -68,7 +68,7 @@
     <div class="card col-span-3">
       <div class="card__head">
         <h3 class="card__title">Recent Containers</h3>
-        <a class="link" routerLink="/containers">View all
+        <a class="link" routerLink="/dev-environments">View all
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
         </a>
       </div>
@@ -79,7 +79,7 @@
           <thead><tr><th>Container</th><th>Status</th><th>Since</th></tr></thead>
           <tbody>
             @for (c of vm.recentContainers; track c.name) {
-              <tr class="clickable" [routerLink]="['/container', c.name]">
+              <tr class="clickable" [routerLink]="['/dev-environments', 'container', c.name]">
                 <td>
                   <div class="container-cell">
                     <div class="cc-icon">
@@ -179,9 +179,9 @@
         <span>Secure dev environments in the DMZ, protected from the cold outside.</span>
       </div>
       <div class="huddle-banner__cta">
-        <button class="btn btn--accent" (click)="modal.openStart()">
+        <button class="btn btn--accent" routerLink="/dev-environments">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-          Start devcontainer
+          Create dev environment
         </button>
       </div>
     </div>

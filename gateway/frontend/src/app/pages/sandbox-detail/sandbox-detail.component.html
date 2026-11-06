@@ -1,0 +1,64 @@
+<a class="back-link" routerLink="/dev-environments">← Dev Environments</a>
+
+@if (error()) {
+  <div class="card"><p style="padding:16px;color:var(--danger);margin:0">{{ error() }}</p></div>
+}
+
+<section class="cd-head">
+  <div class="cd-head__bg"></div>
+  <div class="cd-head__hex"></div>
+  <div class="cd-head__text">
+    <h1>{{ name }}</h1>
+    <div class="cd-head__badges">
+      <span class="cd-badge cd-badge--ok">{{ providerLabel() }}</span>
+      @if (sandbox(); as s) {
+        @if (running()) {
+          <span class="cd-badge cd-badge--ok"><app-icon name="check" [size]="11" /> Running</span>
+        } @else {
+          <span class="cd-badge cd-badge--warn">{{ s.status || 'Stopped' }}</span>
+        }
+      }
+      <span class="cd-badge cd-badge--lock"><app-icon name="shield-check" [size]="11" /> Through Huddle</span>
+    </div>
+  </div>
+  <div class="cd-head__actions">
+    <button class="btn btn-ghost btn-sm" (click)="connectIde('vscode')" [disabled]="!sandbox()" title="Open in VS Code over SSH (Remote-SSH extension)">Connect VS Code</button>
+    <button class="btn btn-ghost btn-sm" (click)="connectIde('jetbrains')" [disabled]="!sandbox()" title="Open in a JetBrains IDE over SSH (Toolbox App)">Connect JetBrains</button>
+    @if (ideStatus()) { <span style="font-size:12px;color:var(--text-muted)">{{ ideStatus() }}</span> }
+    <button class="btn btn-ghost btn-sm" (click)="load()" [disabled]="loading()">
+      @if (loading()) { <span class="spinner"></span> Loading… } @else { Refresh }
+    </button>
+    @if (sandbox()?.managed) {
+      <button class="btn btn-delete btn-sm" (click)="remove()" [disabled]="!!busy()">{{ busy() || 'Remove' }}</button>
+    }
+  </div>
+</section>
+
+<div class="cd-meta">
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">Workspaces</span>
+    <span class="cd-meta__value">{{ sandbox()?.workspaces?.join(', ') || '—' }}</span>
+  </div>
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">SSH</span>
+    <span class="cd-meta__value"><code>ssh {{ sshHost() || name + '.sbx' }}</code></span>
+  </div>
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">Firewall scope</span>
+    <span class="cd-meta__value"><code>{{ scope }}</code></span>
+  </div>
+  <div class="cd-meta__item">
+    <span class="cd-meta__label">Created by</span>
+    <span class="cd-meta__value">{{ sandbox()?.managed ? 'Huddle' : 'outside Huddle' }}</span>
+  </div>
+</div>
+
+<section class="cd-sec">
+  <div class="cd-sec__head">
+    <h2 class="cd-sec__title">Pending <span class="em">requests</span></h2>
+    <p class="cd-sec__sub">— for this sandbox</p>
+  </div>
+  <app-pending-requests [requested]="requested()" [pathRequests]="pathRequests()" />
+</section>
+
+<app-firewall-groups-panel [container]="scope" />

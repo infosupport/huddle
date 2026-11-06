@@ -105,6 +105,7 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     const again = groups.applyGroup(g.id, 'devcontainer-x');
     expect(again.applied).toBe(0);
     expect(again.updated).toBe(3);
+    expect(again.pathRules).toBe(1);
     const scoped = dbMod.db.prepare("SELECT COUNT(*) AS n FROM rules WHERE container_id = 'devcontainer-x'").get() as { n: number };
     // The domain rule, the path rule, and the host-only path-mode marker that
     // admits it over HTTPS.
@@ -437,5 +438,30 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
       .prepare("SELECT path_pattern FROM rules WHERE container_id = 'devcontainer-y' AND domain = 'nuget.org'")
       .all() as { path_pattern: string | null }[];
     expect(scoped).toHaveLength(2); // marker + allowed sub-path, not the requested one
+  });
+  it('carries "TLS inspection off" through export, import and apply', () => {
+    const env = envOpenAI();
+    (env.rules[0] as Record<string, unknown>).no_intercept = 1;
+    groups.importGroupEnvelope(groups.validateGroupEnvelope(env));
+    const g = dbMod.getGroupByName('OpenAI')!;
+    const out = groups.exportGroup(g.id)!;
+    expect(out.rules.find((r) => r.domain === 'api.openai.com')?.no_intercept).toBe(1);
+    // Off is the default and is left out, so the export stays readable by an older Huddle.
+    expect(out.rules.filter((r) => r.domain !== 'api.openai.com').every((r) => !('no_intercept' in r))).toBe(true);
+
+    groups.applyGroup(g.id, 'devcontainer-z');
+    const applied = dbMod.db
+      .prepare("SELECT no_intercept FROM rules WHERE container_id = 'devcontainer-z' AND domain = 'api.openai.com'")
+      .get() as { no_intercept: number };
+    expect(applied.no_intercept).toBe(1);
+  });
+
+  it('refuses "TLS inspection off" on a path rule or a path-mode domain', () => {
+    const rule = (r: Record<string, unknown>) => () =>
+      groups.validateGroupEnvelope({ group: { name: 'X' }, rules: [{ domain: 'a', status: 'allow', ...r }] } as any);
+    expect(rule({ no_intercept: 1, path_pattern: '/x' })).toThrow(/host-only/);
+    expect(rule({ no_intercept: 1, path_mode: 1 })).toThrow(/path mode/);
+    expect(rule({ no_intercept: 2 })).toThrow(/0 or 1/);
+    expect(rule({ no_intercept: 1 })).not.toThrow();
   });
 });
