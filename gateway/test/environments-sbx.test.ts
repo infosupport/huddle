@@ -16,6 +16,7 @@ import {
   parseSbxLsTable,
   allowAllArgs,
   buildIdeLink,
+  caKitFormat,
 } from '../src/environments/sbx';
 import { InvalidSpecError, ProviderDisabledError, ToolFailedError } from '../src/environments/types';
 import { hashProxySecret, parseProxyAuthorization, redactProxyUrls, isHuddleProxyUrl, sbxProxyHostPort } from '../src/environments/sbx-egress';
@@ -265,16 +266,18 @@ describe('SbxProvider', () => {
   describe('create met de Huddle CA (TLS-inspectie)', () => {
     const KIT = '/home/u/.huddle/sbx/kits/huddle-ca';
     const PEM = '-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n';
-    // fakePipe plus het sbx.kit-antwoord van de host agent.
-    const withKit = (replies: any[], kit: unknown = { dir: KIT }) => {
+    // fakePipe plus het sbx.kit-antwoord van de host agent (dat het gevraagde
+    // formaat schrijft) en `sbx version`, beide buiten `calls`.
+    const withKit = (replies: any[], kit: unknown = (a: any) => ({ dir: KIT, format: a.format }), version = 'sbx v0.51.0 (7d55286)') => {
       const pipe = fakePipe(replies);
       const kitCalls: any[] = [];
       const call = pipe.call;
       pipe.call = async (op: string, args: any, opts: any) => {
+        if (op === 'tool.run' && args?.args?.[0] === 'version') return { code: 0, stdout: version, stderr: '' } as any;
         if (op !== 'sbx.kit') return call(op, args, opts);
         kitCalls.push(args);
         if (kit instanceof Error) throw kit;
-        return kit as any;
+        return (typeof kit === 'function' ? kit(args) : kit) as any;
       };
       return Object.assign(pipe, { kitCalls });
     };
@@ -285,7 +288,7 @@ describe('SbxProvider', () => {
       const pipe = withKit([{ code: 0 }, { code: 0 }, { code: 0 }]);
       const r = await make(pipe, store).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
       expect(r.ok).toBe(true);
-      expect(pipe.kitCalls).toEqual([{ caPem: PEM }]);
+      expect(pipe.kitCalls).toEqual([{ caPem: PEM, format: 3 }]);
       expect(pipe.calls[1].args.args).toEqual(['create', '--kit', KIT, '--name', 'box', 'shell', '/a']);
       expect(store.spec('box')).toMatchObject({ huddleCa: true, caSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
       expect(sbxTrustsHuddleCa('sbx:box', store, () => PEM)).toBe(true);
@@ -320,6 +323,43 @@ describe('SbxProvider', () => {
       expect(pipe.calls[2].args.args).toEqual(['create', '--name', 'box', 'shell', '/a']);
       expect(store.spec('box')?.huddleCa).toBeUndefined();
       expect(sbxTrustsHuddleCa('sbx:box', store)).toBe(false);
+    });
+
+    it('een sbx van voor 0.51 krijgt een v2-kit', async () => {
+      const pipe = withKit([{ code: 0 }, { code: 0 }, { code: 0 }], undefined, 'sbx v0.50.1 (abc)');
+      const r = await make(pipe).create({ name: 'box', agent: 'shell', workspaces: [ws('/a')] });
+      expect(r.ok).toBe(true);
+      expect(pipe.kitCalls).toEqual([{ caPem: PEM, format: 2 }]);
+      expect(pipe.calls[1].args.args).toEqual(['create', '--kit', KIT, '--name', 'box', 'shell', '/a']);
+    });
+
+    it('een agent in het andere kitformaat: nog eens met de kit in dat formaat', async () => {
+      const store = memStore();
+      const mix = 'error: resolve kits: cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: huddle-ca; v1/v2: gemini)';
+      const pipe = withKit([{ code: 0 }, { code: 1, stderr: mix }, { code: 0 }, { code: 0 }]);
+      const r = await make(pipe, store).create({ name: 'box', agent: 'gemini', workspaces: [ws('/a')] });
+      expect(r.ok).toBe(true);
+      expect(pipe.kitCalls).toEqual([{ caPem: PEM, format: 3 }, { caPem: PEM, format: 2 }]);
+      expect(pipe.calls[2].args.args).toEqual(['create', '--kit', KIT, '--name', 'box', 'gemini', '/a']);
+      expect(store.spec('box')?.huddleCa).toBe(true);
+    });
+
+    it('een host agent die alleen v2 schrijft, met een sbx die v3 vraagt: zonder kit', async () => {
+      const store = memStore();
+      const pipe = withKit([{ code: 0 }, { code: 0 }, { code: 0 }], { dir: KIT });
+      const r = await make(pipe, store).create({ name: 'box', agent: 'copilot', workspaces: [ws('/a')] });
+      expect(r.ok).toBe(true);
+      expect(pipe.calls[1].args.args).toEqual(['create', '--name', 'box', 'copilot', '/a']);
+      expect(r.steps[0].stderr).toMatch(/v3 kit/);
+      expect(sbxTrustsHuddleCa('sbx:box', store)).toBe(false);
+    });
+
+    it('caKitFormat: v3 vanaf sbx 0.51, en voor een onbekende versie', () => {
+      expect(caKitFormat('sbx v0.51.0 (7d55286)')).toBe(3);
+      expect(caKitFormat('sbx v1.0.0')).toBe(3);
+      expect(caKitFormat('sbx v0.50.1 (abc)')).toBe(2);
+      expect(caKitFormat('sbx v0.39.0')).toBe(2);
+      expect(caKitFormat('sbx nightly-202611050311-5467df7')).toBe(3);
     });
 
     it('een oude host agent of een vreemde map: zonder kit, met een notitie', async () => {

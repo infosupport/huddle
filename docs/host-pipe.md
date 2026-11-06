@@ -66,7 +66,7 @@ Error codes: `bad_request`, `unknown_op`, `not_found`, `not_allowed`, `tool_miss
 | `fs.list` | `{ path?: string }` | `HostFolderListing` (below). No `path` → the roots. |
 | `tool.run` | `{ tool: string, args: string[], timeoutMs?: number }` | `{ code: number, stdout: string, stderr: string }` |
 | `sbx.links` | `{ name: string, links: { id, hostPath, readOnly }[] }` | `{ rw: string \| null, ro: string \| null, skipped: { id, reason }[] }` |
-| `sbx.kit` | `{ caPem: string }` | `{ dir: string }` |
+| `sbx.kit` | `{ caPem: string, format?: 2 \| 3 }` | `{ dir: string, format: 2 \| 3 }` |
 | `ssh.key` | `{}` | `{ publicKey: string }` |
 | `ssh.host` | `{ alias, port, user, hostKey }` or `{ alias, remove: true }` | `{ publicKey: string \| null }` |
 
@@ -99,9 +99,10 @@ The old folder is removed first without following any link in it; an empty `link
 mapping that does not exist, is not a folder, resolves into `~/.huddle`, or contains `~/.huddle` while
 writable is left out and listed in `skipped`. `rw`/`ro` are the host paths of the folders that got links.
 
-**`sbx.kit`**: writes `~/.huddle/sbx/kits/huddle-ca/`, an sbx v2 mixin kit that makes a sandbox trust the
-Huddle CA (see "TLS inspection" under sbx egress), and returns its host path. `caPem` must be one PEM
-certificate; the files are rewritten on every call, with LF line endings.
+**`sbx.kit`**: writes `~/.huddle/sbx/kits/huddle-ca/`, an sbx mixin kit that makes a sandbox trust the
+Huddle CA (see "TLS inspection" under sbx egress), and returns its host path and format. `caPem` must be one PEM
+certificate; `format` is `2` (default: `spec.yaml` plus `files/home/`) or `3` (`huddle-ca.yaml`, built by sbx
+into a layer under `/usr/local/share/huddle-ca`). The folder is rewritten whole on every call, with LF line endings.
 
 **`ssh.key`** / **`ssh.host`**: SSH into a devcontainer (Connect IDE) without setting up a key, like `sbx setup ssh`
 does for sandboxes. `ssh.key` makes Huddle's own ed25519 key pair in `~/.huddle/ssh/id_ed25519` once (on the host,
@@ -247,7 +248,11 @@ under a rule scope of its own: `sbx:<name>`.
   `PROXY_CA_CERT_B64`) in the system store with `update-ca-certificates`; `NODE_EXTRA_CA_CERTS`,
   `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` point at that system bundle (not at the Huddle CA alone, which
   would break sbx's credential proxy); and on every start a background watcher imports the CA into the
-  keystore of each JetBrains backend under `~/.cache/JetBrains/RemoteDev/dist`. A sandbox created that way
+  keystore of each JetBrains backend under `~/.cache/JetBrains/RemoteDev/dist`. sbx only combines kits of one
+  format, so the kit follows the agent's: v3 from sbx 0.51 (its built-in agents are v3 kits there), v2 before
+  (by `sbx version`); when sbx still answers "cannot mix v3 kits with v1/v2 kits", the create is retried once
+  with the kit in the other format. A host agent that only writes v2 gets a create without `--kit` on a v3 sbx.
+  A sandbox created that way
   is stored with `huddleCa`, and only for those the sbx listener terminates TLS; for others (an older host
   agent or an sbx without kits, which then gets a create without `--kit`) CONNECT stays a raw tunnel, decided
   on the host alone, where path-mode domains are denied. The `huddle` host stays closed to sandboxes either way.

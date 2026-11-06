@@ -347,6 +347,17 @@ export function buildIdeLink(ide: IdeKind, sshHost: string, folder?: string): st
 const CA_KIT = 'huddle-ca';
 // What an sbx without kits says to `create --kit`.
 const NO_KIT_RE = /(unknown|undefined|unrecognized) (flag|option)[^\n]*kit|flag provided but not defined:? -+kit/i;
+// What sbx says when the CA kit's format is not the agent's (it only combines one).
+const KIT_MIX_RE = /cannot mix v3 kits with v1\/v2 kits/i;
+
+export type KitFormat = 2 | 3;
+/** The CA kit's format for the agents of this `sbx version`: v3 from 0.51, when they became v3 kits. */
+export function caKitFormat(version: string): KitFormat {
+  const m = /\bv?(\d+)\.(\d+)\.\d+/.exec(version);
+  // A nightly or dev build: the current format.
+  if (!m) return 3;
+  return Number(m[1]) > 0 || Number(m[2]) >= 51 ? 3 : 2;
+}
 
 /** What the gateway keeps of a sandbox: its spec, and whether it trusts the Huddle CA. */
 // huddleCa: created with the Huddle CA kit; caSha256: of which CA (missing on
@@ -530,7 +541,14 @@ export class SbxProvider implements EnvironmentProvider {
     let trustsCa = kit !== null;
     try {
       const createArgs = [...args, ...mappings.paths];
-      created = await this.step(steps, 'Create sandbox', kit ? [createArgs[0], '--kit', kit, ...createArgs.slice(1)] : createArgs, CREATE_TIMEOUT_MS);
+      const withKit = (dir: string) => [createArgs[0], '--kit', dir, ...createArgs.slice(1)];
+      created = await this.step(steps, 'Create sandbox', kit ? withKit(kit.dir) : createArgs, CREATE_TIMEOUT_MS);
+      // The agent's kits are in the other format after all: once more with the kit in that one.
+      if (kit && created.code !== 0 && KIT_MIX_RE.test(`${created.stderr}\n${created.stdout}`)) {
+        const other = await this.prepareCaKit(steps, kit.format === 3 ? 2 : 3);
+        trustsCa = other !== null;
+        created = await this.step(steps, other ? `Create sandbox (v${other.format} CA kit)` : 'Create sandbox (no TLS inspection)', other ? withKit(other.dir) : createArgs, CREATE_TIMEOUT_MS);
+      }
       // An sbx without kits: create it as before, without TLS inspection.
       if (kit && created.code !== 0 && NO_KIT_RE.test(`${created.stderr}\n${created.stdout}`)) {
         trustsCa = false;
@@ -573,9 +591,10 @@ export class SbxProvider implements EnvironmentProvider {
    * Has the host agent write the kit that makes a sandbox trust the Huddle CA
    * (cli/src/pipe/sbx-kit.ts), and returns its folder for `sbx create --kit`.
    * Null when there is none (an older host agent): the sandbox is then created
-   * without it, and its TLS is not inspected.
+   * without it, and its TLS is not inspected. The format follows `sbx version`
+   * unless given.
    */
-  private async prepareCaKit(steps: SandboxStep[]): Promise<string | null> {
+  private async prepareCaKit(steps: SandboxStep[], format?: KitFormat): Promise<{ dir: string; format: KitFormat } | null> {
     const label = 'Prepare the Huddle CA (TLS inspection)';
     const skip = (why: string) => { steps.push({ label, command: '', code: 0, stdout: '', stderr: `no TLS inspection for this sandbox: ${why}` }); return null; };
     let caPem: string;
@@ -584,20 +603,26 @@ export class SbxProvider implements EnvironmentProvider {
     } catch (err: any) {
       return skip(err?.message ?? String(err));
     }
-    let res: { dir?: unknown };
+    if (!format) {
+      const v = await this.run(['version']).catch(() => null);
+      format = caKitFormat(v?.code === 0 ? v.stdout : '');
+    }
+    let res: { dir?: unknown; format?: unknown };
     try {
-      res = await this.pipe.call<{ dir?: unknown }>('sbx.kit', { caPem });
+      res = await this.pipe.call<{ dir?: unknown; format?: unknown }>('sbx.kit', { caPem, format });
     } catch (err: any) {
       return skip(err?.message ?? String(err));
     }
+    // A host agent from before v3 kits ignores `format` and writes v2.
+    if ((res?.format ?? 2) !== format) return skip(`the host agent cannot write a v${format} kit, which this sbx needs (update Huddle on the host)`);
     // Only ever Huddle's own kit folder.
     const dir = normalizeHostPath(String(res?.dir ?? ''));
     const home = hostHuddleHome();
     if (hostPathError(dir) || !dir.endsWith(`/sbx/kits/${CA_KIT}`) || (home && dir.toLowerCase() !== `${home}/sbx/kits/${CA_KIT}`.toLowerCase())) {
       return skip(`unexpected folder from the host (${dir})`);
     }
-    steps.push({ label, command: '', code: 0, stdout: dir, stderr: '' });
-    return dir;
+    steps.push({ label, command: '', code: 0, stdout: `${dir} (v${format} kit)`, stderr: '' });
+    return { dir, format };
   }
 
   /**
