@@ -393,6 +393,31 @@ describe('SbxProvider', () => {
     expect(pipe.policyCalls).toEqual(Array(3).fill(['policy', 'rm', 'network', '--sandbox', 'box', '**']));
     await expect(p.remove('--all', { force: false })).rejects.toBeInstanceOf(InvalidSpecError);
   });
+
+  it('remove: de allow-all regel blijft staan → sandbox blijft ook staan', async () => {
+    const pipe = fakePipe([{ code: 0 }], undefined, () => ({ code: 1, stderr: 'daemon unavailable' }));
+    await expect(sbx(pipe).remove('box', { force: false })).rejects.toThrow('daemon unavailable');
+    expect(pipe.calls).toEqual([]);
+    // Geen regel (meer) is goed: dan kan de sandbox weg.
+    const gone = fakePipe([{ code: 0 }], undefined, () => ({ code: 1, stderr: 'rule not found' }));
+    await sbx(gone).remove('box', { force: false });
+    expect(gone.calls.map((c) => c.args.args)).toEqual([['rm', 'box']]);
+  });
+
+  it('create: een workspace die een link naar ~/.huddle is wordt geweigerd', async () => {
+    const before = process.env.HUDDLE_HOST_HOME_DIR;
+    process.env.HUDDLE_HOST_HOME_DIR = '/home/me/.huddle';
+    try {
+      const pipe = fakePipe([{ paths: ['/home/me/.huddle', '/home/me/.huddle'] } as any]);
+      const res = await sbx(pipe).create({ name: 'box', agent: 'claude', workspaces: [ws('/home/me/proj')] });
+      expect(res.ok).toBe(false);
+      expect(res.steps.at(-1)?.stderr).toMatch(/own folder.*leads to \/home\/me\/\.huddle/);
+      expect(pipe.calls.map((c) => c.op)).toEqual(['fs.resolve']);
+    } finally {
+      if (before === undefined) delete process.env.HUDDLE_HOST_HOME_DIR;
+      else process.env.HUDDLE_HOST_HOME_DIR = before;
+    }
+  });
 });
 
 describe('sbx egress helpers', () => {

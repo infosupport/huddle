@@ -64,11 +64,18 @@ Error codes: `bad_request`, `unknown_op`, `not_found`, `not_allowed`, `tool_miss
 |---|---|---|
 | `host.info` | `{}` | `{ platform, version, home, tools: { [name]: { available, path?, version? } } }` |
 | `fs.list` | `{ path?: string }` | `HostFolderListing` (below). No `path` → the roots. |
+| `fs.resolve` | `{ paths: string[] }` (at most 64, absolute) | `{ paths: (string \| null)[] }`: each path with links followed, in Huddle notation; `null` when it does not exist. |
 | `tool.run` | `{ tool: string, args: string[], timeoutMs?: number }` | `{ code: number, stdout: string, stderr: string }` |
 | `sbx.links` | `{ name: string, links: { id, hostPath, readOnly }[] }` | `{ rw: string \| null, ro: string \| null, skipped: { id, reason }[] }` |
 | `sbx.kit` | `{ caPem: string, format?: 2 \| 3 }` | `{ dir: string, format: 2 \| 3 }` |
 | `ssh.key` | `{}` | `{ publicKey: string }` |
 | `ssh.host` | `{ alias, port, user, hostKey }` or `{ alias, remove: true }` | `{ publicKey: string \| null }` |
+
+**`fs.resolve`**: the gateway cannot see host links, so the `~/.huddle` mount rule (gateway
+`host-path.ts`) would only see the name of a workspace that is a link or junction into it. Before a
+devcontainer or sandbox is created the gateway resolves its host folders (and `~/.huddle` itself) here and
+applies the rule to the targets too. No agent, or one without this op (`unknown_op`), leaves only the check
+on the name; any other failure refuses the create.
 
 **`fs.list`**: lists the immediate subfolders of one folder (port of `host-browse.ts` from
 `feat/sbx-sandboxes-rebased`). No path → roots: every readable drive `X:/` on Windows, `/` elsewhere, plus

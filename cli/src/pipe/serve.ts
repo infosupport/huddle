@@ -25,7 +25,7 @@ import {
   readHeartbeat,
   writeJsonAtomic,
 } from './protocol';
-import { fsList, toHuddlePath } from './fs-list';
+import { fsList, fsResolve, toHuddlePath } from './fs-list';
 import { availableTools, toolRun, toolsInfo } from './tools';
 import { sbxKit } from './sbx-kit';
 import { sbxLinks } from './sbx-links';
@@ -64,6 +64,8 @@ async function dispatch(req: PipeRequest, maxEntries: number): Promise<unknown> 
       };
     case 'fs.list':
       return fsList(args, maxEntries);
+    case 'fs.resolve':
+      return fsResolve(args);
     case 'tool.run':
       return toolRun(args);
     case 'sbx.links':

@@ -1441,10 +1441,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         persisted = setHostFolder(key, folder) && persisted;
         restartRequired = true;
       }
-      // Turning host logs on needs `huddle restart` to mount the folders; turning them off applies at once.
+      // Host logs are mounted by `huddle init`, and extensions read the mounts
+      // directly: on or off, it takes `huddle restart` to add or remove them.
       if (hostAgentLogs !== undefined) {
         persisted = setHostAgentLogs(hostAgentLogs) && persisted;
-        if (hostAgentLogs && !hostAgentLogsMounted()) restartRequired = true;
+        if (hostAgentLogs !== hostAgentLogsMounted()) restartRequired = true;
       }
       notifyStateChanged();
       return { ok: true, restartRequired, persisted };

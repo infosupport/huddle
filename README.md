@@ -520,8 +520,8 @@ operator's own machine needs the operator to opt in. Set `"hostAgentLogs": true`
 
 The folders are mounted only as real directories, never through a symlink. `~/.claude` and `~/.codex` themselves are
 never mounted: they hold credentials. `GET /api/settings` reports
-`hostAgentLogs` and `hostAgentLogsMounted`. Turning the setting off applies at once; the mounts go away on the next
-`huddle restart`.
+`hostAgentLogs` and `hostAgentLogsMounted`. Turning the setting off takes effect on the next `huddle restart`, which
+removes the mounts (until then extensions can still read them, so the settings call reports `restartRequired`).
 
 ### Example: Aikido Security
 

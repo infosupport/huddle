@@ -156,3 +156,25 @@ export async function fsList(args: Record<string, unknown>, max: number = MAX_FO
   if (!isAbsoluteHostPath(raw)) throw new PipeError('bad_request', `not an absolute host path: ${raw}`);
   return listHostFolders(toHuddlePath(raw), max);
 }
+
+const MAX_RESOLVE_PATHS = 64;
+
+/**
+ * The `fs.resolve` op: where each path really is (links followed), or null when
+ * it does not exist. The portal cannot see host links, and a workspace that is a
+ * link into ~/.huddle would otherwise pass its lexical mount check.
+ */
+export async function fsResolve(args: Record<string, unknown>): Promise<{ paths: (string | null)[] }> {
+  const raw = args.paths;
+  if (!Array.isArray(raw) || raw.length > MAX_RESOLVE_PATHS) throw new PipeError('bad_request', `paths must be an array of at most ${MAX_RESOLVE_PATHS}`);
+  const paths: (string | null)[] = [];
+  for (const p of raw) {
+    if (typeof p !== 'string' || p.includes('\0') || !isAbsoluteHostPath(p)) throw new PipeError('bad_request', 'paths must be absolute host paths');
+    try {
+      paths.push(toHuddlePath(await fs.promises.realpath(p)));
+    } catch {
+      paths.push(null);
+    }
+  }
+  return { paths };
+}

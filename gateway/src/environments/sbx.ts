@@ -7,7 +7,7 @@
 
 import crypto from 'crypto';
 import { hostPipe, HostPipe } from '../host-pipe';
-import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError, hostHuddleHome } from '../host-path';
+import { normalizeHostPath, hostPathError, hostPathLeaf, huddleHomeMountError, hostHuddleHome, resolvedHuddleHomeError } from '../host-path';
 import { HostFolderMapping, listFolderMappings } from '../host-config';
 import { containerPathError } from '../workspace-root';
 import { getCaCertPem } from '../tls-ca';
@@ -528,6 +528,15 @@ export class SbxProvider implements EnvironmentProvider {
   private async createWithSecret(spec: SandboxSpec & { name: string }, args: string[], steps: SandboxStep[]): Promise<boolean> {
     // Switched off while this waited in the queue: the setting is the user's again.
     if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
+    // buildCreateArgs checked the folders by name; a link into ~/.huddle passes that.
+    const linkProblem = await resolvedHuddleHomeError(
+      spec.workspaces.map((w, i) => ({ path: normalizeHostPath(w.path), readOnly: i > 0 && w.readOnly === true })),
+      this.pipe,
+    );
+    if (linkProblem) {
+      steps.push({ label: 'Check the folders', command: '', code: 1, stdout: '', stderr: `workspace path ${linkProblem}` });
+      return false;
+    }
     const mappings = await this.prepareFolderMappings(spec.name, steps);
     const kit = await this.prepareCaKit(steps);
     const secret = newProxySecret();
@@ -680,8 +689,10 @@ export class SbxProvider implements EnvironmentProvider {
       // Switched off while this waited in the queue: the sandbox is the user's again.
       if (!this.isEnabled()) throw new ProviderDisabledError('Docker Sandbox was switched off in Huddle');
       // Its allow-all rule first: a rule left behind would let a later sandbox
-      // with this name, created outside Huddle, go anywhere.
-      await this.run(allowAllArgs('rm', name)).catch(() => undefined);
+      // with this name, created outside Huddle, go anywhere. So the sandbox
+      // is not removed while the rule is still there.
+      const policy = await this.run(allowAllArgs('rm', name));
+      if (policy.code !== 0 && !NO_RULE_RE.test(`${policy.stdout}\n${policy.stderr}`)) throw failure(policy, 'sbx policy rm failed');
       const r = await this.run(opts.force ? ['rm', '--force', name] : ['rm', name]);
       if (r.code !== 0) throw failure(r, 'sbx rm failed');
       this.removedSinceListing.add(name);

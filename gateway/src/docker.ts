@@ -7,7 +7,7 @@ import { listFolderMappings, getResourceDefaults } from './host-config';
 import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
-import { normalizeHostPath, huddleHomeMountError } from './host-path';
+import { normalizeHostPath, huddleHomeMountError, resolvedHuddleHomeError } from './host-path';
 import { sanitizeResolvConf } from './dns-egress';
 import {
   needsHuddleLayer,
@@ -1147,6 +1147,16 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
       throw err;
     }
   }
+
+  // The mount checks are lexical; a host folder that is a link into ~/.huddle
+  // passes them. Asked of the host before anything is created.
+  const linkProblem = await resolvedHuddleHomeError([
+    ...listFolderMappings()
+      .filter((m) => m.enabled && m.hostPath?.trim())
+      .map((m) => ({ path: normalizeHostPath(m.hostPath), readOnly: m.readOnly })),
+    ...(empty ? [] : (isMultiMount ? mountParams!.map((m) => m.hostPath) : [workspaceDir]).map((p) => ({ path: normalizeHostPath(p), readOnly: false }))),
+  ]);
+  if (linkProblem) throw new Error(`Host path ${linkProblem}`);
 
   const netName = `dc-net-${containerName}`;
   if (!(await networkExists(netName))) {
