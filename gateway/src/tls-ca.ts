@@ -88,6 +88,13 @@ export function getCaCertPem(): string {
 
 // Genereer (of haal uit cache) een leaf-cert voor één hostname. Het cert heeft
 // SAN-DNS=<hostname> zodat TLS-clients het accepteren bij naam-validatie.
+// The CA's own Subject Key Identifier, so the leaf's Authority Key Identifier
+// matches it; computed the way forge made it for a CA without the extension.
+function caKeyId(ca: forge.pki.Certificate): string {
+  const ext = ca.getExtension('subjectKeyIdentifier') as { subjectKeyIdentifier?: string } | null;
+  return ext?.subjectKeyIdentifier ? forge.util.hexToBytes(ext.subjectKeyIdentifier) : ca.generateSubjectKeyIdentifier().getBytes();
+}
+
 export function signLeafCert(hostname: string): { certPem: string; keyPem: string } {
   if (!loaded) throw new Error('CA not initialized — call initCa() first');
   const cached = leafCache.get(hostname);
@@ -108,6 +115,10 @@ export function signLeafCert(hostname: string): { certPem: string; keyPem: strin
     { name: 'keyUsage', digitalSignature: true, keyEncipherment: true, critical: true },
     { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
     { name: 'subjectAltName', altNames: [{ type: 2, value: hostname }] }, // type 2 = DNS
+    // Strict verifiers (Python 3.13+ sets VERIFY_X509_STRICT) refuse a leaf
+    // without the issuer's key id: "Missing Authority Key Identifier".
+    { name: 'subjectKeyIdentifier' },
+    { name: 'authorityKeyIdentifier', keyIdentifier: caKeyId(loaded.caCert) },
   ]);
   cert.sign(loaded.caKey, forge.md.sha256.create());
 
