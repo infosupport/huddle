@@ -30,6 +30,11 @@ jobs:
         run: npm ci # the lockfile is law
         working-directory: ${{ matrix.project }}
 
+      - name: Install frontend dependencies (needed by the gateway build)
+        if: matrix.project == 'gateway'
+        run: npm ci --prefix frontend
+        working-directory: gateway
+
       - name: Verify registry signatures
         run: npm audit signatures
         working-directory: ${{ matrix.project }}
