@@ -732,7 +732,7 @@ iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A O
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
-# that do not read from the system store (such as Node.js or Java).
+# that do not read from the system store (node).
 mkdir -p /usr/local/share/ca-certificates
 echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
 chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
