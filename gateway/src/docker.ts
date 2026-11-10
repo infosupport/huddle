@@ -1196,7 +1196,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
-    Cmd: ['sh', '-c', script],
+    Cmd: ['sh', '-c', script, '> /tmp/huddle-prepare.log 2>&1'],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
 
