@@ -720,12 +720,18 @@ iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A O
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
-# that do not read from the system store (node).
+# that do not read from the system store (such as Node.js or Java).
 mkdir -p /usr/local/share/ca-certificates
 echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
 chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
+# Generate a Java keystore that includes the Huddle MITM CA for Java tools to trust.
+JAVA_KEYSTORE="/usr/local/share/ca-certificates/huddle-ca.jks"
+keytool -importcert -noprompt -trustcacerts -alias huddle-ca \
+  -file /usr/local/share/ca-certificates/huddle-ca.crt \
+  -keystore "$JAVA_KEYSTORE" -storepass changeit >/dev/null 2>&1 || true
 command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
+printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s"\\n' "$JAVA_KEYSTORE" >> /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 ${IDE_CRED_SCRUB}
