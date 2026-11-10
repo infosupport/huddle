@@ -561,9 +561,7 @@ function buildJavaKeystoreScript(seedscript: string): string {
       -file /usr/local/share/ca-certificates/huddle-ca.crt \
       -keystore "$HUDDLE_JAVA_KEYSTORE" -storepass changeit >/dev/null 2>&1 || true
     
-      printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s -Dhttp.proxyHost=%s -Dhttp.proxyPort=%s"\\n' \
-      "$HUDDLE_JAVA_KEYSTORE", "$HUDDLE_PROXY_HOST", "$HUDDLE_PROXY_PORT" \
-      >> /etc/profile.d/99-huddle-ca.sh
+      printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s -Dhttp.proxyHost=huddle -Dhttp.proxyPort=80"\\n' >> /etc/profile.d/99-huddle-ca.sh
 
     ${seedscript}
   `
@@ -578,7 +576,7 @@ ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
 const HUDDLE_PROXY_HOST = 'huddle';
 const HUDDLE_PROXY_PORT = 80;
-const HUDDLE_PROXY_URL = `http://${HUDDLE_PROXY_HOST}:${HUDDLE_PROXY_PORT}`;
+const HUDDLE_PROXY_URL = 'http://huddle:80';
 const HUDDLE_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
 const HUDDLE_PROXY_ENV = {
   http_proxy: HUDDLE_PROXY_URL,
