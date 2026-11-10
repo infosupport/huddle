@@ -551,6 +551,24 @@ for pair in ${pairs}; do
 done`;
 }
 
+function buildJavaKeystoreScript(seedscript: string): string {
+  return `
+    # Generate a Java keystore that includes the Huddle MITM CA for Java tools to trust.
+    export HUDDLE_JAVA_KEYSTORE="/usr/local/share/ca-certificates/huddle-ca.jks"
+    
+    keytool \
+      -importcert -noprompt -trustcacerts -alias huddle-ca \
+      -file /usr/local/share/ca-certificates/huddle-ca.crt \
+      -keystore "$HUDDLE_JAVA_KEYSTORE" -storepass changeit >/dev/null 2>&1 || true
+    
+      printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s -Dhttp.proxyHost=%s -Dhttp.proxyPort=%s"\\n' \
+      "$HUDDLE_JAVA_KEYSTORE", "$HUDDLE_PROXY_HOST", "$HUDDLE_PROXY_PORT" \
+      >> /etc/profile.d/99-huddle-ca.sh
+
+    ${seedscript}
+  `
+}
+
 // Docker access goes via the socket in the mounted directory /var/run/huddle
 // (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 // Shared between the JetBrains and VS Code startup scripts.
@@ -558,7 +576,9 @@ const DOCKER_SOCK_SYMLINK = `# Docker access goes via the socket in the mounted 
 # (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
-const HUDDLE_PROXY_URL = 'http://huddle:80';
+const HUDDLE_PROXY_HOST = 'huddle';
+const HUDDLE_PROXY_PORT = 80;
+const HUDDLE_PROXY_URL = `http://${HUDDLE_PROXY_HOST}:${HUDDLE_PROXY_PORT}`;
 const HUDDLE_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
 const HUDDLE_PROXY_ENV = {
   http_proxy: HUDDLE_PROXY_URL,
@@ -724,14 +744,8 @@ iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DR
 mkdir -p /usr/local/share/ca-certificates
 echo '${caB64}' | base64 -d > /usr/local/share/ca-certificates/huddle-ca.crt
 chmod 644 /usr/local/share/ca-certificates/huddle-ca.crt
-# Generate a Java keystore that includes the Huddle MITM CA for Java tools to trust.
-JAVA_KEYSTORE="/usr/local/share/ca-certificates/huddle-ca.jks"
-keytool -importcert -noprompt -trustcacerts -alias huddle-ca \
-  -file /usr/local/share/ca-certificates/huddle-ca.crt \
-  -keystore "$JAVA_KEYSTORE" -storepass changeit >/dev/null 2>&1 || true
 command -v update-ca-certificates >/dev/null 2>&1 && update-ca-certificates >/dev/null 2>&1 || true
 printf 'export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/huddle-ca.crt\\n' > /etc/profile.d/99-huddle-ca.sh
-printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s"\\n' "$JAVA_KEYSTORE" >> /etc/profile.d/99-huddle-ca.sh
 chmod 644 /etc/profile.d/99-huddle-ca.sh
 
 ${IDE_CRED_SCRUB}
@@ -1180,7 +1194,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
   const containerPaths = folderMounts.map(m => m.Target);
-  const seedScript = buildFolderMappingSeedScript(containerPaths);
+  const seedScript = buildJavaKeystoreScript(buildFolderMappingSeedScript(containerPaths));
 
   // Run config script via exec — VS Code variant without JB host-config/backend.
   const script = isVscode
