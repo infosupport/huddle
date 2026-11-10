@@ -554,16 +554,11 @@ done`;
 function buildJavaKeystoreScript(seedscript: string): string {
   return `
     # Generate a Java keystore that includes the Huddle MITM CA for Java tools to trust.
-    export HUDDLE_JAVA_KEYSTORE="/usr/local/share/ca-certificates/huddle-ca.jks"
-    
     keytool \
       -importcert -noprompt -trustcacerts -alias huddle-ca \
       -file /usr/local/share/ca-certificates/huddle-ca.crt \
-      -keystore "$HUDDLE_JAVA_KEYSTORE" -storepass changeit
+      -keystore /usr/local/share/ca-certificates/huddle-ca.jks -storepass changeit
     
-      printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s -Dhttp.proxyHost=huddle -Dhttp.proxyPort=80"\\n' \
-        "$HUDDLE_JAVA_KEYSTORE" >> /etc/profile.d/99-huddle-ca.sh
-
     ${seedscript}
   `
 }
@@ -1097,10 +1092,12 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     // hardcode the default path the config script also places a symlink at
     // /var/run/docker.sock.
     'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
+    // Using Java is not limited to JetBrains products (and vice versa) so we define
+    // JAVA_TOOL_OPTIONS regardless of which IDE is selected.
+    'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/usr/local/share/ca-certificates/huddle-ca.jks -Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
     ...(isVscode ? [] : [
       'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
       'XDG_DATA_HOME=/.jbdevcontainer/data',
-      'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
     ]),
   ];
 
