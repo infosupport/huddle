@@ -559,7 +559,7 @@ function buildJavaKeystoreScript(seedscript: string): string {
     keytool \
       -importcert -noprompt -trustcacerts -alias huddle-ca \
       -file /usr/local/share/ca-certificates/huddle-ca.crt \
-      -keystore "$HUDDLE_JAVA_KEYSTORE" -storepass changeit >/dev/null 2>&1 || true
+      -keystore "$HUDDLE_JAVA_KEYSTORE" -storepass changeit
     
       printf 'export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=%s -Dhttp.proxyHost=huddle -Dhttp.proxyPort=80"\\n' \
         "$HUDDLE_JAVA_KEYSTORE" >> /etc/profile.d/99-huddle-ca.sh
