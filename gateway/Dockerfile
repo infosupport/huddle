@@ -22,6 +22,10 @@ RUN npm prune --omit=dev
 
 FROM node:24.22.2-alpine3.24 AS runtime
 WORKDIR /app
+# The npm bundled in the node image ships vulnerable copies of undici and
+# brace-expansion (they live inside npm itself, so no package.json override can reach
+# them). Upgrading npm the supported way replaces them with fixed versions.
+RUN npm install -g npm@11.21.2 && npm cache clean --force
 RUN mkdir -p /data /tmp/dc-sockets
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
