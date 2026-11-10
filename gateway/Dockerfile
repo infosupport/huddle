@@ -1,4 +1,4 @@
-FROM node:24-alpine AS builder
+FROM node:24.22.2-alpine3.24 AS builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
@@ -20,7 +20,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 
-FROM node:24-alpine AS runtime
+FROM node:24.22.2-alpine3.24 AS runtime
 WORKDIR /app
 RUN mkdir -p /data /tmp/dc-sockets
 COPY --from=builder /app/node_modules ./node_modules
