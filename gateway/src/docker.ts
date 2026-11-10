@@ -575,8 +575,6 @@ const DOCKER_SOCK_SYMLINK = `# Docker access goes via the socket in the mounted 
 # (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 ln -sfn /var/run/huddle/docker.sock /var/run/docker.sock 2>/dev/null || true`;
 
-const HUDDLE_PROXY_HOST = 'huddle';
-const HUDDLE_PROXY_PORT = 80;
 const HUDDLE_PROXY_URL = 'http://huddle:80';
 const HUDDLE_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
 const HUDDLE_PROXY_ENV = {
