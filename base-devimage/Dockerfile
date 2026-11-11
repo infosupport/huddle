@@ -3,6 +3,9 @@ FROM mcr.microsoft.com/devcontainers/base:debian
 # mcr base levert al: vscode user (uid 1000) — passwordless sudo wordt hieronder verwijderd,
 # zsh + oh-my-zsh, git, curl, wget, common-utils.
 
+# Non-interactive frontend for apt-get to avoid warnings or prompts during build.
+ARG DEBIAN_FRONTEND=noninteractive
+
 # Docker apt repo + iptables (NAT-rule huddle) + Docker CLI + compose plugin
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
