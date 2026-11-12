@@ -30,6 +30,7 @@ describe('smoke: better-sqlite3', () => {
 
   it('initialises the real Huddle schema and writes a firewall rule', async () => {
     // DB_PATH=:memory: comes from vitest.config.ts, so this never touches /data.
+    expect(process.env.DB_PATH).toBe(':memory:');
     const { db, initDb } = await import('../../src/db');
     initDb();
     const info = db

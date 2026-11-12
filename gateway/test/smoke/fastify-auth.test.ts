@@ -2,11 +2,13 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { isAuthenticated, __resetOperatorTokenCache } from '../../src/auth';
 
-// Dependency smoke test: a real Fastify instance with the same operator-token gate
-// that createApiServer() installs (an onRequest hook around isAuthenticated),
+// Dependency smoke test: a real Fastify instance with an operator-token gate built on
+// the production isAuthenticated() (an onRequest hook, like createApiServer installs),
 // exercised through real requests. Catches a Fastify bump that changes hook or reply
-// semantics, without needing Docker (createApiServer itself binds a port and talks to
-// the Docker API).
+// semantics. createApiServer() itself cannot be used here: it binds fixed port 3000 and
+// talks to the Docker API. The gate as wired in production (allowlist included) is
+// covered by the live boundary suite (test/e2e/boundary.e2e.ts, "zonder operator-token
+// krijgt 401").
 
 const TOKEN = 'smoke-test-operator-token';
 let app: FastifyInstance;

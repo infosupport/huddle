@@ -18,6 +18,9 @@ let proxy: http.Server;
 let proxyPort = 0;
 let caPem = '';
 let caDir = '';
+const openSockets = new Set<net.Socket>();
+// Leaf/CA generation is pure-JS RSA-2048; allow for slow CI runners.
+const TLS_TEST_TIMEOUT = 30_000;
 
 beforeAll(async () => {
   // tls-ca.ts reads CA_DIR at import time, so it must be set before the import.
@@ -28,9 +31,12 @@ beforeAll(async () => {
   initDb();
   db.prepare(`INSERT INTO rules (domain, container_id, status) VALUES (?, NULL, 'allow')`).run(HOST);
 
-  const { initCa, getCaCertPem } = await import('../../src/tls-ca');
+  const { initCa, getCaCertPem, signLeafCert } = await import('../../src/tls-ca');
   initCa();
   caPem = getCaCertPem();
+  // Pre-generate (and cache) the leaf so the slow RSA keygen happens here, under the
+  // 60s hook timeout, and not inside a test body. The proxy reuses the cached leaf.
+  signLeafCert(HOST);
 
   const { createProxyServer } = await import('../../src/proxy');
   proxy = createProxyServer(0);
@@ -42,6 +48,10 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  // http.Server.close() waits for open connections; make sure a failed test cannot
+  // leave a tunnel behind and turn into a hook timeout that hides the real failure.
+  for (const sock of openSockets) sock.destroy();
+  proxy?.closeAllConnections();
   await new Promise<void>(resolve => (proxy ? proxy.close(() => resolve()) : resolve()));
   fs.rmSync(caDir, { recursive: true, force: true });
   delete process.env.CA_DIR;
@@ -53,6 +63,7 @@ function connectTunnel(host: string): Promise<net.Socket> {
     const sock = net.connect(proxyPort, '127.0.0.1', () => {
       sock.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n\r\n`);
     });
+    openSockets.add(sock);
     let buf = '';
     const onData = (chunk: Buffer) => {
       buf += chunk.toString('latin1');
@@ -82,7 +93,7 @@ describe('smoke: node-forge leaf certificate + TLS handshake through the MITM pr
     } finally {
       secure.destroy();
     }
-  });
+  }, TLS_TEST_TIMEOUT);
 
   it('is NOT trusted without the Huddle CA (the leaf really is MITM-signed)', async () => {
     const tunnel = await connectTunnel(HOST);
@@ -95,5 +106,5 @@ describe('smoke: node-forge leaf certificate + TLS handshake through the MITM pr
       /SELF_SIGNED|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY/,
     );
     secure.destroy();
-  });
+  }, TLS_TEST_TIMEOUT);
 });
