@@ -10,4 +10,9 @@ LABEL com.devcontainer.snapshot=true
 LABEL com.devcontainer.source=base-devimage-rider
 LABEL com.devcontainer.ide=rider
 
+ # Rider 2026.3 crashes when opening a solution if ~/Downloads does not exist.
+RUN mkdir -p /home/vscode/Downloads
+
 # Geen ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.
+
+
