@@ -225,10 +225,32 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
       await sleep(1000);
       // Legitiem subpad mag (bereikt upstream — 2xx/3xx/4xx, in elk geval geen 403).
-      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is')).not.toBe('403');
+      // Match op een échte HTTP-status: '000' (kapotte TLS/MITM) is ook "niet 403".
+      const allowed = curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is');
+      expect(allowed).toMatch(/^[1-5]\d\d$/);
+      expect(allowed).not.toBe('403');
       // Traversal buiten /foo/ → door Huddle geblokkeerd (403), niet doorgestuurd.
       expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/../secret', '--path-as-is')).toBe('403');
       expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/..%2f..%2fadmin', '--path-as-is')).toBe('403');
+    });
+
+    // HTTPS-interceptie expliciet vastgepind: de bovenstaande tests bewijzen dit
+    // indirect (een pad-403 kan alleen na TLS-terminatie), maar hier asserteren we
+    // het direct. De leaf die de container ziet moet door Huddle's eigen root-CA zijn
+    // uitgegeven — dáár zou een node-forge- of TLS-regressie in de MITM-keten zichtbaar
+    // worden. (curl vertrouwt de CA in de devcontainer; zonder interceptie zou de
+    // issuer de echte upstream-CA zijn.)
+    it('https wordt geïntercepteerd: het leaf-cert komt van de Huddle-CA', async () => {
+      await clearRulesForDomain('example.org');
+      const denyId = await createRule('example.org', 'deny');
+      await enablePathMode(denyId);
+      await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
+      await sleep(1000);
+      const r = execIn(
+        E2E_NAME,
+        `curl -sv -o /dev/null --path-as-is https://example.org/foo/ 2>&1 | grep -i 'issuer:' || true`,
+      );
+      expect(r.stdout).toContain('Huddle DMZ Proxy Root CA');
     });
 
     // Regressie op de finding #7-fix: de beslissing valt op de gedecodeerde
