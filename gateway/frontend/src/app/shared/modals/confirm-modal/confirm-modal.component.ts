@@ -1,9 +1,10 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
 import { StateService } from '../../../core/services/state.service';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-confirm-modal',
   standalone: true,
   imports: [],

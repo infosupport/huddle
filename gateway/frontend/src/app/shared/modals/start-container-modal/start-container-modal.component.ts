@@ -1,4 +1,4 @@
-import { Component, inject, effect } from '@angular/core';
+import { Component, inject, effect, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ModalService } from '../../../core/services/modal.service';
 import { ApiService } from '../../../core/services/api.service';
@@ -19,6 +19,7 @@ interface RememberedLayout {
 }
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-start-container-modal',
   standalone: true,
   imports: [FormsModule, FmtBytesPipe, FolderSelectComponent, FolderPickerModalComponent],

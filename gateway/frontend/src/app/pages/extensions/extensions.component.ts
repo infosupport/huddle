@@ -1,10 +1,11 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { ApiService } from '../../core/services/api.service';
 import { Extension } from '../../core/extensions/extension.model';
 import { IconComponent } from '../../shared/components/icon/icon.component';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-extensions',
   standalone: true,
   imports: [RouterLink, IconComponent],

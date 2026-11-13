@@ -1,8 +1,9 @@
-import { Component, OnInit, OnDestroy, ElementRef, ViewChild, inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../../core/services/api.service';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-extension-view',
   standalone: true,
   template: `
