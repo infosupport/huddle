@@ -33,5 +33,5 @@ export interface DockerImage {
   tag: string;
   size: number;
   created: number;
-  ide?: 'rider' | 'intellij';
+  ide?: 'rider' | 'intellij' | 'webstorm' | 'vscode';
 }

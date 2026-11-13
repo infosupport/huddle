@@ -44,7 +44,7 @@ export class StartContainerModalComponent {
   indexedFolders: IndexedFolder[] = [];
   baseImage = '';
   selectedImage = '';
-  ide: 'rider' | 'intellij' | 'vscode' = 'intellij';
+  ide: 'rider' | 'intellij' | 'webstorm' | 'vscode' = 'intellij';
   mode: 'single' | 'multi' = 'single';
   workspace = '';
   mounts: { hostPath: string; containerPath: string }[] = [];
