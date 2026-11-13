@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output, inject } from '@angular/core';
+import { Component, EventEmitter, Input, Output, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ApiService } from '../../../core/services/api.service';
 import { Rule } from '../../../core/models/rule.model';
 import { RelTimePipe } from '../../pipes/rel-time.pipe';
@@ -9,6 +9,7 @@ import { PathDomainVm } from './path-allowlist.util';
 // handling of subpaths. Makes the API calls itself and emits `changed`
 // so the parent can reload its state.
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-path-allowlist',
   standalone: true,
   imports: [RelTimePipe],
