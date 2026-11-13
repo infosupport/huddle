@@ -18,6 +18,10 @@ services:
       dockerfile: Dockerfile
     container_name: huddle-devcontainer
 
+    # De base-image eindigt op USER vscode; draai pid 1 als root zodat de bootstrap
+    # kan chownen. De agent zelf draait als `vscode` (remoteUser) zonder sudo.
+    user: root
+
     # Geen NET_ADMIN: de container kan zelf geen iptables/routes aanpassen, dus
     # verkeer kan alleen via de proxy naar buiten (het netwerk is bovendien internal).
 
@@ -34,7 +38,7 @@ services:
       no_proxy: localhost,127.0.0.1,::1,[::1],huddle
       # Vertrouw de Huddle-MITM-CA zonder root: postCreateCommand haalt hem hierheen.
       # Ontbreekt het bestand nog, dan valt Node terug op zijn eigen CA-bundle.
-      NODE_EXTRA_CA_CERTS: /home/node/.huddle-ca.crt
+      NODE_EXTRA_CA_CERTS: /home/vscode/.huddle-ca.crt
 
     volumes:
       - ..:/workspaces/huddle:cached
