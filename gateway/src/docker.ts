@@ -180,10 +180,10 @@ iptables -A OUTPUT -p tcp -j DROP
   }
 }
 
-export type IdeName = 'rider' | 'intellij' | 'vscode';
+export type IdeName = 'rider' | 'intellij' | 'webstorm' | 'vscode';
 
 export function isIdeName(value: unknown): value is IdeName {
-  return value === 'rider' || value === 'intellij' || value === 'vscode';
+  return value === 'rider' || value === 'intellij' || value === 'webstorm' || value === 'vscode';
 }
 
 export function getBaseImageName(ide: IdeName): string {
@@ -230,6 +230,7 @@ function ideFromContainerLabels(labels: Record<string, string> | undefined): Ide
     const backend = JSON.parse(raw)?.customizations?.jetbrains?.backend;
     if (backend === 'Rider') return 'rider';
     if (backend === 'IntelliJ') return 'intellij';
+    if (backend === 'WebStorm') return 'webstorm';
   } catch { /* fallthrough */ }
   return undefined;
 }
@@ -667,7 +668,7 @@ fi`;
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
 export function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
-  const ideFilter = ideName === 'rider' ? 'rider' : 'idea';
+  const ideFilter = ideName === 'rider' ? 'rider' : ideName === 'webstorm' ? 'webstorm' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
 IDEA_DIR=$(ls /.jbdevcontainer/JetBrains/RemoteDev/dist/ 2>/dev/null | grep -i ${ideFilter} | sort -t- -k2 -V | tail -1)
@@ -1009,7 +1010,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   // no RemoteDev distro volume, no remote-dev-server launch.
   const isVscode = ideName === 'vscode';
   const devcontainerId = crypto.randomUUID().replace(/-/g, '');
-  const backend = ideName === 'rider' ? 'Rider' : isVscode ? 'VSCode' : 'IntelliJ';
+  const backend = ideName === 'rider' ? 'Rider' : ideName === 'webstorm' ? 'WebStorm' : isVscode ? 'VSCode' : 'IntelliJ';
   const modelJson = `{"customizations":{"jetbrains":{"backend":"${backend}"}}}`;
   const metadataJson = '[{"remoteUser":"vscode"}]';
 

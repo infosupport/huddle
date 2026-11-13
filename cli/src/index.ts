@@ -164,7 +164,7 @@ Init options:
                                      (same as "huddle experiment use <nr>")
 
 Start options:
-  --ide <intellij|rider|vscode>      IDE (default: intellij)
+  --ide <intellij|rider|webstorm|vscode> IDE (default: intellij)
   --workspace <path>                 Workspace directory (default: current directory)
   --mount <host>=<container>         Mount a host folder at an absolute container path, e.g.
                                      C:/projects/my-repo/backend=/workspace/backend

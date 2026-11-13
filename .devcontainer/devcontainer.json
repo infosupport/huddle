@@ -4,11 +4,11 @@
   "service": "devcontainer",
   "workspaceFolder": "/workspaces/huddle",
 
-  // Geen root voor de agent: attach als de non-root user `node` (sudo is uit de
-  // image gestript, zie Dockerfile). containerUser laten we op de default (root)
-  // zodat de bootstrap de workspace naar `node` kan chownen — anders faalt de
+  // Geen root voor de agent: attach als de non-root user `vscode` (sudo is uit de
+  // base-image gestript). containerUser laten we op de default (root)
+  // zodat de bootstrap de workspace naar `vscode` kan chownen — anders faalt de
   // devcontainer-setup met `chown: Operation not permitted`.
-  "remoteUser": "node",
+  "remoteUser": "vscode",
 
   // Respecteer het `command: sleep infinity` uit docker-compose.yml i.p.v. het te
   // overschrijven, zodat de container in het Huddle-netwerk blijft draaien.
