@@ -31,7 +31,7 @@ npm install -g @infosupport/huddle-cli
 huddle init            # portal → http://localhost:3000
 
 # 3 — launch a devcontainer from your project directory
-huddle                 # IntelliJ (default) · --ide vscode · --ide rider
+huddle                 # IntelliJ (default) · --ide vscode · --ide rider · --ide webstorm
 ```
 
 Open **http://localhost:3000** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
@@ -119,7 +119,7 @@ Two servers run in the same process:
 
 ### Container management
 - Overview of all devcontainers with status, image, uptime, and pending rule requests
-- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / VS Code)
+- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / WebStorm / VS Code)
 - Commit a running container to a snapshot image
 - Force-remove a container including network cleanup
 - A per-container Docker socket proxy is created automatically on start
@@ -222,6 +222,7 @@ Huddle builds base images automatically when you start a devcontainer. To speed 
 docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
 docker build -t base-devimage-intellij  -f base-devimage-intellij/Dockerfile  .
 docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
+docker build -t base-devimage-webstorm  -f base-devimage-webstorm/Dockerfile  .
 ```
 
 ---
