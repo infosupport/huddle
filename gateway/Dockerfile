@@ -22,10 +22,13 @@ RUN npm prune --omit=dev
 
 FROM node:24.22.2-alpine3.24 AS runtime
 WORKDIR /app
-# The npm bundled in the node image ships vulnerable copies of undici and
-# brace-expansion (they live inside npm itself, so no package.json override can reach
-# them). Upgrading npm the supported way replaces them with fixed versions.
-RUN npm install -g npm@11.21.2 && npm cache clean --force
+# The runtime only runs `node dist/index.js`; it never needs a package manager. The
+# npm bundled in the node image ships its own (often vulnerable) copies of undici,
+# brace-expansion and friends, so remove npm, npx and corepack entirely instead of
+# chasing their CVEs with upgrades.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /root/.npm
 RUN mkdir -p /data /tmp/dc-sockets
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
