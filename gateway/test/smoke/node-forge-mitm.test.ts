@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import net from 'net';
 import os from 'os';
@@ -12,6 +12,14 @@ import type { AddressInfo } from 'net';
 // handshake that cannot complete, or a leaf that no longer chains to the CA. This runs
 // the real proxy: CONNECT <host>:443 -> 200 -> TLS handshake against the generated CA.
 // No upstream is needed; the handshake itself is what is under test.
+
+// The CONNECT handler resolves the client IP to a container via the Docker socket
+// (dockerRequest has no timeout). Stub it so the test never touches Docker: a hanging
+// socket would otherwise surface as a 30s timeout. null = "unknown container", which
+// still matches the global (container_id NULL) allow rule inserted below.
+vi.mock('../../src/docker', () => ({
+  resolveContainerByIp: vi.fn(async () => null),
+}));
 
 const HOST = 'smoke.example.test';
 let proxy: http.Server;
@@ -102,8 +110,11 @@ describe('smoke: node-forge leaf certificate + TLS handshake through the MITM pr
       secure.once('secureConnect', () => reject(new Error('handshake unexpectedly trusted')));
       secure.once('error', resolve);
     });
+    // CERT_SIGNATURE_FAILURE: inside a Huddle devcontainer NODE_EXTRA_CA_CERTS trusts the
+    // *host's* Huddle CA, which has the same subject, so the issuer is found but the
+    // signature does not verify. Still a rejection, which is what is under test.
     expect((err as NodeJS.ErrnoException).code).toMatch(
-      /SELF_SIGNED|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY/,
+      /SELF_SIGNED|UNABLE_TO_GET_ISSUER|UNABLE_TO_VERIFY|CERT_SIGNATURE_FAILURE/,
     );
     secure.destroy();
   }, TLS_TEST_TIMEOUT);
