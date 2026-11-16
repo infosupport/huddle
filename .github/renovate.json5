@@ -71,9 +71,12 @@
       automerge: false,
     },
     {
-      description: 'Own GHCR images have no release timestamps',
+      // publish-image.yml builds base-devimage:latest and then builds the IDE images on top of
+      // :latest in the same job. A digest pin would make them build on the previous base.
+      description: 'Own GHCR images: no digest pin (built together in publish-image.yml), no release timestamps',
       matchDatasources: ['docker'],
       matchPackageNames: ['ghcr.io/infosupport/**'],
+      pinDigests: false,
       minimumReleaseAge: null,
     },
     {
@@ -84,6 +87,7 @@
     {
       description: 'GitHub Actions: grouped, automerge on green',
       matchManagers: ['github-actions'],
+      matchPackageNames: ['*', '!node'], // the `node-version` in workflows belongs to the 'node runtime' group
       groupName: 'github actions',
       automerge: true,
     },
