@@ -87,7 +87,7 @@
     {
       description: 'GitHub Actions: grouped, automerge on green',
       matchManagers: ['github-actions'],
-      matchPackageNames: ['*', '!node'], // the `node-version` in workflows belongs to the 'node runtime' group
+      matchPackageNames: ['!node'], // the `node-version` in workflows belongs to the 'node runtime' group
       groupName: 'github actions',
       automerge: true,
     },
