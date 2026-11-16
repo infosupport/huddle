@@ -66,7 +66,7 @@
     },
     {
       description: 'Node image and @types/node move together',
-      matchPackageNames: ['node', '@types/node'],
+      matchDepNames: ['node', '@types/node'],
       groupName: 'node runtime',
       automerge: false,
     },
@@ -87,7 +87,7 @@
     {
       description: 'GitHub Actions: grouped, automerge on green',
       matchManagers: ['github-actions'],
-      matchPackageNames: ['!node'], // the `node-version` in workflows belongs to the 'node runtime' group
+      matchDepNames: ['!node'], // the `node-version` in workflows belongs to the 'node runtime' group
       groupName: 'github actions',
       automerge: true,
     },
