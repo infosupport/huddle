@@ -1,0 +1,37 @@
+name: Security review gate
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+permissions:
+  pull-requests: read
+jobs:
+  security-review-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr.labels.some(l => l.name === 'needs-security-review')) {
+              core.info('No needs-security-review label: nothing to check.');
+              return;
+            }
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
+            });
+            const trusted = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+            const decisive = ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'];
+            const latest = new Map();
+            for (const r of reviews) {
+              if (r.user && trusted.includes(r.author_association) && decisive.includes(r.state)) {
+                latest.set(r.user.login, r);
+              }
+            }
+            const states = [...latest.values()];
+            const approved = states.some(r => r.state === 'APPROVED' && r.commit_id === pr.head.sha);
+            const blocked = states.some(r => r.state === 'CHANGES_REQUESTED');
+            if (!approved || blocked) {
+              core.setFailed('needs-security-review: a maintainer must approve the latest commit.');
+            }
