@@ -48,9 +48,16 @@ jobs:
         working-directory: ${{ matrix.project }}
 
   audit:
+    name: audit (${{ matrix.project }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # The frontend's runtime deps (Angular, xterm) ship to the browser; the CLI
+        # has no runtime deps today, but is audited so new ones are covered.
+        project: [gateway, gateway/frontend, cli]
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -63,7 +70,33 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
-        working-directory: gateway
+        working-directory: ${{ matrix.project }}
+
+  image-scan:
+    # A separate job so a new OS CVE or a trivy-db hiccup cannot stop the e2e
+    # boundary tests from running; both signals stay independent.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Build Huddle image
+        run: docker build -t huddle ./gateway
+
+      - name: Scan Huddle image for vulnerabilities
+        # Catches CVEs in Alpine/OS packages as well as npm ones. Fails on
+        # HIGH/CRITICAL findings that already have a fix available.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: huddle
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
 
   e2e:
     runs-on: ubuntu-latest
@@ -87,17 +120,6 @@ jobs:
 
       - name: Build Huddle image
         run: docker build -t huddle ./gateway
-
-      - name: Scan Huddle image for vulnerabilities
-        # Catches CVEs in Alpine/OS packages as well as npm ones. Fails on
-        # HIGH/CRITICAL findings that already have a fix available.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: huddle
-          scanners: vuln
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
 
       - name: Start Huddle
         # Het operator-token is per run random (alleen deze wegwerp-gateway kent
