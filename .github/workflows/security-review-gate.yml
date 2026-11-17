@@ -43,15 +43,16 @@ jobs:
             const isCritical = (name) =>
               patterns.some(p => p.endsWith('/**') ? name.startsWith(p.slice(0, -2)) : name === p);
 
-            // Versions of security-critical packages in one manifest or lockfile, as "<where>:<name>" -> version.
-            const criticalVersions = (path, text) => {
+            // Security-critical packages in one manifest or lockfile, as "<where>:<name>" -> spec or lockfile entry.
+            // The whole lockfile entry counts: a swapped `resolved` URL or `integrity` at the same version is a change too.
+            const criticalEntries = (path, text) => {
               const out = {};
               if (text === null) return out;
               const json = JSON.parse(text);
               if (path.endsWith('package-lock.json')) {
                 for (const [key, entry] of Object.entries(json.packages ?? {})) {
                   const i = key.lastIndexOf('node_modules/');
-                  if (i !== -1 && isCritical(key.slice(i + 'node_modules/'.length))) out[key] = entry.version;
+                  if (i !== -1 && isCritical(key.slice(i + 'node_modules/'.length))) out[key] = JSON.stringify(entry);
                 }
               } else {
                 for (const section of ['dependencies', 'devDependencies', 'optionalDependencies', 'overrides']) {
@@ -78,8 +79,8 @@ jobs:
             for (const f of files) {
               if (!/(^|\/)(package\.json|package-lock\.json)$/.test(f.filename)) continue;
               const oldPath = f.previous_filename ?? f.filename; // renamed files: read the old path at the base
-              const before = criticalVersions(oldPath, await readFile(oldPath, mergeBase));
-              const after = criticalVersions(f.filename, await readFile(f.filename, pr.head.sha));
+              const before = criticalEntries(oldPath, await readFile(oldPath, mergeBase));
+              const after = criticalEntries(f.filename, await readFile(f.filename, pr.head.sha));
               for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
                 if (before[key] !== after[key]) touched.add(`${f.filename} ${key}`);
               }
