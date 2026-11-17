@@ -1,6 +1,8 @@
 name: Security review gate
+# pull_request_target runs this file from the base branch, so a PR cannot edit the gate that checks it.
+# Safe because the job never checks out or runs PR code; it only reads files through the API.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, synchronize, labeled, unlabeled]
   pull_request_review:
     types: [submitted, dismissed]
@@ -37,7 +39,12 @@ jobs:
             // The security-critical package list lives only in the last packageRule of .github/renovate.json5.
             // Read it from the base commit, so a PR cannot shrink the list it is checked against.
             const renovate = await readFile('.github/renovate.json5', pr.base.sha);
-            const rule = /matchPackageNames:\s*\[([^\]]*)\][^}]*addLabels:\s*\['needs-security-review'\]/.exec(renovate ?? '');
+            if (renovate === null) {
+              // PRs to release branches cut before the Renovate config existed
+              core.info('No .github/renovate.json5 at the base commit: nothing to check.');
+              return;
+            }
+            const rule = /matchPackageNames:\s*\[([^\]]*)\][^}]*addLabels:\s*\['needs-security-review'\]/.exec(renovate);
             if (!rule) throw new Error('security-critical rule not found in .github/renovate.json5');
             const patterns = [...rule[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
             const isCritical = (name) =>
