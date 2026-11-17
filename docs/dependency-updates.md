@@ -35,8 +35,9 @@ The merge policy above depends on these GitHub settings. A repository admin sets
 - **Allow auto-merge** (Settings → General). Renovate then enables GitHub's auto-merge on the PR, and GitHub merges
   it once the required checks pass. Without this setting Renovate still automerges, but merges the branch itself
   after all checks on it are green, on its next run (about every 4 hours).
-- **Branch protection on `main`** with these required status checks: `unit`, `audit`, `e2e` and
-  `security-review-gate`. GitHub's auto-merge only waits for *required* checks, so with "Allow auto-merge" on and no
+- **Branch protection on `main`** with these required status checks (exact names; this assumes the CI matrix jobs
+  from #167 are merged): `unit (gateway)`, `unit (gateway/frontend)`, `unit (cli)`, `audit (gateway)`,
+  `audit (gateway/frontend)`, `audit (cli)`, `image-scan`, `e2e` and `security-review-gate`. GitHub's auto-merge only waits for *required* checks, so with "Allow auto-merge" on and no
   required checks, a PR that Renovate marks for automerge merges as soon as it opens. Without `security-review-gate`
   as a required check, a red gate does not block a merge.
 - **Labels** from [`.github/labels.yml`](../.github/labels.yml) exist in the repository, including `security`,
