@@ -7,8 +7,19 @@
     'customManagers:githubActionsVersions', // updates `# renovate:` annotated *_VERSION env vars in workflows
   ],
   timezone: 'Europe/Amsterdam',
-  // Demo project that is not shipped; keep it out of dependency PRs. (config:recommended already ignores test/examples folders.)
-  ignorePaths: ['docker-demo/**'],
+  // Setting ignorePaths replaces config:recommended's defaults, so they are repeated here.
+  // docker-demo is a demo project that is not shipped; keep it out of dependency PRs.
+  ignorePaths: [
+    '**/node_modules/**',
+    '**/bower_components/**',
+    '**/vendor/**',
+    '**/examples/**',
+    '**/__tests__/**',
+    '**/test/**',
+    '**/tests/**',
+    '**/__fixtures__/**',
+    'docker-demo/**',
+  ],
   // Hosted Renovate runs roughly every 4 hours; a "before 7am" window can be missed.
   schedule: ['* 0-11 * * 1'],
   labels: ['dependencies'],
@@ -19,7 +30,9 @@
     enabled: true,
     schedule: ['* 0-11 * * 1'],
     minimumReleaseAge: null, // has no release timestamp; would stay pending forever
-    automerge: true,
+    // No release-age wait is possible here and it also refreshes security-critical packages
+    // within their ranges, so a person reviews it.
+    automerge: false,
   },
 
   vulnerabilityAlerts: {
@@ -85,16 +98,19 @@
       minimumReleaseAge: null,
     },
     {
-      description: 'GitHub Actions: grouped, automerge on green',
+      // Actions are pinned by digest with a major tag comment (`# v6`), so every non-major update is a
+      // digest update. A re-pointed tag or compromised action must not reach the publish workflows unreviewed.
+      description: 'GitHub Actions: grouped, a maintainer reviews',
       matchManagers: ['github-actions'],
       matchDepNames: ['!node'], // the `node-version` in workflows belongs to the 'node runtime' group
       groupName: 'github actions',
-      automerge: true,
+      automerge: false,
     },
     {
-      description: 'GitHub Action digest updates (re-pointed tags, new pins) need a maintainer review',
-      matchManagers: ['github-actions'],
-      matchUpdateTypes: ['pinDigest', 'digest'],
+      description: 'Renovate CLI version used by the config validator in renovate-config.yml: with the github actions group',
+      matchManagers: ['custom.regex'],
+      matchDepNames: ['renovate'],
+      groupName: 'github actions',
       automerge: false,
     },
     {
