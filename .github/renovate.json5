@@ -102,7 +102,6 @@
       matchPackageNames: ['node-forge', 'fastify', '@fastify/**', 'ws', 'better-sqlite3'],
       automerge: false,
       addLabels: ['needs-security-review'],
-      // TODO for maintainers: add reviewers: ['team:<org/team>'] once an owner is chosen.
     },
   ],
 }
