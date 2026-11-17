@@ -92,6 +92,12 @@
       automerge: true,
     },
     {
+      description: 'GitHub Action digest updates (re-pointed tags, new pins) need a maintainer review',
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['pinDigest', 'digest'],
+      automerge: false,
+    },
+    {
       description: 'Majors are planned work: approve them from the Dependency Dashboard',
       matchUpdateTypes: ['major'],
       dependencyDashboardApproval: true,
