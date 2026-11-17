@@ -7,7 +7,7 @@ pkg="${1:?usage: security-bump.sh <package> <version>}"
 ver="${2:?usage: security-bump.sh <package> <version>}"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 cd "$(git rev-parse --show-toplevel)"
-git diff --quiet && git diff --cached --quiet || { echo "working tree not clean" >&2; exit 1; }
+[[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean (incl. untracked files)" >&2; exit 1; }
 
 git switch -c "security/${pkg//\//-}-${ver}"
 changed=()
@@ -33,4 +33,4 @@ docker build -t huddle:security-test ./gateway
 
 git add -A
 git commit -m "fix(deps): bump ${pkg} to ${ver} (security)"
-echo "Next: git push -u origin HEAD && gh pr create --label security --label dependencies"
+echo "Next: git push -u origin HEAD && gh pr create --label security --label dependencies --label needs-security-review"
