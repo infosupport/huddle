@@ -1,4 +1,4 @@
-import { Component, inject, DestroyRef, signal } from '@angular/core';
+import { Component, inject, DestroyRef, signal, ChangeDetectionStrategy } from '@angular/core';
 import { AsyncPipe, NgClass } from '@angular/common';
 import { FormControl, ReactiveFormsModule } from '@angular/forms';
 import { combineLatest, interval, startWith, switchMap, catchError, of } from 'rxjs';
@@ -8,6 +8,7 @@ import { AuditLog } from '../../core/models/audit-log.model';
 import { RelTimePipe } from '../../shared/pipes/rel-time.pipe';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-audit',
   standalone: true,
   imports: [AsyncPipe, NgClass, ReactiveFormsModule, RelTimePipe],

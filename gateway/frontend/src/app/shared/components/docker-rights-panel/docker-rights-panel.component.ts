@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, PLATFORM_ID, computed, effect, inject, input, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, PLATFORM_ID, computed, effect, inject, input, signal, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { StateService } from '../../../core/services/state.service';
@@ -101,6 +101,7 @@ const DURATION_STORE_PREFIX = 'huddle.dockerActions.duration.';
  * Host ports deliberately do not belong here.
  */
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-docker-rights-panel',
   standalone: true,
   templateUrl: './docker-rights-panel.component.html',

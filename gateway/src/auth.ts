@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { IncomingMessage } from 'http';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 // ── Operator-authenticatie voor de control plane ────────────────────────────
 // Root-cause van de "missing auth"-cluster (findings #4/#5/#9/#10/#11/#13): de
@@ -112,6 +113,41 @@ export function isAuthenticated(headers: IncomingMessage['headers']): boolean {
   const presented = extractPresentedToken(headers);
   if (!presented) return false;
   return timingSafeEqualStr(presented, getOperatorToken());
+}
+
+// ── Gate for the management API ──────────────────────────────────────────────
+// One access model for the entire management API: the operator token.
+// Source IP says nothing reliable here — Docker's proxy and Podman's
+// rootlessport rewrite the source to a bridge-gateway IP, and under
+// rootless Podman even which network that is changes per restart/disconnect
+// (GetRootlessPortChildIP iterates a map). Devcontainers, LAN and operator
+// can therefore only be separated by the token; the former subnet gate has
+// thus been replaced by auth on every /api/* route.
+//
+// Endpoints that devcontainers must be able to reach without a token (sudo-audit
+// ingest and the proxy CA). Keep this deliberately minimal: everything here is
+// callable by anyone on the network.
+const devcontainerPublicApi: ReadonlyArray<{ method: string; path: string }> = [
+  { method: 'POST', path: '/api/audit/sudo' },
+  { method: 'GET',  path: '/api/tls/ca.crt' },
+];
+// Endpoints that the operator browser/CLI must be able to reach without a
+// logged-in session in order to be able to log in at all (and to see that
+// login is needed). The static SPA assets fall under this too (everything
+// outside /api/): it is only client code, and the API itself stays behind auth.
+const authPublicApi: ReadonlySet<string> = new Set(['/api/auth/login', '/api/auth/logout', '/api/auth/status']);
+
+// Fastify onRequest hook installed by createApiServer (api.ts). Exported so the
+// dependency smoke test exercises this exact hook rather than a copy.
+export async function operatorAuthHook(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const url = req.url ?? '';
+  const pathOnly = url.split('?')[0];
+  if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
+  if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
+  if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
+  if (!isAuthenticated(req.headers)) {
+    reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
+  }
 }
 
 // Set-Cookie-waarde voor een geslaagde login. httpOnly (geen JS-toegang),

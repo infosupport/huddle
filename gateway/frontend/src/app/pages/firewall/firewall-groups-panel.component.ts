@@ -1,4 +1,4 @@
-import { Component, inject, signal, computed, Input, OnInit, HostListener } from '@angular/core';
+import { Component, inject, signal, computed, Input, OnInit, HostListener, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../core/services/api.service';
 import { StateService } from '../../core/services/state.service';
@@ -21,6 +21,7 @@ type StatusFilter = 'all' | 'allow' | 'deny' | 'path';
 // place. A "Container / Global" column shows each rule's scope. Allow↔deny and
 // path-mode toggling are done via the bulk actions. Per-group import/export/apply.
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-firewall-groups-panel',
   standalone: true,
   imports: [FormsModule, IconComponent, RelTimePipe],

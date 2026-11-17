@@ -56,6 +56,7 @@ import { grantSudo, revokeSudo } from './sudo-grant';
 import {
   getOperatorToken,
   isAuthenticated,
+  operatorAuthHook,
   timingSafeEqualStr,
   isAllowedOrigin,
   sessionCookie,
@@ -107,37 +108,9 @@ interface ShareableRule {
 export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
-  // One access model for the entire management API: the operator token (auth.ts).
-  // Source IP says nothing reliable here — Docker's proxy and Podman's
-  // rootlessport rewrite the source to a bridge-gateway IP, and under
-  // rootless Podman even which network that is changes per restart/disconnect
-  // (GetRootlessPortChildIP iterates a map). Devcontainers, LAN and operator
-  // can therefore only be separated by the token; the former subnet gate has
-  // thus been replaced by auth on every /api/* route.
-  //
-  // Endpoints that devcontainers must be able to reach without a token (sudo-audit
-  // ingest and the proxy CA). Keep this deliberately minimal: everything here is
-  // callable by anyone on the network.
-  const devcontainerPublicApi: Array<{ method: string; path: string }> = [
-    { method: 'POST', path: '/api/audit/sudo' },
-    { method: 'GET',  path: '/api/tls/ca.crt' },
-  ];
-  // Endpoints that the operator browser/CLI must be able to reach without a
-  // logged-in session in order to be able to log in at all (and to see that
-  // login is needed). The static SPA assets fall under this too (everything
-  // outside /api/): it is only client code, and the API itself stays behind auth.
-  const authPublicApi = new Set<string>(['/api/auth/login', '/api/auth/logout', '/api/auth/status']);
-
-  app.addHook('onRequest', async (req, reply) => {
-    const url = req.url ?? '';
-    const pathOnly = url.split('?')[0];
-    if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
-    if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
-    if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
-    if (!isAuthenticated(req.headers)) {
-      reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
-    }
-  });
+  // One access model for the entire management API: the operator token on every
+  // /api/* route, with a minimal allowlist. See operatorAuthHook in auth.ts.
+  app.addHook('onRequest', operatorAuthHook);
 
   // ── Auth-endpoints ─────────────────────────────────────────────────────────
   // Login: check the token (constant-time) and on success set an httpOnly,
