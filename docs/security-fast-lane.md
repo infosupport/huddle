@@ -5,18 +5,19 @@ Runbook for getting a security fix from advisory to published image quickly.
 1. **An advisory comes in** from a GitHub Dependabot alert, a Renovate PR or Aikido.
 2. **Trigger Renovate**: tick the run checkbox on the Dependency Dashboard so you don't wait for the 4-hourly run.
 3. **Renovate opens a PR** labelled `security`. It never automerges, and CI runs.
-4. **Review.** For security-critical packages (`node-forge`, `fastify`, `@fastify/**`, `ws`, `better-sqlite3`) the PR
-   also carries `needs-security-review`, and the `security-review-gate` check stays red until a maintainer approves
+4. **Review.** For security-critical packages (the last `packageRules` entry in `.github/renovate.json5`, the only
+   copy of that list, which the gate reads as well) the PR also carries `needs-security-review`, and the `security-review-gate` check stays red until a maintainer approves
    the latest commit. Spend about 15 minutes on two questions:
    - Does the vulnerable code path touch our code?
    - Does the fix contain breaking changes?
 5. **Merge.** `publish-image.yml` publishes the image.
 6. **No upstream fix yet?** Run `scripts/security-bump.sh <package> <version>` to pin a patched version through an
-   `overrides` entry. It needs `jq` and a clean working tree. It finds every project whose lockfile contains the
-   package, creates a `security/<package>-<version>` branch (`/` in scoped names becomes `-`), bumps direct
-   dependencies, adds an override so nested copies are patched too, builds and tests every changed project, and builds
-   the image. It stops if the package is in no lockfile, or if the branch already exists (an earlier attempt: check it
-   out to continue, or delete it to start over). Then commit, and open a PR
+   `overrides` entry. It needs `jq`, a clean working tree and an exact version (`1.2.3`, not a range or tag). It finds
+   every project whose lockfile on `origin/main` contains the package, creates a `security/<package>-<version>` branch
+   from the latest `origin/main` (`/` in scoped names becomes `-`), pins direct dependencies, adds an override so
+   nested copies are patched too, and tests every changed project. It builds `cli` on the host and builds the image
+   only when `gateway` or its frontend changed. It stops if the package is in no lockfile, or if the branch already
+   exists (an earlier attempt: check it out to continue, or delete it to start over). Then commit, and open a PR
    labelled `security` (plus `needs-security-review` for security-critical packages). If no patched version exists,
    disable the vulnerable feature, for example with a firewall rule.
 
