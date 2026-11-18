@@ -8,6 +8,7 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runUpdateAgent } from './update-agent';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
@@ -27,7 +28,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -152,6 +153,9 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle update-agent [PR]           Let Claude fix Renovate PRs whose CI is red,
+                                     inside an airlocked devcontainer (needs gh and
+                                     CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -174,6 +178,12 @@ Start options:
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
+
+Update-agent options:
+  --dry-run                          Fix and verify, but print the diff instead of
+                                     pushing or commenting
+  --keep                             Keep the agent container and its folder
+                                     (~/.huddle/update-agent) for inspection
 
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
@@ -372,6 +382,16 @@ async function main(): Promise<void> {
       replace: flagBool(flags, 'replace'),
       clear: flagBool(flags, 'clear'),
       list: flagBool(flags, 'list'),
+    });
+    return;
+  }
+
+  if (cmd === 'update-agent') {
+    await runUpdateAgent({
+      pr: positional[1] !== undefined ? parseIssueNumber(positional[1]) : undefined,
+      dryRun: flagBool(flags, 'dry-run'),
+      keep: flagBool(flags, 'keep'),
+      runtime: flagString(flags, 'runtime'),
     });
     return;
   }
