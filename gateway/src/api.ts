@@ -63,6 +63,7 @@ import {
   clearSessionCookie,
 } from './auth';
 import { attachTerminal } from './terminal';
+import { registerTokenExchangeRoutes } from './token-exchange-api';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
 import {
@@ -1113,6 +1114,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const last5 = db.prepare('SELECT id, ts, container_id, domain, action FROM audit_log ORDER BY ts DESC LIMIT 5').all();
     return { dbPath, rowsBefore: before, rowsAfter: after, insertedId, insertError, last5 };
   });
+
+  // Host-registered Claude credentials for the token exchange (update agent).
+  registerTokenExchangeRoutes(app);
 
   // ── Ephemeral sudo grant (admin access to 'noot') ─────────────────────────
   // The 'noot' admin user starts LOCKED without a password. Admin access is

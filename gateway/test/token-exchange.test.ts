@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { storeTokenExchange, resolveToken, isPlaceholderToken } from '../src/token-exchange';
 
 // Token-exchange containerId-binding (finding #12). Puur (alleen crypto).
@@ -40,5 +40,87 @@ describe('token-exchange containerId binding', () => {
       delete process.env.HUDDLE_TOKEN_PLACEHOLDER_TTL_MS;
       expect(resolveToken(ph, 'container-a')).toBeNull();
     });
+  });
+});
+
+describe('revokeTokenExchange', () => {
+  it('a revoked placeholder can no longer be redeemed', async () => {
+    const { revokeTokenExchange } = await import('../src/token-exchange');
+    const ph = storeTokenExchange('container-r', 'REAL-TOKEN');
+    revokeTokenExchange('container-r');
+    expect(resolveToken(ph, 'container-r')).toBeNull();
+  });
+
+  it('only revokes the placeholder of that container', async () => {
+    const { revokeTokenExchange } = await import('../src/token-exchange');
+    const a = storeTokenExchange('container-x', 'A');
+    const b = storeTokenExchange('container-y', 'B');
+    revokeTokenExchange('container-x');
+    expect(resolveToken(a, 'container-x')).toBeNull();
+    expect(resolveToken(b, 'container-y')).toBe('B');
+  });
+});
+
+// Host-side registration routes (update agent). The audit log is mocked so the
+// test does not need the better-sqlite3 binding.
+vi.mock("../src/db", () => ({ logAudit: vi.fn() }));
+
+describe('token registration routes', () => {
+  async function buildApp() {
+    const Fastify = (await import('fastify')).default;
+    const { registerTokenExchangeRoutes } = await import('../src/token-exchange-api');
+    const app = Fastify({ logger: false });
+    registerTokenExchangeRoutes(app);
+    return app;
+  }
+
+  it('returns a placeholder that resolves only for the registered container', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/docker/containers/update-agent-pr-12/token',
+      payload: { secret: 'sk-ant-real' },
+    });
+    expect(res.statusCode).toBe(200);
+    const { placeholder } = res.json() as { placeholder: string };
+    expect(isPlaceholderToken(placeholder)).toBe(true);
+    expect(placeholder).not.toContain('sk-ant-real');
+    expect(resolveToken(placeholder, 'update-agent-pr-12')).toBe('sk-ant-real');
+    expect(resolveToken(placeholder, 'other-container')).toBeNull();
+  });
+
+  it('DELETE revokes the placeholder', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/docker/containers/update-agent-pr-13/token',
+      payload: { secret: 'sk-ant-real' },
+    });
+    const { placeholder } = res.json() as { placeholder: string };
+    const del = await app.inject({ method: 'DELETE', url: '/api/docker/containers/update-agent-pr-13/token' });
+    expect(del.statusCode).toBe(200);
+    expect(resolveToken(placeholder, 'update-agent-pr-13')).toBeNull();
+  });
+
+  it.each([
+    [{}, 'missing secret'],
+    [{ secret: '' }, 'empty secret'],
+    [{ secret: 'abc def' }, 'whitespace'],
+    [{ secret: 'abc\r\nX-Evil: 1' }, 'CRLF header injection'],
+    [{ secret: 42 }, 'non-string'],
+  ])('rejects %j (%s)', async (payload) => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/api/docker/containers/c1/token', payload });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an invalid container name', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/docker/containers/-bad/token',
+      payload: { secret: 'x' },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });
