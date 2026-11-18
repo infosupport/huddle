@@ -61,3 +61,11 @@ export function resolveToken(placeholder: string, callerContainerId: string | nu
 export function isPlaceholderToken(token: string): boolean {
   return token.startsWith(PREFIX);
 }
+
+// Trek de placeholder van een container in (bv. wanneer de update agent klaar is),
+// zodat een achtergebleven placeholder niet meer inwisselbaar is.
+export function revokeTokenExchange(containerId: string): void {
+  const placeholder = containerLatest.get(containerId);
+  if (placeholder) tokenMap.delete(placeholder);
+  containerLatest.delete(containerId);
+}
