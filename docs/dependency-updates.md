@@ -15,7 +15,7 @@ Dependencies are updated by [Renovate](https://docs.renovatebot.com/). The confi
 | Node image and `@types/node` | One grouped PR ("node runtime"), one reviewer. |
 | GitHub Actions, and the Renovate version (`RENOVATE_VERSION`) used by the config validator in `renovate-config.yml` | One grouped PR ("github actions"), one reviewer. Actions are pinned by digest, so updates are digest refreshes; a re-pointed tag or compromised action must not reach the publish workflows unreviewed. |
 | Lockfile maintenance | Refreshes `package-lock.json` within the existing ranges; the only way transitive dependencies get updated. One reviewer, never automerges: it cannot wait for the release age, and it also refreshes security-critical packages. |
-| Security-critical packages (`node-forge`, `fastify`, `@fastify/**`, `ws`, `better-sqlite3`) | Never automerge. Labelled `needs-security-review`: one reviewer, plus the `security-review-gate` check, which fails until a maintainer (write access or higher) approves the latest commit. The gate also applies to any PR that changes these packages' versions in a `package.json` or `package-lock.json`, with or without the label, so removing the label does not skip it. |
+| Security-critical packages (`node-forge`, `fastify`, `@fastify/**`, `ws`, `better-sqlite3`) | Never automerge. Labelled `needs-security-review`: one reviewer, plus the `security-review-gate` check, which fails until a maintainer (write access or higher) approves the latest commit. The gate also applies to any PR that changes these packages' versions in a `package.json` or `package-lock.json`, with or without the label, so removing the label does not skip it. Changes to `.github/workflows/` or `.github/renovate.json5` need the same approval, so the gate and the package list cannot be weakened unreviewed. |
 | Major updates | Not opened automatically. Approve them from the Dependency Dashboard. |
 | Security advisories | PR labelled `security`, no automerge, no release-age delay. See [security-fast-lane.md](security-fast-lane.md). |
 
@@ -27,6 +27,11 @@ Other rules worth knowing:
 - The `engines` Node range is never updated by Renovate; it is a product decision.
 - When Renovate rebases a `needs-security-review` PR, the head commit changes and the earlier approval no longer
   counts. The reviewer approves again. This is intentional.
+- The gate runs with `pull_request_target`, so it always uses the workflow from `main` and a PR cannot edit the check
+  that judges it. It never checks out or runs PR code. Approvals, change requests and dismissals by maintainers
+  re-run it automatically (`security-review-gate-rerun.yml`), except on PRs from forks: there a maintainer re-runs the
+  gate by hand after approving. A re-run uses the gate as it was when that run started; changes to the gate on `main`
+  apply from the next push or label change on the PR.
 
 ## Repository setup
 
