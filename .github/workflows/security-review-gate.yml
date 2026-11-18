@@ -4,12 +4,13 @@ name: Security review gate
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, labeled, unlabeled]
-  pull_request_review:
-    types: [submitted, dismissed]
+# Review events deliberately do not trigger this workflow: pull_request_review runs the workflow file
+# from the PR's merge ref, so a PR could edit the gate and flip the required check. Reviews are
+# re-evaluated by security-review-gate-rerun.yml, which only re-runs this base-branch run.
 permissions:
   contents: read # read package.json / package-lock.json at the base and head commits
   pull-requests: read
-# A push, label and review on the same commit start separate runs; only the newest may set the check.
+# A push, label and re-run on the same commit start separate runs; only the newest may set the check.
 concurrency:
   group: security-review-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -21,7 +22,17 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const pr = context.payload.pull_request;
+            // A re-run (see security-review-gate-rerun.yml) replays the original event payload, so its labels
+            // and base commit can be stale. Fetch the PR fresh. The re-run still executes this file as it was
+            // when the run started: changes to the gate on the base branch apply from the next push or label.
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: context.payload.pull_request.number,
+            });
+            // The check belongs to the commit this run started for. If the PR moved on, a newer run decides.
+            if (pr.head.sha !== context.payload.pull_request.head.sha) {
+              core.setFailed(`PR head moved to ${pr.head.sha}: the run for that commit decides the gate.`);
+              return;
+            }
 
             // Fork PR commits are also readable from the base repo, and the fork itself may be deleted.
             const readFile = async (path, ref) => {
@@ -83,6 +94,14 @@ jobs:
             });
             const mergeBase = comparison.merge_base_commit.sha;
             const touched = new Set();
+            // Workflows (this gate, its re-run workflow, and any job that could pose as this check) and the
+            // Renovate config (the critical package list) decide what is reviewed, so changes to them need review too.
+            for (const f of files) {
+              const paths = [f.filename, f.previous_filename].filter(Boolean);
+              if (paths.some(p => p.startsWith('.github/workflows/') || p === '.github/renovate.json5')) {
+                touched.add(`${f.filename} (CI or Renovate config)`);
+              }
+            }
             for (const f of files) {
               if (!/(^|\/)(package\.json|package-lock\.json)$/.test(f.filename)) continue;
               const oldPath = f.previous_filename ?? f.filename; // renamed files: read the old path at the base
