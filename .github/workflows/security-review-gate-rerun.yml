@@ -1,0 +1,91 @@
+name: Security review gate re-run
+# Approvals, change requests and dismissals change the gate's outcome without changing any code, so the
+# gate must run again. This workflow only re-runs the gate; it never sets the required check itself.
+# The re-run executes security-review-gate.yml from the base branch, so a PR cannot change that decision.
+# This file runs from the PR's merge ref, so it is not trusted to decide anything. Changes to it need a
+# maintainer's approval like any other workflow change (see the gate).
+# Fork PRs get a read-only token, so the re-run cannot start for them: a maintainer re-runs the gate by hand.
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+permissions:
+  actions: write # re-run the gate's workflow run
+  checks: read # find the gate's check run on the PR head commit
+# Repeated reviews on the same PR collapse into one re-run of the newest state.
+concurrency:
+  group: security-review-gate-rerun-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  rerun:
+    # Plain comments cannot change the gate's outcome.
+    if: github.event.review.state != 'commented'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const gatePath = '.github/workflows/security-review-gate.yml';
+
+            // Only reviews from people with write access count in the gate, so nobody else needs a re-run.
+            // For a dismissal the sender is whoever dismissed the review.
+            const sender = context.payload.sender.login;
+            let permission = 'none';
+            try {
+              ({ data: { permission } } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo, username: sender,
+              }));
+            } catch (e) {
+              if (e.status !== 404) throw e; // 404: not a collaborator
+            }
+            if (!['admin', 'write'].includes(permission)) {
+              core.info(`${sender} has no write access: their review does not change the gate.`);
+              return;
+            }
+
+            // The required check lives on the PR head commit, so look the gate up there instead of matching
+            // branch names. A check run created by Actions has the same id as its job, which names its run.
+            const findGateRun = async () => {
+              const { data } = await github.rest.checks.listForRef({
+                ...context.repo, ref: pr.head.sha, check_name: 'security-review-gate', filter: 'latest',
+              });
+              const candidates = data.check_runs
+                .filter(c => c.app?.slug === 'github-actions')
+                .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+              for (const check of candidates) {
+                const { data: job } = await github.rest.actions.getJobForWorkflowRun({ ...context.repo, job_id: check.id });
+                const { data: run } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: job.run_id });
+                // Ignore same-named jobs from any other workflow: only the base-branch gate decides.
+                if (run.event === 'pull_request_target' && run.path === gatePath) return run;
+              }
+              return null;
+            };
+
+            // A run that is still going may have read the reviews before this one was submitted, so wait for
+            // it to finish and re-run it. The gate normally takes seconds.
+            const deadline = Date.now() + 8 * 60 * 1000;
+            let run;
+            while (true) {
+              run = await findGateRun();
+              if (!run) {
+                core.warning('No security-review-gate run found for the PR head commit: re-run the gate by hand.');
+                return;
+              }
+              if (run.status === 'completed') break;
+              if (Date.now() > deadline) {
+                core.warning(`Gate run ${run.id} did not finish in time: re-run it by hand once it completes.`);
+                return;
+              }
+              core.info(`Gate run ${run.id} is ${run.status}; waiting for it to finish.`);
+              await new Promise(resolve => setTimeout(resolve, 10_000));
+            }
+
+            try {
+              await github.rest.actions.reRunWorkflow({ ...context.repo, run_id: run.id });
+              core.info(`Re-ran security-review-gate run ${run.id}.`);
+            } catch (e) {
+              // Fork PRs get a read-only token. A failed job here would look like a broken gate, so warn instead.
+              if (e.status !== 403) throw e;
+              core.warning(`No permission to re-run gate run ${run.id} (fork PR?): a maintainer must re-run it by hand.`);
+            }
