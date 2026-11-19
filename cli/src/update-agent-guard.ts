@@ -140,15 +140,45 @@ export function hasFailingChecks(pr: PrInfo): boolean {
   return pr.statusCheckRollup.some((c) => FAILED.has((c.conclusion ?? '').toUpperCase()) || FAILED.has((c.state ?? '').toUpperCase()));
 }
 
-/** GitHub Actions run ids of the failing checks, for `gh run view --log-failed`. */
-export function failedRunIds(pr: PrInfo): string[] {
-  const ids = new Set<string>();
+/**
+ * The failing GitHub Actions jobs, for `gh run view --job <id> --log`. Job logs
+ * are readable as soon as the job finishes, even while other jobs of the same
+ * run are still going (`--log-failed` waits for the whole run).
+ */
+export function failedJobs(pr: PrInfo): { runId: string; jobId: string }[] {
+  const jobs = new Map<string, { runId: string; jobId: string }>();
   for (const c of pr.statusCheckRollup) {
-    if (!FAILED.has((c.conclusion ?? c.state ?? '').toUpperCase())) continue;
-    const m = /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? '');
-    if (m) ids.add(m[1]);
+    if (!FAILED.has((c.conclusion || c.state || '').toUpperCase())) continue;
+    const m = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? '');
+    if (m) jobs.set(m[2], { runId: m[1], jobId: m[2] });
   }
-  return [...ids];
+  return [...jobs.values()];
+}
+
+/** The npm projects CI builds, in build order: the gateway build compiles the frontend. */
+export const PROJECTS = ['gateway/frontend', 'gateway', 'cli'] as const;
+
+/**
+ * Which projects to verify for a set of changed files. CI checks everything
+ * after the push; locally only what the change can break, so a `cli` update
+ * does not depend on installing the gateway's native modules. A gateway
+ * change needs the frontend too (`build:ui`). A file outside the projects
+ * (root config, workflows, ...) could affect any of them, so it means all.
+ */
+export function affectedProjects(changedFiles: string[]): string[] {
+  const hit = new Set<string>();
+  for (const raw of changedFiles) {
+    const f = raw.replace(/\\/g, '/');
+    if (f.startsWith('gateway/')) {
+      hit.add('gateway/frontend');
+      hit.add('gateway');
+    } else if (f.startsWith('cli/')) {
+      hit.add('cli');
+    } else {
+      return [...PROJECTS];
+    }
+  }
+  return PROJECTS.filter((p) => hit.has(p));
 }
 
 /** Why the agent should not touch this PR, or null when it should. */
