@@ -91,7 +91,32 @@ export interface CommitAuthor {
 
 export const GAVE_UP_LABEL = 'agent-gave-up';
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR']);
-const SAFE_BRANCH = /^renovate\/[A-Za-z0-9._\/()+-]+$/;
+const SAFE_REF_CHARS = /^[A-Za-z0-9._\/()+-]+$/;
+
+/** Renovate's branchPrefix: 'renovate/' unless HUDDLE_RENOVATE_BRANCH_PREFIX says otherwise. */
+export function renovateBranchPrefix(): string {
+  return process.env.HUDDLE_RENOVATE_BRANCH_PREFIX?.trim() || 'renovate/';
+}
+
+/** A branch Renovate made, with only characters that are safe to pass to git. */
+export function isRenovateBranch(branch: string, prefix = renovateBranchPrefix()): boolean {
+  return branch.startsWith(prefix) && branch.length > prefix.length && SAFE_REF_CHARS.test(branch);
+}
+
+const TRAILER = /^(co-authored-by|signed-off-by|reviewed-by|acked-by|approved-by|tested-by|reported-by)\s*:/i;
+
+/**
+ * The agent writes its own commit message after reading untrusted input. Keep
+ * it, but drop attribution trailers (they would credit or implicate other
+ * people) and cap its size. Falls back when nothing usable is left.
+ */
+export function sanitizeCommitMessage(message: string, fallback: string): string {
+  const lines = message.replace(/\r\n/g, '\n').split('\n').filter((l) => !TRAILER.test(l.trim()));
+  const subject = (lines.shift() ?? '').trim().slice(0, 100);
+  if (!subject) return `${fallback}\n`;
+  const body = lines.join('\n').trim().slice(0, 4000);
+  return body ? `${subject}\n\n${body}\n` : `${subject}\n`;
+}
 
 /**
  * Renovate as the Mend app (`renovate[bot]`), as a self-hosted bot account
@@ -128,7 +153,8 @@ export function failedRunIds(pr: PrInfo): string[] {
 
 /** Why the agent should not touch this PR, or null when it should. */
 export function skipReason(pr: PrInfo): string | null {
-  if (!SAFE_BRANCH.test(pr.headRefName)) return `branch ${pr.headRefName} is not a renovate/* branch`;
+  const prefix = renovateBranchPrefix();
+  if (!isRenovateBranch(pr.headRefName, prefix)) return `branch ${pr.headRefName} is not a ${prefix}* branch`;
   if (pr.labels.some((l) => l.name === GAVE_UP_LABEL)) return `labelled ${GAVE_UP_LABEL}`;
   if (pr.commits.some((c) => !c.authors.every((a) => isRenovateAuthor(a)))) {
     return 'has commits from someone other than Renovate (already being worked on)';

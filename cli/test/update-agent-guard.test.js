@@ -111,3 +111,19 @@ test('isRenovateAuthor recognises the app, self-hosted bots and configured ids',
   assert.equal(g.isRenovateAuthor({ login: 'our-deps-bot' }, ['our-deps-bot']), true);
   assert.equal(g.isRenovateAuthor({ login: 'renovate-fan', email: 'fan@example.com' }), false);
 });
+
+test('isRenovateBranch honours the configured prefix and rejects unsafe names', () => {
+  assert.equal(g.isRenovateBranch('renovate/vitest-4.x', 'renovate/'), true);
+  assert.equal(g.isRenovateBranch('deps/vitest-4.x', 'renovate/'), false);
+  assert.equal(g.isRenovateBranch('deps/vitest-4.x', 'deps/'), true);
+  assert.equal(g.isRenovateBranch('deps/', 'deps/'), false);
+  assert.equal(g.isRenovateBranch('deps/x;rm -rf', 'deps/'), false);
+});
+
+test('sanitizeCommitMessage drops attribution trailers and falls back when empty', () => {
+  const msg = 'fix(deps): adapt to fastify 6\n\nThe reply API changed.\nCo-authored-by: Someone <s@example.com>\nSigned-off-by: Other <o@example.com>\n';
+  assert.equal(g.sanitizeCommitMessage(msg, 'fallback'), 'fix(deps): adapt to fastify 6\n\nThe reply API changed.\n');
+  assert.equal(g.sanitizeCommitMessage('', 'fix(deps): fallback'), 'fix(deps): fallback\n');
+  assert.equal(g.sanitizeCommitMessage('Co-authored-by: x <x@y>', 'fix(deps): fallback'), 'fix(deps): fallback\n');
+  assert.equal(g.sanitizeCommitMessage('x'.repeat(300), 'f').length, 101);
+});
