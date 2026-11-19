@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { spawnSync, SpawnSyncOptions } from 'child_process';
-import { get, post, del } from './api';
+import { spawn, spawnSync, SpawnSyncOptions } from 'child_process';
+import { ApiError, get, post, del } from './api';
 import { CONFIG_DIR } from './config';
 import { resolveRuntime } from './runtime';
 import { bold, dim, green, red, yellow } from './utils';
@@ -11,6 +11,7 @@ import {
   failedRunIds,
   guardViolations,
   parseNameStatus,
+  sanitizeCommitMessage,
   skipReason,
   testWeakeningFlags,
 } from './update-agent-guard';
@@ -82,10 +83,43 @@ function must(cmd: string, args: string[], opts: SpawnSyncOptions = {}): string 
   return r.stdout;
 }
 
-/** Quote agent-written text for a public comment: a blockquote, with @mentions defused. */
+// The long-running container commands (Claude, verification) run async, so a
+// Ctrl+C reaches the SIGINT handler while they run: it stops them, and the
+// normal `finally` cleanup removes the container, rules and placeholder.
+let interrupted = false;
+const interruptHooks = new Set<() => void>();
+const OUTPUT_CAP = 1024 * 1024;
+
+function runAsync(cmd: string, args: string[], opts: { timeout?: number; inherit?: boolean } = {}): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: opts.inherit ? ['ignore', 'inherit', 'inherit'] : ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout?.setEncoding('utf8').on('data', (d: string) => { stdout = (stdout + d).slice(-OUTPUT_CAP); });
+    child.stderr?.setEncoding('utf8').on('data', (d: string) => { stderr = (stderr + d).slice(-OUTPUT_CAP); });
+    const timer = opts.timeout ? setTimeout(() => { timedOut = true; child.kill(); }, opts.timeout) : undefined;
+    const stop = () => child.kill();
+    interruptHooks.add(stop);
+    const done = () => { if (timer) clearTimeout(timer); interruptHooks.delete(stop); };
+    child.on('error', (err) => { done(); reject(new Error(`${cmd} ${args[0] ?? ''}: ${err.message}`)); });
+    child.on('close', (status) => { done(); resolve({ status: timedOut ? null : status, timedOut, stdout, stderr }); });
+  });
+}
+
+function onSigint(): void {
+  if (interrupted) process.exit(130);
+  interrupted = true;
+  console.log(yellow('\nInterrupted: stopping the agent and cleaning up. Press Ctrl+C again to quit right away.'));
+  for (const stop of interruptHooks) stop();
+}
+
+/**
+ * Agent-written text for a public comment, inside a code fence: no links,
+ * images, HTML or @mentions are rendered from it.
+ */
 function quoteUntrusted(text: string): string {
-  // A zero-width space after @ keeps the text readable but stops GitHub from notifying anyone.
-  return text.replace(/@(?=[A-Za-z0-9])/g, '@​').split('\n').map((l) => `> ${l}`).join('\n');
+  return ['````text', text.replace(/`{3,}/g, (m) => "'".repeat(m.length)), '````'].join('\n');
 }
 
 const tail = (s: string, n: number) => (s.length > n ? `[…truncated…]\n${s.slice(-n)}` : s);
@@ -109,7 +143,24 @@ export async function runUpdateAgent(opts: UpdateAgentOptions): Promise<void> {
   }
 
   const results: Result[] = [];
+  process.on('SIGINT', onSigint);
+  try {
+    await processAll(prs, { repo, engine, imageName, credential, prompt, identity, opts }, results);
+  } finally {
+    process.off('SIGINT', onSigint);
+  }
+
+  console.log(`\n${bold('Update agent summary')}`);
+  for (const r of results) {
+    const color = r.outcome === 'fixed' || r.outcome === 'dry-run' ? green : r.outcome === 'skipped' ? dim : red;
+    console.log(`  #${r.pr}  ${color(r.outcome.padEnd(8))} ${r.detail}`);
+  }
+}
+
+async function processAll(prs: PrInfo[], base: Omit<Ctx, 'pr'>, results: Result[]): Promise<void> {
+  const { opts } = base;
   for (const pr of prs) {
+    if (interrupted) break;
     const reason = skipReason(pr);
     if (reason) {
       if (opts.pr) console.log(yellow(`Skipping #${pr.number}: ${reason}`));
@@ -118,18 +169,12 @@ export async function runUpdateAgent(opts: UpdateAgentOptions): Promise<void> {
     }
     console.log(`\n${bold(`PR #${pr.number}`)} ${pr.title} ${dim(`(${pr.headRefName})`)}`);
     try {
-      results.push(await processPr({ pr, repo, engine, imageName, credential, prompt, identity, opts }));
+      results.push(await processPr({ ...base, pr }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(red(`  error: ${msg}`));
       results.push({ pr: pr.number, outcome: 'error', detail: msg });
     }
-  }
-
-  console.log(`\n${bold('Update agent summary')}`);
-  for (const r of results) {
-    const color = r.outcome === 'fixed' || r.outcome === 'dry-run' ? green : r.outcome === 'skipped' ? dim : red;
-    console.log(`  #${r.pr}  ${color(r.outcome.padEnd(8))} ${r.detail}`);
   }
 }
 
@@ -198,6 +243,11 @@ async function processPr(ctx: Ctx): Promise<Result> {
   const { pr, opts } = ctx;
   const name = `update-agent-pr-${pr.number}`;
   const dir = path.join(CONFIG_DIR, 'update-agent', `pr-${pr.number}`);
+  // A container from an earlier --keep run is someone's debugging session:
+  // never delete it (or its folder) implicitly.
+  if (await containerExists(name)) {
+    return { pr: pr.number, outcome: 'skipped', detail: `container ${name} from an earlier --keep run still exists; remove it first` };
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   try {
     return await fixPr(ctx, name, dir);
@@ -242,17 +292,23 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   // Every exec that can time out stops all of the agent user's processes
   // afterwards: a timeout only kills the local `docker exec` client, not the
   // process inside the container.
-  const exec = (args: string[], workdir: string, extra: SpawnSyncOptions = {}): RunResult => {
-    const r = run(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...GIT_SAFE_DIR_ENV, name, ...args], extra);
-    if (r.timedOut) {
+  const exec = async (args: string[], workdir: string, extra: { timeout?: number; inherit?: boolean } = {}): Promise<RunResult> => {
+    const r = await runAsync(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...GIT_SAFE_DIR_ENV, name, ...args], extra);
+    if (r.timedOut || interrupted) {
       // pkill exits 1 when nothing was left to kill; anything else means it failed.
       const kill = run(engine, ['exec', '-u', 'root', name, 'pkill', '-KILL', '-u', 'vscode']);
       if (kill.status !== 0 && kill.status !== 1) throw new Error(`Could not stop the timed-out process in ${name}.`);
     }
+    if (interrupted) throw new Error('interrupted');
     return r;
   };
-  const treeState = () => exec(['git', 'status', '--porcelain', '-uall'], '/workspace/repo').stdout +
-    exec(['git', 'diff', 'HEAD'], '/workspace/repo').stdout;
+  // Hash of the whole working tree, untracked files included, via a throwaway
+  // index so the real index stays untouched.
+  const treeState = async () => {
+    const r = await exec(['sh', '-c', 'cp .git/index "$1" && GIT_INDEX_FILE="$1" git add -A && GIT_INDEX_FILE="$1" git write-tree', 'sh', '/tmp/huddle-tree.idx'], '/workspace/repo');
+    if (r.status !== 0) throw new Error(`could not read the working tree in ${name}: ${r.stderr.trim()}`);
+    return r.stdout.trim();
+  };
 
   let lastFailure = '';
   let feedback = '';
@@ -260,12 +316,12 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     console.log(dim(`  attempt ${attempt}/${MAX_ATTEMPTS}: running Claude Code`));
     const task = feedback ? `${ctx.prompt}\n\nThis is attempt ${attempt}. ${feedback}` : ctx.prompt;
-    const before = treeState();
-    const claude = exec(['claude', '-p', task, '--max-turns', '40', '--allowedTools', ALLOWED_TOOLS], '/workspace/repo', {
-      stdio: ['ignore', 'inherit', 'inherit'],
+    const before = await treeState();
+    const claude = await exec(['claude', '-p', task, '--max-turns', '40', '--allowedTools', ALLOWED_TOOLS], '/workspace/repo', {
+      inherit: true,
       timeout: CLAUDE_TIMEOUT_MS,
     });
-    if (treeState() === before) {
+    if ((await treeState()) === before) {
       if (claude.status !== 0) {
         // Not the PR's fault: credential, firewall or Claude Code itself.
         throw new Error(`Claude Code ${claude.timedOut ? 'timed out' : `exited with ${claude.status}`} without changing anything. ` +
@@ -276,7 +332,7 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
       continue;
     }
     console.log(dim('  verifying: npm ci, build and test in every project'));
-    lastFailure = verify(exec);
+    lastFailure = await verify(exec);
     if (!lastFailure) break;
     fs.writeFileSync(path.join(ws, 'input', `verify-${attempt}.log`), tail(lastFailure, 30_000));
     verifyLog = `/workspace/input/verify-${attempt}.log`;
@@ -295,15 +351,14 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
 
   // Commit inside the container under the developer's name, then hand it out as a bundle.
   const msgFile = path.join(ws, 'out', 'commit-msg.txt');
-  if (!fs.existsSync(msgFile) || !fs.readFileSync(msgFile, 'utf8').trim()) {
-    fs.writeFileSync(msgFile, `fix(deps): adapt code for ${pr.title}\n`);
-  }
+  const agentMsg = fs.existsSync(msgFile) ? fs.readFileSync(msgFile, 'utf8') : '';
+  fs.writeFileSync(msgFile, sanitizeCommitMessage(agentMsg, `fix(deps): adapt code for ${pr.title}`));
   const git = (args: string[]) => exec([
     'git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
     '-c', `user.name=${ctx.identity.name}`, '-c', `user.email=${ctx.identity.email}`, ...args,
   ], '/workspace/repo');
   for (const args of [['add', '-A'], ['commit', '-q', '--no-verify', '-F', '/workspace/out/commit-msg.txt'], ['bundle', 'create', '/workspace/out/agent.bundle', 'HEAD', `^${pr.headRefOid}`]]) {
-    const r = git(args);
+    const r = await git(args);
     if (r.status !== 0) throw new Error(`git ${args[0]} in the container failed: ${(r.stderr || r.stdout).trim()}`);
   }
 
@@ -380,9 +435,9 @@ function writeInputs(ctx: Ctx, input: string): void {
 }
 
 /** Runs what CI runs. Returns '' when everything passes, otherwise the failing output. */
-function verify(exec: (args: string[], workdir: string, extra?: SpawnSyncOptions) => RunResult): string {
+async function verify(exec: (args: string[], workdir: string, extra?: { timeout?: number }) => Promise<RunResult>): Promise<string> {
   for (const project of PROJECTS) {
-    const r = exec(
+    const r = await exec(
       ['bash', '-lc', 'npm ci --no-audit --no-fund && npm run build --if-present && CI=true npm test --if-present'],
       `/workspace/repo/${project}`,
       { timeout: VERIFY_TIMEOUT_MS },
@@ -410,6 +465,16 @@ async function giveUp(ctx: Ctx, reason: string, details: string): Promise<Result
     must('gh', ['pr', 'comment', String(pr.number), '--repo', repo, '--body-file', '-'], { input: body });
   }
   return { pr: pr.number, outcome: 'gave-up', detail: reason };
+}
+
+async function containerExists(name: string): Promise<boolean> {
+  try {
+    await get(`/api/docker/containers/${encodeURIComponent(name)}`);
+    return true;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return false;
+    throw err;
+  }
 }
 
 async function cleanup(name: string, keep: boolean): Promise<void> {

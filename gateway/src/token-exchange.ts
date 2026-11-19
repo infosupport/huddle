@@ -31,15 +31,24 @@ function safeEqual(a: string, b: string): boolean {
 // het aanvroeg (finding #12). Een null container-id levert een placeholder op
 // die nooit inwisselbaar is (fail-closed) i.p.v. de oude gedeelde 'unknown'-
 // bucket waarmee elke onbekende caller andermans token kon inwisselen.
-export function storeTokenExchange(containerId: string | null, realToken: string): string {
+//
+// `slot` scheidt de bronnen per container: 'login' voor een in de container
+// onderschepte OAuth-login, 'host' voor een credential die de operator via de
+// API registreert (update agent). Een nieuwe placeholder vervangt alleen de
+// vorige van hetzelfde slot, zodat de twee elkaar niet uitschakelen.
+export type TokenSlot = 'login' | 'host';
+
+const slotKey = (containerId: string, slot: TokenSlot) => `${slot}\u0000${containerId}`;
+
+export function storeTokenExchange(containerId: string | null, realToken: string, slot: TokenSlot = 'login'): string {
   if (containerId) {
-    const prev = containerLatest.get(containerId);
+    const prev = containerLatest.get(slotKey(containerId, slot));
     if (prev) tokenMap.delete(prev);
   }
   const placeholder = PREFIX + crypto.randomBytes(32).toString('hex');
   // containerId '' bij null → matcht nooit een echte (niet-lege) caller-id.
   tokenMap.set(placeholder, { realToken, containerId: containerId ?? '', expiresAt: Date.now() + ttlMs() });
-  if (containerId) containerLatest.set(containerId, placeholder);
+  if (containerId) containerLatest.set(slotKey(containerId, slot), placeholder);
   return placeholder;
 }
 
@@ -64,8 +73,9 @@ export function isPlaceholderToken(token: string): boolean {
 
 // Trek de placeholder van een container in (bv. wanneer de update agent klaar is),
 // zodat een achtergebleven placeholder niet meer inwisselbaar is.
-export function revokeTokenExchange(containerId: string): void {
-  const placeholder = containerLatest.get(containerId);
+export function revokeTokenExchange(containerId: string, slot: TokenSlot = 'host'): void {
+  const key = slotKey(containerId, slot);
+  const placeholder = containerLatest.get(key);
   if (placeholder) tokenMap.delete(placeholder);
-  containerLatest.delete(containerId);
+  containerLatest.delete(key);
 }

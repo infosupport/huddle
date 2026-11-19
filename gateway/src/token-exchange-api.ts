@@ -24,7 +24,7 @@ export function registerTokenExchangeRoutes(app: FastifyInstance): void {
       if (typeof secret !== 'string' || !SECRET.test(secret)) {
         return reply.code(400).send({ error: 'secret must be a non-empty token without whitespace' });
       }
-      const placeholder = storeTokenExchange(name, secret);
+      const placeholder = storeTokenExchange(name, secret, 'host');
       // Never log the secret or the placeholder.
       logAudit({ containerId: name, domain: 'api.anthropic.com', action: 'admin:token-register' });
       return { placeholder };
@@ -36,7 +36,7 @@ export function registerTokenExchangeRoutes(app: FastifyInstance): void {
     async (req, reply) => {
       const { name } = req.params;
       if (!CONTAINER_NAME.test(name)) return reply.code(400).send({ error: 'invalid container name' });
-      revokeTokenExchange(name);
+      revokeTokenExchange(name, 'host');
       logAudit({ containerId: name, domain: 'api.anthropic.com', action: 'admin:token-revoke' });
       return { ok: true };
     }

@@ -46,18 +46,34 @@ describe('token-exchange containerId binding', () => {
 describe('revokeTokenExchange', () => {
   it('a revoked placeholder can no longer be redeemed', async () => {
     const { revokeTokenExchange } = await import('../src/token-exchange');
-    const ph = storeTokenExchange('container-r', 'REAL-TOKEN');
+    const ph = storeTokenExchange('container-r', 'REAL-TOKEN', 'host');
     revokeTokenExchange('container-r');
     expect(resolveToken(ph, 'container-r')).toBeNull();
   });
 
   it('only revokes the placeholder of that container', async () => {
     const { revokeTokenExchange } = await import('../src/token-exchange');
-    const a = storeTokenExchange('container-x', 'A');
-    const b = storeTokenExchange('container-y', 'B');
+    const a = storeTokenExchange('container-x', 'A', 'host');
+    const b = storeTokenExchange('container-y', 'B', 'host');
     revokeTokenExchange('container-x');
     expect(resolveToken(a, 'container-x')).toBeNull();
     expect(resolveToken(b, 'container-y')).toBe('B');
+  });
+});
+
+describe('token slots', () => {
+  it('a host-registered token does not evict the login placeholder of the same container, and back', async () => {
+    const { revokeTokenExchange } = await import('../src/token-exchange');
+    const login = storeTokenExchange('container-s', 'LOGIN');
+    const host = storeTokenExchange('container-s', 'HOST', 'host');
+    expect(resolveToken(login, 'container-s')).toBe('LOGIN');
+    expect(resolveToken(host, 'container-s')).toBe('HOST');
+    const login2 = storeTokenExchange('container-s', 'LOGIN2');
+    expect(resolveToken(login, 'container-s')).toBeNull(); // same slot: replaced
+    expect(resolveToken(host, 'container-s')).toBe('HOST');
+    revokeTokenExchange('container-s');
+    expect(resolveToken(host, 'container-s')).toBeNull();
+    expect(resolveToken(login2, 'container-s')).toBe('LOGIN2');
   });
 });
 
