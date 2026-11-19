@@ -64,20 +64,28 @@ const ALLOWED_TOOLS = [
 
 interface RunResult {
   status: number | null;
+  timedOut?: boolean;
   stdout: string;
   stderr: string;
 }
 
 function run(cmd: string, args: string[], opts: SpawnSyncOptions = {}): RunResult {
   const r = spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts });
-  if (r.error) throw new Error(`${cmd} ${args[0] ?? ''}: ${r.error.message}`);
-  return { status: r.status, stdout: (r.stdout as string) ?? '', stderr: (r.stderr as string) ?? '' };
+  const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
+  if (r.error && !timedOut) throw new Error(`${cmd} ${args[0] ?? ''}: ${r.error.message}`);
+  return { status: timedOut ? null : r.status, timedOut, stdout: (r.stdout as string) ?? '', stderr: (r.stderr as string) ?? '' };
 }
 
 function must(cmd: string, args: string[], opts: SpawnSyncOptions = {}): string {
   const r = run(cmd, args, opts);
   if (r.status !== 0) throw new Error(`${cmd} ${args.slice(0, 3).join(' ')} failed: ${(r.stderr || r.stdout).trim().slice(-2000)}`);
   return r.stdout;
+}
+
+/** Quote agent-written text for a public comment: a blockquote, with @mentions defused. */
+function quoteUntrusted(text: string): string {
+  // A zero-width space after @ keeps the text readable but stops GitHub from notifying anyone.
+  return text.replace(/@(?=[A-Za-z0-9])/g, '@​').split('\n').map((l) => `> ${l}`).join('\n');
 }
 
 const tail = (s: string, n: number) => (s.length > n ? `[…truncated…]\n${s.slice(-n)}` : s);
@@ -165,9 +173,11 @@ function gitIdentity(): { name: string; email: string } {
 function listPrs(repo: string, only?: number): PrInfo[] {
   if (only) {
     const r = run('gh', ['pr', 'view', String(only), '--repo', repo, '--json', PR_FIELDS]);
-    return r.status === 0 ? [JSON.parse(r.stdout) as PrInfo] : [];
+    if (r.status === 0) return [JSON.parse(r.stdout) as PrInfo];
+    if (/could not resolve|not found/i.test(r.stderr)) return [];
+    throw new Error(`gh pr view ${only} failed: ${r.stderr.trim()}`);
   }
-  const out = must('gh', ['pr', 'list', '--repo', repo, '--author', 'app/renovate', '--state', 'open', '--limit', '100', '--json', PR_FIELDS]);
+  const out = must('gh', ['pr', 'list', '--repo', repo, '--author', process.env.HUDDLE_RENOVATE_AUTHOR?.trim() || 'app/renovate', '--state', 'open', '--limit', '100', '--json', PR_FIELDS]);
   return JSON.parse(out) as PrInfo[];
 }
 
@@ -185,117 +195,176 @@ interface Ctx {
 }
 
 async function processPr(ctx: Ctx): Promise<Result> {
-  const { pr, repo, engine, opts } = ctx;
+  const { pr, opts } = ctx;
   const name = `update-agent-pr-${pr.number}`;
   const dir = path.join(CONFIG_DIR, 'update-agent', `pr-${pr.number}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  try {
+    return await fixPr(ctx, name, dir);
+  } finally {
+    await cleanup(name, opts.keep);
+    if (!opts.keep) removeDir(dir);
+  }
+}
+
+async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
+  const { pr, repo, engine, opts } = ctx;
   // Mounted at /workspace. Its root holds no .git, so the gateway mounts it as-is
   // instead of creating a worktree (gateway/src/worktree.ts).
   const ws = path.join(dir, 'workspace');
+  const repoDir = path.join(ws, 'repo');
   const publish = path.join(dir, 'publish'); // trusted clone: never mounted
-  fs.rmSync(dir, { recursive: true, force: true });
   for (const d of ['input', 'out']) fs.mkdirSync(path.join(ws, d), { recursive: true });
 
   const clone = (dest: string, depth: string) =>
     must('gh', ['repo', 'clone', repo, dest, '--', '--config', 'core.autocrlf=false', '--quiet', '--no-tags', '--single-branch', '--depth', depth, '--branch', pr.headRefName]);
-  clone(path.join(ws, 'repo'), '50');
+  clone(repoDir, '50');
   clone(publish, '1');
   const head = must('git', ['-C', publish, 'rev-parse', 'HEAD']).trim();
   if (head !== pr.headRefOid) return { pr: pr.number, outcome: 'skipped', detail: 'branch moved while starting; run again' };
+  // Read (never run) the git metadata the agent could use to run code on commit.
+  const gitBaseline = gitMetadata(repoDir);
 
   writeInputs(ctx, path.join(ws, 'input'));
 
-  try {
-    console.log(dim(`  starting ${name} (airlocked: npm registry + Anthropic API only)`));
-    await post(`/api/docker/containers/${name}/airlock`, { airlocked: true });
-    await post(`/api/rules/import?container=${encodeURIComponent(name)}`, { mode: 'replace', rules: AGENT_RULES });
-    await post('/api/docker/start', {
-      imageName: ctx.imageName,
-      containerName: name,
-      ideName: 'vscode',
-      mounts: [{ hostPath: ws.replace(/\\/g, '/'), containerPath: '/workspace' }],
-      containerWorkspace: '/workspace/repo',
+  console.log(dim(`  starting ${name} (airlocked: npm registry + Anthropic API only)`));
+  await post(`/api/docker/containers/${name}/airlock`, { airlocked: true });
+  await post(`/api/rules/import?container=${encodeURIComponent(name)}`, { mode: 'replace', rules: AGENT_RULES });
+  await post('/api/docker/start', {
+    imageName: ctx.imageName,
+    containerName: name,
+    ideName: 'vscode',
+    mounts: [{ hostPath: ws.replace(/\\/g, '/'), containerPath: '/workspace' }],
+    containerWorkspace: '/workspace/repo',
+  });
+  const { placeholder } = await post<{ placeholder: string }>(`/api/docker/containers/${name}/token`, { secret: ctx.credential.secret });
+
+  // Every exec that can time out stops all of the agent user's processes
+  // afterwards: a timeout only kills the local `docker exec` client, not the
+  // process inside the container.
+  const exec = (args: string[], workdir: string, extra: SpawnSyncOptions = {}): RunResult => {
+    const r = run(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...GIT_SAFE_DIR_ENV, name, ...args], extra);
+    if (r.timedOut) {
+      // pkill exits 1 when nothing was left to kill; anything else means it failed.
+      const kill = run(engine, ['exec', '-u', 'root', name, 'pkill', '-KILL', '-u', 'vscode']);
+      if (kill.status !== 0 && kill.status !== 1) throw new Error(`Could not stop the timed-out process in ${name}.`);
+    }
+    return r;
+  };
+  const treeState = () => exec(['git', 'status', '--porcelain', '-uall'], '/workspace/repo').stdout +
+    exec(['git', 'diff', 'HEAD'], '/workspace/repo').stdout;
+
+  let lastFailure = '';
+  let feedback = '';
+  let verifyLog = '';
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    console.log(dim(`  attempt ${attempt}/${MAX_ATTEMPTS}: running Claude Code`));
+    const task = feedback ? `${ctx.prompt}\n\nThis is attempt ${attempt}. ${feedback}` : ctx.prompt;
+    const before = treeState();
+    const claude = exec(['claude', '-p', task, '--max-turns', '40', '--allowedTools', ALLOWED_TOOLS], '/workspace/repo', {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      timeout: CLAUDE_TIMEOUT_MS,
     });
-    const { placeholder } = await post<{ placeholder: string }>(`/api/docker/containers/${name}/token`, { secret: ctx.credential.secret });
-
-    const exec = (args: string[], workdir: string, extra: SpawnSyncOptions = {}) =>
-      run(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...GIT_SAFE_DIR_ENV, name, ...args], extra);
-
-    let lastFailure = '';
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      console.log(dim(`  attempt ${attempt}/${MAX_ATTEMPTS}: running Claude Code`));
-      const task = attempt === 1
-        ? ctx.prompt
-        : `${ctx.prompt}\n\nThis is attempt ${attempt}. Your previous change did not pass verification; ` +
-          `the output is in /workspace/input/verify-${attempt - 1}.log. Fix that, keeping the earlier work where it is right.`;
-      const claude = exec(['claude', '-p', task, '--max-turns', '40', '--allowedTools', ALLOWED_TOOLS], '/workspace/repo', {
-        stdio: ['ignore', 'inherit', 'inherit'],
-        timeout: CLAUDE_TIMEOUT_MS,
-      });
-
-      if (!exec(['git', 'status', '--porcelain'], '/workspace/repo').stdout.trim()) {
-        if (claude.status !== 0) {
-          throw new Error(`Claude Code exited with ${claude.status ?? 'a timeout'} without changes. Check the credential and the requested rules for ${name} in the portal.`);
-        }
-        lastFailure = 'the agent made no changes';
-        continue;
+    if (treeState() === before) {
+      if (claude.status !== 0) {
+        // Not the PR's fault: credential, firewall or Claude Code itself.
+        throw new Error(`Claude Code ${claude.timedOut ? 'timed out' : `exited with ${claude.status}`} without changing anything. ` +
+          `Check the credential and the requested rules for ${name} in the portal.`);
       }
-      console.log(dim('  verifying: npm ci, build and test in every project'));
-      lastFailure = verify(exec);
-      if (!lastFailure) break;
-      fs.writeFileSync(path.join(ws, 'input', `verify-${attempt}.log`), tail(lastFailure, 30_000));
-      console.log(yellow(`  verification failed`));
+      lastFailure = lastFailure || 'the agent made no changes';
+      feedback = `Your previous attempt changed nothing.${verifyLog ? ` The last verification output is still in ${verifyLog}.` : ''}`;
+      continue;
     }
-    if (lastFailure) return await giveUp(ctx, `failed after ${MAX_ATTEMPTS} attempts`, lastFailure);
+    console.log(dim('  verifying: npm ci, build and test in every project'));
+    lastFailure = verify(exec);
+    if (!lastFailure) break;
+    fs.writeFileSync(path.join(ws, 'input', `verify-${attempt}.log`), tail(lastFailure, 30_000));
+    verifyLog = `/workspace/input/verify-${attempt}.log`;
+    feedback = `Your previous change did not pass verification; the output is in ${verifyLog}. ` +
+      'Fix that, keeping the earlier work where it is right.';
+    console.log(yellow('  verification failed'));
+  }
+  if (lastFailure) return giveUp(ctx, `failed after ${MAX_ATTEMPTS} attempts`, lastFailure);
 
-    // Commit inside the container under the developer's name, then hand it out as a bundle.
-    const msgFile = path.join(ws, 'out', 'commit-msg.txt');
-    if (!fs.existsSync(msgFile) || !fs.readFileSync(msgFile, 'utf8').trim()) {
-      fs.writeFileSync(msgFile, `fix(deps): adapt code for ${pr.title}\n`);
-    }
-    const git = (args: string[]) => exec(['git', '-c', `user.name=${ctx.identity.name}`, '-c', `user.email=${ctx.identity.email}`, ...args], '/workspace/repo');
-    for (const args of [['add', '-A'], ['commit', '-q', '-F', '/workspace/out/commit-msg.txt'], ['bundle', 'create', '/workspace/out/agent.bundle', 'HEAD', `^${pr.headRefOid}`]]) {
-      const r = git(args);
-      if (r.status !== 0) throw new Error(`git ${args[0]} in the container failed: ${(r.stderr || r.stdout).trim()}`);
-    }
+  // Hooks or a filter driver planted by the agent (or by a package's install
+  // script during verification) would run on commit and could change the
+  // committed content after it was verified.
+  if (gitMetadata(repoDir) !== gitBaseline) {
+    return giveUp(ctx, 'the git configuration or hooks were changed during the run', 'Something in the container changed .git/config, .git/hooks or .git/info/attributes.');
+  }
 
-    // From here on only the trusted clone is used.
-    must('git', ['-C', publish, 'fetch', '--quiet', path.join(ws, 'out', 'agent.bundle'), 'HEAD']);
-    const fixed = must('git', ['-C', publish, 'rev-parse', 'FETCH_HEAD']).trim();
-    if (run('git', ['-C', publish, 'merge-base', '--is-ancestor', pr.headRefOid, fixed]).status !== 0) {
-      return await giveUp(ctx, 'the result does not build on the PR head', '');
-    }
-    const files = parseNameStatus(must('git', ['-C', publish, 'diff', '--name-status', pr.headRefOid, fixed]));
-    const blocked = guardViolations(files.map((f) => f.path));
-    if (blocked.length) {
-      return await giveUp(ctx, 'blocked by the path guard', `The agent changed files only a person may change:\n${blocked.join('\n')}`);
-    }
-    const flags = testWeakeningFlags(files, must('git', ['-C', publish, 'diff', '-U0', pr.headRefOid, fixed]));
-    const summaryFile = path.join(ws, 'out', 'summary.md');
-    const summary = fs.existsSync(summaryFile) ? fs.readFileSync(summaryFile, 'utf8').trim() : '_The agent wrote no summary._';
-    const comment = [
-      `### Update agent: fixed the build`,
-      '',
-      tail(summary, 20_000),
-      '',
-      `**Files changed:** ${files.filter((f) => f.status !== 'D').length} changed, ${files.filter((f) => f.status === 'D').length} deleted`,
-      flags.length ? `**Check these (possible weakened tests):**\n${flags.map((f) => `- ${f}`).join('\n')}` : '**Test changes:** nothing suspicious found',
-      '',
-      `<sub>Run by ${ctx.identity.name} with \`huddle update-agent\` inside an airlocked Huddle devcontainer. A person still reviews and merges.</sub>`,
-    ].join('\n');
+  // Commit inside the container under the developer's name, then hand it out as a bundle.
+  const msgFile = path.join(ws, 'out', 'commit-msg.txt');
+  if (!fs.existsSync(msgFile) || !fs.readFileSync(msgFile, 'utf8').trim()) {
+    fs.writeFileSync(msgFile, `fix(deps): adapt code for ${pr.title}\n`);
+  }
+  const git = (args: string[]) => exec([
+    'git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+    '-c', `user.name=${ctx.identity.name}`, '-c', `user.email=${ctx.identity.email}`, ...args,
+  ], '/workspace/repo');
+  for (const args of [['add', '-A'], ['commit', '-q', '--no-verify', '-F', '/workspace/out/commit-msg.txt'], ['bundle', 'create', '/workspace/out/agent.bundle', 'HEAD', `^${pr.headRefOid}`]]) {
+    const r = git(args);
+    if (r.status !== 0) throw new Error(`git ${args[0]} in the container failed: ${(r.stderr || r.stdout).trim()}`);
+  }
 
-    if (opts.dryRun) {
-      console.log(must('git', ['-C', publish, '--no-pager', 'show', '--stat', '--patch', fixed]));
-      console.log(dim('\n--- PR comment that would be posted ---\n') + comment);
-      return { pr: pr.number, outcome: 'dry-run', detail: `${files.length} file(s) changed; nothing pushed` };
-    }
-    // A plain push: it fails instead of overwriting if the branch moved meanwhile.
-    must('git', ['-C', publish, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', '--quiet', 'origin', `${fixed}:refs/heads/${pr.headRefName}`]);
-    must('gh', ['pr', 'comment', String(pr.number), '--repo', repo, '--body-file', '-'], { input: comment });
-    console.log(green(`  pushed ${fixed.slice(0, 7)} to ${pr.headRefName}`));
-    return { pr: pr.number, outcome: 'fixed', detail: `pushed ${fixed.slice(0, 7)}${flags.length ? `, ${flags.length} flag(s) for review` : ''}` };
-  } finally {
-    await cleanup(name, opts.keep);
-    if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
+  // From here on only the trusted clone is used.
+  must('git', ['-C', publish, 'fetch', '--quiet', path.join(ws, 'out', 'agent.bundle'), 'HEAD']);
+  const fixed = must('git', ['-C', publish, 'rev-parse', 'FETCH_HEAD']).trim();
+  if (run('git', ['-C', publish, 'merge-base', '--is-ancestor', pr.headRefOid, fixed]).status !== 0) {
+    return giveUp(ctx, 'the result does not build on the PR head', '');
+  }
+  const files = parseNameStatus(must('git', ['-C', publish, 'diff', '--name-status', pr.headRefOid, fixed]));
+  const blocked = guardViolations(files.map((f) => f.path));
+  if (blocked.length) {
+    return giveUp(ctx, 'blocked by the path guard', `The agent changed files only a person may change:\n${blocked.join('\n')}`);
+  }
+  const flags = testWeakeningFlags(files, must('git', ['-C', publish, 'diff', '-U0', pr.headRefOid, fixed]));
+  const summaryFile = path.join(ws, 'out', 'summary.md');
+  const summary = fs.existsSync(summaryFile) ? fs.readFileSync(summaryFile, 'utf8').trim() : '';
+  const comment = [
+    '### Update agent: fixed the build',
+    '',
+    'The agent\'s own summary, written after reading untrusted release notes and logs:',
+    '',
+    summary ? quoteUntrusted(tail(summary, 20_000)) : '> _The agent wrote no summary._',
+    '',
+    `**Files changed:** ${files.filter((f) => f.status !== 'D').length} changed, ${files.filter((f) => f.status === 'D').length} deleted`,
+    flags.length ? `**Check these (possible weakened tests):**\n${flags.map((f) => `- ${f}`).join('\n')}` : '**Test changes:** nothing suspicious found',
+    '',
+    `<sub>Run by ${ctx.identity.name} with \`huddle update-agent\` inside an airlocked Huddle devcontainer. A person still reviews and merges.</sub>`,
+  ].join('\n');
+
+  if (opts.dryRun) {
+    console.log(must('git', ['-C', publish, '--no-pager', 'show', '--stat', '--patch', fixed]));
+    console.log(dim('\n--- PR comment that would be posted ---\n') + comment);
+    return { pr: pr.number, outcome: 'dry-run', detail: `${files.length} file(s) changed; nothing pushed` };
+  }
+  // A plain push: it fails instead of overwriting if the branch moved meanwhile.
+  must('git', ['-C', publish, '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', '--quiet', 'origin', `${fixed}:refs/heads/${pr.headRefName}`]);
+  must('gh', ['pr', 'comment', String(pr.number), '--repo', repo, '--body-file', '-'], { input: comment });
+  console.log(green(`  pushed ${fixed.slice(0, 7)} to ${pr.headRefName}`));
+  return { pr: pr.number, outcome: 'fixed', detail: `pushed ${fixed.slice(0, 7)}${flags.length ? `, ${flags.length} flag(s) for review` : ''}` };
+}
+
+/** Snapshot of the git files that can make git run code. Read as plain files, never through git. */
+function gitMetadata(repoDir: string): string {
+  const gitDir = path.join(repoDir, '.git');
+  const read = (p: string) => { try { return fs.readFileSync(p, 'utf8'); } catch { return '<missing>'; } };
+  let hooks: string[];
+  try {
+    hooks = fs.readdirSync(path.join(gitDir, 'hooks')).filter((f) => !f.endsWith('.sample')).sort();
+  } catch {
+    hooks = ['<missing>'];
+  }
+  const isDir = (() => { try { return fs.lstatSync(gitDir).isDirectory(); } catch { return false; } })();
+  return JSON.stringify({ isDir, config: read(path.join(gitDir, 'config')), attributes: read(path.join(gitDir, 'info', 'attributes')), hooks });
+}
+
+function removeDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+  } catch (err) {
+    console.log(yellow(`  could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 
