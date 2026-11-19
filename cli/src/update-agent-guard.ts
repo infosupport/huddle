@@ -8,7 +8,9 @@ const GUARDED: RegExp[] = [
   /(^|\/)renovate\.json5?$/,
   /(^|\/)Dockerfile[^/]*$/,
   /^base-devimage[^/]*\//,
-  /^gateway\/src\/(auth|tls-ca|socket-proxy|proxy)\.ts$/,
+  // The security boundary: auth, TLS interception, firewall decisions, the
+  // Docker socket filter, sudo grants and the credential exchange.
+  /^gateway\/src\/(auth|tls-ca|proxy|rules|socket-proxy|docker-actions|sudo-grant|token-exchange|token-exchange-api)\.ts$/,
 ];
 
 export function isGuardedPath(file: string): boolean {
@@ -78,15 +80,35 @@ export interface PrInfo {
   headRefOid: string;
   labels: { name: string }[];
   statusCheckRollup: { conclusion?: string | null; state?: string | null; detailsUrl?: string | null; targetUrl?: string | null }[];
-  commits: { authors: { login?: string | null; email?: string | null }[] }[];
+  commits: { authors: CommitAuthor[] }[];
+}
+
+export interface CommitAuthor {
+  login?: string | null;
+  name?: string | null;
+  email?: string | null;
 }
 
 export const GAVE_UP_LABEL = 'agent-gave-up';
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR']);
 const SAFE_BRANCH = /^renovate\/[A-Za-z0-9._\/()+-]+$/;
 
-export function isRenovateAuthor(a: { login?: string | null; email?: string | null }): boolean {
-  return /^renovate(\[bot\])?$/i.test(a.login ?? '') || /\brenovate\[bot\]@users\.noreply\.github\.com$/i.test(a.email ?? '');
+/**
+ * Renovate as the Mend app (`renovate[bot]`), as a self-hosted bot account
+ * (`renovate-bot`, Renovate's default `bot@renovateapp.com` git author), or as
+ * extra logins/emails listed in HUDDLE_RENOVATE_AUTHORS (comma-separated).
+ */
+export function isRenovateAuthor(a: CommitAuthor, extra: string[] = renovateAuthorsFromEnv()): boolean {
+  const ids = [a.login, a.name, a.email].map((v) => (v ?? '').trim().toLowerCase()).filter(Boolean);
+  return ids.some((id) =>
+    /^renovate(\[bot\]|-bot)?$/.test(id) ||
+    /^(\d+\+)?renovate\[bot\]@users\.noreply\.github\.com$/.test(id) ||
+    id === 'bot@renovateapp.com' ||
+    extra.includes(id));
+}
+
+function renovateAuthorsFromEnv(): string[] {
+  return (process.env.HUDDLE_RENOVATE_AUTHORS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
 export function hasFailingChecks(pr: PrInfo): boolean {
@@ -108,7 +130,7 @@ export function failedRunIds(pr: PrInfo): string[] {
 export function skipReason(pr: PrInfo): string | null {
   if (!SAFE_BRANCH.test(pr.headRefName)) return `branch ${pr.headRefName} is not a renovate/* branch`;
   if (pr.labels.some((l) => l.name === GAVE_UP_LABEL)) return `labelled ${GAVE_UP_LABEL}`;
-  if (pr.commits.some((c) => !c.authors.every(isRenovateAuthor))) {
+  if (pr.commits.some((c) => !c.authors.every((a) => isRenovateAuthor(a)))) {
     return 'has commits from someone other than Renovate (already being worked on)';
   }
   if (!hasFailingChecks(pr)) return 'CI is not failing';

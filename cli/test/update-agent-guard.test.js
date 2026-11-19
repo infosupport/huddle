@@ -17,6 +17,11 @@ test('guarded paths are blocked', () => {
     'gateway/src/tls-ca.ts',
     'gateway/src/socket-proxy.ts',
     'gateway/src/proxy.ts',
+    'gateway/src/rules.ts',
+    'gateway/src/docker-actions.ts',
+    'gateway/src/sudo-grant.ts',
+    'gateway/src/token-exchange.ts',
+    'gateway/src/token-exchange-api.ts',
     ['gateway', 'src', 'auth.ts'].join('\\'), // Windows separators
   ]) assert.equal(g.isGuardedPath(p), true, p);
 });
@@ -25,6 +30,7 @@ test('ordinary source and test files are allowed', () => {
   for (const p of [
     'gateway/src/api.ts',
     'gateway/src/proxy-forward.ts',
+    'gateway/src/rules-folder.ts',
     'gateway/test/proxy.test.ts',
     'gateway/frontend/src/app/app.ts',
     'cli/src/index.ts',
@@ -95,4 +101,13 @@ test('failedRunIds extracts unique Actions run ids of failing checks', () => {
     ],
   });
   assert.deepEqual(g.failedRunIds(p), ['123']);
+});
+
+test('isRenovateAuthor recognises the app, self-hosted bots and configured ids', () => {
+  assert.equal(g.isRenovateAuthor({ login: '', name: 'renovate[bot]', email: '' }), true);
+  assert.equal(g.isRenovateAuthor({ email: 'bot@renovateapp.com' }), true);
+  assert.equal(g.isRenovateAuthor({ login: 'renovate-bot' }), true);
+  assert.equal(g.isRenovateAuthor({ login: 'our-deps-bot' }), false);
+  assert.equal(g.isRenovateAuthor({ login: 'our-deps-bot' }, ['our-deps-bot']), true);
+  assert.equal(g.isRenovateAuthor({ login: 'renovate-fan', email: 'fan@example.com' }), false);
 });
