@@ -91,16 +91,26 @@ test('skipReason selects only failing, untouched Renovate PRs', () => {
   assert.equal(g.skipReason(pr({ commits: [{ authors: [{ email: '29139614+renovate[bot]@users.noreply.github.com' }] }] })), null);
 });
 
-test('failedRunIds extracts unique Actions run ids of failing checks', () => {
+test('failedJobs lists the failing Actions jobs, also while the run is in progress', () => {
   const p = pr({
     statusCheckRollup: [
       { conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/1' },
       { conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/2' },
+      { conclusion: '', state: null, detailsUrl: 'https://github.com/o/r/actions/runs/123/job/4' }, // still running
       { conclusion: 'SUCCESS', detailsUrl: 'https://github.com/o/r/actions/runs/456/job/3' },
       { state: 'ERROR', targetUrl: 'https://example.com/status' },
     ],
   });
-  assert.deepEqual(g.failedRunIds(p), ['123']);
+  assert.deepEqual(g.failedJobs(p), [{ runId: '123', jobId: '1' }, { runId: '123', jobId: '2' }]);
+});
+
+test('affectedProjects verifies only what the change can break', () => {
+  assert.deepEqual(g.affectedProjects(['cli/package.json', 'cli/tsconfig.json']), ['cli']);
+  assert.deepEqual(g.affectedProjects(['gateway/package-lock.json']), ['gateway/frontend', 'gateway']);
+  assert.deepEqual(g.affectedProjects(['gateway/frontend/package.json']), ['gateway/frontend', 'gateway']);
+  assert.deepEqual(g.affectedProjects(['cli/a.ts', 'gateway/src/b.ts']), ['gateway/frontend', 'gateway', 'cli']);
+  assert.deepEqual(g.affectedProjects(['package.json']), ['gateway/frontend', 'gateway', 'cli']);
+  assert.deepEqual(g.affectedProjects(['.github/workflows/test.yml', 'cli/a.ts']), ['gateway/frontend', 'gateway', 'cli']);
 });
 
 test('isRenovateAuthor recognises the app, self-hosted bots and configured ids', () => {

@@ -8,7 +8,8 @@ import { bold, dim, green, red, yellow } from './utils';
 import {
   GAVE_UP_LABEL,
   PrInfo,
-  failedRunIds,
+  affectedProjects,
+  failedJobs,
   guardViolations,
   parseNameStatus,
   sanitizeCommitMessage,
@@ -46,15 +47,23 @@ const CLAUDE_TIMEOUT_MS = 30 * 60 * 1000;
 const VERIFY_TIMEOUT_MS = 20 * 60 * 1000;
 const PROMPT_PATH = '.github/agent/update-agent.md';
 const PR_FIELDS = 'number,title,headRefName,headRefOid,labels,statusCheckRollup,commits';
-// Frontend first: the gateway build (`build:ui`) compiles it.
-const PROJECTS = ['gateway/frontend', 'gateway', 'cli'];
 const AGENT_RULES = [
   { domain: 'registry.npmjs.org', status: 'allow' },
   { domain: 'api.anthropic.com', status: 'allow' },
   { domain: 'huddle', status: 'allow' }, // huddle's own audit forwarder (global rules don't apply under airlock)
+  // better-sqlite3 (gateway) downloads its prebuilt native binary from its own
+  // GitHub releases during `npm ci`; GitHub redirects that to its asset hosts.
+  // Only that path on github.com, nothing else there.
+  { domain: 'github.com', status: 'allow', path_pattern: '/WiseLibs/better-sqlite3/releases/download/*' },
+  { domain: 'release-assets.githubusercontent.com', status: 'allow' },
+  { domain: 'objects.githubusercontent.com', status: 'allow' },
 ];
-// The mounted repo is owned by another uid; without this git refuses it ("dubious ownership").
-const GIT_SAFE_DIR_ENV = ['-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/workspace/repo'];
+const CONTAINER_ENV = [
+  // The mounted repo is owned by another uid; without this git refuses it ("dubious ownership").
+  '-e', 'GIT_CONFIG_COUNT=1', '-e', 'GIT_CONFIG_KEY_0=safe.directory', '-e', 'GIT_CONFIG_VALUE_0=/workspace/repo',
+  // No telemetry or other non-essential calls from Claude Code; the airlock would block them anyway.
+  '-e', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1',
+];
 const ALLOWED_TOOLS = [
   'Read', 'Edit', 'Write', 'Glob', 'Grep',
   'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(ls:*)', 'Bash(cat:*)',
@@ -275,9 +284,9 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   // Read (never run) the git metadata the agent could use to run code on commit.
   const gitBaseline = gitMetadata(repoDir);
 
-  writeInputs(ctx, path.join(ws, 'input'));
+  const prFiles = writeInputs(ctx, path.join(ws, 'input'));
 
-  console.log(dim(`  starting ${name} (airlocked: npm registry + Anthropic API only)`));
+  console.log(dim(`  starting ${name} (airlocked: npm registry, Anthropic API and better-sqlite3 releases only)`));
   await post(`/api/docker/containers/${name}/airlock`, { airlocked: true });
   await post(`/api/rules/import?container=${encodeURIComponent(name)}`, { mode: 'replace', rules: AGENT_RULES });
   await post('/api/docker/start', {
@@ -293,7 +302,7 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   // afterwards: a timeout only kills the local `docker exec` client, not the
   // process inside the container.
   const exec = async (args: string[], workdir: string, extra: { timeout?: number; inherit?: boolean } = {}): Promise<RunResult> => {
-    const r = await runAsync(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...GIT_SAFE_DIR_ENV, name, ...args], extra);
+    const r = await runAsync(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...CONTAINER_ENV, name, ...args], extra);
     if (r.timedOut || interrupted) {
       // pkill exits 1 when nothing was left to kill; anything else means it failed.
       const kill = run(engine, ['exec', '-u', 'root', name, 'pkill', '-KILL', '-u', 'vscode']);
@@ -308,6 +317,12 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
     const r = await exec(['sh', '-c', 'cp .git/index "$1" && GIT_INDEX_FILE="$1" git add -A && GIT_INDEX_FILE="$1" git write-tree', 'sh', '/tmp/huddle-tree.idx'], '/workspace/repo');
     if (r.status !== 0) throw new Error(`could not read the working tree in ${name}: ${r.stderr.trim()}`);
     return r.stdout.trim();
+  };
+  // Files the agent changed relative to the PR head, untracked ones included.
+  const changedFiles = async () => {
+    const r = await exec(['sh', '-c', 'cp .git/index "$1" && GIT_INDEX_FILE="$1" git add -A && GIT_INDEX_FILE="$1" git diff --cached --name-only HEAD', 'sh', '/tmp/huddle-changed.idx'], '/workspace/repo');
+    if (r.status !== 0) throw new Error(`could not list the changed files in ${name}: ${r.stderr.trim()}`);
+    return r.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   };
 
   let lastFailure = '';
@@ -327,12 +342,17 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
         throw new Error(`Claude Code ${claude.timedOut ? 'timed out' : `exited with ${claude.status}`} without changing anything. ` +
           `Check the credential and the requested rules for ${name} in the portal.`);
       }
-      lastFailure = lastFailure || 'the agent made no changes';
-      feedback = `Your previous attempt changed nothing.${verifyLog ? ` The last verification output is still in ${verifyLog}.` : ''}`;
+      // After a failed verification, an attempt that changes nothing means the
+      // agent sees no code fix (often an environment problem). Another
+      // attempt would re-verify the same tree, so stop with that output.
+      if (verifyLog) break;
+      lastFailure = 'the agent made no changes';
+      feedback = 'Your previous attempt changed nothing.';
       continue;
     }
-    console.log(dim('  verifying: npm ci, build and test in every project'));
-    lastFailure = await verify(exec);
+    const projects = affectedProjects([...prFiles, ...(await changedFiles())]);
+    console.log(dim(`  verifying: npm ci, build and test in ${projects.join(', ')}`));
+    lastFailure = await verify(exec, projects);
     if (!lastFailure) break;
     fs.writeFileSync(path.join(ws, 'input', `verify-${attempt}.log`), tail(lastFailure, 30_000));
     verifyLog = `/workspace/input/verify-${attempt}.log`;
@@ -423,20 +443,29 @@ function removeDir(dir: string): void {
   }
 }
 
-function writeInputs(ctx: Ctx, input: string): void {
+/** Writes the agent's inputs and returns the files the PR itself changes. */
+function writeInputs(ctx: Ctx, input: string): string[] {
   const { pr, repo } = ctx;
-  const view = JSON.parse(must('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'title,body'])) as { title: string; body: string };
+  const view = JSON.parse(must('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'title,body,files'])) as {
+    title: string;
+    body: string;
+    files?: { path: string }[];
+  };
   fs.writeFileSync(path.join(input, 'pr.md'), `# ${view.title}\n\n${view.body ?? ''}\n`);
-  const logs = failedRunIds(pr).map((id) => {
-    const r = run('gh', ['run', 'view', id, '--repo', repo, '--log-failed']);
-    return `===== run ${id} =====\n${r.status === 0 ? r.stdout : `(could not read log: ${r.stderr.trim()})`}`;
+  const logs = failedJobs(pr).map(({ runId, jobId }) => {
+    const r = run('gh', ['run', 'view', '--job', jobId, '--repo', repo, '--log']);
+    return `===== run ${runId}, job ${jobId} =====\n${r.status === 0 ? tail(r.stdout, 20_000) : `(could not read log: ${r.stderr.trim()})`}`;
   });
   fs.writeFileSync(path.join(input, 'failure.log'), tail(logs.join('\n') || 'No GitHub Actions log found for the failing checks.', 60_000));
+  return (view.files ?? []).map((f) => f.path);
 }
 
-/** Runs what CI runs. Returns '' when everything passes, otherwise the failing output. */
-async function verify(exec: (args: string[], workdir: string, extra?: { timeout?: number }) => Promise<RunResult>): Promise<string> {
-  for (const project of PROJECTS) {
+/** Runs what CI runs, for the given projects. Returns '' when everything passes, otherwise the failing output. */
+async function verify(
+  exec: (args: string[], workdir: string, extra?: { timeout?: number }) => Promise<RunResult>,
+  projects: string[],
+): Promise<string> {
+  for (const project of projects) {
     const r = await exec(
       ['bash', '-lc', 'npm ci --no-audit --no-fund && npm run build --if-present && CI=true npm test --if-present'],
       `/workspace/repo/${project}`,
