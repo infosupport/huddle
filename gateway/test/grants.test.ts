@@ -131,7 +131,7 @@ describe.skipIf(!sqliteAvailable)('docker grants', () => {
     });
   });
   describe('clearContainerAuthorizations (isolated start)', () => {
-    it('removes every right granted to that container name, and only that one', async () => {
+    it('removes the Docker rights and host ports of that container name, and only those', async () => {
       const dbMod = await import('../src/db');
       for (const c of [CID, 'other']) {
         setGrant(c, 9999);
@@ -142,7 +142,8 @@ describe.skipIf(!sqliteAvailable)('docker grants', () => {
       dbMod.clearContainerAuthorizations(CID);
       expect(getGrant(CID)).toBeUndefined();
       expect(dbMod.getActionPolicies(CID)).toEqual({});
-      expect(dbMod.getSudoGrant(CID)).toBeUndefined();
+      // Kept: the sweeper needs it to lock the account when the grant expires.
+      expect(dbMod.getSudoGrant(CID)).toEqual({ until: 9999 });
       expect(dbMod.listApprovedHostPorts(CID)).toEqual([]);
       expect(getGrant('other')).toEqual({ until: 9999 });
       expect(dbMod.getActionPolicies('other')).toEqual({ 'container.create': true });

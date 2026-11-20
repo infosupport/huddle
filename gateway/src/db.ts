@@ -279,12 +279,15 @@ export function deleteGrant(containerId: string): void {
   db.prepare(`DELETE FROM docker_grants WHERE container_id = ?`).run(containerId);
 }
 
-// Everything an operator may have granted a container by name: a Docker grant,
-// Docker action policies, sudo and approved host ports. Cleared before an
-// isolated start, so a reused name never inherits an earlier container's rights.
+// The rights an operator may have granted a container by name and that a new
+// container with that name would inherit: a Docker grant, Docker action
+// policies and approved host ports. Cleared before an isolated start.
+// Sudo grants are left alone: a new container's 'noot' account is always
+// created locked, and the row is what lets the sweeper lock an account whose
+// grant expired, so deleting it could only leave a live password untracked.
 export function clearContainerAuthorizations(containerId: string): void {
   db.transaction(() => {
-    for (const table of ['docker_grants', 'docker_action_policies', 'sudo_grants', 'approved_host_ports']) {
+    for (const table of ['docker_grants', 'docker_action_policies', 'approved_host_ports']) {
       db.prepare(`DELETE FROM ${table} WHERE container_id = ?`).run(containerId);
     }
   })();

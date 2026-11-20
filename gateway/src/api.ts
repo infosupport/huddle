@@ -1015,8 +1015,7 @@ export async function createApiServer(): Promise<FastifyInstance> {
       try {
         // An isolated container runs untrusted code: it starts without anything
         // an operator once granted a container with the same name. Only when
-        // no such container exists: an existing one keeps its rights, so its
-        // sudo grant stays tracked and gets locked when it expires.
+        // no such container exists: an existing one keeps its rights.
         if (params.isolated) {
           if (await containerNameTaken(containerName)) {
             return reply.code(409).send({ error: `Container '${containerName}' already exists. Remove it first.` });
