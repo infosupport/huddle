@@ -76,11 +76,19 @@ export function testWeakeningFlags(files: NameStatus[], unifiedDiff: string): st
 export interface PrInfo {
   number: number;
   title: string;
+  author?: PrAuthor | null;
+  isCrossRepository?: boolean;
   headRefName: string;
   headRefOid: string;
   labels: { name: string }[];
   statusCheckRollup: { conclusion?: string | null; state?: string | null; detailsUrl?: string | null; targetUrl?: string | null }[];
   commits: { authors: CommitAuthor[] }[];
+}
+
+/** The PR author as `gh --json author` gives it: GitHub-verified, unlike commit metadata. */
+export interface PrAuthor {
+  login?: string | null;
+  is_bot?: boolean | null;
 }
 
 export interface CommitAuthor {
@@ -92,6 +100,26 @@ export interface CommitAuthor {
 export const GAVE_UP_LABEL = 'agent-gave-up';
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR']);
 const SAFE_REF_CHARS = /^[A-Za-z0-9._\/()+-]+$/;
+
+/** Renovate's GitHub account, as `gh --author` takes it: the Mend app unless HUDDLE_RENOVATE_AUTHOR says otherwise. */
+export function renovatePrAuthor(): string {
+  return process.env.HUDDLE_RENOVATE_AUTHOR?.trim() || 'app/renovate';
+}
+
+/**
+ * Whether GitHub says Renovate opened the PR. An `app/<name>` author must be
+ * that app's bot account, so a user who happens to be called "renovate" does
+ * not pass.
+ */
+export function isRenovatePrAuthor(author: PrAuthor | null | undefined, expected = renovatePrAuthor()): boolean {
+  const login = (author?.login ?? '').trim().toLowerCase();
+  const want = expected.trim().toLowerCase();
+  if (!login) return false;
+  if (want.startsWith('app/')) {
+    return author?.is_bot === true && (login === want || login === `${want.slice(4)}[bot]`);
+  }
+  return login === want;
+}
 
 /** Renovate's branchPrefix: 'renovate/' unless HUDDLE_RENOVATE_BRANCH_PREFIX says otherwise. */
 export function renovateBranchPrefix(): string {
@@ -136,8 +164,13 @@ function renovateAuthorsFromEnv(): string[] {
   return (process.env.HUDDLE_RENOVATE_AUTHORS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
+/** A check run has a `conclusion`, a commit status a `state`. */
+function isFailedCheck(c: PrInfo['statusCheckRollup'][number]): boolean {
+  return FAILED.has((c.conclusion ?? '').toUpperCase()) || FAILED.has((c.state ?? '').toUpperCase());
+}
+
 export function hasFailingChecks(pr: PrInfo): boolean {
-  return pr.statusCheckRollup.some((c) => FAILED.has((c.conclusion ?? '').toUpperCase()) || FAILED.has((c.state ?? '').toUpperCase()));
+  return pr.statusCheckRollup.some(isFailedCheck);
 }
 
 /**
@@ -148,7 +181,7 @@ export function hasFailingChecks(pr: PrInfo): boolean {
 export function failedJobs(pr: PrInfo): { runId: string; jobId: string }[] {
   const jobs = new Map<string, { runId: string; jobId: string }>();
   for (const c of pr.statusCheckRollup) {
-    if (!FAILED.has((c.conclusion || c.state || '').toUpperCase())) continue;
+    if (!isFailedCheck(c)) continue;
     const m = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? '');
     if (m) jobs.set(m[2], { runId: m[1], jobId: m[2] });
   }
@@ -183,6 +216,10 @@ export function affectedProjects(changedFiles: string[]): string[] {
 
 /** Why the agent should not touch this PR, or null when it should. */
 export function skipReason(pr: PrInfo): string | null {
+  // Listing filters on the author already; a PR named on the command line
+  // gets the same check here, so a Renovate-looking branch is not enough.
+  if (!isRenovatePrAuthor(pr.author)) return `not opened by ${renovatePrAuthor()}`;
+  if (pr.isCrossRepository !== false) return 'not a branch in this repository';
   const prefix = renovateBranchPrefix();
   if (!isRenovateBranch(pr.headRefName, prefix)) return `branch ${pr.headRefName} is not a ${prefix}* branch`;
   if (pr.labels.some((l) => l.name === GAVE_UP_LABEL)) return `labelled ${GAVE_UP_LABEL}`;
