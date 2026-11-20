@@ -987,8 +987,15 @@ export async function createApiServer(): Promise<FastifyInstance> {
       };
       try {
         // An isolated container runs untrusted code: it starts without anything
-        // an operator once granted a container with the same name.
-        if (params.isolated) clearContainerAuthorizations(containerName);
+        // an operator once granted a container with the same name. Only when
+        // no such container exists: an existing one keeps its rights, so its
+        // sudo grant stays tracked and gets locked when it expires.
+        if (params.isolated) {
+          if (await containerNameTaken(containerName)) {
+            return reply.code(409).send({ error: `Container '${containerName}' already exists. Remove it first.` });
+          }
+          clearContainerAuthorizations(containerName);
+        }
         const id = await createAndStartContainer(params);
         return { id, containerName };
       } catch (err: any) {
@@ -1584,4 +1591,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
   console.log(`[api] listening on ${address}`);
 
   return app;
+}
+
+// Whether a container with this name exists. Any error other than "not found" is
+// passed on: a start must not clear rights when it cannot tell.
+async function containerNameTaken(name: string): Promise<boolean> {
+  try {
+    await inspectContainer(name);
+    return true;
+  } catch (err: any) {
+    if (/ → 404:/.test(String(err?.message))) return false;
+    throw err;
+  }
 }

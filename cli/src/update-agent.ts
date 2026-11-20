@@ -373,6 +373,11 @@ async function startAgent(ctx: Ctx, name: string, ws: string): Promise<Agent> {
   const { placeholder } = await post<{ placeholder: string }>(`/api/docker/containers/${name}/token`, { secret: credential.secret });
 
   const root = (script: string) => run(engine, ['exec', '-u', 'root', name, 'sh', '-c', script]);
+  // The gateway hands the repo to vscode; input and out are siblings the agent
+  // writes to as well (summary, commit message, verification logs). Without
+  // this they stay owned by the host user, which is not vscode on every host.
+  const own = root('chown -R vscode:vscode /workspace/input /workspace/out');
+  if (own.status !== 0) throw new Error(`could not prepare /workspace for the agent in ${name}: ${own.stderr.trim()}`);
   const stopAll = () => {
     // pkill exits 1 when nothing was left to kill; anything else means it failed.
     const kill = root('pkill -KILL -u vscode');
