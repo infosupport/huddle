@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, clearContainerAuthorizations, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -929,13 +929,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
     containerName: string;
     ideName?: string;
     empty?: boolean;
+    isolated?: boolean;
     presentableName?: string;
     memory?: string;
     cpus?: string;
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, isolated, presentableName: presentableNameOverride, memory, cpus } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -1007,10 +1008,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
+        isolated: isolated === true,
         memory,
         cpus,
       };
       try {
+        // An isolated container runs untrusted code: it starts without anything
+        // an operator once granted a container with the same name.
+        if (params.isolated) clearContainerAuthorizations(containerName);
         const id = await createAndStartContainer(params);
         return { id, containerName };
       } catch (err: any) {

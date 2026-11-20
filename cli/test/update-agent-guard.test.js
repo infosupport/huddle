@@ -69,6 +69,8 @@ function pr(over = {}) {
   return {
     number: 7,
     title: 'chore(deps): update vitest',
+    author: { login: 'app/renovate', is_bot: true },
+    isCrossRepository: false,
     headRefName: 'renovate/dev-tooling-(non-major)',
     headRefOid: 'abc',
     labels: [],
@@ -89,6 +91,20 @@ test('skipReason selects only failing, untouched Renovate PRs', () => {
     /someone other than Renovate/,
   );
   assert.equal(g.skipReason(pr({ commits: [{ authors: [{ email: '29139614+renovate[bot]@users.noreply.github.com' }] }] })), null);
+  // A PR named on the command line: the branch name and commit metadata can be forged, the PR author cannot.
+  assert.match(g.skipReason(pr({ author: { login: 'someone', is_bot: false } })), /not opened by app\/renovate/);
+  assert.match(g.skipReason(pr({ isCrossRepository: true })), /not a branch in this repository/);
+  assert.match(g.skipReason(pr({ isCrossRepository: undefined })), /not a branch in this repository/);
+});
+
+test('isRenovatePrAuthor trusts only the configured GitHub account', () => {
+  assert.equal(g.isRenovatePrAuthor({ login: 'app/renovate', is_bot: true }, 'app/renovate'), true);
+  assert.equal(g.isRenovatePrAuthor({ login: 'renovate[bot]', is_bot: true }, 'app/renovate'), true);
+  assert.equal(g.isRenovatePrAuthor({ login: 'renovate', is_bot: false }, 'app/renovate'), false);
+  assert.equal(g.isRenovatePrAuthor({ login: 'app/renovate', is_bot: false }, 'app/renovate'), false);
+  assert.equal(g.isRenovatePrAuthor({ login: 'Our-Deps-Bot', is_bot: false }, 'our-deps-bot'), true);
+  assert.equal(g.isRenovatePrAuthor({ login: 'someone' }, 'our-deps-bot'), false);
+  assert.equal(g.isRenovatePrAuthor(null, 'app/renovate'), false);
 });
 
 test('failedJobs lists the failing Actions jobs, also while the run is in progress', () => {
@@ -99,9 +115,11 @@ test('failedJobs lists the failing Actions jobs, also while the run is in progre
       { conclusion: '', state: null, detailsUrl: 'https://github.com/o/r/actions/runs/123/job/4' }, // still running
       { conclusion: 'SUCCESS', detailsUrl: 'https://github.com/o/r/actions/runs/456/job/3' },
       { state: 'ERROR', targetUrl: 'https://example.com/status' },
+      { state: 'FAILURE', targetUrl: 'https://github.com/o/r/actions/runs/789/job/5' },
     ],
   });
-  assert.deepEqual(g.failedJobs(p), [{ runId: '123', jobId: '1' }, { runId: '123', jobId: '2' }]);
+  assert.deepEqual(g.failedJobs(p), [{ runId: '123', jobId: '1' }, { runId: '123', jobId: '2' }, { runId: '789', jobId: '5' }]);
+  assert.equal(g.hasFailingChecks(p), true);
 });
 
 test('affectedProjects verifies only what the change can break', () => {

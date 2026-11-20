@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawn, spawnSync, SpawnSyncOptions } from 'child_process';
@@ -12,6 +13,7 @@ import {
   failedJobs,
   guardViolations,
   parseNameStatus,
+  renovatePrAuthor,
   sanitizeCommitMessage,
   skipReason,
   testWeakeningFlags,
@@ -23,9 +25,11 @@ import {
 //   npm, the Anthropic API and huddle itself (airlock), and holds a placeholder
 //   instead of the real Claude credential (token exchange).
 // - The HOST (this CLI, with the developer's own gh/git login) does every
-//   GitHub read and write, checks the result itself, and never runs git inside
-//   the folder the agent wrote to: the agent's commit leaves as a git bundle and
-//   is fetched into a separate clean clone.
+//   GitHub read and write and checks the result itself. Once the container
+//   runs, the host never touches the mounted folder by path: anything in it can
+//   be a symlink to a host file. Files the agent can write are read and written
+//   through the container, and the agent's commit leaves as a git bundle that
+//   is copied out with `docker cp` and fetched into a separate clean clone.
 
 export interface UpdateAgentOptions {
   pr?: number;
@@ -46,7 +50,7 @@ const MAX_ATTEMPTS = 3;
 const CLAUDE_TIMEOUT_MS = 30 * 60 * 1000;
 const VERIFY_TIMEOUT_MS = 20 * 60 * 1000;
 const PROMPT_PATH = '.github/agent/update-agent.md';
-const PR_FIELDS = 'number,title,headRefName,headRefOid,labels,statusCheckRollup,commits';
+const PR_FIELDS = 'number,title,author,isCrossRepository,headRefName,headRefOid,labels,statusCheckRollup,commits';
 const AGENT_RULES = [
   { domain: 'registry.npmjs.org', status: 'allow' },
   { domain: 'api.anthropic.com', status: 'allow' },
@@ -99,14 +103,23 @@ let interrupted = false;
 const interruptHooks = new Set<() => void>();
 const OUTPUT_CAP = 1024 * 1024;
 
-function runAsync(cmd: string, args: string[], opts: { timeout?: number; inherit?: boolean } = {}): Promise<RunResult> {
+interface AsyncOpts {
+  timeout?: number;
+  inherit?: boolean;
+  input?: string;
+}
+
+function runAsync(cmd: string, args: string[], opts: AsyncOpts = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: opts.inherit ? ['ignore', 'inherit', 'inherit'] : ['ignore', 'pipe', 'pipe'] });
+    const out = opts.inherit ? 'inherit' : 'pipe';
+    const child = spawn(cmd, args, { stdio: [opts.input === undefined ? 'ignore' : 'pipe', out, out] });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     child.stdout?.setEncoding('utf8').on('data', (d: string) => { stdout = (stdout + d).slice(-OUTPUT_CAP); });
     child.stderr?.setEncoding('utf8').on('data', (d: string) => { stderr = (stderr + d).slice(-OUTPUT_CAP); });
+    child.stdin?.on('error', () => { /* the process exited early; its status says why */ });
+    child.stdin?.end(opts.input);
     const timer = opts.timeout ? setTimeout(() => { timedOut = true; child.kill(); }, opts.timeout) : undefined;
     const stop = () => child.kill();
     interruptHooks.add(stop);
@@ -231,7 +244,7 @@ function listPrs(repo: string, only?: number): PrInfo[] {
     if (/could not resolve|not found/i.test(r.stderr)) return [];
     throw new Error(`gh pr view ${only} failed: ${r.stderr.trim()}`);
   }
-  const out = must('gh', ['pr', 'list', '--repo', repo, '--author', process.env.HUDDLE_RENOVATE_AUTHOR?.trim() || 'app/renovate', '--state', 'open', '--limit', '100', '--json', PR_FIELDS]);
+  const out = must('gh', ['pr', 'list', '--repo', repo, '--author', renovatePrAuthor(), '--state', 'open', '--limit', '100', '--json', PR_FIELDS]);
   return JSON.parse(out) as PrInfo[];
 }
 
@@ -266,26 +279,84 @@ async function processPr(ctx: Ctx): Promise<Result> {
   }
 }
 
+/**
+ * dir/workspace is mounted at /workspace (repo, input, out). Its root holds no
+ * .git, so the gateway mounts it as-is instead of creating a worktree.
+ * dir/publish is the trusted clone and dir/agent.bundle the copied-out commit;
+ * neither is ever mounted.
+ */
 async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
-  const { pr, repo, engine, opts } = ctx;
-  // Mounted at /workspace. Its root holds no .git, so the gateway mounts it as-is
-  // instead of creating a worktree (gateway/src/worktree.ts).
+  const { pr } = ctx;
   const ws = path.join(dir, 'workspace');
-  const repoDir = path.join(ws, 'repo');
-  const publish = path.join(dir, 'publish'); // trusted clone: never mounted
-  for (const d of ['input', 'out']) fs.mkdirSync(path.join(ws, d), { recursive: true });
+  const publish = path.join(dir, 'publish');
+  const prFiles = prepareWorkspace(ctx, ws, publish);
+  if (!prFiles) return { pr: pr.number, outcome: 'skipped', detail: 'branch moved while starting; run again' };
 
+  const agent = await startAgent(ctx, name, ws);
+  // Git metadata the agent could use to run code on commit (hooks, filters).
+  const gitBaseline = gitMetadata(agent);
+
+  const failure = await runAttempts(ctx, agent, prFiles);
+  if (failure) return giveUp(ctx, `failed after ${MAX_ATTEMPTS} attempts`, failure);
+
+  // Nothing the agent or a package's install script left running may change
+  // the tree between the checks below and the commit.
+  agent.stopAll();
+  if (gitMetadata(agent) !== gitBaseline) {
+    return giveUp(ctx, 'the git configuration or hooks were changed during the run', 'Something in the container changed .git/config, .git/hooks or .git/info/attributes.');
+  }
+  const bundle = await commitAndBundle(ctx, agent, dir);
+  return publishResult(ctx, agent, publish, bundle);
+}
+
+/** Clones the PR twice and writes the agent's inputs. Returns the PR's files, or null if the branch moved. */
+function prepareWorkspace(ctx: Ctx, ws: string, publish: string): string[] | null {
+  const { pr, repo } = ctx;
+  for (const d of ['input', 'out']) fs.mkdirSync(path.join(ws, d), { recursive: true });
   const clone = (dest: string, depth: string) =>
     must('gh', ['repo', 'clone', repo, dest, '--', '--config', 'core.autocrlf=false', '--quiet', '--no-tags', '--single-branch', '--depth', depth, '--branch', pr.headRefName]);
-  clone(repoDir, '50');
+  clone(path.join(ws, 'repo'), '50');
   clone(publish, '1');
-  const head = must('git', ['-C', publish, 'rev-parse', 'HEAD']).trim();
-  if (head !== pr.headRefOid) return { pr: pr.number, outcome: 'skipped', detail: 'branch moved while starting; run again' };
-  // Read (never run) the git metadata the agent could use to run code on commit.
-  const gitBaseline = gitMetadata(repoDir);
+  if (must('git', ['-C', publish, 'rev-parse', 'HEAD']).trim() !== pr.headRefOid) return null;
+  return writeInputs(ctx, path.join(ws, 'input'));
+}
 
-  const prFiles = writeInputs(ctx, path.join(ws, 'input'));
+/** Writes the agent's inputs (before the container exists) and returns the files the PR itself changes. */
+function writeInputs(ctx: Ctx, input: string): string[] {
+  const { pr, repo } = ctx;
+  const view = JSON.parse(must('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'title,body,files'])) as {
+    title: string;
+    body: string;
+    files?: { path: string }[];
+  };
+  fs.writeFileSync(path.join(input, 'pr.md'), `# ${view.title}\n\n${view.body ?? ''}\n`);
+  const logs = failedJobs(pr).map(({ runId, jobId }) => {
+    const r = run('gh', ['run', 'view', '--job', jobId, '--repo', repo, '--log']);
+    return `===== run ${runId}, job ${jobId} =====\n${r.status === 0 ? tail(r.stdout, 20_000) : `(could not read log: ${r.stderr.trim()})`}`;
+  });
+  fs.writeFileSync(path.join(input, 'failure.log'), tail(logs.join('\n') || 'No GitHub Actions log found for the failing checks.', 60_000));
+  return (view.files ?? []).map((f) => f.path);
+}
 
+// ── the container ────────────────────────────────────────────────────────────
+
+type Exec = (args: string[], workdir: string, extra?: AsyncOpts) => Promise<RunResult>;
+
+interface Agent {
+  name: string;
+  /** Runs as the agent's user (vscode) with the placeholder credential. */
+  exec: Exec;
+  /** Runs a shell script as root, for checks the agent's processes cannot interfere with. */
+  root(script: string): RunResult;
+  /** Kills every process of the agent's user. */
+  stopAll(): void;
+  /** Reads a file the agent may have written; symlinks resolve inside the container. */
+  readFile(file: string): Promise<string>;
+  writeFile(file: string, content: string): Promise<void>;
+}
+
+async function startAgent(ctx: Ctx, name: string, ws: string): Promise<Agent> {
+  const { engine, credential } = ctx;
   console.log(dim(`  starting ${name} (airlocked: npm registry, Anthropic API and better-sqlite3 releases only)`));
   await post(`/api/docker/containers/${name}/airlock`, { airlocked: true });
   await post(`/api/rules/import?container=${encodeURIComponent(name)}`, { mode: 'replace', rules: AGENT_RULES });
@@ -295,22 +366,56 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
     ideName: 'vscode',
     mounts: [{ hostPath: ws.replace(/\\/g, '/'), containerPath: '/workspace' }],
     containerWorkspace: '/workspace/repo',
+    // No folder mappings from the portal, and no Docker or sudo rights left
+    // over from an earlier container with this name.
+    isolated: true,
   });
-  const { placeholder } = await post<{ placeholder: string }>(`/api/docker/containers/${name}/token`, { secret: ctx.credential.secret });
+  const { placeholder } = await post<{ placeholder: string }>(`/api/docker/containers/${name}/token`, { secret: credential.secret });
 
-  // Every exec that can time out stops all of the agent user's processes
-  // afterwards: a timeout only kills the local `docker exec` client, not the
-  // process inside the container.
-  const exec = async (args: string[], workdir: string, extra: { timeout?: number; inherit?: boolean } = {}): Promise<RunResult> => {
-    const r = await runAsync(engine, ['exec', '-u', 'vscode', '-w', workdir, '-e', `${ctx.credential.env}=${placeholder}`, ...CONTAINER_ENV, name, ...args], extra);
-    if (r.timedOut || interrupted) {
-      // pkill exits 1 when nothing was left to kill; anything else means it failed.
-      const kill = run(engine, ['exec', '-u', 'root', name, 'pkill', '-KILL', '-u', 'vscode']);
-      if (kill.status !== 0 && kill.status !== 1) throw new Error(`Could not stop the timed-out process in ${name}.`);
-    }
+  const root = (script: string) => run(engine, ['exec', '-u', 'root', name, 'sh', '-c', script]);
+  const stopAll = () => {
+    // pkill exits 1 when nothing was left to kill; anything else means it failed.
+    const kill = root('pkill -KILL -u vscode');
+    if (kill.status !== 0 && kill.status !== 1) throw new Error(`Could not stop the agent's processes in ${name}.`);
+  };
+  // A timeout only kills the local `docker exec` client, not the process in the
+  // container, so every exec that timed out or was interrupted stops them all.
+  const exec: Exec = async (args, workdir, extra = {}) => {
+    const stdin = extra.input === undefined ? [] : ['-i'];
+    const r = await runAsync(engine, ['exec', ...stdin, '-u', 'vscode', '-w', workdir, '-e', `${credential.env}=${placeholder}`, ...CONTAINER_ENV, name, ...args], extra);
+    if (r.timedOut || interrupted) stopAll();
     if (interrupted) throw new Error('interrupted');
     return r;
   };
+  const readFile = async (file: string) => {
+    const r = await exec(['sh', '-c', 'if [ -f "$1" ]; then head -c 200000 "$1"; fi', 'sh', file], '/workspace');
+    if (r.status !== 0) throw new Error(`could not read ${file} in ${name}: ${r.stderr.trim()}`);
+    return r.stdout;
+  };
+  const writeFile = async (file: string, content: string) => {
+    const r = await exec(['sh', '-c', 'cat > "$1"', 'sh', file], '/workspace', { input: content });
+    if (r.status !== 0) throw new Error(`could not write ${file} in ${name}: ${r.stderr.trim()}`);
+  };
+  return { name, exec, root, stopAll, readFile, writeFile };
+}
+
+/** Snapshot of the git files that can make git run code, read as root and never through git. */
+function gitMetadata(agent: Agent): string {
+  const r = agent.root([
+    'cd /workspace/repo',
+    '[ -L .git ] && echo "symlinked .git"',
+    'cd .git 2>/dev/null || { echo "no .git directory"; exit 0; }',
+    'cat config 2>&1; echo "-- attributes"; cat info/attributes 2>&1',
+    'echo "-- hooks"; ls -A hooks 2>&1 | grep -v "[.]sample$"',
+    'exit 0',
+  ].join('\n'));
+  if (r.status !== 0) throw new Error(`could not read the git metadata in ${agent.name}: ${r.stderr.trim()}`);
+  return r.stdout;
+}
+
+/** Runs Claude Code and verifies its work, up to MAX_ATTEMPTS. Returns '' on success, otherwise the last failure. */
+async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<string> {
+  const { exec, name } = agent;
   // Hash of the whole working tree, untracked files included, via a throwaway
   // index so the real index stays untouched.
   const treeState = async () => {
@@ -354,36 +459,56 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
     console.log(dim(`  verifying: npm ci, build and test in ${projects.join(', ')}`));
     lastFailure = await verify(exec, projects);
     if (!lastFailure) break;
-    fs.writeFileSync(path.join(ws, 'input', `verify-${attempt}.log`), tail(lastFailure, 30_000));
     verifyLog = `/workspace/input/verify-${attempt}.log`;
+    await agent.writeFile(verifyLog, tail(lastFailure, 30_000));
     feedback = `Your previous change did not pass verification; the output is in ${verifyLog}. ` +
       'Fix that, keeping the earlier work where it is right.';
     console.log(yellow('  verification failed'));
   }
-  if (lastFailure) return giveUp(ctx, `failed after ${MAX_ATTEMPTS} attempts`, lastFailure);
+  return lastFailure;
+}
 
-  // Hooks or a filter driver planted by the agent (or by a package's install
-  // script during verification) would run on commit and could change the
-  // committed content after it was verified.
-  if (gitMetadata(repoDir) !== gitBaseline) {
-    return giveUp(ctx, 'the git configuration or hooks were changed during the run', 'Something in the container changed .git/config, .git/hooks or .git/info/attributes.');
+/** Runs what CI runs, for the given projects. Returns '' when everything passes, otherwise the failing output. */
+async function verify(exec: Exec, projects: string[]): Promise<string> {
+  for (const project of projects) {
+    const r = await exec(
+      ['bash', '-lc', 'npm ci --no-audit --no-fund && npm run build --if-present && CI=true npm test --if-present'],
+      `/workspace/repo/${project}`,
+      { timeout: VERIFY_TIMEOUT_MS },
+    );
+    if (r.status !== 0) return `### ${project} failed (exit ${r.status ?? 'timeout'})\n${r.stdout}\n${r.stderr}`;
   }
+  return '';
+}
 
-  // Commit inside the container under the developer's name, then hand it out as a bundle.
-  const msgFile = path.join(ws, 'out', 'commit-msg.txt');
-  const agentMsg = fs.existsSync(msgFile) ? fs.readFileSync(msgFile, 'utf8') : '';
-  fs.writeFileSync(msgFile, sanitizeCommitMessage(agentMsg, `fix(deps): adapt code for ${pr.title}`));
-  const git = (args: string[]) => exec([
-    'git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
-    '-c', `user.name=${ctx.identity.name}`, '-c', `user.email=${ctx.identity.email}`, ...args,
-  ], '/workspace/repo');
-  for (const args of [['add', '-A'], ['commit', '-q', '--no-verify', '-F', '/workspace/out/commit-msg.txt'], ['bundle', 'create', '/workspace/out/agent.bundle', 'HEAD', `^${pr.headRefOid}`]]) {
-    const r = await git(args);
+/** Commits in the container under the developer's name and copies the commit out as a bundle. */
+async function commitAndBundle(ctx: Ctx, agent: Agent, dir: string): Promise<string> {
+  const { pr, identity, engine } = ctx;
+  const message = sanitizeCommitMessage(await agent.readFile('/workspace/out/commit-msg.txt'), `fix(deps): adapt code for ${pr.title}`);
+  // A fresh name, so nothing the agent prepared in /tmp can stand in for it.
+  const inContainer = `/tmp/huddle-${crypto.randomBytes(8).toString('hex')}.bundle`;
+  const steps: { args: string[]; input?: string }[] = [
+    { args: ['add', '-A'] },
+    { args: ['commit', '-q', '--no-verify', '-F', '-'], input: message },
+    { args: ['bundle', 'create', inContainer, 'HEAD', `^${pr.headRefOid}`] },
+  ];
+  for (const { args, input } of steps) {
+    const r = await agent.exec([
+      'git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+      '-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`, ...args,
+    ], '/workspace/repo', { input });
     if (r.status !== 0) throw new Error(`git ${args[0]} in the container failed: ${(r.stderr || r.stdout).trim()}`);
   }
+  const bundle = path.join(dir, 'agent.bundle');
+  must(engine, ['cp', `${agent.name}:${inContainer}`, bundle]);
+  if (!fs.lstatSync(bundle).isFile()) throw new Error('the bundle copied out of the container is not a regular file');
+  return bundle;
+}
 
-  // From here on only the trusted clone is used.
-  must('git', ['-C', publish, 'fetch', '--quiet', path.join(ws, 'out', 'agent.bundle'), 'HEAD']);
+/** Checks the agent's commit in the trusted clone, then pushes and comments (or prints it for --dry-run). */
+async function publishResult(ctx: Ctx, agent: Agent, publish: string, bundle: string): Promise<Result> {
+  const { pr, repo, opts } = ctx;
+  must('git', ['-C', publish, 'fetch', '--quiet', bundle, 'HEAD']);
   const fixed = must('git', ['-C', publish, 'rev-parse', 'FETCH_HEAD']).trim();
   if (run('git', ['-C', publish, 'merge-base', '--is-ancestor', pr.headRefOid, fixed]).status !== 0) {
     return giveUp(ctx, 'the result does not build on the PR head', '');
@@ -394,8 +519,7 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
     return giveUp(ctx, 'blocked by the path guard', `The agent changed files only a person may change:\n${blocked.join('\n')}`);
   }
   const flags = testWeakeningFlags(files, must('git', ['-C', publish, 'diff', '-U0', pr.headRefOid, fixed]));
-  const summaryFile = path.join(ws, 'out', 'summary.md');
-  const summary = fs.existsSync(summaryFile) ? fs.readFileSync(summaryFile, 'utf8').trim() : '';
+  const summary = (await agent.readFile('/workspace/out/summary.md')).trim();
   const comment = [
     '### Update agent: fixed the build',
     '',
@@ -421,60 +545,7 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   return { pr: pr.number, outcome: 'fixed', detail: `pushed ${fixed.slice(0, 7)}${flags.length ? `, ${flags.length} flag(s) for review` : ''}` };
 }
 
-/** Snapshot of the git files that can make git run code. Read as plain files, never through git. */
-function gitMetadata(repoDir: string): string {
-  const gitDir = path.join(repoDir, '.git');
-  const read = (p: string) => { try { return fs.readFileSync(p, 'utf8'); } catch { return '<missing>'; } };
-  let hooks: string[];
-  try {
-    hooks = fs.readdirSync(path.join(gitDir, 'hooks')).filter((f) => !f.endsWith('.sample')).sort();
-  } catch {
-    hooks = ['<missing>'];
-  }
-  const isDir = (() => { try { return fs.lstatSync(gitDir).isDirectory(); } catch { return false; } })();
-  return JSON.stringify({ isDir, config: read(path.join(gitDir, 'config')), attributes: read(path.join(gitDir, 'info', 'attributes')), hooks });
-}
-
-function removeDir(dir: string): void {
-  try {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
-  } catch (err) {
-    console.log(yellow(`  could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`));
-  }
-}
-
-/** Writes the agent's inputs and returns the files the PR itself changes. */
-function writeInputs(ctx: Ctx, input: string): string[] {
-  const { pr, repo } = ctx;
-  const view = JSON.parse(must('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'title,body,files'])) as {
-    title: string;
-    body: string;
-    files?: { path: string }[];
-  };
-  fs.writeFileSync(path.join(input, 'pr.md'), `# ${view.title}\n\n${view.body ?? ''}\n`);
-  const logs = failedJobs(pr).map(({ runId, jobId }) => {
-    const r = run('gh', ['run', 'view', '--job', jobId, '--repo', repo, '--log']);
-    return `===== run ${runId}, job ${jobId} =====\n${r.status === 0 ? tail(r.stdout, 20_000) : `(could not read log: ${r.stderr.trim()})`}`;
-  });
-  fs.writeFileSync(path.join(input, 'failure.log'), tail(logs.join('\n') || 'No GitHub Actions log found for the failing checks.', 60_000));
-  return (view.files ?? []).map((f) => f.path);
-}
-
-/** Runs what CI runs, for the given projects. Returns '' when everything passes, otherwise the failing output. */
-async function verify(
-  exec: (args: string[], workdir: string, extra?: { timeout?: number }) => Promise<RunResult>,
-  projects: string[],
-): Promise<string> {
-  for (const project of projects) {
-    const r = await exec(
-      ['bash', '-lc', 'npm ci --no-audit --no-fund && npm run build --if-present && CI=true npm test --if-present'],
-      `/workspace/repo/${project}`,
-      { timeout: VERIFY_TIMEOUT_MS },
-    );
-    if (r.status !== 0) return `### ${project} failed (exit ${r.status ?? 'timeout'})\n${r.stdout}\n${r.stderr}`;
-  }
-  return '';
-}
+// ── outcome and cleanup ──────────────────────────────────────────────────────
 
 async function giveUp(ctx: Ctx, reason: string, details: string): Promise<Result> {
   const { pr, repo, opts } = ctx;
@@ -503,6 +574,15 @@ async function containerExists(name: string): Promise<boolean> {
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return false;
     throw err;
+  }
+}
+
+/** rmSync removes symlinks themselves and never follows them. */
+function removeDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+  } catch (err) {
+    console.log(yellow(`  could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 

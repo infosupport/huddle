@@ -279,6 +279,17 @@ export function deleteGrant(containerId: string): void {
   db.prepare(`DELETE FROM docker_grants WHERE container_id = ?`).run(containerId);
 }
 
+// Everything an operator may have granted a container by name: a Docker grant,
+// Docker action policies, sudo and approved host ports. Cleared before an
+// isolated start, so a reused name never inherits an earlier container's rights.
+export function clearContainerAuthorizations(containerId: string): void {
+  db.transaction(() => {
+    for (const table of ['docker_grants', 'docker_action_policies', 'sudo_grants', 'approved_host_ports']) {
+      db.prepare(`DELETE FROM ${table} WHERE container_id = ?`).run(containerId);
+    }
+  })();
+}
+
 export function getAllGrants(): Record<string, { until: number }> {
   const rows = db.prepare(`SELECT container_id, until FROM docker_grants`).all() as
     { container_id: string; until: number }[];
