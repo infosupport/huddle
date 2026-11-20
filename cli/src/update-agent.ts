@@ -498,7 +498,11 @@ async function commitAndBundle(ctx: Ctx, agent: Agent, dir: string): Promise<str
     { args: ['bundle', 'create', inContainer, 'HEAD', `^${pr.headRefOid}`] },
   ];
   for (const { args, input } of steps) {
+    // Only the repo's own config (checked above) applies: the agent can write
+    // ~/.gitconfig, where a filter for a .gitattributes in the tree would
+    // change the content on `git add`, after it was verified.
     const r = await agent.exec([
+      'env', 'GIT_CONFIG_GLOBAL=/dev/null', 'GIT_CONFIG_NOSYSTEM=1',
       'git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
       '-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`, ...args,
     ], '/workspace/repo', { input });
