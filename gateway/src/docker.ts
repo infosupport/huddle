@@ -977,6 +977,7 @@ export interface StartParams {
   presentableName: string;
   ideName?: IdeName;
   empty?: boolean;
+  isolated?: boolean;       // no global folder mappings: for containers that run untrusted code (update agent)
   memory?: string;
   cpus?: string;
 }
@@ -1112,7 +1113,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     }
   }
 
-  const folderMounts = buildFolderMounts(containerName, mountStyle);
+  const folderMounts = params.isolated ? [] : buildFolderMounts(containerName, mountStyle);
 
   // The RemoteDev distro volume is JB-only; VS Code does not need it.
   const mounts = [

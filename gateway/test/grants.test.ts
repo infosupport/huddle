@@ -130,4 +130,26 @@ describe.skipIf(!sqliteAvailable)('docker grants', () => {
       expect(() => deleteGrant('never-existed')).not.toThrow();
     });
   });
+  describe('clearContainerAuthorizations (isolated start)', () => {
+    it('removes the Docker rights and host ports of that container name, and only those', async () => {
+      const dbMod = await import('../src/db');
+      for (const c of [CID, 'other']) {
+        setGrant(c, 9999);
+        dbMod.setActionPolicy(c, 'container.create', true);
+        dbMod.setSudoGrant(c, 9999);
+        dbMod.addApprovedHostPort({ container_id: c, host_port: 8080, container_port: 80, protocol: 'tcp', description: '' });
+      }
+      dbMod.clearContainerAuthorizations(CID);
+      expect(getGrant(CID)).toBeUndefined();
+      expect(dbMod.getActionPolicies(CID)).toEqual({});
+      // Kept: the sweeper needs it to lock the account when the grant expires.
+      expect(dbMod.getSudoGrant(CID)).toEqual({ until: 9999 });
+      expect(dbMod.listApprovedHostPorts(CID)).toEqual([]);
+      expect(getGrant('other')).toEqual({ until: 9999 });
+      expect(dbMod.getActionPolicies('other')).toEqual({ 'container.create': true });
+      expect(dbMod.getSudoGrant('other')).toEqual({ until: 9999 });
+      expect(dbMod.listApprovedHostPorts('other')).toHaveLength(1);
+      db.exec('DELETE FROM docker_action_policies; DELETE FROM sudo_grants; DELETE FROM approved_host_ports');
+    });
+  });
 });
