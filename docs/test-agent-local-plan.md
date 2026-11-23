@@ -46,6 +46,18 @@ Isolation rules for the VM:
 
 Exit code: 0 no failures, 1 an area failed, 2 no report written.
 
+## Proving the agent can fail: `fault-injection.sh`
+
+The first full run was all PASS. That only means something if a broken boundary turns the report red. `scripts/test-agent/fault-injection.sh` injects a known bug into `gateway/src`, runs the whole test agent against it, and checks that the matching area fails. It restores the source with `git checkout -- gateway/src` afterwards (it refuses to start when `gateway/src` has uncommitted changes). VM only, needs the same credentials as `run.sh`, and each fault is a full run.
+
+| Fault | What it breaks | The agent must flag |
+|---|---|---|
+| `baseline` | nothing | no failures (false-alarm check) |
+| `privileged` | the "privileged containers not permitted" check in `socket-proxy.ts` | Docker socket |
+| `path-traversal` | the `..` rejection in `normalizePathname` in `rules.ts` | Bypass attempts |
+
+Verdicts: `DETECTED` (good), `MISSED` (the agent did not notice a real bug: tune the prompt), `OK` / `FALSE ALARM` for the baseline, `ERROR` when no report was written. More faults can be added to the `apply_fault` and `expected_area` functions.
+
 ## Known uncertainties for the first run
 
 - **Playwright MCP flags** (`--storage-state`, `--isolated`, `--no-sandbox`) and the version: the version is resolved from npm at run time and printed; pin it in `PLAYWRIGHT_MCP_VERSION` once it works. The browser is installed on first use by the MCP server.
