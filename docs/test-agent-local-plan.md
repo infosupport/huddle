@@ -1,73 +1,66 @@
-# Local test agent in a Docker-in-Docker arena (plan, not started)
+# Local test agent (runner mirror in a Linux VM)
 
-Status: **plan only, nothing implemented yet.**
+Status: **first version written, not yet run.** `scripts/test-agent/run.sh`, `.github/agent/test-agent.md` and `.github/agent/playwright-mcp.json` exist. The first run in the VM will show what needs adjusting.
 
 ## Context
 
 The Huddle PDF (Part 2, "Agent 2: Test agent", pp. 16-19) asks for an AI agent that uses a running, throwaway Huddle the way an operator and an attacker would:
 
 - **Browser:** Playwright MCP against the portal on `localhost:3000`, logged in with a per-run operator token.
-- **Shell:** `docker exec` into a target devcontainer, to send traffic from inside the boundary (curl, npm install, docker via the proxied socket).
+- **Shell:** `docker exec` into a target devcontainer, to send traffic from inside the boundary.
 - **Fixed scenarios** (firewall, HTTPS interception, bypass attempts, docker socket, sudo grant, portal), each checked against an expected result.
 - **Output:** one pass/fail line per area. Details of a failed security check never appear in public output. Confirmed findings later become deterministic tests in `gateway/test/e2e/`.
 
-In CI it runs on a throwaway GitHub runner. On a developer PC there is no such runner, and running the agent inside the main Huddle is paradoxical: the target Huddle needs a Docker socket to create devcontainers, and the main Huddle exists to keep that away from the agent.
+In CI it runs on a throwaway GitHub runner. A developer PC has no such runner, and running the agent inside the main Huddle is paradoxical: the target Huddle needs a Docker socket to create devcontainers, and the main Huddle exists to keep that away from the agent.
 
-## Decisions
+## Decision: a disposable Linux VM is the runner
 
-- **Isolation:** a Docker-in-Docker (dind) arena. A privileged `docker:dind` container with its own inner Docker engine, no host socket and no host mounts except an output folder. The throwaway Huddle, the target devcontainer and the agent all run inside it.
-- **Later upgrade:** swap the arena for a disposable VM (Canonical Multipass on Hyper-V). Hyper-V is currently **Disabled** on this machine, and Rancher Desktop runs on WSL2, so this needs admin approval and a reboot. The prompt, scenarios and scripts stay the same; only the "start the arena" step changes.
-- **Findings stay local.** Nothing is auto-posted to GitHub in the local version.
+The first plan used a Docker-in-Docker arena on Rancher Desktop. That is replaced by a **Hyper-V Ubuntu VM** with the repo checked out on `feat/test-agent`. The VM is the isolation boundary, exactly like the GitHub runner, so `run.sh` is a one-to-one mirror of the CI job: the same steps run directly on the VM's own Docker.
 
-## What already exists and gets reused
+Isolation rules for the VM:
 
-- `.github/workflows/test.yml`, job `e2e`: the recipe for starting a throwaway Huddle. Internal network `devcontainer-net`, random `HUDDLE_OPERATOR_TOKEN`, mounts for `docker.sock` and `/tmp/dc-sockets`, `docker network connect bridge huddle`, wait on `/api/rules`, pull or build the base images. Replay this inside the arena.
-- `gateway/test/e2e/helpers.ts`: `spawnDevcontainer`, `execIn`, and the rules, grant and sudo API helpers. They use the `docker` CLI, so they work against the arena via `DOCKER_HOST`, plus `HUDDLE_URL` and `HUDDLE_OPERATOR_TOKEN`.
-- `gateway/test/e2e/README.md`: the T1-T11 scenario list, which overlaps the PDF scenario table.
-- `.github/agent/update-agent.md`: style reference for agent prompt files.
+- No Hyper-V Enhanced Session, shared folders or clipboard sharing with the PC.
+- No credentials that can push to GitHub or reach anything else (a read-only checkout is enough). The agent has the `Read` and `Write` tools on the VM.
+- Take a Hyper-V checkpoint of the clean state and restore it after runs you do not trust.
+- `run.sh` refuses to run on anything that does not look like a VM (`systemd-detect-virt --vm`).
 
-## Build steps
+## Choices taken from the PDF
 
-1. `.github/agent/test-agent.md`: the prompt. Scenario table with expected results, pass/fail/unclear plus the evidence command, writes `findings.md`, never prints bypass details to stdout.
-2. `.github/agent/playwright-mcp.json`: headless Playwright MCP with a pinned version.
-3. `scripts/test-agent/arena.Dockerfile`: `docker:dind` plus node, `@anthropic-ai/claude-code` and a browser. The repo is copied into the image, not mounted.
-4. `scripts/test-agent/run-in-arena.sh`: runs inside the arena and mirrors the CI job. Start `dockerd`, build `huddle:pr`, start it, create the target devcontainer, then run `claude -p` with the prompt, `--mcp-config`, `--allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Read,Write"` and `--max-turns 60`.
-5. `scripts/test-agent.ps1`: the host entry point. Build the arena image, `docker run --privileged` with no host socket and no mounts except an output folder for `findings.md`, pass a dedicated, spend-limited `ANTHROPIC_API_KEY`, stream the log, then `docker rm -f` the arena so every run starts fresh.
-6. Later: `.github/workflows/test-agent.yml` that calls `run-in-arena.sh` directly on the runner (already isolated), a step that files findings in the private `infosupport/huddle-security` repo, and the nightly exploratory run.
+| Question | Answer | Source |
+|---|---|---|
+| Which scenarios? | All of the fixed list, every run | p. 16-17 table |
+| API key? | Environment variable on the runner (the VM), never inside the target container. The agent's only shell is `docker exec target-dc`. | p. 18, p. 21 ("keep the key on the runner outside the devcontainer") |
+| Network? | Open, like the GitHub runner, which sits outside Huddle's firewall | p. 15, p. 18 |
+| Where do findings go? | Locally: `findings.md` in the run's output folder, nothing posted. In CI later: private repo via a separate step. | p. 18-19, p. 23 |
+| Login of the browser? | The operator token is a session cookie (`huddle_session`). `run.sh` puts it in a Playwright storage-state file, so the agent never sees the token. | `gateway/src/auth.ts` |
+| Tool allowlist | `mcp__playwright__*`, `Bash(docker exec target-dc:*)`, `Read`, `Write`. Added: `Bash(docker exec -u root target-dc:*)` (the sudo scenario needs root in the target). | p. 19 |
 
-## Things to settle while building
+## What `run.sh` does (mirrors the CI job)
 
-- **Browser in an Alpine arena:** Playwright's bundled Chromium needs glibc. Either use Alpine's `chromium` package (and point Playwright MCP at it, with `--no-sandbox` as root) or use a Debian-based dind image.
-- **Build context:** a root-level `.dockerignore` would change the existing root-context builds in CI (`-f base-devimage/Dockerfile .`). Use a Dockerfile-specific ignore file (`arena.Dockerfile.dockerignore`) instead.
-- **Base images inside the arena:** pulling from `ghcr.io` needs a login, so build `base-devimage` and `base-devimage-vscode` from source inside the arena and tag them with the ghcr names that `helpers.ts` expects. The first run is slow because the arena has no image cache.
-- **Run the agent as a non-root user** inside the arena, with access to the inner Docker socket only.
-- **API key:** the update agent uses Huddle's token exchange so the real key never enters its container. The arena has no equivalent, so the key is inside the arena. Use a dedicated key with a spend limit.
-- **Egress:** the MVP arena has open outbound access. Hardening: allowlist `api.anthropic.com`, `registry.npmjs.org` and `ghcr.io` via iptables or a proxy sidecar.
-- **Isolation strength:** privileged dind shares the WSL2 kernel with Rancher Desktop. That is a softer boundary than a VM, and acceptable for the first version.
-- **Rancher Desktop:** check that it allows `--privileged` containers.
+1. Preflight: Linux, in a VM, tools present, `ANTHROPIC_API_KEY` set, no leftovers of an earlier run.
+2. Build `huddle:pr` from `gateway/`; pull `base-devimage` and `base-devimage-vscode` (build from this checkout when the pull fails or `TEST_AGENT_BUILD_BASE=1`).
+3. Start Huddle like the `e2e` job in `.github/workflows/test.yml` (internal `devcontainer-net`, random `HUDDLE_OPERATOR_TOKEN`, Docker socket and `/tmp/dc-sockets` mounted, then `docker network connect bridge huddle`). The port is bound to `127.0.0.1` only.
+4. Create the target devcontainer `target-dc` through Huddle's API (`POST /api/docker/start`), as `spawnDevcontainer` does in `gateway/test/e2e/helpers.ts`.
+5. Run `claude -p` with the prompt, the Playwright MCP config (`--strict-mcp-config`), the allowlist and `--max-turns 60`, in a scratch folder.
+6. Print `report.md`, keep `evidence.md`, `findings.md` and `huddle.log` (the network log) in the output folder, remove the Huddle stack.
 
-## Questions to ask the user before starting
+Exit code: 0 no failures, 1 an area failed, 2 no report written.
 
-Ask these first (use the question tool), so nothing is built on a guess:
+## Known uncertainties for the first run
 
-1. **API key:** is there a dedicated, spend-limited Anthropic API key for the agent, and how should the script receive it (env var `ANTHROPIC_API_KEY` in the shell, or a local untracked file)?
-2. **Privileged containers:** does Rancher Desktop allow `docker run --privileged` on this machine? (Check with a quick `docker run --rm --privileged docker:dind docker --version`, or ask.)
-3. **Branch:** start on a new branch (for example `feat/test-agent`) from `main`, or continue on `feat/update-agent`? That branch has unrelated uncommitted changes in `cli/src/update-agent.ts` and `gateway/src/api.ts`.
-4. **Entry script language:** `scripts/test-agent.ps1` (matches the repo's `huddle.ps1`) or also a bash version for Linux and macOS developers?
-5. **Output folder:** where should `findings.md` and the run log land on the host (for example `scripts/test-agent/out/`, git-ignored)?
-6. **Scenario scope for the first run:** all scenarios in the PDF table, or start with a subset (for example firewall and docker socket) to tune the prompt first?
-7. **Base images:** build `base-devimage` and `base-devimage-vscode` from source in the arena (slow first run, no login), or log in to `ghcr.io` with a personal token to pull them?
-8. **Egress hardening:** accept open outbound access for the first version, or build the allowlist from the start?
-9. **CI later:** do the private repo `infosupport/huddle-security`, a `SECURITY_REPO_TOKEN` and an `ANTHROPIC_API_KEY` repo secret exist, or is the CI workflow out of scope for now?
-10. **VM later:** if Multipass becomes the goal, can Hyper-V be enabled on this machine (admin rights, reboot, IT policy)?
+- **Playwright MCP flags** (`--storage-state`, `--isolated`, `--no-sandbox`) and the version: the version is resolved from npm at run time and printed; pin it in `PLAYWRIGHT_MCP_VERSION` once it works. The browser is installed on first use by the MCP server.
+- **Agent turn budget:** 60 turns may be too few for eight scenarios. Raise `TEST_AGENT_MAX_TURNS` if the agent runs out.
+- **Portal steps in the prompt** are described in general terms; the agent explores the portal itself. Tighten the prompt after seeing a run.
+- **Base image pull** from `ghcr.io` may need a login; the script falls back to building from the checkout (slower).
+- **API key exposure:** the key is in the `claude` process on the VM. Use a dedicated, spend-limited key.
 
-## Verification
+## Next steps (not started)
 
-1. Run `scripts/test-agent.ps1` end to end: the arena starts, Huddle answers on `:3000` inside the arena, and the target container runs.
-2. Confirm isolation: inside the arena `docker ps` shows only arena containers, the host `docker ps` shows only the arena, and no `/var/run/docker.sock` or host path is mounted.
-3. The agent reports a pass/fail line per area. Deliberately break a rule (for example disable a deny) and confirm it is flagged as a fail.
-4. The arena is removed after the run, and `findings.md` exists only in the output folder.
+1. First run in the VM, read `evidence.md` and tune the prompt.
+2. Turn confirmed findings into deterministic tests in `gateway/test/e2e/`.
+3. `.github/workflows/test-agent.yml` (report-only first), with the private-repo findings step and the nightly exploratory run in `infosupport/huddle-security`. Needs an `ANTHROPIC_API_KEY` secret, a `SECURITY_REPO_TOKEN`, and pinned action SHAs.
 
-## Repo state note
+## Questions still open
 
-The branch `feat/update-agent` has uncommitted changes in `cli/src/update-agent.ts` and `gateway/src/api.ts`. They are unrelated to this plan. Consider starting the test agent work on its own branch.
+1. Is the CI workflow in scope now, or after the local run works? (Needs the private repo and the secrets above.)
+2. Should the later nightly exploratory run reuse `run.sh` with a different prompt, or live only in the private repo?
