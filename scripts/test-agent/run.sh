@@ -207,6 +207,18 @@ fi
 # Session secrets are no longer needed.
 rm -f "$AUTH_HEADER_FILE" "$OUT_DIR/huddle-session.json"
 
+# Anything the agent wrote besides its three output files (the prompt forbids helper
+# scripts). Only reported, never deleted: read them, then remove them by hand if you want.
+stray="$(find . -mindepth 1 -maxdepth 1 \
+  ! -name evidence.md ! -name report.md ! -name findings.md \
+  ! -name prompt.md ! -name playwright-mcp.json ! -name agent.jsonl ! -name agent.err \
+  ! -name browser-install.log ! -name huddle.log ! -name .playwright-mcp \
+  -printf '%f\n' | sort)"
+if [ -n "$stray" ]; then
+  warn "the agent left files it was not asked to write (kept for you to inspect; delete by hand if unwanted, and read them with 'cat -v'):"
+  while IFS= read -r f; do printf '    %s/%s\n' "$OUT_DIR" "$f" >&2; done <<<"$stray"
+fi
+
 # ── Result ──────────────────────────────────────────────────────────────────
 if [ ! -s report.md ]; then
   warn "the agent wrote no report.md"
