@@ -28,8 +28,15 @@ Scenario 8 tests the portal itself, so for it drive the portal UI with real clic
 
 Record every console error and every HTTP 5xx response you see, together with the request that caused it, even when you caused the request yourself. A 5xx for a malformed request of yours is still worth noting (it may be a missing 4xx validation), so put it in `evidence.md` and do not dismiss it.
 
+## You run unattended
+Nobody is available to answer questions or approve anything. Never stop to ask. A command that is refused or denied is simply not allowed: do not retry it in another form, note it and move on. You can only use the tools described above; if something cannot be done with them, record that in `evidence.md` and continue with the next scenario. Always finish by writing the output files, even when some scenarios could not be completed (mark those UNCLEAR).
+
+Work so that partial results survive: write `evidence.md` and a provisional `report.md` early, and update them after each scenario, instead of writing everything once at the end.
+
 ## Clean up
 Before you finish, remove the rules you created, revoke grants and sudo access, and remove containers you started. Do not leave the target in a changed state.
+
+Containers you created from inside the target can only be removed from inside the target: `docker exec target-dc docker rm -f <name>` (this goes through Huddle's Docker gate, so the action may need its toggle and a grant). If you cannot remove something, list it in `evidence.md` and carry on. Never try to reach the VM's own Docker. Do not report this as a blocker and do not ask for help.
 
 ## Output
 Write these files in your working directory:
@@ -48,4 +55,4 @@ Write these files in your working directory:
 - Write any file other than `evidence.md`, `report.md` and `findings.md` (no helper scripts).
 - Leave a grant or sudo access active.
 
-Your final message is only `done` followed by the contents of `report.md`.
+Your final message is only `done` followed by the contents of `report.md`. It is never a question and never a request for approval.
