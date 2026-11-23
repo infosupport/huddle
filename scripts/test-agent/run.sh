@@ -10,10 +10,15 @@
 # socket and gives an LLM agent a browser and a shell in a container.
 #
 # Usage:   ANTHROPIC_API_KEY=... scripts/test-agent/run.sh [--keep]
+#          CLAUDE_CODE_OAUTH_TOKEN=... scripts/test-agent/run.sh [--keep]
 #          scripts/test-agent/run.sh --clean      # remove leftovers of an earlier run
 #
 # Environment:
-#   ANTHROPIC_API_KEY           required; use a dedicated, spend-limited key
+#   ANTHROPIC_API_KEY           credential, option 1: a dedicated, spend-limited API key
+#   CLAUDE_CODE_OAUTH_TOKEN     credential, option 2: token from `claude setup-token`, created
+#                               on your host and pasted into the VM (never log in on the VM).
+#                               One of the two is required. Enter it without shell history:
+#                                 read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
 #   PLAYWRIGHT_MCP_VERSION      default: latest from npm (printed; pin it once it works)
 #   TEST_AGENT_OUT              output folder (default ~/test-agent-out/<timestamp>)
 #   TEST_AGENT_MAX_TURNS        default 60
@@ -82,7 +87,8 @@ for cmd in docker node npm npx openssl curl claude timeout; do
   command -v "$cmd" >/dev/null || die "missing command: $cmd"
 done
 docker info >/dev/null 2>&1 || die "cannot talk to Docker (is your user in the docker group?)"
-[ -n "${ANTHROPIC_API_KEY:-}" ] || die "set ANTHROPIC_API_KEY (a dedicated, spend-limited key)"
+[ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
+  || die "set ANTHROPIC_API_KEY (a dedicated, spend-limited key) or CLAUDE_CODE_OAUTH_TOKEN (from 'claude setup-token' on your host)"
 if docker inspect huddle >/dev/null 2>&1 || docker inspect "$TARGET" >/dev/null 2>&1 \
    || docker network inspect devcontainer-net >/dev/null 2>&1; then
   die "a 'huddle' or '$TARGET' container or the 'devcontainer-net' network already exists. Run: $0 --clean"
@@ -173,6 +179,7 @@ timeout "${TIMEOUT_MIN}m" claude -p "$(cat prompt.md)" \
   --strict-mcp-config \
   --mcp-config playwright-mcp.json \
   --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read,Write" \
+  --disallowedTools "Read(//proc/**)" \
   2>&1 | tee agent.log
 agent_rc=${PIPESTATUS[0]}
 set -e
