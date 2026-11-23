@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@{{PLAYWRIGHT_MCP_VERSION}}",
+        "--headless",
+        "--no-sandbox",
+        "--isolated",
+        "--storage-state",
+        "huddle-session.json"
+      ]
+    }
+  }
+}
