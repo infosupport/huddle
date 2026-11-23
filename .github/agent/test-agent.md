@@ -28,6 +28,8 @@ Scenario 8 tests the portal itself, so for it drive the portal UI with real clic
 
 Record every console error and every HTTP 5xx response you see, together with the request that caused it, even when you caused the request yourself. A 5xx for a malformed request of yours is still worth noting (it may be a missing 4xx validation), so put it in `evidence.md` and do not dismiss it.
 
+For scenario 7, "it works" must be shown, not inferred from the account status: the sudo-grant response contains a one-time password. Use it in one command, for example `docker exec -u root target-dc sh -c 'echo <password> | su - noot -c "sudo -S -p \"\" id"'`, and expect `uid=0`. After the wait, the same command must fail. If you could not show that sudo worked, scenario 7 is UNCLEAR, not PASS.
+
 ## You run unattended
 Nobody is available to answer questions or approve anything. Never stop to ask. A command that is refused or denied is simply not allowed: do not retry it in another form, note it and move on. You can only use the tools described above; if something cannot be done with them, record that in `evidence.md` and continue with the next scenario. Always finish by writing the output files, even when some scenarios could not be completed (mark those UNCLEAR).
 
