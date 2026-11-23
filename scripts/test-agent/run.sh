@@ -102,6 +102,14 @@ PLAYWRIGHT_MCP_VERSION="${PLAYWRIGHT_MCP_VERSION:-$(npm view @playwright/mcp ver
 [ -n "$PLAYWRIGHT_MCP_VERSION" ] || die "could not determine the @playwright/mcp version; set PLAYWRIGHT_MCP_VERSION"
 log "using @playwright/mcp@$PLAYWRIGHT_MCP_VERSION (pin it with PLAYWRIGHT_MCP_VERSION once it works)"
 
+# The MCP server defaults to Google Chrome, which is not installed here. Install Playwright's
+# own Chromium, with the same playwright version the MCP server depends on, and run with it.
+PW_VERSION="$(npm view "@playwright/mcp@$PLAYWRIGHT_MCP_VERSION" dependencies.playwright 2>/dev/null || true)"
+[ -n "$PW_VERSION" ] || die "could not find which playwright version @playwright/mcp@$PLAYWRIGHT_MCP_VERSION uses"
+log "installing Chromium for playwright@$PW_VERSION (first run only; log: $OUT_DIR/browser-install.log)"
+npx -y "playwright@$PW_VERSION" install chromium >"$OUT_DIR/browser-install.log" 2>&1 \
+  || die "browser install failed, see $OUT_DIR/browser-install.log. If system libraries are missing, run once: sudo npx -y playwright@$PW_VERSION install-deps chromium"
+
 trap cleanup EXIT INT TERM
 CREATED=1
 

@@ -5,6 +5,8 @@
       "args": [
         "-y",
         "@playwright/mcp@{{PLAYWRIGHT_MCP_VERSION}}",
+        "--browser",
+        "chromium",
         "--headless",
         "--no-sandbox",
         "--isolated",
