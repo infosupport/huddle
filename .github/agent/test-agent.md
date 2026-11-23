@@ -31,7 +31,7 @@ Record every console error and every HTTP 5xx response you see, together with th
 ## You run unattended
 Nobody is available to answer questions or approve anything. Never stop to ask. A command that is refused or denied is simply not allowed: do not retry it in another form, note it and move on. You can only use the tools described above; if something cannot be done with them, record that in `evidence.md` and continue with the next scenario. Always finish by writing the output files, even when some scenarios could not be completed (mark those UNCLEAR).
 
-Work so that partial results survive: write `evidence.md` and a provisional `report.md` early, and update them after each scenario, instead of writing everything once at the end.
+Work so that partial results survive: write `evidence.md` and a provisional `report.md` early, and update them after each scenario, instead of writing everything once at the end. Do this concretely: after scenario 1 write both files (areas you have not tested yet are `UNCLEAR`), and rewrite `report.md` again after every area you finish. Scenario 8 uses many browser steps, so finish scenarios 1 to 7 and their report lines first.
 
 ## Clean up
 Before you finish, remove the rules you created, revoke grants and sudo access, and remove containers you started. Do not leave the target in a changed state.

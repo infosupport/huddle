@@ -21,7 +21,8 @@
 #                                 read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
 #   PLAYWRIGHT_MCP_VERSION      default: 0.0.86 (pinned; override to try another version)
 #   TEST_AGENT_OUT              output folder (default ~/test-agent-out/<timestamp>)
-#   TEST_AGENT_MAX_TURNS        default 60
+#   TEST_AGENT_MODEL            default claude-sonnet-5-5 (pinned; change it deliberately)
+#   TEST_AGENT_MAX_TURNS        default 120 (60 was too few once the portal scenario drives the UI)
 #   TEST_AGENT_TIMEOUT_MIN      default 45
 #   TEST_AGENT_BUILD_BASE=1     build base-devimage* from this checkout instead of pulling
 #   TEST_AGENT_ALLOW_BARE_METAL=1  skip the "am I in a VM" check (not recommended)
@@ -33,7 +34,9 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${TEST_AGENT_OUT:-$HOME/test-agent-out/$RUN_ID}"
-MAX_TURNS="${TEST_AGENT_MAX_TURNS:-60}"
+MAX_TURNS="${TEST_AGENT_MAX_TURNS:-120}"
+# Pinned so runs are comparable: newest Sonnet; the first runs used the CLI default, claude-sonnet-5.
+MODEL="${TEST_AGENT_MODEL:-claude-sonnet-5-5}"
 TIMEOUT_MIN="${TEST_AGENT_TIMEOUT_MIN:-45}"
 # Pinned: this version worked in the first full run. Bump it deliberately, like any dependency.
 PLAYWRIGHT_MCP_VERSION="${PLAYWRIGHT_MCP_VERSION:-0.0.86}"
@@ -182,11 +185,12 @@ sed "s|{{PLAYWRIGHT_MCP_VERSION}}|$PLAYWRIGHT_MCP_VERSION|g" "$REPO_DIR/.github/
 # The full transcript (every tool call and result) goes to agent.jsonl, one JSON object per
 # line, so the verdicts can be audited. It is not echoed to the terminal: it is text produced
 # by an agent attacking a container, so read it with `less` or `cat -v`, not by dumping it raw.
-log "running the agent (max $MAX_TURNS turns, $TIMEOUT_MIN min timeout). This takes a while; transcript: $OUT_DIR/agent.jsonl"
+log "running the agent with model $MODEL (max $MAX_TURNS turns, $TIMEOUT_MIN min timeout). This takes a while; transcript: $OUT_DIR/agent.jsonl"
 cd "$OUT_DIR"
 set +e
 timeout "${TIMEOUT_MIN}m" claude -p "$(cat prompt.md)" \
   --output-format stream-json --verbose \
+  --model "$MODEL" \
   --max-turns "$MAX_TURNS" \
   --strict-mcp-config \
   --mcp-config playwright-mcp.json \
@@ -196,6 +200,9 @@ timeout "${TIMEOUT_MIN}m" claude -p "$(cat prompt.md)" \
 agent_rc=$?
 set -e
 [ "$agent_rc" = 0 ] || warn "the agent exited with status $agent_rc (stderr: $OUT_DIR/agent.err)"
+if grep -q '"subtype":"error_max_turns"' agent.jsonl 2>/dev/null; then
+  warn "the agent ran out of turns ($MAX_TURNS) before it finished; raise TEST_AGENT_MAX_TURNS. evidence.md shows how far it got."
+fi
 
 # Session secrets are no longer needed.
 rm -f "$AUTH_HEADER_FILE" "$OUT_DIR/huddle-session.json"
