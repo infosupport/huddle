@@ -19,7 +19,7 @@
 #                               on your host and pasted into the VM (never log in on the VM).
 #                               One of the two is required. Enter it without shell history:
 #                                 read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
-#   PLAYWRIGHT_MCP_VERSION      default: latest from npm (printed; pin it once it works)
+#   PLAYWRIGHT_MCP_VERSION      default: 0.0.86 (pinned; override to try another version)
 #   TEST_AGENT_OUT              output folder (default ~/test-agent-out/<timestamp>)
 #   TEST_AGENT_MAX_TURNS        default 60
 #   TEST_AGENT_TIMEOUT_MIN      default 45
@@ -35,6 +35,8 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${TEST_AGENT_OUT:-$HOME/test-agent-out/$RUN_ID}"
 MAX_TURNS="${TEST_AGENT_MAX_TURNS:-60}"
 TIMEOUT_MIN="${TEST_AGENT_TIMEOUT_MIN:-45}"
+# Pinned: this version worked in the first full run. Bump it deliberately, like any dependency.
+PLAYWRIGHT_MCP_VERSION="${PLAYWRIGHT_MCP_VERSION:-0.0.86}"
 HUDDLE_URL="http://localhost:3000"
 TARGET="target-dc"
 BASE_IMAGE="ghcr.io/infosupport/base-devimage"
@@ -98,9 +100,7 @@ mkdir -p "$OUT_DIR"
 chmod 700 "$OUT_DIR"
 log "output folder: $OUT_DIR"
 
-PLAYWRIGHT_MCP_VERSION="${PLAYWRIGHT_MCP_VERSION:-$(npm view @playwright/mcp version 2>/dev/null || true)}"
-[ -n "$PLAYWRIGHT_MCP_VERSION" ] || die "could not determine the @playwright/mcp version; set PLAYWRIGHT_MCP_VERSION"
-log "using @playwright/mcp@$PLAYWRIGHT_MCP_VERSION (pin it with PLAYWRIGHT_MCP_VERSION once it works)"
+log "using @playwright/mcp@$PLAYWRIGHT_MCP_VERSION"
 
 # The MCP server defaults to Google Chrome, which is not installed here. Install Playwright's
 # own Chromium, with the same playwright version the MCP server depends on, and run with it.
@@ -179,19 +179,23 @@ sleep 4 # the detached post-start config (iptables, proxy, curlrc) needs a momen
 sed "s|{{REPO_DIR}}|$REPO_DIR|g" "$REPO_DIR/.github/agent/test-agent.md" >"$OUT_DIR/prompt.md"
 sed "s|{{PLAYWRIGHT_MCP_VERSION}}|$PLAYWRIGHT_MCP_VERSION|g" "$REPO_DIR/.github/agent/playwright-mcp.json" >"$OUT_DIR/playwright-mcp.json"
 
-log "running the agent (max $MAX_TURNS turns, $TIMEOUT_MIN min timeout). Transcript: $OUT_DIR/agent.log"
+# The full transcript (every tool call and result) goes to agent.jsonl, one JSON object per
+# line, so the verdicts can be audited. It is not echoed to the terminal: it is text produced
+# by an agent attacking a container, so read it with `less` or `cat -v`, not by dumping it raw.
+log "running the agent (max $MAX_TURNS turns, $TIMEOUT_MIN min timeout). This takes a while; transcript: $OUT_DIR/agent.jsonl"
 cd "$OUT_DIR"
 set +e
 timeout "${TIMEOUT_MIN}m" claude -p "$(cat prompt.md)" \
+  --output-format stream-json --verbose \
   --max-turns "$MAX_TURNS" \
   --strict-mcp-config \
   --mcp-config playwright-mcp.json \
   --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read,Write" \
   --disallowedTools "Read(//proc/**)" \
-  2>&1 | tee agent.log
-agent_rc=${PIPESTATUS[0]}
+  >agent.jsonl 2>agent.err
+agent_rc=$?
 set -e
-[ "$agent_rc" = 0 ] || warn "the agent exited with status $agent_rc"
+[ "$agent_rc" = 0 ] || warn "the agent exited with status $agent_rc (stderr: $OUT_DIR/agent.err)"
 
 # Session secrets are no longer needed.
 rm -f "$AUTH_HEADER_FILE" "$OUT_DIR/huddle-session.json"
