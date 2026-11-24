@@ -1,6 +1,6 @@
 # Test agent in CI
 
-`.github/workflows/test-agent.yml` runs the AI test agent (Huddle PDF part 2) on every pull request to `main`. It builds Huddle from the PR, starts a target devcontainer, and lets the agent attack it through the portal and from inside the container.
+`.github/workflows/test-agent.yml` runs the AI test agent (Huddle PDF part 2) on every pull request. It builds Huddle from the PR, starts a target devcontainer, and lets the agent attack it through the portal and from inside the container.
 
 | Job | Runs | Output |
 |---|---|---|
@@ -9,6 +9,14 @@
 | `report-findings` | only when there are findings | **waits for approval**, then decrypts the findings and files them as a private vulnerability report. |
 
 Details of a failed security check never appear in the PR, the Actions log or an unencrypted artifact. All three are public on a public repository.
+
+Other safeguards in the workflow:
+
+- **The judge comes from the base branch.** The agent's prompt, its MCP config and its pinned tools (`.github/agent/`) are taken from the PR's base branch, so a PR cannot edit them to pass its own test. A PR that changes `.github/agent/` is still tested with the old version. The new version takes effect once it is merged. (If the base branch has no `.github/agent/` yet, the run uses the PR's copy and shows a warning.)
+- **Pinned tools.** Actions are pinned by commit SHA. The Playwright MCP server and its dependencies are locked by `.github/agent/package-lock.json`, so Renovate can update them like any other dependency. `npm ci` runs with `--ignore-scripts`.
+- **The agent only writes its own files.** It may read the checkout and write only `evidence.md`, `report.md` and `findings.md`. Its shell access is `docker exec` into the target container only.
+- **One run per PR.** A new push cancels the run in progress, and every run updates the same PR comment.
+- **Least-privilege tokens.** The reporting App's token is limited to the repository-advisories permission and to this repository.
 
 ## Setup
 
@@ -58,10 +66,43 @@ Only runs with findings wait, which should be rare. PRs without findings never a
 
 When a run has findings, the run page shows "Review deployments" for `security-report`. Before approving, check that the PR does not change `.github/workflows/` or `.github/agent/`. If it does, read those changes first: they decide what the secrets are used for. Then approve, and the private report appears under Security > Advisories.
 
-Approve within a day. The encrypted findings artifact is kept for 1 day (`retention-days: 1`). After that, `report-findings` fails and the findings are lost. Rejecting also discards them.
+Approve within a day. The encrypted findings artifact is kept for 1 day (`retention-days: 1`). After that, `report-findings` fails and the findings are lost. Rejecting also discards them, and so does a new push to the PR, which cancels the waiting run. The new run reports again if the problem is still there.
 
 ### What it does not protect
 
 `CLAUDE_CODE_OAUTH_TOKEN` is a repository secret, because every PR run needs it. Anyone with write access can still read it from a PR. Only the reporting secrets sit behind the approval.
 
 Pull requests from forks receive no secrets at all on `pull_request`, so the agent cannot run on them. This is not solved yet.
+
+## Evidence that it works
+
+A green report only means something if the agent turns red on a real bug. Each fault below was planted in `gateway/src` and run once:
+
+| Fault | Where | Result |
+|---|---|---|
+| none (baseline) | VM (`fault-injection.sh`) and CI (`feat/test-agent` PR on the fork) | all areas PASS, no false alarm |
+| privileged-container check off | VM and CI (`demo/test-agent-fault-privileged` PR on the fork) | "Docker socket" failed. The private report named the right cause. |
+| `..` rejection off in `normalizePathname` | VM only | "Bypass attempts" failed. The findings named the right cause. |
+
+A CI run takes about 10 minutes, of which the agent itself takes about 6 to 7 minutes and 65 to 80 turns.
+
+Caveats:
+
+- Results vary from run to run: how deep the sudo check goes, and whether a 5xx was recorded. One clean run does not prove a clean boundary.
+- Findings are leads for a maintainer, not verified diagnoses.
+- Re-run the faults (`scripts/test-agent/fault-injection.sh`, or a demo PR) after any change to the prompt, the model or the setup.
+
+## Known observations (not acted on)
+
+- `DELETE /api/authz/grants/<container>` with a JSON content-type and an empty body returns 500 (the body parser's "Body cannot be empty"). Probably should be a 4xx or an accepted empty body. Seen in one VM run.
+- The gateway refuses to remove containers it did not create itself ("not created by this container"). May be by design.
+
+## Open work
+
+From the PDF, not built yet:
+
+1. **Report-only period, then a required check.** Run it on PRs for about two weeks to measure the false-alarm rate and the cost, then make it a required check in branch protection.
+2. **Nightly exploratory run.** The agent gets a budget (for example 30 minutes) to try to break the boundary freely. It runs in the private security repository, never in the public one. The PDF plans this once the scenario run is stable.
+3. **Findings become tests.** Every confirmed finding becomes a deterministic test in `gateway/test/e2e/`. A security finding gets its test in the private fix branch, together with the fix.
+
+Also open: pull requests from forks (see above). The workflow also runs on every PR, while the PDF only asks for dependency PRs, so limiting the trigger would save cost.

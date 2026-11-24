@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Local mirror of the "Test agent" GitHub Actions job (docs/test-agent-local-plan.md,
-# Huddle PDF part 2, "Running the test agent").
+# Local mirror of the "Test agent" GitHub Actions job (scripts/test-agent/README.md,
+# docs/test-agent-ci.md, Huddle PDF part 2, "Running the test agent").
 #
 # Builds a throwaway Huddle from this checkout, creates a target devcontainer through
 # it, then lets Claude Code attack it from outside (Playwright on the portal) and from
@@ -19,7 +19,6 @@
 #                               on your host and pasted into the VM (never log in on the VM).
 #                               One of the two is required. Enter it without shell history:
 #                                 read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
-#   PLAYWRIGHT_MCP_VERSION      default: 0.0.86 (pinned; override to try another version)
 #   TEST_AGENT_OUT              output folder (default ~/test-agent-out/<timestamp>)
 #   TEST_AGENT_MODEL            default claude-sonnet-5-5 (pinned; change it deliberately)
 #   TEST_AGENT_MAX_TURNS        default 120 (60 was too few once the portal scenario drives the UI)
@@ -38,8 +37,6 @@ MAX_TURNS="${TEST_AGENT_MAX_TURNS:-120}"
 # Pinned so runs are comparable: newest Sonnet; the first runs used the CLI default, claude-sonnet-5.
 MODEL="${TEST_AGENT_MODEL:-claude-sonnet-5-5}"
 TIMEOUT_MIN="${TEST_AGENT_TIMEOUT_MIN:-45}"
-# Pinned: this version worked in the first full run. Bump it deliberately, like any dependency.
-PLAYWRIGHT_MCP_VERSION="${PLAYWRIGHT_MCP_VERSION:-0.0.86}"
 HUDDLE_URL="http://localhost:3000"
 TARGET="target-dc"
 BASE_IMAGE="ghcr.io/infosupport/base-devimage"
@@ -88,7 +85,7 @@ if ! systemd-detect-virt --vm --quiet 2>/dev/null; then
   [ "${TEST_AGENT_ALLOW_BARE_METAL:-}" = 1 ] \
     || die "this does not look like a virtual machine. Run it in the disposable VM, or set TEST_AGENT_ALLOW_BARE_METAL=1 if you know what you are doing."
 fi
-for cmd in docker node npm npx openssl curl claude timeout; do
+for cmd in docker node npm openssl curl claude timeout; do
   command -v "$cmd" >/dev/null || die "missing command: $cmd"
 done
 docker info >/dev/null 2>&1 || die "cannot talk to Docker (is your user in the docker group?)"
@@ -103,15 +100,14 @@ mkdir -p "$OUT_DIR"
 chmod 700 "$OUT_DIR"
 log "output folder: $OUT_DIR"
 
-log "using @playwright/mcp@$PLAYWRIGHT_MCP_VERSION"
-
-# The MCP server defaults to Google Chrome, which is not installed here. Install Playwright's
-# own Chromium, with the same playwright version the MCP server depends on, and run with it.
-PW_VERSION="$(npm view "@playwright/mcp@$PLAYWRIGHT_MCP_VERSION" dependencies.playwright 2>/dev/null || true)"
-[ -n "$PW_VERSION" ] || die "could not find which playwright version @playwright/mcp@$PLAYWRIGHT_MCP_VERSION uses"
-log "installing Chromium for playwright@$PW_VERSION (first run only; log: $OUT_DIR/browser-install.log)"
-npx -y "playwright@$PW_VERSION" install chromium >"$OUT_DIR/browser-install.log" 2>&1 \
-  || die "browser install failed, see $OUT_DIR/browser-install.log. If system libraries are missing, run once: sudo npx -y playwright@$PW_VERSION install-deps chromium"
+# The Playwright MCP server and its playwright are pinned by .github/agent/package-lock.json,
+# like in CI. The server defaults to Google Chrome, which is not installed here, so install
+# Playwright's own Chromium with that same playwright version.
+PLAYWRIGHT="$REPO_DIR/.github/agent/node_modules/.bin/playwright"
+log "installing the pinned Playwright MCP server and Chromium (log: $OUT_DIR/browser-install.log)"
+{ npm ci --ignore-scripts --no-audit --no-fund --prefix "$REPO_DIR/.github/agent" && "$PLAYWRIGHT" install chromium; } \
+  >"$OUT_DIR/browser-install.log" 2>&1 \
+  || die "install failed, see $OUT_DIR/browser-install.log. If system libraries are missing, run once: sudo $PLAYWRIGHT install-deps chromium"
 
 trap cleanup EXIT INT TERM
 CREATED=1
@@ -180,7 +176,8 @@ sleep 4 # the detached post-start config (iptables, proxy, curlrc) needs a momen
 
 # ── Run the agent ───────────────────────────────────────────────────────────
 sed "s|{{REPO_DIR}}|$REPO_DIR|g" "$REPO_DIR/.github/agent/test-agent.md" >"$OUT_DIR/prompt.md"
-sed "s|{{PLAYWRIGHT_MCP_VERSION}}|$PLAYWRIGHT_MCP_VERSION|g" "$REPO_DIR/.github/agent/playwright-mcp.json" >"$OUT_DIR/playwright-mcp.json"
+# The config points at the server relative to the repo root; the agent runs in $OUT_DIR.
+sed "s|\.github/agent/node_modules|$REPO_DIR/.github/agent/node_modules|g" "$REPO_DIR/.github/agent/playwright-mcp.json" >"$OUT_DIR/playwright-mcp.json"
 
 # The full transcript (every tool call and result) goes to agent.jsonl, one JSON object per
 # line, so the verdicts can be audited. It is not echoed to the terminal: it is text produced

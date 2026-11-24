@@ -9,8 +9,12 @@ name: Test agent
 
 on:
   pull_request:
-    branches: [main]
   workflow_dispatch:
+
+# A new push to a PR cancels its run in progress: only the latest commit is tested.
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   # The only report lines that may be made public.
@@ -30,17 +34,33 @@ jobs:
         with:
           persist-credentials: false
 
+      # The agent's prompt and tools come from the base branch, so a PR cannot weaken the
+      # test that judges it. A PR that changes them is tested with the old ones.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.base_ref || github.ref }}
+          path: base
+          sparse-checkout: .github/agent
+          persist-credentials: false
+
       - name: Start Huddle and the target devcontainer
         run: |
+          if [ -f base/.github/agent/test-agent.md ]; then
+            rm -rf .github/agent && mv base/.github/agent .github/agent
+          else
+            echo "::warning::.github/agent is not on the base branch yet, so this run uses the PR's copy."
+          fi
+          rm -rf base
           export HUDDLE_OPERATOR_TOKEN=$(openssl rand -hex 32); echo "::add-mask::$HUDDLE_OPERATOR_TOKEN"
           docker build -q -t huddle:pr gateway
           docker pull -q ghcr.io/infosupport/base-devimage-vscode
-          npm ci --prefix cli && npm run build --prefix cli
+          npm ci --ignore-scripts --prefix cli && npm run build --prefix cli
           HUDDLE_IMAGE=huddle:pr HUDDLE_NO_PULL=1 node cli/dist/index.js init
           until node cli/dist/index.js start --ide vscode --empty --name target-dc; do sleep 3; done
           echo "{\"cookies\":[{\"name\":\"huddle_session\",\"value\":\"$HUDDLE_OPERATOR_TOKEN\",\"domain\":\"localhost\",\"path\":\"/\",\"expires\":-1,\"httpOnly\":true,\"secure\":false,\"sameSite\":\"Strict\"}],\"origins\":[]}" > huddle-session.json
-          MCP=$(jq -r '.mcpServers.playwright.args[1]' .github/agent/playwright-mcp.json)
-          npx -y "playwright@$(npm view "$MCP" dependencies.playwright)" install --with-deps chromium
+          # The Playwright MCP server and its dependencies, locked by .github/agent/package-lock.json.
+          npm ci --ignore-scripts --prefix .github/agent
+          .github/agent/node_modules/.bin/playwright install --with-deps chromium
 
       - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
@@ -91,6 +111,8 @@ jobs:
         with:
           name: findings
 
+      # Only the permission the report needs. The action has no declared input for it, but
+      # passes every permission-* input on to GitHub (expect an "Unexpected input" warning).
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: app-token
         with:
@@ -98,6 +120,7 @@ jobs:
           private-key: ${{ secrets.SECURITY_REPORT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-repository-advisories: write
 
       - name: Report findings privately
         env:
@@ -118,6 +141,7 @@ jobs:
       pull-requests: write
     steps:
       # Filtered again on this clean runner, in case the agent's runner was tampered with.
+      # One comment per PR, updated by every run.
       - name: Post the public report
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,4 +150,4 @@ jobs:
         run: |
           printf '%s\n' "$REPORT" | grep -xE "$REPORT_LINES" > public.md || echo "The test agent wrote no valid report." > public.md
           tee -a "$GITHUB_STEP_SUMMARY" < public.md
-          if [ -n "$PR_NUMBER" ]; then gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body-file public.md; fi
+          if [ -n "$PR_NUMBER" ]; then gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body-file public.md --edit-last --create-if-none; fi
