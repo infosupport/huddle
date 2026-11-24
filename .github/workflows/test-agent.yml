@@ -1,9 +1,9 @@
 name: Test agent
 # AI test agent (Huddle PDF part 2): attacks a throwaway Huddle built from the PR.
-# Private findings are encrypted before leaving the agent job.
-# Secrets: ANTHROPIC_API_KEY, SECURITY_REPORT_AGE_IDENTITY,
-# SECURITY_REPORT_APP_PRIVATE_KEY. Variables: SECURITY_REPORT_AGE_RECIPIENT,
-# SECURITY_REPORT_APP_CLIENT_ID.
+# Public output is only the pass/fail line per area. Findings are encrypted before they
+# leave the agent's runner, and filed as a private vulnerability report by a separate job.
+# Secrets: ANTHROPIC_API_KEY, SECURITY_REPORT_AGE_IDENTITY, SECURITY_REPORT_APP_PRIVATE_KEY.
+# Variables: SECURITY_REPORT_AGE_RECIPIENT, SECURITY_REPORT_APP_CLIENT_ID.
 
 on:
   pull_request:
@@ -13,12 +13,12 @@ on:
 jobs:
   test-agent:
     runs-on: ubuntu-latest
-    continue-on-error: true   # report-only for the first two weeks
     timeout-minutes: 60
     permissions:
       contents: read
     outputs:
-      has_output: ${{ steps.output.outputs.present }}
+      report: ${{ steps.result.outputs.report }}
+      findings: ${{ steps.result.outputs.findings }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,96 +48,71 @@ jobs:
             --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read,Write"
             --disallowedTools "Read(//proc/**)"
 
-      - name: Check for agent output
-        id: output
+      # report.md is agent output: keep only lines in the exact allowed format. Findings are
+      # encrypted, because artifacts of a public repo can be downloaded by anyone.
+      - name: Check the report and encrypt the findings
+        id: result
         if: always()
-        run: |
-          if [ -f findings.md ] || [ -f report.md ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Encrypt agent output for the reporting job
-        if: always() && steps.output.outputs.present == 'true'
         env:
           AGE_RECIPIENT: ${{ vars.SECURITY_REPORT_AGE_RECIPIENT }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y age
-          files=()
-          [ ! -f findings.md ] || files+=(findings.md)
-          [ ! -f report.md ] || files+=(report.md)
-          tar -czf agent-output.tar.gz -- "${files[@]}"
-          age -r "$AGE_RECIPIENT" -o agent-output.tar.gz.age agent-output.tar.gz
-          rm -f findings.md report.md agent-output.tar.gz
+          grep -xE '(Firewall|HTTPS interception|Bypass attempts|Docker socket|Sudo|Portal): (PASS|UNCLEAR|security check failed, details sent to maintainers)|Portal: FAIL - [A-Za-z0-9 .,()-]{1,100}' \
+            report.md > public.md || echo "The test agent wrote no valid report." > public.md
+          { echo 'report<<EOF'; cat public.md; echo EOF; } >> "$GITHUB_OUTPUT"
+          if [ -f findings.md ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq age
+            age -r "$AGE_RECIPIENT" -o findings.md.age findings.md && rm findings.md
+            echo "findings=true" >> "$GITHUB_OUTPUT"
+          fi
+          [ "$(wc -l < public.md)" = 6 ] && ! grep -qE 'failed|FAIL' public.md
 
-      - name: Upload encrypted output
-        if: always() && steps.output.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.result.outputs.findings == 'true'
         with:
-          name: encrypted-agent-output
-          path: agent-output.tar.gz.age
-          if-no-files-found: error
+          name: findings
+          path: findings.md.age
           retention-days: 1
 
+  # A fresh runner: nothing the agent left behind can reach the reporting credentials.
   report:
     needs: test-agent
-    if: always() && needs.test-agent.outputs.has_output == 'true'
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: Download encrypted output
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.test-agent.outputs.findings == 'true'
         with:
-          name: encrypted-agent-output
+          name: findings
 
-      - name: Decrypt agent output
-        env:
-          AGE_IDENTITY: ${{ secrets.SECURITY_REPORT_AGE_IDENTITY }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y age
-          printf '%s\n' "$AGE_IDENTITY" > age-identity.txt
-          age -d -i age-identity.txt -o agent-output.tar.gz agent-output.tar.gz.age
-          tar -xzf agent-output.tar.gz
-          rm -f age-identity.txt agent-output.tar.gz agent-output.tar.gz.age
-
-      - name: Create short-lived GitHub App token
-        if: hashFiles('findings.md') != ''
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        if: needs.test-agent.outputs.findings == 'true'
         id: app-token
-        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # V3.4.0
         with:
           client-id: ${{ vars.SECURITY_REPORT_APP_CLIENT_ID }}
           private-key: ${{ secrets.SECURITY_REPORT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: huddle
+          repositories: ${{ github.event.repository.name }}
 
       - name: Report findings privately
-        if: hashFiles('findings.md') != ''
+        if: needs.test-agent.outputs.findings == 'true'
         env:
+          AGE_IDENTITY: ${{ secrets.SECURITY_REPORT_AGE_IDENTITY }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          jq -n --rawfile d findings.md \
-            --arg s "Test agent finding, run ${{ github.run_id }}" \
-            '{summary: $s, description: $d}' \
-            | gh api --method POST \
-                "repos/${{ github.repository }}/security-advisories/reports" \
-                --input -
-          rm -f findings.md
+          set -o pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq age
+          age -d -i <(printf '%s\n' "$AGE_IDENTITY") findings.md.age \
+            | jq -Rs --arg s "Test agent finding, run ${{ github.run_id }}" '{summary: $s, description: .}' \
+            | gh api --method POST "repos/${{ github.repository }}/security-advisories/reports" --input - >/dev/null
 
       - name: Post the public report
-        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ needs.test-agent.outputs.report || 'The test agent wrote no report.' }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          grep -xE '(Firewall|HTTPS interception|Bypass attempts|Docker socket|Sudo|Portal): (PASS|UNCLEAR|security check failed, details sent to maintainers)|Portal: FAIL - [A-Za-z0-9 .,()-]{1,100}' \
-            report.md > public.md || echo "The test agent wrote no valid report." > public.md
-          cat public.md | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            gh pr comment "$PR_NUMBER" --body-file public.md
-          fi
-          [ "$(wc -l < public.md)" = 6 ] && ! grep -qE 'failed|FAIL' public.md
+          printf '%s\n' "$REPORT" | tee -a "$GITHUB_STEP_SUMMARY" > public.md
+          if [ -n "$PR_NUMBER" ]; then gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body-file public.md; fi
