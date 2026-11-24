@@ -2,7 +2,14 @@
 
 An AI agent that attacks a throwaway Huddle the way an operator or attacker would, then reports pass/fail per area. The agent's instructions are in `.github/agent/test-agent.md`; these scripts run it.
 
-**Run them only in the disposable Linux VM**, never on your own PC. The scripts start Docker containers and give an AI agent a shell, so the VM is the isolation boundary.
+**Run them only in the disposable Linux VM**, never on your own PC. The scripts start Docker containers and give an AI agent a shell, so the VM is the isolation boundary, like the throwaway runner in CI (`docs/test-agent-ci.md`). Keep the VM isolated:
+
+- No shared folders, clipboard sharing or Enhanced Session with your PC. Reach it over SSH without agent or X11 forwarding.
+- No credentials that can push to GitHub or reach anything else, and no real work login. Create the Claude token with `claude setup-token` on your PC, and enter it in the VM with `read -rs`.
+- Take a checkpoint of the clean VM, and restore it after a run you do not trust.
+- Read agent output with `less` or `cat -v`, not by letting the terminal interpret it.
+
+`run.sh` refuses to run outside a VM (`systemd-detect-virt --vm`).
 
 ## `run.sh` — run the test agent once
 

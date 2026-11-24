@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "playwright": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "@playwright/mcp@0.0.86",
+        ".github/agent/node_modules/@playwright/mcp/cli.js",
         "--browser",
         "chromium",
         "--headless",
