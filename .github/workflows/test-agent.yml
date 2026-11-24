@@ -2,13 +2,18 @@ name: Test agent
 # AI test agent (Huddle PDF part 2): attacks a throwaway Huddle built from the PR.
 # Public output is only the pass/fail line per area. Findings are encrypted before they
 # leave the agent's runner, and filed as a private vulnerability report by a separate job.
-# Secrets: ANTHROPIC_API_KEY, SECURITY_REPORT_AGE_IDENTITY, SECURITY_REPORT_APP_PRIVATE_KEY.
+# Secrets: ANTHROPIC_API_KEY (a dedicated, spend-limited key). In the "security-report"
+# environment, with required reviewers: SECURITY_REPORT_AGE_IDENTITY, SECURITY_REPORT_APP_PRIVATE_KEY.
 # Variables: SECURITY_REPORT_AGE_RECIPIENT, SECURITY_REPORT_APP_CLIENT_ID.
 
 on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+env:
+  # The only report lines that may be made public.
+  REPORT_LINES: '(Firewall|HTTPS interception|Bypass attempts|Docker socket|Sudo|Portal): (PASS|UNCLEAR|security check failed, details sent to maintainers)|Portal: FAIL - [A-Za-z0-9 .,()-]{1,100}'
 
 jobs:
   test-agent:
@@ -45,7 +50,7 @@ jobs:
             --model claude-sonnet-5-5
             --max-turns 120
             --mcp-config .github/agent/playwright-mcp.json
-            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read,Write"
+            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./**),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)"
             --disallowedTools "Read(//proc/**)"
 
       # report.md is agent output: keep only lines in the exact allowed format. Findings are
@@ -56,8 +61,7 @@ jobs:
         env:
           AGE_RECIPIENT: ${{ vars.SECURITY_REPORT_AGE_RECIPIENT }}
         run: |
-          grep -xE '(Firewall|HTTPS interception|Bypass attempts|Docker socket|Sudo|Portal): (PASS|UNCLEAR|security check failed, details sent to maintainers)|Portal: FAIL - [A-Za-z0-9 .,()-]{1,100}' \
-            report.md > public.md || echo "The test agent wrote no valid report." > public.md
+          grep -xE "$REPORT_LINES" report.md > public.md || echo "The test agent wrote no valid report." > public.md
           { echo 'report<<EOF'; cat public.md; echo EOF; } >> "$GITHUB_OUTPUT"
           if [ -f findings.md ]; then
             sudo apt-get update -qq && sudo apt-get install -y -qq age
@@ -73,22 +77,20 @@ jobs:
           path: findings.md.age
           retention-days: 1
 
-  # A fresh runner: nothing the agent left behind can reach the reporting credentials.
-  report:
+  # A fresh runner: nothing the agent left behind can reach the reporting credentials. The
+  # environment's reviewers approve before its secrets are released to a PR's run.
+  report-findings:
     needs: test-agent
-    if: always()
+    if: always() && needs.test-agent.outputs.findings == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
+    environment: security-report
+    permissions: {}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: needs.test-agent.outputs.findings == 'true'
         with:
           name: findings
 
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
-        if: needs.test-agent.outputs.findings == 'true'
         id: app-token
         with:
           client-id: ${{ vars.SECURITY_REPORT_APP_CLIENT_ID }}
@@ -97,7 +99,6 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Report findings privately
-        if: needs.test-agent.outputs.findings == 'true'
         env:
           AGE_IDENTITY: ${{ secrets.SECURITY_REPORT_AGE_IDENTITY }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -108,11 +109,20 @@ jobs:
             | jq -Rs --arg s "Test agent finding, run ${{ github.run_id }}" '{summary: $s, description: .}' \
             | gh api --method POST "repos/${{ github.repository }}/security-advisories/reports" --input - >/dev/null
 
+  report:
+    needs: test-agent
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # Filtered again on this clean runner, in case the agent's runner was tampered with.
       - name: Post the public report
         env:
           GH_TOKEN: ${{ github.token }}
-          REPORT: ${{ needs.test-agent.outputs.report || 'The test agent wrote no report.' }}
+          REPORT: ${{ needs.test-agent.outputs.report }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          printf '%s\n' "$REPORT" | tee -a "$GITHUB_STEP_SUMMARY" > public.md
+          printf '%s\n' "$REPORT" | grep -xE "$REPORT_LINES" > public.md || echo "The test agent wrote no valid report." > public.md
+          tee -a "$GITHUB_STEP_SUMMARY" < public.md
           if [ -n "$PR_NUMBER" ]; then gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body-file public.md; fi
