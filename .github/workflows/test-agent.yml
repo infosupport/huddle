@@ -2,7 +2,7 @@ name: Test agent
 # AI test agent (Huddle PDF part 2): attacks a throwaway Huddle built from the PR.
 # Public output is only the pass/fail line per area. Findings are encrypted before they
 # leave the agent's runner, and filed as a private vulnerability report by a separate job.
-# Secrets: ANTHROPIC_API_KEY (a dedicated, spend-limited key). In the "security-report"
+# Secrets: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`). In the "security-report"
 # environment, with required reviewers: SECURITY_REPORT_AGE_IDENTITY, SECURITY_REPORT_APP_PRIVATE_KEY.
 # Variables: SECURITY_REPORT_AGE_RECIPIENT, SECURITY_REPORT_APP_CLIENT_ID.
 
@@ -43,7 +43,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           prompt: Follow the instructions in .github/agent/test-agent.md. The REPO_DIR placeholder in it means your working directory.
           claude_args: >-
