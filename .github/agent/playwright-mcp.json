@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "node",
+      "args": [
+        ".github/agent/node_modules/@playwright/mcp/cli.js",
+        "--browser",
+        "chromium",
+        "--headless",
+        "--no-sandbox",
+        "--isolated",
+        "--storage-state",
+        "huddle-session.json"
+      ]
+    }
+  }
+}
