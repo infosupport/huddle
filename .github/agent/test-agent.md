@@ -50,7 +50,7 @@ Write these files in your working directory:
   - `<Area>: PASS`
   - `<Area>: UNCLEAR`
   - for a failed security area (every area except Portal): `<Area>: security check failed, details sent to maintainers`
-  - for a failed Portal check: `Portal: FAIL - <short, non-sensitive reason>`
+  - for a failed Portal check: `Portal: FAIL - <short, non-sensitive reason>`. The reason is at most 100 characters and uses only letters, digits, spaces and `. , ( ) -`. A line in any other format is dropped from the PR comment.
 - `findings.md`: only when a security area failed or is UNCLEAR. It is filed as a private security report for the maintainers. Start each area with a heading `## FAILED: <Area>` or `## UNCLEAR: <Area>`, failed areas first. For a failed area, give the scenario, the exact command, the observed and expected result, and why it matters. For an UNCLEAR area, say what could not be verified and why (for example a command that was blocked). Do not create this file when every security area passed.
 
 ## Never

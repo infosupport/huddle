@@ -123,6 +123,7 @@ Caveats:
 ## Known observations (not acted on)
 
 - `DELETE /api/authz/grants/<container>` with a JSON content-type and an empty body returns 500 (the body parser's "Body cannot be empty"). Probably should be a 4xx or an accepted empty body. Seen in one VM run.
+- `DELETE /api/rules/<id>` returned 500 once for a valid request, right after the rule had been approved and used; the identical retry returned 200. Seen in one CI run.
 - The gateway refuses to remove containers it did not create itself ("not created by this container"). May be by design.
 - In CI, Claude Code ran in auto mode, where a safety classifier judges every command. It blocked a POST with `secretbody=…`, and later `docker run --privileged`, which left those areas UNCLEAR (the second time hiding a planted bug). The agent now runs with `--permission-mode default`, so only the tool allowlist decides. The prompt also asks for neutral test data.
 - Two CI runs ended normally without writing `report.md`. The cause is unknown. The `debug` artifact now keeps the transcript, so the next time it can be traced.
