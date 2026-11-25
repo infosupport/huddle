@@ -90,16 +90,18 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
-          prompt: Follow the instructions in .github/agent/test-agent.md. The REPO_DIR placeholder in it means your working directory.
+          prompt: Follow the instructions in ${{ github.workspace }}/.github/agent/test-agent.md. The REPO_DIR placeholder in it, and your working directory, is ${{ github.workspace }}. Write evidence.md, report.md and findings.md there, by absolute path.
           # Permission mode "default": only the allowlist below decides, anything else is denied.
           # Auto mode adds a safety classifier that blocks the very attacks the agent must try
           # (for example `docker run --privileged`), which left scenarios UNCLEAR.
+          # File rules use absolute paths: a `cd` by the agent changes what `./` means, which
+          # once made its own output files unwritable.
           claude_args: >-
             --permission-mode default
             --model claude-sonnet-5-5
             --max-turns 120
             --mcp-config ${{ runner.temp }}/playwright-mcp.json
-            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./.github/agent/test-agent.md),Read(./gateway/test/e2e/**),Read(./evidence.md),Read(./report.md),Read(./findings.md),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)"
+            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(/${{ github.workspace }}/.github/agent/test-agent.md),Read(/${{ github.workspace }}/gateway/test/e2e/**),Read(/${{ github.workspace }}/evidence.md),Read(/${{ github.workspace }}/report.md),Read(/${{ github.workspace }}/findings.md),Edit(/${{ github.workspace }}/evidence.md),Edit(/${{ github.workspace }}/report.md),Edit(/${{ github.workspace }}/findings.md)"
             --disallowedTools "Read(//proc/**),Read(/${{ runner.temp }}/**)"
 
       # report.md is agent output: keep only lines in the exact allowed format. Findings and the

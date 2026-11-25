@@ -98,6 +98,7 @@ if docker inspect huddle >/dev/null 2>&1 || docker inspect "$TARGET" >/dev/null 
 fi
 
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)" # absolute, for the agent's file rules
 chmod 700 "$OUT_DIR"
 log "output folder: $OUT_DIR"
 
@@ -198,7 +199,7 @@ timeout "${TIMEOUT_MIN}m" claude -p "$(cat prompt.md)" \
   --max-turns "$MAX_TURNS" \
   --strict-mcp-config \
   --mcp-config playwright-mcp.json \
-  --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./**),Read(/$REPO_DIR/gateway/test/e2e/**),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)" \
+  --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(/$OUT_DIR/**),Read(/$REPO_DIR/gateway/test/e2e/**),Edit(/$OUT_DIR/evidence.md),Edit(/$OUT_DIR/report.md),Edit(/$OUT_DIR/findings.md)" \
   --disallowedTools "Read(//proc/**),Read(/$SECRET_DIR/**)" \
   >agent.jsonl 2>agent.err
 agent_rc=$?
