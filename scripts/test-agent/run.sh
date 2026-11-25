@@ -58,6 +58,7 @@ remove_resources() {
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
+  [ -n "${SECRET_DIR:-}" ] && rm -rf "$SECRET_DIR"
   if [ "$CREATED" = 1 ]; then
     # Huddle's log holds the proxy/network log of the run (the PDF attaches it to the PR).
     docker logs huddle >"$OUT_DIR/huddle.log" 2>&1 || true
@@ -130,11 +131,13 @@ ensure_image "$IDE_IMAGE"  base-devimage-vscode/Dockerfile
 
 # ── Start the throwaway Huddle (same as the CI "Start Huddle" step) ─────────
 TOKEN="$(openssl rand -hex 24)"
-# Keep the token out of `ps` and out of the agent: a 0600 header file for curl, and a
-# browser session file for Playwright. The agent never sees the token itself.
-AUTH_HEADER_FILE="$OUT_DIR/.auth-header"
+# Keep the token out of `ps` and out of the agent: a header file for curl and a browser
+# session file for Playwright, in a private folder outside the agent's working directory.
+SECRET_DIR="$(mktemp -d)"
+AUTH_HEADER_FILE="$SECRET_DIR/auth-header"
+SESSION_FILE="$SECRET_DIR/huddle-session.json"
 ( umask 077; printf 'Authorization: Bearer %s\n' "$TOKEN" >"$AUTH_HEADER_FILE" )
-( umask 077; cat >"$OUT_DIR/huddle-session.json" <<EOF
+( umask 077; cat >"$SESSION_FILE" <<EOF
 {"cookies":[{"name":"huddle_session","value":"$TOKEN","domain":"localhost","path":"/","expires":-1,"httpOnly":true,"secure":false,"sameSite":"Strict"}],"origins":[]}
 EOF
 )
@@ -176,8 +179,12 @@ sleep 4 # the detached post-start config (iptables, proxy, curlrc) needs a momen
 
 # ── Run the agent ───────────────────────────────────────────────────────────
 sed "s|{{REPO_DIR}}|$REPO_DIR|g" "$REPO_DIR/.github/agent/test-agent.md" >"$OUT_DIR/prompt.md"
-# The config points at the server relative to the repo root; the agent runs in $OUT_DIR.
-sed "s|\.github/agent/node_modules|$REPO_DIR/.github/agent/node_modules|g" "$REPO_DIR/.github/agent/playwright-mcp.json" >"$OUT_DIR/playwright-mcp.json"
+# The config points at the server relative to the repo root (the agent runs in $OUT_DIR) and
+# at the session file by name; make both absolute.
+sed -e "s|\.github/agent/node_modules|$REPO_DIR/.github/agent/node_modules|g" \
+    -e "s|\"huddle-session.json\"|\"$SESSION_FILE\"|" \
+    "$REPO_DIR/.github/agent/playwright-mcp.json" >"$OUT_DIR/playwright-mcp.json"
+grep -qF "$SESSION_FILE" "$OUT_DIR/playwright-mcp.json" || die "could not point the MCP config at the session file"
 
 # The full transcript (every tool call and result) goes to agent.jsonl, one JSON object per
 # line, so the verdicts can be audited. It is not echoed to the terminal: it is text produced
@@ -191,8 +198,8 @@ timeout "${TIMEOUT_MIN}m" claude -p "$(cat prompt.md)" \
   --max-turns "$MAX_TURNS" \
   --strict-mcp-config \
   --mcp-config playwright-mcp.json \
-  --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read,Write" \
-  --disallowedTools "Read(//proc/**)" \
+  --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./**),Read(/$REPO_DIR/gateway/test/e2e/**),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)" \
+  --disallowedTools "Read(//proc/**),Read(/$SECRET_DIR/**)" \
   >agent.jsonl 2>agent.err
 agent_rc=$?
 set -e
@@ -202,7 +209,7 @@ if grep -q '"subtype":"error_max_turns"' agent.jsonl 2>/dev/null; then
 fi
 
 # Session secrets are no longer needed.
-rm -f "$AUTH_HEADER_FILE" "$OUT_DIR/huddle-session.json"
+rm -rf "$SECRET_DIR"
 
 # Anything the agent wrote besides its three output files (the prompt forbids helper
 # scripts). Only reported, never deleted: read them, then remove them by hand if you want.
