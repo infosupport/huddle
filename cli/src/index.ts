@@ -184,6 +184,9 @@ Update-agent options:
                                      pushing or commenting
   --keep                             Keep the agent container and its folder
                                      (~/.huddle/update-agent) for inspection
+  --skip-majors                      Skip PRs Renovate labelled 'major'
+  --out <dir>                        Write each run's network log to <dir>
+                                     (pr-<n>-network.json)
 
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
@@ -391,6 +394,8 @@ async function main(): Promise<void> {
       pr: positional[1] !== undefined ? parseIssueNumber(positional[1]) : undefined,
       dryRun: flagBool(flags, 'dry-run'),
       keep: flagBool(flags, 'keep'),
+      skipMajors: flagBool(flags, 'skip-majors'),
+      out: flagString(flags, 'out'),
       runtime: flagString(flags, 'runtime'),
     });
     return;
