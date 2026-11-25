@@ -90,6 +90,17 @@ Approve within a day. The encrypted findings artifact is kept for 1 day (`retent
 
 Pull requests from forks receive no secrets at all on `pull_request`, so the agent cannot run on them. This is not solved yet.
 
+## Debugging a run
+
+Every run uploads a `debug` artifact, kept for 7 days. It holds the agent's full transcript (every tool call and result), plus its raw `report.md` and `evidence.md`. It is encrypted with the same age key as the findings, because it can contain bypass details. To read it, use the private key (`SECURITY_REPORT_AGE_IDENTITY`):
+
+```bash
+gh run download <run-id> -n debug
+age -d -i security-report.agekey debug.tar.gz.age | tar -xz
+```
+
+Read the transcript with `less` or `jq`, not by printing it raw to a terminal: it is text produced by an agent attacking a container.
+
 ## Evidence that it works
 
 A green report only means something if the agent turns red on a real bug. Each fault below was planted in `gateway/src` and run once:
@@ -113,7 +124,7 @@ Caveats:
 - `DELETE /api/authz/grants/<container>` with a JSON content-type and an empty body returns 500 (the body parser's "Body cannot be empty"). Probably should be a 4xx or an accepted empty body. Seen in one VM run.
 - The gateway refuses to remove containers it did not create itself ("not created by this container"). May be by design.
 - In CI, Claude Code's safety classifier blocked a test command that POSTed `secretbody=…` to an outside host, which left Firewall and HTTPS interception UNCLEAR. The prompt now asks for neutral test data.
-- One CI run ended normally without writing `report.md`. The cause is unknown, because the agent's transcript and `evidence.md` are not kept after the run.
+- Two CI runs ended normally without writing `report.md`. The cause is unknown. The `debug` artifact now keeps the transcript, so the next time it can be traced.
 
 ## Open work
 

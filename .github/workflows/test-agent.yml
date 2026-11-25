@@ -77,6 +77,7 @@ jobs:
           grep -qF "$RUNNER_TEMP/huddle-session.json" "$RUNNER_TEMP/playwright-mcp.json"
 
       - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
+        id: agent
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
@@ -88,21 +89,27 @@ jobs:
             --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./.github/agent/test-agent.md),Read(./gateway/test/e2e/**),Read(./evidence.md),Read(./report.md),Read(./findings.md),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)"
             --disallowedTools "Read(//proc/**),Read(/${{ runner.temp }}/**)"
 
-      # report.md is agent output: keep only lines in the exact allowed format. Findings are
-      # encrypted, because artifacts of a public repo can be downloaded by anyone.
+      # report.md is agent output: keep only lines in the exact allowed format. Findings and the
+      # debug bundle are encrypted, because artifacts of a public repo can be downloaded by anyone.
       - name: Check the report and encrypt the findings
         id: result
         if: always()
         env:
           AGE_RECIPIENT: ${{ vars.SECURITY_REPORT_AGE_RECIPIENT }}
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
         run: |
           grep -xE "$REPORT_LINES" report.md > public.md || echo "The test agent wrote no valid report." > public.md
           { echo 'report<<EOF'; cat public.md; echo EOF; } >> "$GITHUB_OUTPUT"
+          sudo apt-get update -qq && sudo apt-get install -y -qq age
           if [ -f findings.md ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq age
             age -r "$AGE_RECIPIENT" -o findings.md.age findings.md && rm findings.md
             echo "findings=true" >> "$GITHUB_OUTPUT"
           fi
+          # Debug bundle for maintainers: the agent's full transcript, its raw report and evidence.
+          mkdir debug
+          cp "${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}" debug/transcript.json 2>/dev/null || true
+          cp evidence.md report.md debug/ 2>/dev/null || true
+          tar -czf - debug | age -r "$AGE_RECIPIENT" -o debug.tar.gz.age && rm -rf debug
           # Green only when all six areas PASS: a failed or UNCLEAR (untested) area turns it red.
           [ "$(grep -c ': PASS$' public.md)" = 6 ]
 
@@ -112,6 +119,14 @@ jobs:
           name: findings
           path: findings.md.age
           retention-days: 1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: debug
+          path: debug.tar.gz.age
+          retention-days: 7
+          if-no-files-found: ignore
 
   # A fresh runner: nothing the agent left behind can reach the reporting credentials. The
   # environment's reviewers approve before its secrets are released to a PR's run.
