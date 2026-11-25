@@ -28,6 +28,8 @@ Scenario 8 tests the portal itself, so for it drive the portal UI with real clic
 
 Record every console error and every HTTP 5xx response you see, together with the request that caused it, even when you caused the request yourself. A 5xx for a malformed request of yours is still worth noting (it may be a missing 4xx validation), so put it in `evidence.md` and do not dismiss it.
 
+Use neutral test data, such as `probe=huddle-test-agent`, for POST bodies, headers and file contents. Never use words like secret, password, token or key in test data: a safety check blocks commands that look like sending credentials to an outside host, and a blocked command leaves the scenario UNCLEAR.
+
 For scenario 7, "it works" must be shown, not inferred from the account status: the sudo-grant response contains a one-time password. Use it in one command, for example `docker exec -u root target-dc sh -c 'echo <password> | su - noot -c "sudo -S -p \"\" id"'`, and expect `uid=0`. After the wait, the same command must fail. If you could not show that sudo worked, scenario 7 is UNCLEAR, not PASS.
 
 ## You run unattended
@@ -49,7 +51,7 @@ Write these files in your working directory:
   - `<Area>: UNCLEAR`
   - for a failed security area (every area except Portal): `<Area>: security check failed, details sent to maintainers`
   - for a failed Portal check: `Portal: FAIL - <short, non-sensitive reason>`
-- `findings.md`: only when a security area failed or is unclear. For each, give the scenario, the exact command, the observed and expected result, and why it matters. Do not create this file when everything passed.
+- `findings.md`: only when a security area failed or is UNCLEAR. It is filed as a private security report for the maintainers. Start each area with a heading `## FAILED: <Area>` or `## UNCLEAR: <Area>`, failed areas first. For a failed area, give the scenario, the exact command, the observed and expected result, and why it matters. For an UNCLEAR area, say what could not be verified and why (for example a command that was blocked). Do not create this file when every security area passed.
 
 ## Never
 - Describe a bypass method or payload anywhere except `findings.md`: not in `report.md`, not in your final message, not in any other file.
