@@ -12,9 +12,10 @@ Details of a failed security check never appear in the PR, the Actions log or an
 
 Other safeguards in the workflow:
 
-- **The judge comes from the base branch.** The agent's prompt, its MCP config and its pinned tools (`.github/agent/`) are taken from the PR's base branch, so a PR cannot edit them to pass its own test. A PR that changes `.github/agent/` is still tested with the old version. The new version takes effect once it is merged. (If the base branch has no `.github/agent/` yet, the run uses the PR's copy and shows a warning.)
+- **The judge comes from the base branch.** The agent's prompt, its MCP config and its pinned tools (`.github/agent/`) are taken from the PR's base branch, so a PR cannot edit them to pass its own test. A PR that changes `.github/agent/` is still tested with the old version. The new version takes effect once it is merged. (If the base branch has no `.github/agent/` yet, the run uses the PR's copy and shows a warning.) The files are installed after the PR's own build steps, so a changed build script cannot overwrite them. This guards against simple tampering, not against a determined attacker: the PR's code runs on the same runner (the Huddle container even gets the Docker socket), and someone with write access can edit the workflow itself. Requiring review of `.github/` changes, for example with CODEOWNERS, closes that.
 - **Pinned tools.** Actions are pinned by commit SHA. The Playwright MCP server and its dependencies are locked by `.github/agent/package-lock.json`, so Renovate can update them like any other dependency. `npm ci` runs with `--ignore-scripts`.
 - **The agent only writes its own files.** It may read the checkout and write only `evidence.md`, `report.md` and `findings.md`. Its shell access is `docker exec` into the target container only.
+- **The operator token stays out of reach.** The browser's login file is written to `$RUNNER_TEMP`, outside the working directory, and reading it is explicitly denied. The agent works as the operator through the logged-in browser, but never reads the token itself.
 - **One run per PR.** A new push cancels the run in progress, and every run updates the same PR comment.
 - **Least-privilege tokens.** The reporting App's token is limited to this repository and to the App's single permission (see Setup).
 
