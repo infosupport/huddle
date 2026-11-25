@@ -458,6 +458,10 @@ function gitMetadata(agent: Agent): string {
     'cd /workspace/repo',
     '[ -L .git ] && echo "symlinked .git"',
     'cd .git 2>/dev/null || { echo "no .git directory"; exit 0; }',
+    // Git reads config and info/attributes from the directory in `commondir`
+    // when that file exists, even outside a worktree. The commit pins
+    // GIT_COMMON_DIR, so this only makes a planted one visible as a change.
+    '[ -e commondir ] && echo "commondir present"',
     'cat config 2>&1; echo "-- attributes"; cat info/attributes 2>&1',
     'echo "-- hooks"; ls -A hooks 2>&1 | grep -v "[.]sample$"',
     'exit 0',
@@ -587,9 +591,12 @@ async function commitAndBundle(ctx: Ctx, agent: Agent, dir: string): Promise<str
   for (const { args, input } of steps) {
     // Only the repo's own config (checked above) applies: the agent can write
     // ~/.gitconfig, where a filter for a .gitattributes in the tree would
-    // change the content on `git add`, after it was verified.
+    // change the content on `git add`, after it was verified. GIT_DIR and
+    // GIT_COMMON_DIR pin the checked .git: otherwise a `.git/commondir` file
+    // would make git take its config and attributes (a filter) from elsewhere.
     const r = await agent.exec([
       'env', 'GIT_CONFIG_GLOBAL=/dev/null', 'GIT_CONFIG_NOSYSTEM=1',
+      'GIT_DIR=/workspace/repo/.git', 'GIT_COMMON_DIR=/workspace/repo/.git', 'GIT_WORK_TREE=/workspace/repo',
       'git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
       '-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`, ...args,
     ], '/workspace/repo', { input });
