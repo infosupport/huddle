@@ -4,7 +4,7 @@
 
 | Job | Runs | Output |
 |---|---|---|
-| `test-agent` | every PR | one PASS / UNCLEAR / failed line per area. Red check when an area failed. Findings are encrypted and uploaded as the `findings` artifact. |
+| `test-agent` | every PR | one PASS / UNCLEAR / failed line per area. Green only when all six areas PASS: a failed area, or an UNCLEAR one (not tested properly), turns it red. Findings (failed or UNCLEAR security areas) are encrypted and uploaded as the `findings` artifact. |
 | `report` | every PR | posts the allowed report lines as a PR comment. |
 | `report-findings` | only when there are findings | **waits for approval**, then decrypts the findings and files them as a private vulnerability report. |
 
@@ -16,7 +16,22 @@ Other safeguards in the workflow:
 - **Pinned tools.** Actions are pinned by commit SHA. The Playwright MCP server and its dependencies are locked by `.github/agent/package-lock.json`, so Renovate can update them like any other dependency. `npm ci` runs with `--ignore-scripts`.
 - **The agent only writes its own files.** It may read the checkout and write only `evidence.md`, `report.md` and `findings.md`. Its shell access is `docker exec` into the target container only.
 - **One run per PR.** A new push cancels the run in progress, and every run updates the same PR comment.
-- **Least-privilege tokens.** The reporting App's token is limited to the repository-advisories permission and to this repository.
+- **Least-privilege tokens.** The reporting App's token is limited to this repository and to the App's single permission (see Setup).
+
+## Private reports: FAILED versus UNCLEAR
+
+Both kinds go to the maintainers as a private report, because even the details of an incomplete test can hint at a weak spot. The title tells them apart:
+
+| Title | Meaning | Severity |
+|---|---|---|
+| `Test agent, run <id> \| FAILED: Docker socket` | a check failed: a possible vulnerability | high (adjust after triage) |
+| `Test agent, run <id> \| UNCLEAR: Firewall, HTTPS interception` | not verified, for example because a command was blocked | not set |
+
+A report can have both labels. In the description each area starts with `## FAILED: <Area>` or `## UNCLEAR: <Area>`.
+
+Every report starts in **Triage** (Security > Advisories). A maintainer accepts it as a draft advisory, or closes it: an UNCLEAR report is usually closed after a re-run passes.
+
+GitHub only notifies repository admins and security managers who **watch** the repository with "All Activity", or with "Custom" > "Security alerts". Watching is off by default, and on forks too.
 
 ## Setup
 
@@ -30,7 +45,7 @@ Other safeguards in the workflow:
 | `security-report` environment | Settings > Environments | **required reviewers**, see below |
 | Private vulnerability reporting | Settings > Security | enabled |
 
-The reporting GitHub App needs no webhook, the repository permission "Security advisories: Read and write", and is installed on this repository only.
+The reporting GitHub App needs no webhook and is installed on this repository only. Give it the repository permission "Security advisories: Read and write" and nothing else. The workflow's token gets all of the App's permissions.
 
 ## The `security-report` environment needs required reviewers
 
@@ -96,6 +111,8 @@ Caveats:
 
 - `DELETE /api/authz/grants/<container>` with a JSON content-type and an empty body returns 500 (the body parser's "Body cannot be empty"). Probably should be a 4xx or an accepted empty body. Seen in one VM run.
 - The gateway refuses to remove containers it did not create itself ("not created by this container"). May be by design.
+- In CI, Claude Code's safety classifier blocked a test command that POSTed `secretbody=…` to an outside host, which left Firewall and HTTPS interception UNCLEAR. The prompt now asks for neutral test data.
+- One CI run ended normally without writing `report.md`. The cause is unknown, because the agent's transcript and `evidence.md` are not kept after the run.
 
 ## Open work
 

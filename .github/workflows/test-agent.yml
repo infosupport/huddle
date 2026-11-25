@@ -89,7 +89,8 @@ jobs:
             age -r "$AGE_RECIPIENT" -o findings.md.age findings.md && rm findings.md
             echo "findings=true" >> "$GITHUB_OUTPUT"
           fi
-          [ "$(wc -l < public.md)" = 6 ] && ! grep -qE 'failed|FAIL' public.md
+          # Green only when all six areas PASS: a failed or UNCLEAR (untested) area turns it red.
+          [ "$(grep -c ': PASS$' public.md)" = 6 ]
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.result.outputs.findings == 'true'
@@ -111,8 +112,7 @@ jobs:
         with:
           name: findings
 
-      # Only the permission the report needs. The action has no declared input for it, but
-      # passes every permission-* input on to GitHub (expect an "Unexpected input" warning).
+      # The token gets the App's permissions, so the App must have only "Security advisories".
       - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: app-token
         with:
@@ -120,17 +120,25 @@ jobs:
           private-key: ${{ secrets.SECURITY_REPORT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-repository-advisories: write
 
+      # The title says which areas FAILED (a possible vulnerability, severity high) and which
+      # are UNCLEAR (not verified, no severity), taken from the public report lines.
       - name: Report findings privately
         env:
           AGE_IDENTITY: ${{ secrets.SECURITY_REPORT_AGE_IDENTITY }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPORT: ${{ needs.test-agent.outputs.report }}
         run: |
           set -o pipefail
+          areas() { printf '%s\n' "$REPORT" | grep -xE "$REPORT_LINES" | sed -n "s/: $1\$//p" | paste -sd, - | sed 's/,/, /g' || true; }
+          failed=$(areas 'security check failed, details sent to maintainers')
+          unclear=$(areas UNCLEAR)
+          summary="Test agent, run ${{ github.run_id }}"
+          [ -n "$failed" ] && summary="$summary | FAILED: $failed"
+          [ -n "$unclear" ] && summary="$summary | UNCLEAR: $unclear"
           sudo apt-get update -qq && sudo apt-get install -y -qq age
           age -d -i <(printf '%s\n' "$AGE_IDENTITY") findings.md.age \
-            | jq -Rs --arg s "Test agent finding, run ${{ github.run_id }}" '{summary: $s, description: .}' \
+            | jq -Rs --arg s "$summary" --arg sev "${failed:+high}" '{summary: $s, description: .} + (if $sev == "" then {} else {severity: $sev} end)' \
             | gh api --method POST "repos/${{ github.repository }}/security-advisories/reports" --input - >/dev/null
 
   report:
