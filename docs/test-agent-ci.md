@@ -15,7 +15,7 @@ Other safeguards in the workflow:
 - **The judge comes from the base branch.** The agent's prompt, its MCP config and its pinned tools (`.github/agent/`) are taken from the PR's base branch, so a PR cannot edit them to pass its own test. A PR that changes `.github/agent/` is still tested with the old version. The new version takes effect once it is merged. (If the base branch has no `.github/agent/` yet, the run uses the PR's copy and shows a warning.) The files are installed after the PR's own build steps, so a changed build script cannot overwrite them. This guards against simple tampering, not against a determined attacker: the PR's code runs on the same runner (the Huddle container even gets the Docker socket), and someone with write access can edit the workflow itself. Requiring review of `.github/` changes, for example with CODEOWNERS, closes that.
 - **Pinned tools.** Actions are pinned by commit SHA. The Playwright MCP server and its dependencies are locked by `.github/agent/package-lock.json`, so Renovate can update them like any other dependency. `npm ci` runs with `--ignore-scripts`.
 - **The allowlist is the boundary.** The agent runs in permission mode `default`: tools and commands outside its allowlist are denied, because nobody can approve them in CI. Chained commands are checked one by one.
-- **The agent only reads and writes what it needs.** It may read its prompt, `gateway/test/e2e/` and its own output files, and write only `evidence.md`, `report.md` and `findings.md`. Before it starts, symlinks in the checkout, any `report.md` committed by the PR, and Claude Code config from the PR (`.claude/`, `.mcp.json`, `CLAUDE.md`) are removed, so a PR can't point the agent at the login file, supply its own report, or widen the allowlist. Its shell access is `docker exec` into the target container only.
+- **The agent only writes its own files.** Its Read tool may read its prompt, `gateway/test/e2e/` and its output files. It may write only `evidence.md`, `report.md` and `findings.md`. These rules use absolute paths, so a `cd` can't shift them. Claude Code also allows read-only shell commands (`grep`, `ls`, `sed -n`) inside the working directory without asking. So in practice the agent can read the checkout, which is public code. Outside the working directory, those commands are denied too. Before it starts, symlinks in the checkout, any `report.md` committed by the PR, and Claude Code config from the PR (`.claude/`, `.mcp.json`, `CLAUDE.md`) are removed, so a PR can't point the agent at the login file, supply its own report, or widen the allowlist. Its shell access is `docker exec` into the target container only.
 - **The operator token stays out of reach.** The browser's login file is written to `$RUNNER_TEMP`, outside the working directory, and reading it is explicitly denied. The agent works as the operator through the logged-in browser, but never reads the token itself.
 - **One run per PR.** A new push cancels the run in progress, and every run updates the same PR comment.
 - **Least-privilege tokens.** The reporting App's token is limited to this repository and to the App's single permission (see Setup).
@@ -45,7 +45,7 @@ GitHub only notifies repository admins and security managers who **watch** the r
 | `SECURITY_REPORT_AGE_IDENTITY` | secret in the `security-report` environment | the private key file from `age-keygen` |
 | `SECURITY_REPORT_APP_PRIVATE_KEY` | secret in the `security-report` environment | the App's `.pem` private key |
 | `security-report` environment | Settings > Environments | **required reviewers**, see below |
-| Private vulnerability reporting | Settings > Security | enabled |
+| Private vulnerability reporting | Settings > Advanced Security | enabled, with the App's bot account (`<app-name>[bot]`) as trusted reporter. Otherwise GitHub accepts at most 5 reports per day from it. |
 
 The reporting GitHub App needs no webhook and is installed on this repository only. Give it the repository permission "Security advisories: Read and write" and nothing else. The workflow's token gets all of the App's permissions.
 
@@ -135,11 +135,10 @@ Caveats:
 
 ## Known observations (not acted on)
 
-- `DELETE /api/authz/grants/<container>` with a JSON content-type and an empty body returns 500 (the body parser's "Body cannot be empty"). Probably should be a 4xx or an accepted empty body. Seen in one VM run.
-- `DELETE /api/rules/<id>` returned 500 once for a valid request, right after the rule had been approved and used; the identical retry returned 200. Seen in one CI run.
+- A `DELETE` with `content-type: application/json` and an empty body returns 500 instead of a 4xx (the body parser's "Body cannot be empty"). Seen on `/api/rules/<id>`, `/api/authz/grants/<container>` and `/api/docker/containers/<container>/sudo-grant`, in the VM and in CI. Probably should be a 400, or the empty body should be accepted.
 - The gateway refuses to remove containers it did not create itself ("not created by this container"). May be by design.
 - In CI, Claude Code ran in auto mode, where a safety classifier judges every command. It blocked a POST with `secretbody=…`, and later `docker run --privileged`, which left those areas UNCLEAR (the second time hiding a planted bug). The agent now runs with `--permission-mode default`, so only the tool allowlist decides. The prompt also asks for neutral test data.
-- Two CI runs ended normally without writing `report.md`. The cause is unknown. The `debug` artifact now keeps the transcript, so the next time it can be traced.
+- Three CI runs ended without `report.md`. The `debug` transcript showed why: the agent had run `cd gateway` (Claude Code allows `cd` inside the working directory), and the write rules were relative (`./report.md`), so they no longer matched. The rules are now absolute, and the prompt says never to `cd`.
 
 ## Open work
 
