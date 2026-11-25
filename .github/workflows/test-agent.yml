@@ -68,6 +68,9 @@ jobs:
           # report.md, which would count if the agent writes none. Remove both.
           find . -type l ! -path './.github/agent/node_modules/*' -print -delete
           rm -f evidence.md report.md findings.md
+          # Claude Code config from the PR could widen the allowlist or add instructions. The
+          # action also restores these from the base branch on PRs; this covers manual runs too.
+          rm -rf .claude .mcp.json CLAUDE.md CLAUDE.local.md
           # The Playwright MCP server and its dependencies, locked by .github/agent/package-lock.json.
           npm ci --ignore-scripts --prefix .github/agent
           .github/agent/node_modules/.bin/playwright install --with-deps chromium
