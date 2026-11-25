@@ -81,8 +81,17 @@ export interface PrInfo {
   headRefName: string;
   headRefOid: string;
   labels: { name: string }[];
-  statusCheckRollup: { conclusion?: string | null; state?: string | null; detailsUrl?: string | null; targetUrl?: string | null }[];
-  commits: { authors: CommitAuthor[] }[];
+  statusCheckRollup: CheckInfo[];
+  commits: { authors: CommitAuthor[]; messageBody?: string | null }[];
+}
+
+/** One entry of `gh --json statusCheckRollup`: a check run has a `conclusion`, a commit status a `state`. */
+export interface CheckInfo {
+  conclusion?: string | null;
+  state?: string | null;
+  workflowName?: string | null;
+  detailsUrl?: string | null;
+  targetUrl?: string | null;
 }
 
 /** The PR author as `gh --json author` gives it: GitHub-verified, unlike commit metadata. */
@@ -98,6 +107,10 @@ export interface CommitAuthor {
 }
 
 export const GAVE_UP_LABEL = 'agent-gave-up';
+/** Renovate adds it to major updates (`addLabels` on the majors rule in renovate.json5); see --skip-majors. */
+export const MAJOR_LABEL = 'major';
+/** Trailer the CLI adds to every commit the agent pushes, so a later run recognises it. */
+export const AGENT_TRAILER = 'Huddle-Update-Agent';
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR']);
 const SAFE_REF_CHARS = /^[A-Za-z0-9._\/()+-]+$/;
 
@@ -131,19 +144,25 @@ export function isRenovateBranch(branch: string, prefix = renovateBranchPrefix()
   return branch.startsWith(prefix) && branch.length > prefix.length && SAFE_REF_CHARS.test(branch);
 }
 
-const TRAILER = /^(co-authored-by|signed-off-by|reviewed-by|acked-by|approved-by|tested-by|reported-by)\s*:/i;
+const TRAILER = /^(co-authored-by|signed-off-by|reviewed-by|acked-by|approved-by|tested-by|reported-by|huddle-update-agent)\s*:/i;
 
 /**
  * The agent writes its own commit message after reading untrusted input. Keep
  * it, but drop attribution trailers (they would credit or implicate other
- * people) and cap its size. Falls back when nothing usable is left.
+ * people) and cap its size. Falls back when nothing usable is left. Ends with
+ * the AGENT_TRAILER, so a later run knows this commit is the agent's.
  */
-export function sanitizeCommitMessage(message: string, fallback: string): string {
+export function sanitizeCommitMessage(message: string, fallback: string, source = 'huddle update-agent'): string {
   const lines = message.replace(/\r\n/g, '\n').split('\n').filter((l) => !TRAILER.test(l.trim()));
-  const subject = (lines.shift() ?? '').trim().slice(0, 100);
-  if (!subject) return `${fallback}\n`;
+  const subject = (lines.shift() ?? '').trim().slice(0, 100) || fallback;
   const body = lines.join('\n').trim().slice(0, 4000);
-  return body ? `${subject}\n\n${body}\n` : `${subject}\n`;
+  const trailer = `${AGENT_TRAILER}: ${source.replace(/\s+/g, ' ').trim()}`;
+  return body ? `${subject}\n\n${body}\n\n${trailer}\n` : `${subject}\n\n${trailer}\n`;
+}
+
+/** A commit the update agent pushed: its message carries the AGENT_TRAILER. */
+export function isAgentCommit(commit: PrInfo['commits'][number]): boolean {
+  return new RegExp(`^${AGENT_TRAILER}:`, 'im').test(commit.messageBody ?? '');
 }
 
 /**
@@ -164,13 +183,25 @@ function renovateAuthorsFromEnv(): string[] {
   return (process.env.HUDDLE_RENOVATE_AUTHORS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
-/** A check run has a `conclusion`, a commit status a `state`. */
-function isFailedCheck(c: PrInfo['statusCheckRollup'][number]): boolean {
+/**
+ * The GitHub Actions workflows whose result is "CI" for the agent: 'Test'
+ * unless HUDDLE_UPDATE_AGENT_CI_WORKFLOWS (comma-separated) says otherwise.
+ * Other red checks are not a build the agent can fix: the security review gate
+ * waits for a person, a scanner reports a vulnerability, the test agent
+ * reports a security finding.
+ */
+export function ciWorkflows(): string[] {
+  const list = (process.env.HUDDLE_UPDATE_AGENT_CI_WORKFLOWS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : ['Test'];
+}
+
+function isFailedCheck(c: CheckInfo, workflows: string[]): boolean {
+  if (!workflows.includes((c.workflowName ?? '').trim())) return false;
   return FAILED.has((c.conclusion ?? '').toUpperCase()) || FAILED.has((c.state ?? '').toUpperCase());
 }
 
-export function hasFailingChecks(pr: PrInfo): boolean {
-  return pr.statusCheckRollup.some(isFailedCheck);
+export function hasFailingChecks(pr: PrInfo, workflows = ciWorkflows()): boolean {
+  return pr.statusCheckRollup.some((c) => isFailedCheck(c, workflows));
 }
 
 /**
@@ -178,10 +209,10 @@ export function hasFailingChecks(pr: PrInfo): boolean {
  * are readable as soon as the job finishes, even while other jobs of the same
  * run are still going (`--log-failed` waits for the whole run).
  */
-export function failedJobs(pr: PrInfo): { runId: string; jobId: string }[] {
+export function failedJobs(pr: PrInfo, workflows = ciWorkflows()): { runId: string; jobId: string }[] {
   const jobs = new Map<string, { runId: string; jobId: string }>();
   for (const c of pr.statusCheckRollup) {
-    if (!isFailedCheck(c)) continue;
+    if (!isFailedCheck(c, workflows)) continue;
     const m = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? '');
     if (m) jobs.set(m[2], { runId: m[1], jobId: m[2] });
   }
@@ -214,18 +245,33 @@ export function affectedProjects(changedFiles: string[]): string[] {
   return PROJECTS.filter((p) => hit.has(p));
 }
 
-/** Why the agent should not touch this PR, or null when it should. */
-export function skipReason(pr: PrInfo): string | null {
+export type PrDecision =
+  | { action: 'fix' }
+  | { action: 'skip'; reason: string }
+  /** The agent's own fix is on the branch and CI is still red: label the PR for a person. */
+  | { action: 'give-up'; reason: string };
+
+/** What the agent should do with this PR. */
+export function decide(pr: PrInfo, opts: { skipMajors?: boolean } = {}): PrDecision {
+  const skip = (reason: string): PrDecision => ({ action: 'skip', reason });
   // Listing filters on the author already; a PR named on the command line
   // gets the same check here, so a Renovate-looking branch is not enough.
-  if (!isRenovatePrAuthor(pr.author)) return `not opened by ${renovatePrAuthor()}`;
-  if (pr.isCrossRepository !== false) return 'not a branch in this repository';
+  if (!isRenovatePrAuthor(pr.author)) return skip(`not opened by ${renovatePrAuthor()}`);
+  if (pr.isCrossRepository !== false) return skip('not a branch in this repository');
   const prefix = renovateBranchPrefix();
-  if (!isRenovateBranch(pr.headRefName, prefix)) return `branch ${pr.headRefName} is not a ${prefix}* branch`;
-  if (pr.labels.some((l) => l.name === GAVE_UP_LABEL)) return `labelled ${GAVE_UP_LABEL}`;
-  if (pr.commits.some((c) => !c.authors.every((a) => isRenovateAuthor(a)))) {
-    return 'has commits from someone other than Renovate (already being worked on)';
+  if (!isRenovateBranch(pr.headRefName, prefix)) return skip(`branch ${pr.headRefName} is not a ${prefix}* branch`);
+  if (pr.labels.some((l) => l.name === GAVE_UP_LABEL)) return skip(`labelled ${GAVE_UP_LABEL}`);
+  if (opts.skipMajors && pr.labels.some((l) => l.name === MAJOR_LABEL)) return skip(`a major update (labelled ${MAJOR_LABEL})`);
+  const others = pr.commits.filter((c) => !c.authors.every((a) => isRenovateAuthor(a)));
+  if (others.some((c) => !isAgentCommit(c))) return skip('has commits from someone other than Renovate (already being worked on)');
+  const failing = hasFailingChecks(pr);
+  // The agent never builds on its own pushed fix: that would lift the limit of
+  // MAX_ATTEMPTS. Renovate's rebase checkbox drops the fix to start over.
+  if (others.length) {
+    return failing
+      ? { action: 'give-up', reason: 'CI still fails after the agent\'s fix' }
+      : skip('the agent already pushed a fix');
   }
-  if (!hasFailingChecks(pr)) return 'CI is not failing';
-  return null;
+  if (!failing) return skip('CI is not failing');
+  return { action: 'fix' };
 }

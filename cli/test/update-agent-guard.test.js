@@ -74,28 +74,65 @@ function pr(over = {}) {
     headRefName: 'renovate/dev-tooling-(non-major)',
     headRefOid: 'abc',
     labels: [],
-    statusCheckRollup: [{ conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/9' }],
+    statusCheckRollup: [{ conclusion: 'FAILURE', workflowName: 'Test', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/9' }],
     commits: [{ authors: [{ login: 'renovate[bot]' }] }],
     ...over,
   };
 }
 
-test('skipReason selects only failing, untouched Renovate PRs', () => {
-  assert.equal(g.skipReason(pr()), null);
-  assert.match(g.skipReason(pr({ statusCheckRollup: [{ conclusion: 'SUCCESS' }] })), /not failing/);
-  assert.match(g.skipReason(pr({ labels: [{ name: 'agent-gave-up' }] })), /agent-gave-up/);
-  assert.match(g.skipReason(pr({ headRefName: 'feature/x' })), /not a renovate/);
-  assert.match(g.skipReason(pr({ headRefName: 'renovate/x;rm -rf' })), /not a renovate/);
+test('decide selects only failing, untouched Renovate PRs', () => {
+  const skipReason = (p, opts) => {
+    const d = g.decide(p, opts);
+    return d.action === 'skip' ? d.reason : d.action === 'fix' ? null : `give-up: ${d.reason}`;
+  };
+  assert.equal(skipReason(pr()), null);
+  assert.match(skipReason(pr({ statusCheckRollup: [{ conclusion: 'SUCCESS', workflowName: 'Test' }] })), /not failing/);
+  assert.match(skipReason(pr({ labels: [{ name: 'agent-gave-up' }] })), /agent-gave-up/);
+  assert.match(skipReason(pr({ headRefName: 'feature/x' })), /not a renovate/);
+  assert.match(skipReason(pr({ headRefName: 'renovate/x;rm -rf' })), /not a renovate/);
   assert.match(
-    g.skipReason(pr({ commits: [{ authors: [{ login: 'renovate[bot]' }] }, { authors: [{ login: 'someone' }] }] })),
+    skipReason(pr({ commits: [{ authors: [{ login: 'renovate[bot]' }] }, { authors: [{ login: 'someone' }] }] })),
     /someone other than Renovate/,
   );
-  assert.equal(g.skipReason(pr({ commits: [{ authors: [{ email: '29139614+renovate[bot]@users.noreply.github.com' }] }] })), null);
+  assert.equal(skipReason(pr({ commits: [{ authors: [{ email: '29139614+renovate[bot]@users.noreply.github.com' }] }] })), null);
   // A PR named on the command line: the branch name and commit metadata can be forged, the PR author cannot.
-  assert.match(g.skipReason(pr({ author: { login: 'someone', is_bot: false } })), /not opened by app\/renovate/);
-  assert.match(g.skipReason(pr({ isCrossRepository: true })), /not a branch in this repository/);
-  assert.match(g.skipReason(pr({ isCrossRepository: undefined })), /not a branch in this repository/);
+  assert.match(skipReason(pr({ author: { login: 'someone', is_bot: false } })), /not opened by app\/renovate/);
+  assert.match(skipReason(pr({ isCrossRepository: true })), /not a branch in this repository/);
+  assert.match(skipReason(pr({ isCrossRepository: undefined })), /not a branch in this repository/);
+  // Rollout: majors only when asked for.
+  assert.equal(skipReason(pr({ labels: [{ name: 'major' }] })), null);
+  assert.match(skipReason(pr({ labels: [{ name: 'major' }] }), { skipMajors: true }), /major update/);
 });
+
+test('decide counts only the CI workflows as a failing build', () => {
+  const gate = { conclusion: 'FAILURE', workflowName: 'Security review gate', detailsUrl: 'https://github.com/o/r/actions/runs/5/job/6' };
+  const scanner = { conclusion: 'FAILURE', workflowName: '', detailsUrl: 'https://app.aikido.dev/x' };
+  const status = { state: 'FAILURE', targetUrl: 'https://example.com/status' };
+  assert.deepEqual(g.decide(pr({ statusCheckRollup: [gate, scanner, status] })), { action: 'skip', reason: 'CI is not failing' });
+  assert.equal(g.decide(pr({ statusCheckRollup: [gate, { conclusion: 'FAILURE', workflowName: 'Test' }] })).action, 'fix');
+  process.env.HUDDLE_UPDATE_AGENT_CI_WORKFLOWS = 'Build, Lint';
+  try {
+    assert.equal(g.decide(pr()).action, 'skip');
+    assert.equal(g.decide(pr({ statusCheckRollup: [{ conclusion: 'TIMED_OUT', workflowName: 'Lint' }] })).action, 'fix');
+  } finally {
+    delete process.env.HUDDLE_UPDATE_AGENT_CI_WORKFLOWS;
+  }
+});
+
+test('decide never builds on its own pushed fix', () => {
+  const renovate = { authors: [{ login: 'renovate[bot]' }] };
+  const agent = { authors: [{ login: 'huddle-update-agent[bot]' }], messageBody: 'Why.\n\nHuddle-Update-Agent: https://github.com/o/r/actions/runs/1' };
+  const human = { authors: [{ login: 'someone' }], messageBody: 'manual fix' };
+  assert.deepEqual(g.decide(pr({ commits: [renovate, agent] })), { action: 'give-up', reason: 'CI still fails after the agent\'s fix' });
+  assert.deepEqual(
+    g.decide(pr({ commits: [renovate, agent], statusCheckRollup: [{ conclusion: 'SUCCESS', workflowName: 'Test' }] })),
+    { action: 'skip', reason: 'the agent already pushed a fix' },
+  );
+  assert.match(g.decide(pr({ commits: [renovate, agent, human] })).reason, /someone other than Renovate/);
+  // Already handed to a person: no second comment.
+  assert.match(g.decide(pr({ commits: [renovate, agent], labels: [{ name: 'agent-gave-up' }] })).reason, /agent-gave-up/);
+});
+
 
 test('isRenovatePrAuthor trusts only the configured GitHub account', () => {
   assert.equal(g.isRenovatePrAuthor({ login: 'app/renovate', is_bot: true }, 'app/renovate'), true);
@@ -110,12 +147,13 @@ test('isRenovatePrAuthor trusts only the configured GitHub account', () => {
 test('failedJobs lists the failing Actions jobs, also while the run is in progress', () => {
   const p = pr({
     statusCheckRollup: [
-      { conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/1' },
-      { conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/2' },
-      { conclusion: '', state: null, detailsUrl: 'https://github.com/o/r/actions/runs/123/job/4' }, // still running
-      { conclusion: 'SUCCESS', detailsUrl: 'https://github.com/o/r/actions/runs/456/job/3' },
-      { state: 'ERROR', targetUrl: 'https://example.com/status' },
-      { state: 'FAILURE', targetUrl: 'https://github.com/o/r/actions/runs/789/job/5' },
+      { conclusion: 'FAILURE', workflowName: 'Test', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/1' },
+      { conclusion: 'FAILURE', workflowName: 'Test', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/2' },
+      { conclusion: '', state: null, workflowName: 'Test', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/4' }, // still running
+      { conclusion: 'SUCCESS', workflowName: 'Test', detailsUrl: 'https://github.com/o/r/actions/runs/456/job/3' },
+      { state: 'ERROR', targetUrl: 'https://example.com/status' }, // a commit status, not a CI workflow
+      { conclusion: 'STARTUP_FAILURE', workflowName: 'Test', detailsUrl: 'https://github.com/o/r/actions/runs/789/job/5' },
+      { conclusion: 'FAILURE', workflowName: 'Security review gate', detailsUrl: 'https://github.com/o/r/actions/runs/999/job/8' },
     ],
   });
   assert.deepEqual(g.failedJobs(p), [{ runId: '123', jobId: '1' }, { runId: '123', jobId: '2' }, { runId: '789', jobId: '5' }]);
@@ -148,10 +186,19 @@ test('isRenovateBranch honours the configured prefix and rejects unsafe names', 
   assert.equal(g.isRenovateBranch('deps/x;rm -rf', 'deps/'), false);
 });
 
-test('sanitizeCommitMessage drops attribution trailers and falls back when empty', () => {
+test('sanitizeCommitMessage drops attribution trailers, falls back when empty and marks the commit', () => {
+  const T = '\n\nHuddle-Update-Agent: huddle update-agent\n';
   const msg = 'fix(deps): adapt to fastify 6\n\nThe reply API changed.\nCo-authored-by: Someone <s@example.com>\nSigned-off-by: Other <o@example.com>\n';
-  assert.equal(g.sanitizeCommitMessage(msg, 'fallback'), 'fix(deps): adapt to fastify 6\n\nThe reply API changed.\n');
-  assert.equal(g.sanitizeCommitMessage('', 'fix(deps): fallback'), 'fix(deps): fallback\n');
-  assert.equal(g.sanitizeCommitMessage('Co-authored-by: x <x@y>', 'fix(deps): fallback'), 'fix(deps): fallback\n');
-  assert.equal(g.sanitizeCommitMessage('x'.repeat(300), 'f').length, 101);
+  assert.equal(g.sanitizeCommitMessage(msg, 'fallback'), `fix(deps): adapt to fastify 6\n\nThe reply API changed.${T}`);
+  assert.equal(g.sanitizeCommitMessage('', 'fix(deps): fallback'), `fix(deps): fallback${T}`);
+  assert.equal(g.sanitizeCommitMessage('Co-authored-by: x <x@y>', 'fix(deps): fallback'), `fix(deps): fallback${T}`);
+  assert.equal(g.sanitizeCommitMessage('x'.repeat(300), 'f').split('\n')[0].length, 100);
+  // The agent cannot set the trailer's value itself; the CLI's own one wins.
+  assert.equal(
+    g.sanitizeCommitMessage('fix: a\n\nHuddle-Update-Agent: forged', 'f', 'https://github.com/o/r/actions/runs/1'),
+    'fix: a\n\nHuddle-Update-Agent: https://github.com/o/r/actions/runs/1\n',
+  );
+  assert.equal(g.isAgentCommit({ authors: [], messageBody: 'Body.\n\nHuddle-Update-Agent: huddle update-agent' }), true);
+  assert.equal(g.isAgentCommit({ authors: [], messageBody: 'mentions Huddle-Update-Agent: inline' }), false);
 });
+

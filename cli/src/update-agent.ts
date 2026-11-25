@@ -4,18 +4,19 @@ import path from 'path';
 import { spawn, spawnSync, SpawnSyncOptions } from 'child_process';
 import { ApiError, get, post, del } from './api';
 import { CONFIG_DIR } from './config';
+import { GithubApp, appConfigFromEnv } from './github-app';
 import { resolveRuntime } from './runtime';
 import { bold, dim, green, red, yellow } from './utils';
 import {
   GAVE_UP_LABEL,
   PrInfo,
   affectedProjects,
+  decide,
   failedJobs,
   guardViolations,
   parseNameStatus,
   renovatePrAuthor,
   sanitizeCommitMessage,
-  skipReason,
   testWeakeningFlags,
 } from './update-agent-guard';
 
@@ -24,8 +25,9 @@ import {
 // - The CONTAINER only edits files. It has no GitHub credentials, reaches only
 //   npm, the Anthropic API and huddle itself (airlock), and holds a placeholder
 //   instead of the real Claude credential (token exchange).
-// - The HOST (this CLI, with the developer's own gh/git login) does every
-//   GitHub read and write and checks the result itself. Once the container
+// - The HOST (this CLI, with the developer's own gh/git login, or the GitHub
+//   App token in .github/workflows/update-agent.yml) does every GitHub read
+//   and write and checks the result itself. Once the container
 //   runs, the host never touches the mounted folder by path: anything in it can
 //   be a symlink to a host file. Files the agent can write are read and written
 //   through the container, and the agent's commit leaves as a git bundle that
@@ -35,6 +37,10 @@ export interface UpdateAgentOptions {
   pr?: number;
   dryRun: boolean;
   keep: boolean;
+  /** Skip PRs Renovate labelled as a major update (rollout: minors first). */
+  skipMajors: boolean;
+  /** Folder for each run's network log (pr-<n>-network.json), e.g. for a CI artifact. */
+  out?: string;
   runtime?: string;
 }
 
@@ -47,6 +53,7 @@ interface Result {
 }
 
 const MAX_ATTEMPTS = 3;
+const MAX_TURNS = 40;
 const CLAUDE_TIMEOUT_MS = 30 * 60 * 1000;
 const VERIFY_TIMEOUT_MS = 20 * 60 * 1000;
 const PROMPT_PATH = '.github/agent/update-agent.md';
@@ -105,14 +112,14 @@ const OUTPUT_CAP = 1024 * 1024;
 
 interface AsyncOpts {
   timeout?: number;
-  inherit?: boolean;
   input?: string;
+  /** Show stderr on the terminal as it comes, instead of capturing it. */
+  liveStderr?: boolean;
 }
 
 function runAsync(cmd: string, args: string[], opts: AsyncOpts = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const out = opts.inherit ? 'inherit' : 'pipe';
-    const child = spawn(cmd, args, { stdio: [opts.input === undefined ? 'ignore' : 'pipe', out, out] });
+    const child = spawn(cmd, args, { stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', opts.liveStderr ? 'inherit' : 'pipe'] });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -150,13 +157,20 @@ const tail = (s: string, n: number) => (s.length > n ? `[…truncated…]\n${s.s
 
 export async function runUpdateAgent(opts: UpdateAgentOptions): Promise<void> {
   const engine = resolveRuntime(opts.runtime).name;
-  if (run('gh', ['auth', 'status']).status !== 0) throw new Error('GitHub CLI is not logged in. Run `gh auth login` first.');
-  const repo = must('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
+  // In CI the CLI acts as a GitHub App; on a developer's machine as their own `gh` login.
+  const appConfig = appConfigFromEnv();
+  const app = appConfig ? new GithubApp(appConfig) : null;
+  // Read once; no child process (git and gh on PR content, docker) inherits the key.
+  delete process.env.HUDDLE_GITHUB_APP_PRIVATE_KEY;
+  if (app) await app.refresh();
+  else if (run('gh', ['auth', 'status']).status !== 0) throw new Error('GitHub CLI is not logged in. Run `gh auth login` first.');
+  const repo = app?.repo ?? must('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
   const credential = claudeCredential();
   // Doubles as the "is Huddle running and are we authenticated" check.
   const { imageName } = await get<{ imageName: string }>('/api/docker/base-image?ide=vscode');
   const prompt = fetchPrompt(repo);
-  const identity = gitIdentity();
+  const identity = app ? await app.identity() : gitIdentity();
+  const refreshGithub = async () => { await app?.refresh(); };
 
   const prs = listPrs(repo, opts.pr);
   if (prs.length === 0) {
@@ -167,7 +181,7 @@ export async function runUpdateAgent(opts: UpdateAgentOptions): Promise<void> {
   const results: Result[] = [];
   process.on('SIGINT', onSigint);
   try {
-    await processAll(prs, { repo, engine, imageName, credential, prompt, identity, opts }, results);
+    await processAll(prs, { repo, engine, imageName, credential, prompt, identity, opts, refreshGithub }, results);
   } finally {
     process.off('SIGINT', onSigint);
   }
@@ -177,24 +191,30 @@ export async function runUpdateAgent(opts: UpdateAgentOptions): Promise<void> {
     const color = r.outcome === 'fixed' || r.outcome === 'dry-run' ? green : r.outcome === 'skipped' ? dim : red;
     console.log(`  #${r.pr}  ${color(r.outcome.padEnd(8))} ${r.detail}`);
   }
+  // A run that broke (not a PR the agent gave up on) fails the CI job.
+  if (results.some((r) => r.outcome === 'error')) process.exitCode = 1;
 }
 
-async function processAll(prs: PrInfo[], base: Omit<Ctx, 'pr'>, results: Result[]): Promise<void> {
+async function processAll(prs: PrInfo[], base: Omit<Ctx, 'pr' | 'usage'>, results: Result[]): Promise<void> {
   const { opts } = base;
   for (const pr of prs) {
     if (interrupted) break;
-    const reason = skipReason(pr);
-    if (reason) {
-      if (opts.pr) console.log(yellow(`Skipping #${pr.number}: ${reason}`));
-      results.push({ pr: pr.number, outcome: 'skipped', detail: reason });
+    const decision = decide(pr, { skipMajors: opts.skipMajors });
+    if (decision.action === 'skip') {
+      if (opts.pr) console.log(yellow(`Skipping #${pr.number}: ${decision.reason}`));
+      results.push({ pr: pr.number, outcome: 'skipped', detail: decision.reason });
       continue;
     }
     console.log(`\n${bold(`PR #${pr.number}`)} ${pr.title} ${dim(`(${pr.headRefName})`)}`);
+    const ctx: Ctx = { ...base, pr, usage: { costUsd: 0, turns: 0 } };
     try {
-      results.push(await processPr({ ...base, pr }));
+      await ctx.refreshGithub();
+      results.push(decision.action === 'give-up'
+        ? await giveUp(ctx, decision.reason, '')
+        : await processPr(ctx));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(red(`  error: ${msg}`));
+      printUntrusted(`  error: ${msg}`, red, 20_000, true);
       results.push({ pr: pr.number, outcome: 'error', detail: msg });
     }
   }
@@ -209,8 +229,11 @@ interface Credential {
 
 function claudeCredential(): Credential {
   const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
-  if (oauth) return { env: 'CLAUDE_CODE_OAUTH_TOKEN', secret: oauth };
   const key = process.env.ANTHROPIC_API_KEY?.trim();
+  // Only the gateway gets it; no child process of this CLI inherits it.
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  delete process.env.ANTHROPIC_API_KEY;
+  if (oauth) return { env: 'CLAUDE_CODE_OAUTH_TOKEN', secret: oauth };
   if (key) return { env: 'ANTHROPIC_API_KEY', secret: key };
   throw new Error(
     'No Claude credential found. Set CLAUDE_CODE_OAUTH_TOKEN (create one with `claude setup-token`) ' +
@@ -259,6 +282,22 @@ interface Ctx {
   prompt: string;
   identity: { name: string; email: string };
   opts: UpdateAgentOptions;
+  /** Renews the GitHub App token (CI) before GitHub calls that follow a long agent run; a no-op locally. */
+  refreshGithub: () => Promise<void>;
+  /** Claude Code usage over all attempts, for the PR comment. */
+  usage: { costUsd: number; turns: number };
+  /** The agent container, once it was started: its network log goes with the result. */
+  container?: string;
+}
+
+/** Who ran the agent, for comments and the commit trailer: the CI run, or the developer. */
+function runner(ctx: Ctx): { markdown: string; trailer: string } {
+  const { GITHUB_ACTIONS, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID } = process.env;
+  if (GITHUB_ACTIONS === 'true' && GITHUB_SERVER_URL && GITHUB_REPOSITORY && /^\d+$/.test(GITHUB_RUN_ID ?? '')) {
+    const url = `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`;
+    return { markdown: `Run by [GitHub Actions](${url})`, trailer: url };
+  }
+  return { markdown: `Run by ${ctx.identity.name}`, trailer: 'huddle update-agent' };
 }
 
 async function processPr(ctx: Ctx): Promise<Result> {
@@ -274,6 +313,14 @@ async function processPr(ctx: Ctx): Promise<Result> {
   try {
     return await fixPr(ctx, name, dir);
   } finally {
+    if (opts.out && ctx.container) {
+      try {
+        await saveNetworkLog(ctx, opts.out);
+      } catch (err) {
+        // Never in the way of cleanup: the placeholder must be revoked.
+        console.log(yellow(`  could not write the network log: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    }
     await cleanup(name, opts.keep);
     if (!opts.keep) removeDir(dir);
   }
@@ -292,6 +339,7 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   const prFiles = prepareWorkspace(ctx, ws, publish);
   if (!prFiles) return { pr: pr.number, outcome: 'skipped', detail: 'branch moved while starting; run again' };
 
+  ctx.container = name;
   const agent = await startAgent(ctx, name, ws);
   // Git metadata the agent could use to run code on commit (hooks, filters).
   const gitBaseline = gitMetadata(agent);
@@ -442,10 +490,16 @@ async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<s
     console.log(dim(`  attempt ${attempt}/${MAX_ATTEMPTS}: running Claude Code`));
     const task = feedback ? `${ctx.prompt}\n\nThis is attempt ${attempt}. ${feedback}` : ctx.prompt;
     const before = await treeState();
-    const claude = await exec(['claude', '-p', task, '--max-turns', '40', '--allowedTools', ALLOWED_TOOLS], '/workspace/repo', {
-      inherit: true,
-      timeout: CLAUDE_TIMEOUT_MS,
-    });
+    // JSON output: only the agent's final answer is printed (a public CI log
+    // must not get the whole transcript), plus its cost for the PR comment.
+    const model = process.env.HUDDLE_UPDATE_AGENT_MODEL?.trim();
+    // Locally, Claude Code's warnings show while it works. In CI its stderr is
+    // captured and printed with workflow commands off (printUntrusted).
+    const claude = await exec([
+      'claude', '-p', task, '--output-format', 'json', '--max-turns', String(MAX_TURNS),
+      ...(model ? ['--model', model] : []), '--allowedTools', ALLOWED_TOOLS,
+    ], '/workspace/repo', { timeout: CLAUDE_TIMEOUT_MS, liveStderr: !inActions() });
+    reportClaude(ctx, claude);
     if ((await treeState()) === before) {
       if (claude.status !== 0) {
         // Not the PR's fault: credential, firewall or Claude Code itself.
@@ -473,6 +527,39 @@ async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<s
   return lastFailure;
 }
 
+/** Prints the agent's final answer and adds its cost and turns to ctx.usage. */
+function reportClaude(ctx: Ctx, r: RunResult): void {
+  let out: { result?: unknown; total_cost_usd?: unknown; num_turns?: unknown } | null = null;
+  try {
+    out = JSON.parse(r.stdout.trim());
+  } catch {
+    /* not JSON: Claude Code failed before it could answer */
+  }
+  if (out && typeof out === 'object') {
+    if (typeof out.total_cost_usd === 'number') ctx.usage.costUsd += out.total_cost_usd;
+    if (typeof out.num_turns === 'number') ctx.usage.turns += out.num_turns;
+    if (typeof out.result === 'string' && out.result.trim()) printUntrusted(out.result.trim().replace(/^/gm, '    '));
+  } else if (r.stdout.trim()) {
+    printUntrusted(r.stdout.trim());
+  }
+  if (r.status !== 0 && r.stderr.trim()) printUntrusted(r.stderr.trim());
+}
+
+const inActions = () => process.env.GITHUB_ACTIONS === 'true';
+
+/**
+ * Prints text the agent may have shaped (its answers, its diff and commit
+ * message, errors carrying container output). In GitHub Actions, workflow
+ * commands are switched off around it, so a line like `::add-mask::` or
+ * `::error::` in it does nothing in the public log.
+ */
+function printUntrusted(text: string, color: (s: string) => string = dim, max = 4_000, toStderr = false): void {
+  const stop = crypto.randomBytes(16).toString('hex');
+  if (inActions()) console.log(`::stop-commands::${stop}`);
+  (toStderr ? console.error : console.log)(color(tail(text, max)));
+  if (inActions()) console.log(`::${stop}::`);
+}
+
 /** Runs what CI runs, for the given projects. Returns '' when everything passes, otherwise the failing output. */
 async function verify(exec: Exec, projects: string[]): Promise<string> {
   for (const project of projects) {
@@ -489,7 +576,7 @@ async function verify(exec: Exec, projects: string[]): Promise<string> {
 /** Commits in the container under the developer's name and copies the commit out as a bundle. */
 async function commitAndBundle(ctx: Ctx, agent: Agent, dir: string): Promise<string> {
   const { pr, identity, engine } = ctx;
-  const message = sanitizeCommitMessage(await agent.readFile('/workspace/out/commit-msg.txt'), `fix(deps): adapt code for ${pr.title}`);
+  const message = sanitizeCommitMessage(await agent.readFile('/workspace/out/commit-msg.txt'), `fix(deps): adapt code for ${pr.title}`, runner(ctx).trailer);
   // A fresh name, so nothing the agent prepared in /tmp can stand in for it.
   const inContainer = `/tmp/huddle-${crypto.randomBytes(8).toString('hex')}.bundle`;
   const steps: { args: string[]; input?: string }[] = [
@@ -517,6 +604,7 @@ async function commitAndBundle(ctx: Ctx, agent: Agent, dir: string): Promise<str
 /** Checks the agent's commit in the trusted clone, then pushes and comments (or prints it for --dry-run). */
 async function publishResult(ctx: Ctx, agent: Agent, publish: string, bundle: string): Promise<Result> {
   const { pr, repo, opts } = ctx;
+  await ctx.refreshGithub();
   must('git', ['-C', publish, 'fetch', '--quiet', bundle, 'HEAD']);
   const fixed = must('git', ['-C', publish, 'rev-parse', 'FETCH_HEAD']).trim();
   if (run('git', ['-C', publish, 'merge-base', '--is-ancestor', pr.headRefOid, fixed]).status !== 0) {
@@ -529,6 +617,7 @@ async function publishResult(ctx: Ctx, agent: Agent, publish: string, bundle: st
   }
   const flags = testWeakeningFlags(files, must('git', ['-C', publish, 'diff', '-U0', pr.headRefOid, fixed]));
   const summary = (await agent.readFile('/workspace/out/summary.md')).trim();
+  const facts = await runFacts(ctx);
   const comment = [
     '### Update agent: fixed the build',
     '',
@@ -538,13 +627,15 @@ async function publishResult(ctx: Ctx, agent: Agent, publish: string, bundle: st
     '',
     `**Files changed:** ${files.filter((f) => f.status !== 'D').length} changed, ${files.filter((f) => f.status === 'D').length} deleted`,
     flags.length ? `**Check these (possible weakened tests):**\n${flags.map((f) => `- ${f}`).join('\n')}` : '**Test changes:** nothing suspicious found',
+    ...facts,
     '',
-    `<sub>Run by ${ctx.identity.name} with \`huddle update-agent\` inside an airlocked Huddle devcontainer. A person still reviews and merges.</sub>`,
+    `<sub>${runner(ctx).markdown} with \`huddle update-agent\` inside an airlocked Huddle devcontainer. A person still reviews and merges.</sub>`,
   ].join('\n');
 
   if (opts.dryRun) {
-    console.log(must('git', ['-C', publish, '--no-pager', 'show', '--stat', '--patch', fixed]));
-    console.log(dim('\n--- PR comment that would be posted ---\n') + comment);
+    printUntrusted(must('git', ['-C', publish, '--no-pager', 'show', '--stat', '--patch', fixed]), (s) => s, 200_000);
+    console.log(dim('\n--- PR comment that would be posted ---'));
+    printUntrusted(comment, (s) => s, 40_000);
     return { pr: pr.number, outcome: 'dry-run', detail: `${files.length} file(s) changed; nothing pushed` };
   }
   // A plain push: it fails instead of overwriting if the branch moved meanwhile.
@@ -560,13 +651,18 @@ async function giveUp(ctx: Ctx, reason: string, details: string): Promise<Result
   const { pr, repo, opts } = ctx;
   console.log(red(`  giving up: ${reason}`));
   if (!opts.dryRun) {
+    await ctx.refreshGithub();
+    const facts = await runFacts(ctx);
     const body = [
       `### Update agent: gave up`,
       '',
-      `**Reason:** ${reason}. Nothing was pushed; this PR needs a person.`,
+      `**Reason:** ${reason}. ${ctx.container ? 'Nothing was pushed; this' : 'This'} PR needs a person.`,
       details ? `\n<details><summary>Last output</summary>\n\n\`\`\`\n${tail(details, 6_000).replace(/```/g, "'''")}\n\`\`\`\n</details>` : '',
+      ...facts,
       '',
-      `<sub>Run by ${ctx.identity.name} with \`huddle update-agent\`. Remove the \`${GAVE_UP_LABEL}\` label to let the agent try again.</sub>`,
+      `<sub>${runner(ctx).markdown} with \`huddle update-agent\`. ${ctx.container
+        ? `Remove the \`${GAVE_UP_LABEL}\` label to let the agent try again.`
+        : `To let the agent start over, tick the rebase checkbox and remove the \`${GAVE_UP_LABEL}\` label.`}</sub>`,
     ].join('\n');
     if (run('gh', ['pr', 'edit', String(pr.number), '--repo', repo, '--add-label', GAVE_UP_LABEL]).status !== 0) {
       console.log(yellow(`  could not add the ${GAVE_UP_LABEL} label (does it exist in ${repo}?)`));
@@ -574,6 +670,74 @@ async function giveUp(ctx: Ctx, reason: string, details: string): Promise<Result
     must('gh', ['pr', 'comment', String(pr.number), '--repo', repo, '--body-file', '-'], { input: body });
   }
   return { pr: pr.number, outcome: 'gave-up', detail: reason };
+}
+
+// ── network log and usage ────────────────────────────────────────────────────
+
+interface AuditRow {
+  ts: number;
+  domain: string;
+  port: number | null;
+  method: string | null;
+  path: string | null;
+  action: string;
+  res_status: number | null;
+}
+
+const AUDIT_PAGE = 1000;
+const AUDIT_MAX = 20_000;
+
+/** The agent container's traffic from Huddle's audit log: no headers or bodies, only what went where. */
+async function networkLog(ctx: Ctx): Promise<{ requests: AuditRow[]; requested: string[] } | null> {
+  const name = ctx.container;
+  if (!name) return null;
+  try {
+    const requests: AuditRow[] = [];
+    for (let offset = 0; offset < AUDIT_MAX; offset += AUDIT_PAGE) {
+      const page = await get<AuditRow[]>(`/api/audit?container=${encodeURIComponent(name)}&limit=${AUDIT_PAGE}&offset=${offset}`);
+      requests.push(...page.map(({ ts, domain, port, method, path: p, action, res_status }) => ({ ts, domain, port, method, path: p, action, res_status })));
+      if (page.length < AUDIT_PAGE) break;
+    }
+    const rules = await get<{ domain: string }[]>(`/api/rules?container=${encodeURIComponent(name)}&status=requested`);
+    return { requests: requests.reverse(), requested: [...new Set(rules.map((r) => r.domain))] };
+  } catch (err) {
+    console.log(yellow(`  could not read the network log of ${name}: ${err instanceof Error ? err.message : String(err)}`));
+    return null;
+  }
+}
+
+async function saveNetworkLog(ctx: Ctx, out: string): Promise<void> {
+  const log = await networkLog(ctx);
+  if (!log) return;
+  fs.mkdirSync(out, { recursive: true });
+  const file = path.join(out, `pr-${ctx.pr.number}-network.json`);
+  fs.writeFileSync(file, `${JSON.stringify({ pr: ctx.pr.number, container: ctx.container, ...log }, null, 2)}\n`);
+  console.log(dim(`  network log: ${file}`));
+}
+
+/** A host name as text for a public comment; anything else is not shown as-is. */
+const hostText = (d: string) => (/^[A-Za-z0-9.-]{1,253}$/.test(d) ? `\`${d}\`` : '_(invalid host name)_');
+
+/** Usage and network lines for the PR comment. */
+async function runFacts(ctx: Ctx): Promise<string[]> {
+  const lines: string[] = [];
+  if (ctx.usage.turns) lines.push(`**Claude Code:** ${ctx.usage.turns} turns, $${ctx.usage.costUsd.toFixed(2)}`);
+  const log = await networkLog(ctx);
+  if (log) {
+    const byHost = new Map<string, { allowed: number; denied: number }>();
+    for (const r of log.requests) {
+      const h = byHost.get(r.domain) ?? { allowed: 0, denied: 0 };
+      if (r.action === 'allow') h.allowed++;
+      else h.denied++;
+      byHost.set(r.domain, h);
+    }
+    const hosts = [...byHost.entries()].sort((a, b) => b[1].allowed + b[1].denied - (a[1].allowed + a[1].denied)).slice(0, 15);
+    lines.push(`**Network:** ${hosts.length ? hosts.map(([d, h]) => `${hostText(d)} ${h.allowed}${h.denied ? ` (+${h.denied} blocked)` : ''}`).join(', ') : 'no requests logged'}`);
+    if (log.requested.length) {
+      lines.push(`**Blocked hosts it asked for:** ${log.requested.slice(0, 15).map(hostText).join(', ')}. A dependency that suddenly needs a new host deserves a look.`);
+    }
+  }
+  return lines.length ? ['', ...lines] : [];
 }
 
 async function containerExists(name: string): Promise<boolean> {
