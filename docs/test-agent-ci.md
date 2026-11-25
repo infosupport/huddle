@@ -14,6 +14,7 @@ Other safeguards in the workflow:
 
 - **The judge comes from the base branch.** The agent's prompt, its MCP config and its pinned tools (`.github/agent/`) are taken from the PR's base branch, so a PR cannot edit them to pass its own test. A PR that changes `.github/agent/` is still tested with the old version. The new version takes effect once it is merged. (If the base branch has no `.github/agent/` yet, the run uses the PR's copy and shows a warning.) The files are installed after the PR's own build steps, so a changed build script cannot overwrite them. This guards against simple tampering, not against a determined attacker: the PR's code runs on the same runner (the Huddle container even gets the Docker socket), and someone with write access can edit the workflow itself. Requiring review of `.github/` changes, for example with CODEOWNERS, closes that.
 - **Pinned tools.** Actions are pinned by commit SHA. The Playwright MCP server and its dependencies are locked by `.github/agent/package-lock.json`, so Renovate can update them like any other dependency. `npm ci` runs with `--ignore-scripts`.
+- **The allowlist is the boundary.** The agent runs in permission mode `default`: tools and commands outside its allowlist are denied, because nobody can approve them in CI. Chained commands are checked one by one.
 - **The agent only reads and writes what it needs.** It may read its prompt, `gateway/test/e2e/` and its own output files, and write only `evidence.md`, `report.md` and `findings.md`. Before it starts, symlinks in the checkout and any `report.md` committed by the PR are removed, so a PR can't point the agent at the login file or supply its own report. Its shell access is `docker exec` into the target container only.
 - **The operator token stays out of reach.** The browser's login file is written to `$RUNNER_TEMP`, outside the working directory, and reading it is explicitly denied. The agent works as the operator through the logged-in browser, but never reads the token itself.
 - **One run per PR.** A new push cancels the run in progress, and every run updates the same PR comment.
@@ -123,7 +124,7 @@ Caveats:
 
 - `DELETE /api/authz/grants/<container>` with a JSON content-type and an empty body returns 500 (the body parser's "Body cannot be empty"). Probably should be a 4xx or an accepted empty body. Seen in one VM run.
 - The gateway refuses to remove containers it did not create itself ("not created by this container"). May be by design.
-- In CI, Claude Code's safety classifier blocked a test command that POSTed `secretbody=…` to an outside host, which left Firewall and HTTPS interception UNCLEAR. The prompt now asks for neutral test data.
+- In CI, Claude Code ran in auto mode, where a safety classifier judges every command. It blocked a POST with `secretbody=…`, and later `docker run --privileged`, which left those areas UNCLEAR (the second time hiding a planted bug). The agent now runs with `--permission-mode default`, so only the tool allowlist decides. The prompt also asks for neutral test data.
 - Two CI runs ended normally without writing `report.md`. The cause is unknown. The `debug` artifact now keeps the transcript, so the next time it can be traced.
 
 ## Open work
