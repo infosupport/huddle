@@ -71,6 +71,12 @@ jobs:
           # Claude Code config from the PR could widen the allowlist or add instructions. The
           # action also restores these from the base branch on PRs; this covers manual runs too.
           rm -rf .claude .mcp.json CLAUDE.md CLAUDE.local.md
+          # The PR's build ran on this runner and could have written user-level Claude config or
+          # set CLAUDE_CONFIG_DIR through GITHUB_ENV. Start from a fresh home and config dir; these
+          # lines come last in GITHUB_ENV, so they win.
+          export HOME="$(mktemp -d "$RUNNER_TEMP/home.XXXXXX")"
+          export CLAUDE_CONFIG_DIR="$(mktemp -d "$RUNNER_TEMP/claude-config.XXXXXX")"
+          printf 'HOME=%s\nCLAUDE_CONFIG_DIR=%s\n' "$HOME" "$CLAUDE_CONFIG_DIR" >> "$GITHUB_ENV"
           # The Playwright MCP server and its dependencies, locked by .github/agent/package-lock.json.
           npm ci --ignore-scripts --prefix .github/agent
           .github/agent/node_modules/.bin/playwright install --with-deps chromium

@@ -85,6 +85,19 @@ When a run has findings, the run page shows "Review deployments" for `security-r
 
 Approve within a day. The encrypted findings artifact is kept for 1 day (`retention-days: 1`). After that, `report-findings` fails and the findings are lost. Rejecting also discards them, and so does a new push to the PR, which cancels the waiting run. The new run reports again if the problem is still there.
 
+### What no workflow change can protect
+
+The `test-agent` job runs the PR's code on the runner: its build scripts, its CLI, and its gateway, which gets the Docker socket and so can control the whole runner. Malicious PR code, including a compromised dependency in a Renovate PR, can therefore:
+
+- tamper with the run, for example to make it pass;
+- read `CLAUDE_CODE_OAUTH_TOKEN` from the agent's process.
+
+The cleanups before the agent starts (base-branch prompt, symlinks, Claude config, a fresh home directory) stop simple attempts, not this. What limits the damage:
+
+- the reporting secrets live on a separate runner, behind approval;
+- code review;
+- a credential with little power: a dedicated API key with a spending limit is safer here than a personal subscription token.
+
 ### What it does not protect
 
 `CLAUDE_CODE_OAUTH_TOKEN` is a repository secret, because every PR run needs it. Anyone with write access can still read it from a PR. Only the reporting secrets sit behind the approval.
