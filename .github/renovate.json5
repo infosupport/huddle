@@ -118,6 +118,8 @@
       matchUpdateTypes: ['major'],
       dependencyDashboardApproval: true,
       automerge: false,
+      // The update agent's rollout (`--skip-majors`) recognises majors by this label.
+      addLabels: ['major'],
     },
     {
       // security-review-gate.yml reads matchPackageNames from this rule (keep the single-quoted list and

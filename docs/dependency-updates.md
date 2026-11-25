@@ -16,7 +16,7 @@ Dependencies are updated by [Renovate](https://docs.renovatebot.com/). The confi
 | GitHub Actions, and the Renovate version (`RENOVATE_VERSION`) used by the config validator in `renovate-config.yml` | One grouped PR ("github actions"), one reviewer. Actions are pinned by digest, so updates are digest refreshes; a re-pointed tag or compromised action must not reach the publish workflows unreviewed. |
 | Lockfile maintenance | Refreshes `package-lock.json` within the existing ranges; the only way transitive dependencies get updated. One reviewer, never automerges: it cannot wait for the release age, and it also refreshes security-critical packages. |
 | Security-critical packages (`node-forge`, `fastify`, `@fastify/**`, `ws`, `better-sqlite3`) | Never automerge. Labelled `needs-security-review`: one reviewer, plus the `security-review-gate` check, which fails until a maintainer (write access or higher) approves the latest commit. The gate also applies to any PR that changes these packages' versions in a `package.json` or `package-lock.json`, with or without the label, so removing the label does not skip it. Changes to `.github/workflows/` or `.github/renovate.json5` need the same approval, so the gate and the package list cannot be weakened unreviewed. |
-| Major updates | Not opened automatically. Approve them from the Dependency Dashboard. |
+| Major updates | Not opened automatically. Approve them from the Dependency Dashboard. Labelled `major`, so the update agent can leave them alone during its rollout. |
 | Security advisories | PR labelled `security`, no automerge, no release-age delay. See [security-fast-lane.md](security-fast-lane.md). |
 
 Other rules worth knowing:
