@@ -64,6 +64,10 @@ jobs:
             echo "::warning::.github/agent is not on the base branch yet, so this run uses the PR's copy."
           fi
           rm -rf base
+          # A PR could plant a symlink (for example to the login file below) or its own
+          # report.md, which would count if the agent writes none. Remove both.
+          find . -type l ! -path './.github/agent/node_modules/*' -print -delete
+          rm -f evidence.md report.md findings.md
           # The Playwright MCP server and its dependencies, locked by .github/agent/package-lock.json.
           npm ci --ignore-scripts --prefix .github/agent
           .github/agent/node_modules/.bin/playwright install --with-deps chromium
@@ -81,7 +85,7 @@ jobs:
             --model claude-sonnet-5-5
             --max-turns 120
             --mcp-config ${{ runner.temp }}/playwright-mcp.json
-            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./**),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)"
+            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(./.github/agent/test-agent.md),Read(./gateway/test/e2e/**),Read(./evidence.md),Read(./report.md),Read(./findings.md),Edit(./evidence.md),Edit(./report.md),Edit(./findings.md)"
             --disallowedTools "Read(//proc/**),Read(/${{ runner.temp }}/**)"
 
       # report.md is agent output: keep only lines in the exact allowed format. Findings are
