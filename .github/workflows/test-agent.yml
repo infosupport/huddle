@@ -82,7 +82,11 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
           prompt: Follow the instructions in .github/agent/test-agent.md. The REPO_DIR placeholder in it means your working directory.
+          # Permission mode "default": only the allowlist below decides, anything else is denied.
+          # Auto mode adds a safety classifier that blocks the very attacks the agent must try
+          # (for example `docker run --privileged`), which left scenarios UNCLEAR.
           claude_args: >-
+            --permission-mode default
             --model claude-sonnet-5-5
             --max-turns 120
             --mcp-config ${{ runner.temp }}/playwright-mcp.json
