@@ -16,6 +16,7 @@ import {
   guardViolations,
   parseNameStatus,
   renovatePrAuthor,
+  requestsByHost,
   sanitizeCommitMessage,
   testWeakeningFlags,
 } from './update-agent-guard';
@@ -79,6 +80,8 @@ const ALLOWED_TOOLS = [
   'Read', 'Edit', 'Write', 'Glob', 'Grep',
   'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(ls:*)', 'Bash(cat:*)',
   'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)',
+  // To undo an experiment, such as a regenerated lockfile.
+  'Bash(git restore:*)',
 ].join(',');
 
 // ── process helpers (no shell: every argument is passed as-is) ──────────────
@@ -321,9 +324,21 @@ async function processPr(ctx: Ctx): Promise<Result> {
         console.log(yellow(`  could not write the network log: ${err instanceof Error ? err.message : String(err)}`));
       }
     }
+    if (!opts.keep && ctx.container) wipeWorkspace(ctx.engine, name);
     await cleanup(name, opts.keep);
     if (!opts.keep) removeDir(dir);
   }
+}
+
+/**
+ * Empties the mounted /workspace from inside the container, as root. On Linux
+ * the files the agent wrote belong to the container's vscode user, which the
+ * host user cannot delete. rm never follows symlinks, and only the container's
+ * view of the mount is touched. Best effort: removeDir reports what is left.
+ */
+function wipeWorkspace(engine: string, name: string): void {
+  run(engine, ['exec', '-u', 'root', name, 'sh', '-c',
+    'pkill -KILL -u vscode; find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} +']);
 }
 
 /**
@@ -345,7 +360,12 @@ async function fixPr(ctx: Ctx, name: string, dir: string): Promise<Result> {
   const gitBaseline = gitMetadata(agent);
 
   const failure = await runAttempts(ctx, agent, prFiles);
-  if (failure) return giveUp(ctx, `failed after ${MAX_ATTEMPTS} attempts`, failure);
+  if (failure) {
+    // Its own explanation is what the reviewer needs most, e.g. "hold this
+    // update until X widens its peer range".
+    const summary = (await agent.readFile('/workspace/out/summary.md')).trim();
+    return giveUp(ctx, failure.reason, failure.output, summary);
+  }
 
   // Nothing the agent or a package's install script left running may change
   // the tree between the checks below and the commit.
@@ -470,8 +490,14 @@ function gitMetadata(agent: Agent): string {
   return r.stdout;
 }
 
-/** Runs Claude Code and verifies its work, up to MAX_ATTEMPTS. Returns '' on success, otherwise the last failure. */
-async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<string> {
+/** Why the attempts ended without a verified fix (reason for the comment, output for its details). */
+interface AttemptFailure {
+  reason: string;
+  output: string;
+}
+
+/** Runs Claude Code and verifies its work, up to MAX_ATTEMPTS. Returns null on success. */
+async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<AttemptFailure | null> {
   const { exec, name } = agent;
   // Hash of the whole working tree, untracked files included, via a throwaway
   // index so the real index stays untouched.
@@ -489,7 +515,6 @@ async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<s
 
   let lastFailure = '';
   let feedback = '';
-  let verifyLog = '';
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     console.log(dim(`  attempt ${attempt}/${MAX_ATTEMPTS}: running Claude Code`));
     const task = feedback ? `${ctx.prompt}\n\nThis is attempt ${attempt}. ${feedback}` : ctx.prompt;
@@ -510,25 +535,25 @@ async function runAttempts(ctx: Ctx, agent: Agent, prFiles: string[]): Promise<s
         throw new Error(`Claude Code ${claude.timedOut ? 'timed out' : `exited with ${claude.status}`} without changing anything. ` +
           `Check the credential and the requested rules for ${name} in the portal.`);
       }
-      // After a failed verification, an attempt that changes nothing means the
-      // agent sees no code fix (often an environment problem). Another
-      // attempt would re-verify the same tree, so stop with that output.
-      if (verifyLog) break;
-      lastFailure = 'the agent made no changes';
-      feedback = 'Your previous attempt changed nothing.';
-      continue;
+      // An attempt that changes nothing is the agent's answer: it sees no code
+      // fix (an unfixable update, or an environment problem it explains in its
+      // summary). Another attempt would only reach the same conclusion, or
+      // re-verify the same tree.
+      return lastFailure
+        ? { reason: `the agent found no further fix after verification failed (attempt ${attempt} of ${MAX_ATTEMPTS})`, output: lastFailure }
+        : { reason: 'the agent found no code fix', output: '' };
     }
     const projects = affectedProjects([...prFiles, ...(await changedFiles())]);
     console.log(dim(`  verifying: npm ci, build and test in ${projects.join(', ')}`));
     lastFailure = await verify(exec, projects);
-    if (!lastFailure) break;
-    verifyLog = `/workspace/input/verify-${attempt}.log`;
+    if (!lastFailure) return null;
+    const verifyLog = `/workspace/input/verify-${attempt}.log`;
     await agent.writeFile(verifyLog, tail(lastFailure, 30_000));
     feedback = `Your previous change did not pass verification; the output is in ${verifyLog}. ` +
       'Fix that, keeping the earlier work where it is right.';
     console.log(yellow('  verification failed'));
   }
-  return lastFailure;
+  return { reason: `verification still failed after ${MAX_ATTEMPTS} attempts`, output: lastFailure };
 }
 
 /** Prints the agent's final answer and adds its cost and turns to ctx.usage. */
@@ -567,12 +592,14 @@ function printUntrusted(text: string, color: (s: string) => string = dim, max = 
 /** Runs what CI runs, for the given projects. Returns '' when everything passes, otherwise the failing output. */
 async function verify(exec: Exec, projects: string[]): Promise<string> {
   for (const project of projects) {
+    // One stream, in order: the end of the output is then the failure itself,
+    // not stderr's build warnings appended after it.
     const r = await exec(
-      ['bash', '-lc', 'npm ci --no-audit --no-fund && npm run build --if-present && CI=true npm test --if-present'],
+      ['bash', '-lc', '{ npm ci --no-audit --no-fund && npm run build --if-present && CI=true npm test --if-present; } 2>&1'],
       `/workspace/repo/${project}`,
       { timeout: VERIFY_TIMEOUT_MS },
     );
-    if (r.status !== 0) return `### ${project} failed (exit ${r.status ?? 'timeout'})\n${r.stdout}\n${r.stderr}`;
+    if (r.status !== 0) return `### ${project} failed (exit ${r.status ?? 'timeout'})\n${r.stdout}${r.stderr ? `\n${r.stderr}` : ''}`;
   }
   return '';
 }
@@ -654,7 +681,7 @@ async function publishResult(ctx: Ctx, agent: Agent, publish: string, bundle: st
 
 // ── outcome and cleanup ──────────────────────────────────────────────────────
 
-async function giveUp(ctx: Ctx, reason: string, details: string): Promise<Result> {
+async function giveUp(ctx: Ctx, reason: string, details: string, summary = ''): Promise<Result> {
   const { pr, repo, opts } = ctx;
   console.log(red(`  giving up: ${reason}`));
   if (!opts.dryRun) {
@@ -664,6 +691,9 @@ async function giveUp(ctx: Ctx, reason: string, details: string): Promise<Result
       `### Update agent: gave up`,
       '',
       `**Reason:** ${reason}. ${ctx.container ? 'Nothing was pushed; this' : 'This'} PR needs a person.`,
+      ...(summary
+        ? ['', 'The agent\'s own explanation, written after reading untrusted release notes and logs:', '', quoteUntrusted(tail(summary, 20_000))]
+        : []),
       details ? `\n<details><summary>Last output</summary>\n\n\`\`\`\n${tail(details, 6_000).replace(/```/g, "'''")}\n\`\`\`\n</details>` : '',
       ...facts,
       '',
@@ -731,14 +761,7 @@ async function runFacts(ctx: Ctx): Promise<string[]> {
   if (ctx.usage.turns) lines.push(`**Claude Code:** ${ctx.usage.turns} turns, $${ctx.usage.costUsd.toFixed(2)}`);
   const log = await networkLog(ctx);
   if (log) {
-    const byHost = new Map<string, { allowed: number; denied: number }>();
-    for (const r of log.requests) {
-      const h = byHost.get(r.domain) ?? { allowed: 0, denied: 0 };
-      if (r.action === 'allow') h.allowed++;
-      else h.denied++;
-      byHost.set(r.domain, h);
-    }
-    const hosts = [...byHost.entries()].sort((a, b) => b[1].allowed + b[1].denied - (a[1].allowed + a[1].denied)).slice(0, 15);
+    const hosts = requestsByHost(log.requests).slice(0, 15);
     lines.push(`**Network:** ${hosts.length ? hosts.map(([d, h]) => `${hostText(d)} ${h.allowed}${h.denied ? ` (+${h.denied} blocked)` : ''}`).join(', ') : 'no requests logged'}`);
     if (log.requested.length) {
       lines.push(`**Blocked hosts it asked for:** ${log.requested.slice(0, 15).map(hostText).join(', ')}. A dependency that suddenly needs a new host deserves a look.`);
