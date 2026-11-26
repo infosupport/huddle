@@ -202,3 +202,20 @@ test('sanitizeCommitMessage drops attribution trailers, falls back when empty an
   assert.equal(g.isAgentCommit({ authors: [], messageBody: 'mentions Huddle-Update-Agent: inline' }), false);
 });
 
+
+test('requestsByHost counts proxy decisions, not Huddle admin events', () => {
+  const rows = [
+    { domain: 'firewall', action: 'admin:rules-import-replace' },
+    { domain: 'docker', action: 'airlock:on' },
+    { domain: 'api.anthropic.com', action: 'admin:token-register' },
+    { domain: 'api.anthropic.com', action: 'allow' },
+    { domain: 'registry.npmjs.org', action: 'allow' },
+    { domain: 'registry.npmjs.org', action: 'allow' },
+    { domain: 'evil.example', action: 'deny' },
+  ];
+  assert.deepEqual(g.requestsByHost(rows), [
+    ['registry.npmjs.org', { allowed: 2, denied: 0 }],
+    ['api.anthropic.com', { allowed: 1, denied: 0 }],
+    ['evil.example', { allowed: 0, denied: 1 }],
+  ]);
+});

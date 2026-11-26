@@ -275,3 +275,20 @@ export function decide(pr: PrInfo, opts: { skipMajors?: boolean } = {}): PrDecis
   if (!failing) return skip('CI is not failing');
   return { action: 'fix' };
 }
+
+/**
+ * Requests per host from Huddle's audit log, busiest first. Only proxy
+ * decisions count: the log also holds Huddle's own events for the container
+ * (`admin:token-register`, `airlock:on`, ...), which are no requests.
+ */
+export function requestsByHost(rows: { domain: string; action: string }[]): [string, { allowed: number; denied: number }][] {
+  const byHost = new Map<string, { allowed: number; denied: number }>();
+  for (const r of rows) {
+    if (r.action !== 'allow' && r.action !== 'deny') continue;
+    const h = byHost.get(r.domain) ?? { allowed: 0, denied: 0 };
+    if (r.action === 'allow') h.allowed++;
+    else h.denied++;
+    byHost.set(r.domain, h);
+  }
+  return [...byHost.entries()].sort((a, b) => b[1].allowed + b[1].denied - (a[1].allowed + a[1].denied));
+}

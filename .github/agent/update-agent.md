@@ -26,3 +26,8 @@ You have no GitHub access and no access to the internet beyond the npm registry.
 Write two files:
 - `/workspace/out/commit-msg.txt`: a conventional commit message, for example `fix(deps): adapt to fastify 6 reply API`, followed by a body that explains the breaking change and what you changed.
 - `/workspace/out/summary.md`: a short Markdown summary for the PR reviewer. Cover the breaking change, what you changed and why, and anything the reviewer should check by hand. No heading; it is placed under one.
+
+## When there is no code fix
+Some updates cannot be fixed in our code, for example when another package's peer range does not allow the new version yet. On a retry, the verification may also fail for a reason the update did not cause. In both cases:
+- Leave the working tree as you found it: undo your experiments with `git restore` (also a regenerated lockfile). An attempt that changes nothing ends the run, and the PR goes to a person.
+- Write only `/workspace/out/summary.md`: the cause, why you could not fix it, and what a person should do. It is posted on the PR.
