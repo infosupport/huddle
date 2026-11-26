@@ -450,6 +450,11 @@ async function startAgent(ctx: Ctx, name: string, ws: string): Promise<Agent> {
     // pkill exits 1 when nothing was left to kill; anything else means it failed.
     const kill = root('pkill -KILL -u vscode');
     if (kill.status !== 0 && kill.status !== 1) throw new Error(`Could not stop the agent's processes in ${name}.`);
+    // The container's keep-alive runs as vscode too. A Huddle from before the
+    // fix in its keep-alive loop stops the container here.
+    if (root('true').status !== 0) {
+      throw new Error(`${name} stopped when the agent's processes were stopped. Update Huddle (\`huddle init\`) and run again.`);
+    }
   };
   // A timeout only kills the local `docker exec` client, not the process in the
   // container, so every exec that timed out or was interrupted stops them all.

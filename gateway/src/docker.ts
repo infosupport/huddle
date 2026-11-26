@@ -1144,7 +1144,12 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const createBody = {
     Image: imageName,
     Entrypoint: ['/bin/sh'],
-    Cmd: ['-c', 'while sleep 1000; do :; done'],
+    // Keep-alive as PID 1 (the image's user, vscode). Not `while sleep 1000`:
+    // killing that sleep (`pkill -u vscode`, as `huddle update-agent` does to
+    // stop the agent's processes) would end the loop and stop the container.
+    // A killed sleep now only restarts it, and PID 1 itself ignores SIGKILL
+    // from inside its namespace.
+    Cmd: ['-c', 'while :; do sleep 1000; done'],
     Env: env,
     Labels: {
       'com.intellij.devcontainer.id': devcontainerId,
