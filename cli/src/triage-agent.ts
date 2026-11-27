@@ -32,9 +32,11 @@ import {
   TriagePrInfo,
   TriageReport,
   advisoryIds,
+  extractTriageJson,
   decideTriage,
   lockfileBumps,
   ownCommentId,
+  parseLineCounts,
   parseTriage,
   renderComment,
   renderPrivate,
@@ -73,7 +75,7 @@ interface Result {
 const MAX_TURNS = 60;
 const CLAUDE_TIMEOUT_MS = 20 * 60 * 1000;
 const PROMPT_PATH = '.github/agent/triage-agent.md';
-const PR_FIELDS = 'number,title,author,isCrossRepository,headRefName,headRefOid,labels';
+const PR_FIELDS = 'number,title,author,isCrossRepository,headRefName,headRefOid,labels,state';
 /** The design doc's allowlist for the triage agent (airlock mode, so no global rules apply). */
 const TRIAGE_RULES: AgentRule[] = [
   { domain: 'registry.npmjs.org', status: 'allow' }, // npm view, npm pack of the old and new version
@@ -92,7 +94,8 @@ const TRIAGE_RULES: AgentRule[] = [
  * `npm install`, so the bumped package's install scripts are not run on purpose.
  */
 const ALLOWED_TOOLS = [
-  'Read', 'Glob', 'Grep', 'Write(//workspace/out/**)', 'Edit(//workspace/out/**)',
+  // Edit rules cover every file-writing tool, Write included; a Write(path) rule would match nothing.
+  'Read', 'Glob', 'Grep', 'Edit(//workspace/out/**)',
   'Bash(curl:*)', 'Bash(npm view:*)', 'Bash(npm pack:*)', 'Bash(tar:*)', 'Bash(diff:*)', 'Bash(mkdir:*)',
   'Bash(ls:*)', 'Bash(cat:*)', 'Bash(head:*)',
   'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git grep:*)',
@@ -230,8 +233,12 @@ async function triagePr(ctx: Ctx, name: string, ws: string): Promise<Result> {
   if (must('git', ['-C', repoDir, 'rev-parse', 'HEAD']).trim() !== pr.headRefOid) {
     return { pr: pr.number, outcome: 'skipped', detail: 'branch moved while starting; run again' };
   }
-  // Listed before the container exists: afterwards the host never reads the mounted folder.
-  const knownFiles = new Set(must('git', ['-C', repoDir, 'ls-tree', '-r', '-z', '--name-only', 'HEAD']).split('\0').filter(Boolean));
+  // Read before the container exists (afterwards the host never reads the mounted folder),
+  // from git's objects rather than the checkout, so a symlink in the PR is not followed.
+  // grep exits 1 when nothing matched: a repository without text files.
+  const grep = run('git', ['-C', repoDir, 'grep', '-c', '-I', '-z', '', 'HEAD']);
+  if (grep.status !== 0 && grep.status !== 1) throw new Error(`git grep in the PR checkout failed: ${grep.stderr.trim()}`);
+  const lineCounts = parseLineCounts(grep.stdout);
   const { bumps, advisories } = writeInputs(ctx, path.join(ws, 'input'));
 
   ctx.container = name;
@@ -245,16 +252,17 @@ async function triagePr(ctx: Ctx, name: string, ws: string): Promise<Result> {
     'claude', '-p', ctx.prompt, '--output-format', 'json', '--max-turns', String(MAX_TURNS),
     ...(model ? ['--model', model] : []), '--allowedTools', ALLOWED_TOOLS,
   ], '/workspace/repo', { timeout: CLAUDE_TIMEOUT_MS, liveStderr: !inActions() });
-  reportClaude(ctx, claude);
+  const answer = reportClaude(ctx, claude);
   agent.stopAll();
 
-  const raw = (await agent.readFile('/workspace/out/triage.json')).trim();
+  // The prompt asks for the same JSON in the final answer, in case writing the file failed.
+  const raw = (await agent.readFile('/workspace/out/triage.json')).trim() || extractTriageJson(answer);
   if (!raw && claude.status !== 0) {
     // Not the PR's fault: credential, firewall or Claude Code itself.
     throw new Error(`Claude Code ${claude.timedOut ? 'timed out' : `exited with ${claude.status}`} without an analysis. ` +
       `Check the credential and the requested rules for ${name} in the portal.`);
   }
-  const parsed = raw ? parseTriage(raw, knownFiles) : { ok: false as const, errors: ['the agent wrote no triage.json'] };
+  const parsed = raw ? parseTriage(raw, lineCounts) : { ok: false as const, errors: ['the agent wrote no triage.json'] };
   let report: TriageReport | null = null;
   let problem: string | undefined;
   if (parsed.ok) {
@@ -269,7 +277,7 @@ async function triagePr(ctx: Ctx, name: string, ws: string): Promise<Result> {
 
   const url = actionsRunUrl();
   const body = renderComment({
-    report, problem, bumps, advisories, repo, headSha: pr.headRefOid,
+    report, problem, bumps, title: pr.title, advisories, repo, headSha: pr.headRefOid,
     facts: await runFacts(ctx.container, ctx.usage),
     runner: url ? `Run by [GitHub Actions](${url})` : `Run by ${ctx.login}`,
   });
@@ -307,11 +315,21 @@ function writeInputs(ctx: Ctx, input: string): { bumps: Bump[]; advisories: stri
     throw new Error(`could not read ${file} at ${ref}: ${r.stderr.trim()}`);
   };
   const bumps: Bump[] = [];
+  const unreadable: string[] = [];
   for (const f of view.files ?? []) {
     if (!/(^|\/)package-lock\.json$/.test(f.path)) continue;
-    bumps.push(...lockfileBumps(f.path, readAt(f.path, mergeBase), readAt(f.path, pr.headRefOid)));
+    try {
+      bumps.push(...lockfileBumps(f.path, readAt(f.path, mergeBase), readAt(f.path, pr.headRefOid)));
+    } catch (err) {
+      // A broken lockfile (conflict markers, say) still gets an analysis, or at least the fallback comment.
+      unreadable.push(f.path);
+      console.log(yellow(`  could not read the versions in ${f.path}: ${err instanceof Error ? err.message : String(err)}`));
+    }
   }
   fs.writeFileSync(path.join(input, 'bumps.json'), `${JSON.stringify(bumps, null, 2)}\n`);
+  if (unreadable.length) {
+    fs.writeFileSync(path.join(input, 'bumps-incomplete.txt'), `bumps.json leaves out these lockfiles, which could not be parsed:\n${unreadable.join('\n')}\n`);
+  }
 
   const advisories = advisoryIds(`${view.title}\n${view.body ?? ''}`);
   fs.mkdirSync(path.join(input, 'advisories'));
@@ -335,8 +353,11 @@ function claimsBeyondAdvisory(raw: string): boolean {
   }
 }
 
-/** Prints the agent's final answer (not in Actions: the log is public) and adds its cost and turns to ctx.usage. */
-function reportClaude(ctx: Ctx, r: RunResult): void {
+/**
+ * Prints the agent's final answer (not in Actions: the log is public), adds
+ * its cost and turns to ctx.usage, and returns the answer.
+ */
+function reportClaude(ctx: Ctx, r: RunResult): string {
   const out = parseClaudeOutput(r.stdout);
   if (out) {
     ctx.usage.costUsd += out.costUsd;
@@ -348,6 +369,7 @@ function reportClaude(ctx: Ctx, r: RunResult): void {
     else if (!out && r.stdout.trim()) printUntrusted(r.stdout.trim());
   }
   if (r.status !== 0 && r.stderr.trim()) printUntrusted(r.stderr.trim());
+  return out?.result ?? '';
 }
 
 /**

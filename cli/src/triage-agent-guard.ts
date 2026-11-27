@@ -22,6 +22,8 @@ export interface TriagePrInfo {
   headRefName: string;
   headRefOid: string;
   labels: { name: string }[];
+  /** OPEN, CLOSED or MERGED, as gh reports it. */
+  state?: string;
 }
 
 export type TriageDecision = { action: 'triage' } | { action: 'skip'; reason: string };
@@ -33,6 +35,8 @@ export type TriageDecision = { action: 'triage' } | { action: 'skip'; reason: st
  */
 export function decideTriage(pr: TriagePrInfo): TriageDecision {
   const skip = (reason: string): TriageDecision => ({ action: 'skip', reason });
+  // A merged PR's branch is usually gone, and its analysis no longer helps a reviewer.
+  if (pr.state !== undefined && pr.state.toUpperCase() !== 'OPEN') return skip(`the PR is ${pr.state.toLowerCase()}`);
   if (!pr.labels.some((l) => l.name === SECURITY_LABEL)) return skip(`not labelled ${SECURITY_LABEL}`);
   if (pr.isCrossRepository !== false) return skip('not a branch in this repository');
   const prefix = renovateBranchPrefix();
@@ -143,11 +147,38 @@ const REPO_PATH = /^[A-Za-z0-9._+-]+(\/[A-Za-z0-9._+-]+)*$/;
 const TEXT_MAX = 500;
 
 /**
- * Checks the agent's triage.json. Files must exist in the PR (knownFiles,
- * listed by the CLI before the agent ran). Error messages never quote the
- * agent's values, so they are safe to show.
+ * Line counts per text file from `git grep -c -I -z '' <ref>`, which reads
+ * git's objects, not the checkout: lines of "<ref>:<path>\0<count>\n".
+ * Binary and empty files are not listed.
  */
-export function parseTriage(text: string, knownFiles: Set<string>): { ok: true; report: TriageReport } | { ok: false; errors: string[] } {
+export function parseLineCounts(output: string, ref = 'HEAD'): Map<string, number> {
+  const counts = new Map<string, number>();
+  const prefix = `${ref}:`;
+  for (const m of output.matchAll(/([^\0]*)\0(\d+)\n/g)) {
+    const entry = m[1].replace(/^\n/, '');
+    if (entry.startsWith(prefix)) counts.set(entry.slice(prefix.length), Number(m[2]));
+  }
+  return counts;
+}
+
+/**
+ * The JSON of the agent's final answer, for when it could not write
+ * triage.json: the answer itself, or its first ```json block. '' if none.
+ */
+export function extractTriageJson(answer: string): string {
+  const fenced = /```(?:json)?\s*\n([\s\S]*?)\n\s*```/.exec(answer);
+  if (fenced) return fenced[1].trim();
+  const t = answer.trim();
+  return t.startsWith('{') ? t : '';
+}
+
+/**
+ * Checks the agent's triage.json. Files must be text files in the PR, and
+ * line ranges must lie inside them (lineCounts, read by the CLI before the
+ * agent ran). Error messages never quote the agent's values, so they are
+ * safe to show.
+ */
+export function parseTriage(text: string, lineCounts: Map<string, number>): { ok: true; report: TriageReport } | { ok: false; errors: string[] } {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -191,12 +222,13 @@ export function parseTriage(text: string, knownFiles: Set<string>): { ok: true; 
     const file = typeof e.file === 'string' ? e.file : '';
     if (!REPO_PATH.test(file) || file.split('/').some((s) => s === '.' || s === '..') || file.length > 300) {
       errors.push(`usage[${i}].file must be a path relative to the repository root`);
-    } else if (!knownFiles.has(file)) {
-      errors.push(`usage[${i}].file is not a file in the PR`);
+    } else if (!lineCounts.has(file)) {
+      errors.push(`usage[${i}].file is not a text file in the PR`);
     }
-    const okLine = (n: unknown) => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 1_000_000;
+    const lines = lineCounts.get(file) ?? 1_000_000;
+    const okLine = (n: unknown) => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= lines;
     if (!okLine(e.startLine) || !okLine(e.endLine) || (e.startLine as number) > (e.endLine as number)) {
-      errors.push(`usage[${i}] needs lines with 1 <= startLine <= endLine`);
+      errors.push(`usage[${i}] needs lines with 1 <= startLine <= endLine <= the file's length`);
     }
     return { file, startLine: Number(e.startLine), endLine: Number(e.endLine), note: str(`usage[${i}].note`, 200, e.note) };
   });
@@ -239,14 +271,27 @@ function headline(packages: { name: string; from: string; to: string }[], adviso
   return `### Security triage: ${pkgs}${more}${ids}`;
 }
 
-/** The packages the PR changed, as the headline shows them when the agent gave no valid report. */
-function bumpPackages(bumps: Bump[]): { name: string; from: string; to: string }[] {
+/**
+ * The packages the PR changed, as the headline shows them when the agent gave
+ * no valid report. Packages the PR title names come first ("update dependency
+ * node-forge to v1.3.2", or a security-bump.sh branch), so a transitive bump
+ * does not push the vulnerable package out of the headline.
+ */
+function bumpPackages(bumps: Bump[], title = ''): { name: string; from: string; to: string }[] {
   const seen = new Map<string, { name: string; from: string; to: string }>();
   for (const b of bumps) {
     if (!b.before.length || !b.after.length || seen.has(b.name)) continue;
     seen.set(b.name, { name: b.name, from: b.before.join('/'), to: b.after.join('/') });
   }
-  return [...seen.values()];
+  const words = new Set(title.toLowerCase().split(/[\s,;:()[\]]+/));
+  const named = (p: { name: string }) => words.has(p.name.toLowerCase());
+  const all = [...seen.values()];
+  return [...all.filter(named), ...all.filter((p) => !named(p))];
+}
+
+/** An answer whose recommendation does not follow from its own analysis. */
+function contradicts(r: TriageReport): boolean {
+  return r.reachable === 'yes' && (r.affected === 'no' || r.recommendation === 'merge-low-urgency');
 }
 
 const RECOMMENDATION_TEXT: Record<Recommendation, string> = {
@@ -260,6 +305,8 @@ export interface CommentInput {
   /** Why there is no report (host text only), when report is null. */
   problem?: string;
   bumps: Bump[];
+  /** The PR title, to put the package it names first when there is no report. */
+  title?: string;
   advisories?: string[];
   repo: string;
   headSha: string;
@@ -282,7 +329,7 @@ export function renderComment(c: CommentInput): string {
   if (!r) {
     return [
       TRIAGE_MARKER,
-      headline(bumpPackages(c.bumps), c.advisories ?? []),
+      headline(bumpPackages(c.bumps, c.title), c.advisories ?? []),
       '',
       `**Affected:** unclear (${c.problem ?? 'no analysis'})  `,
       `${deepDive}: do the full manual review from the security fast lane.`,
@@ -305,7 +352,9 @@ export function renderComment(c: CommentInput): string {
   const unclear = r.affected === 'unclear' || r.reachable === 'unclear';
   const recommendation = unclear
     ? `${deepDive}: the agent could not settle this, so do the full manual review from the security fast lane.`
-    : `**Recommendation:** ${RECOMMENDATION_TEXT[r.recommendation]}`;
+    : contradicts(r)
+      ? `${deepDive}: the agent's own analysis contradicts its recommendation (${RECOMMENDATION_TEXT[r.recommendation]}), so do the full manual review.`
+      : `**Recommendation:** ${RECOMMENDATION_TEXT[r.recommendation]}`;
   return [
     TRIAGE_MARKER,
     headline(r.packages, r.advisories),

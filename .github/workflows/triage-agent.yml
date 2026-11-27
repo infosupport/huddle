@@ -26,11 +26,12 @@ permissions: {}
 
 jobs:
   triage-agent:
-    # Only the security label, on a branch in this repository. The CLI checks again who opened the
-    # PR (Renovate, or a security/* branch from security-bump.sh).
+    # Only the security label, on an open PR from a branch in this repository. The CLI checks again
+    # who opened the PR (Renovate, or a security/* branch from security-bump.sh) and that it is open.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'security' &&
+       github.event.pull_request.state == 'open' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     # On the job, not the workflow: every other label (dependencies, needs-security-review, ...) also
     # starts this workflow, and at workflow level its skipped run would cancel the real one. The newest

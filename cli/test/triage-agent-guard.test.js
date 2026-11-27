@@ -22,6 +22,9 @@ test('decideTriage takes security PRs from Renovate or security/* branches in th
     return d.action === 'skip' ? d.reason : null;
   };
   assert.equal(reason(pr()), null);
+  assert.equal(reason(pr({ state: 'OPEN' })), null);
+  assert.match(reason(pr({ state: 'MERGED' })), /the PR is merged/);
+  assert.match(reason(pr({ state: 'CLOSED' })), /the PR is closed/);
   // security-bump.sh: a person opens it from a security/* branch.
   assert.equal(reason(pr({ author: { login: 'some-maintainer' }, headRefName: 'security/node-forge-1.3.2' })), null);
   assert.match(reason(pr({ labels: [{ name: 'dependencies' }] })), /not labelled security/);
@@ -93,7 +96,7 @@ function report(over = {}) {
   };
 }
 
-const files = new Set(['gateway/src/tls-ca.ts', 'gateway/src/proxy.ts']);
+const files = new Map([['gateway/src/tls-ca.ts', 200], ['gateway/src/proxy.ts', 50]]);
 
 test('parseTriage accepts a well-formed report', () => {
   const r = t.parseTriage(JSON.stringify(report()), files);
@@ -119,9 +122,10 @@ test('parseTriage rejects reports the host cannot render safely', () => {
   assert.match(errors({ usage: [{ file: '../etc/passwd', startLine: 1, endLine: 1, note: '' }] }), /usage\[0\]\.file/);
   assert.match(errors({ usage: [{ file: '/etc/passwd', startLine: 1, endLine: 1, note: '' }] }), /usage\[0\]\.file/);
   assert.match(errors({ usage: [{ file: 'docs/@maintainer', startLine: 1, endLine: 1, note: '' }] }), /usage\[0\]\.file/);
-  assert.match(errors({ usage: [{ file: 'gateway/src/nope.ts', startLine: 1, endLine: 1, note: '' }] }), /not a file in the PR/);
+  assert.match(errors({ usage: [{ file: 'gateway/src/nope.ts', startLine: 1, endLine: 1, note: '' }] }), /not a text file in the PR/);
   assert.match(errors({ usage: [{ file: 'gateway/src/proxy.ts', startLine: 9, endLine: 3, note: '' }] }), /lines/);
   assert.match(errors({ usage: [{ file: 'gateway/src/proxy.ts', startLine: 0, endLine: 3, note: '' }] }), /lines/);
+  assert.match(errors({ usage: [{ file: 'gateway/src/proxy.ts', startLine: 40, endLine: 51, note: '' }] }), /file's length/);
   assert.match(errors({ beyondAdvisory: 'no' }), /beyondAdvisory/);
   assert.match(errors({ breakingChanges: 'x'.repeat(2000) }), /breakingChanges/);
 });
@@ -203,4 +207,34 @@ test('renderComment keeps package names and versions inert in the headline', () 
     bumps: [],
   });
   assert.match(body, /^### Security triage: `@octocat\/www\.evil\.com` `GH-1` → `www\.evil\.com`/m);
+});
+
+test('renderComment sends a recommendation that contradicts the analysis to a person', () => {
+  const low = t.renderComment({ ...ctx, report: report({ affected: 'yes', reachable: 'yes', recommendation: 'merge-low-urgency' }), bumps: [] });
+  assert.match(low, /^\*\*Recommendation:\*\* needs a human deep-dive: the agent's own analysis contradicts its recommendation \(merge \(low urgency\)\)/m);
+  const notAffected = t.renderComment({ ...ctx, report: report({ affected: 'no', reachable: 'yes', recommendation: 'merge-now' }), bumps: [] });
+  assert.match(notAffected, /^\*\*Recommendation:\*\* needs a human deep-dive/m);
+  // Consistent answers keep their recommendation.
+  const now = t.renderComment({ ...ctx, report: report({ affected: 'yes', reachable: 'yes', recommendation: 'merge-now' }), bumps: [] });
+  assert.match(now, /^\*\*Recommendation:\*\* merge now$/m);
+  const notReachable = t.renderComment({ ...ctx, report: report({ affected: 'yes', reachable: 'no' }), bumps: [] });
+  assert.match(notReachable, /^\*\*Recommendation:\*\* merge \(low urgency\)$/m);
+});
+
+test('renderComment without a report puts the package the PR title names first', () => {
+  const bumps = ['@types/a', '@types/b', 'abc', 'ws'].map((name) => ({ lockfile: 'gateway/package-lock.json', name, before: ['1.0.0'], after: ['1.0.1'] }));
+  const body = t.renderComment({ ...ctx, report: null, bumps, problem: 'x', title: 'fix(deps): update dependency ws to v1.0.1 [security]' });
+  assert.match(body, /^### Security triage: `ws` `1\.0\.0` → `1\.0\.1`, `@types\/a`/m);
+});
+
+test('parseLineCounts reads git grep -c -z output, paths with colons included', () => {
+  const out = 'HEAD:cli/package.json\x0040\nHEAD:docs/a:b.md\x007\n';
+  assert.deepEqual([...t.parseLineCounts(out)], [['cli/package.json', 40], ['docs/a:b.md', 7]]);
+  assert.equal(t.parseLineCounts('').size, 0);
+});
+
+test('extractTriageJson takes the answer itself or its json block', () => {
+  assert.equal(t.extractTriageJson(' {"a":1} '), '{"a":1}');
+  assert.equal(t.extractTriageJson('Done.\n```json\n{"a":1}\n```\nBye'), '{"a":1}');
+  assert.equal(t.extractTriageJson('Wrote /workspace/out/triage.json.'), '');
 });
