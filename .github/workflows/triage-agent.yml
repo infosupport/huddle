@@ -24,11 +24,6 @@ on:
 
 permissions: {}
 
-# The newest run for a PR wins; a cancelled run has posted nothing yet or only its comment.
-concurrency:
-  group: triage-agent-pr-${{ github.event.pull_request.number || inputs.pr }}
-  cancel-in-progress: true
-
 jobs:
   triage-agent:
     # Only the security label, on a branch in this repository. The CLI checks again who opened the
@@ -37,6 +32,12 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'security' &&
        github.event.pull_request.head.repo.full_name == github.repository)
+    # On the job, not the workflow: every other label (dependencies, needs-security-review, ...) also
+    # starts this workflow, and at workflow level its skipped run would cancel the real one. The newest
+    # triage run for a PR wins; a cancelled run has posted nothing yet or only its comment.
+    concurrency:
+      group: triage-agent-pr-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     # One Claude Code run of at most 20 minutes, plus starting Huddle.
     timeout-minutes: 45
@@ -84,15 +85,17 @@ jobs:
           node cli/dist/index.js triage-agent "$PR" $DRY_RUN --out "$RUNNER_TEMP/triage-agent"
 
       # An analysis that goes beyond the advisory must not become public, and artifacts of a public
-      # repository can be downloaded by anyone: encrypt it, or drop it.
+      # repository can be downloaded by anyone: encrypt it, or drop it. Its network log goes with it:
+      # the paths the agent fetched can point at the undisclosed vector.
       - name: Encrypt a withheld analysis
         if: always()
         env:
           AGE_RECIPIENT: ${{ vars.SECURITY_REPORT_AGE_RECIPIENT }}
         run: |
           shopt -s nullglob
-          files=("$RUNNER_TEMP"/triage-agent/*-private.md)
-          [ ${#files[@]} -gt 0 ] || exit 0
+          private=("$RUNNER_TEMP"/triage-agent/*-private.md)
+          [ ${#private[@]} -gt 0 ] || exit 0
+          files=("${private[@]}" "$RUNNER_TEMP"/triage-agent/*-network.json)
           trap 'rm -f "${files[@]}"' EXIT # the plaintext never stays, also when encryption fails
           if [ -z "$AGE_RECIPIENT" ]; then
             echo "::warning::The analysis went beyond the advisory, but SECURITY_REPORT_AGE_RECIPIENT is not set: it was dropped. Run the agent locally to see it."

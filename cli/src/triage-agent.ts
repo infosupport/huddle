@@ -83,7 +83,14 @@ const TRIAGE_RULES: AgentRule[] = [
   { domain: 'api.anthropic.com', status: 'allow' },
   { domain: 'huddle', status: 'allow' }, // huddle's own audit forwarder
 ];
-/** Only what reading needs. Write and Edit only in /workspace/out; no npm install, so no install script runs. */
+/**
+ * What reading needs. The file tools write only in /workspace/out, but these
+ * shell commands can write files and run code inside the container (`tar
+ * --to-command`, `npm pack` of a local folder runs its prepack script): the
+ * airlocked, credential-free container is the boundary, not this list. The
+ * prompt asks for `npm pack <name>@<version> --ignore-scripts` and never
+ * `npm install`, so the bumped package's install scripts are not run on purpose.
+ */
 const ALLOWED_TOOLS = [
   'Read', 'Glob', 'Grep', 'Write(//workspace/out/**)', 'Edit(//workspace/out/**)',
   'Bash(curl:*)', 'Bash(npm view:*)', 'Bash(npm pack:*)', 'Bash(tar:*)', 'Bash(diff:*)', 'Bash(mkdir:*)',
@@ -255,6 +262,8 @@ async function triagePr(ctx: Ctx, name: string, ws: string): Promise<Result> {
   } else {
     problem = 'the agent wrote no valid analysis';
     console.log(yellow(`  ${problem}:\n${parsed.errors.map((e) => `    ${e}`).join('\n')}`));
+    // An unchecked file can still hold an analysis that must stay private: keep it as is.
+    if (claimsBeyondAdvisory(raw)) keepPrivate(ctx, `# Triage agent: ${repo} PR #${pr.number} (triage.json failed the check)\n\n\`\`\`json\n${raw}\n\`\`\`\n`);
   }
   if (report?.beyondAdvisory) keepPrivate(ctx, renderPrivate(report, { number: pr.number, title: pr.title, repo }));
 
@@ -310,10 +319,20 @@ function writeInputs(ctx: Ctx, input: string): { bumps: Bump[]; advisories: stri
     const r = id.startsWith('GHSA-')
       ? run('gh', ['api', `advisories/${id}`])
       : run('gh', ['api', `advisories?cve_id=${id}`]);
-    fs.writeFileSync(path.join(input, 'advisories', `${id}.json`), r.status === 0 ? r.stdout : `{"error": "not found on GitHub; look it up on OSV"}\n`);
+    // A CVE search answers with a list, empty when GitHub has no advisory for it.
+    const found = r.status === 0 && r.stdout.trim() !== '[]';
+    fs.writeFileSync(path.join(input, 'advisories', `${id}.json`), found ? r.stdout : `{"error": "not found on GitHub; look it up on OSV"}\n`);
   }
   console.log(dim(`  ${bumps.length} package version change(s), advisories: ${advisories.join(', ') || 'none named in the PR'}`));
   return { bumps, advisories };
+}
+
+function claimsBeyondAdvisory(raw: string): boolean {
+  try {
+    return (JSON.parse(raw) as { beyondAdvisory?: unknown } | null)?.beyondAdvisory === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Prints the agent's final answer (not in Actions: the log is public) and adds its cost and turns to ctx.usage. */

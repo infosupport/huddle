@@ -131,7 +131,7 @@ const ctx = { repo: 'infosupport/huddle', headSha: '0123456789abcdef0123456789ab
 test('renderComment writes the fixed format with links to the PR head', () => {
   const body = t.renderComment({ ...ctx, report: report(), bumps: [] });
   assert.ok(body.startsWith(t.TRIAGE_MARKER));
-  assert.match(body, /^### Security triage: node-forge 1\.3\.1 → 1\.3\.2 \(\[GHSA-5rrq-pxf6-6jx5\]\(https:\/\/github\.com\/advisories\/GHSA-5rrq-pxf6-6jx5\)\)$/m);
+  assert.match(body, /^### Security triage: `node-forge` `1.3.1` → `1.3.2` \(\[GHSA-5rrq-pxf6-6jx5\]\(https:\/\/github\.com\/advisories\/GHSA-5rrq-pxf6-6jx5\)\)$/m);
   assert.match(body, /^\*\*Affected:\*\* no {2}$/m);
   assert.match(body, /\[gateway\/src\/tls-ca\.ts:L40-L125\]\(https:\/\/github\.com\/infosupport\/huddle\/blob\/0123456789abcdef0123456789abcdef01234567\/gateway\/src\/tls-ca\.ts#L40-L125\) `CA \+ leaf signing only; we never verify certificates with forge`/);
   assert.match(body, /^\*\*Reachable from a devcontainer:\*\* no, `the cert parsing path is not used` {2}$/m);
@@ -166,7 +166,7 @@ test('renderComment withholds an analysis that goes beyond the advisory', () => 
     bumps: [],
   });
   assert.doesNotMatch(body, /secret|proxy\.ts|Affected/);
-  assert.match(body, /^### Security triage: node-forge 1\.3\.1 → 1\.3\.2/m);
+  assert.match(body, /^### Security triage: `node-forge` `1.3.1` → `1.3.2`/m);
   assert.match(body, /details sent to maintainers/);
   assert.match(body, /^\*\*Recommendation:\*\* needs a human deep-dive/m);
 });
@@ -174,7 +174,7 @@ test('renderComment withholds an analysis that goes beyond the advisory', () => 
 test('renderComment without a valid report falls back to the bumps and a manual review', () => {
   const bumps = [{ lockfile: 'gateway/package-lock.json', name: 'node-forge', before: ['1.3.1'], after: ['1.3.2'] }];
   const body = t.renderComment({ ...ctx, report: null, bumps, problem: 'the agent wrote no valid analysis' });
-  assert.match(body, /^### Security triage: node-forge 1\.3\.1 → 1\.3\.2$/m);
+  assert.match(body, /^### Security triage: `node-forge` `1.3.1` → `1.3.2`$/m);
   assert.match(body, /^\*\*Affected:\*\* unclear/m);
   assert.match(body, /the agent wrote no valid analysis/);
   assert.match(body, /^\*\*Recommendation:\*\* needs a human deep-dive/m);
@@ -194,4 +194,13 @@ test('ownCommentId picks the newest marked comment by the given login', () => {
   assert.equal(t.ownCommentId(lines, 'github-actions[bot]'), '13');
   assert.equal(t.ownCommentId(lines, 'nobody'), null);
   assert.equal(t.ownCommentId('x;y\tgithub-actions[bot]', 'github-actions[bot]'), null);
+});
+
+test('renderComment keeps package names and versions inert in the headline', () => {
+  const body = t.renderComment({
+    ...ctx,
+    report: report({ packages: [{ name: '@octocat/www.evil.com', from: 'GH-1', to: 'www.evil.com' }] }),
+    bumps: [],
+  });
+  assert.match(body, /^### Security triage: `@octocat\/www\.evil\.com` `GH-1` → `www\.evil\.com`/m);
 });

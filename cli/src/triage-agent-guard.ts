@@ -221,15 +221,19 @@ function inert(text: string, max = TEXT_MAX): string {
   return flat ? `\`${flat}\`` : '';
 }
 
-/** npm names may contain `_` and `~`, which Markdown would read as emphasis. */
-const mdName = (s: string) => s.replace(/[_~]/g, (c) => `\\${c}`);
+/**
+ * A package name or version as an inline code span. Valid npm names and
+ * versions can still render as text: `@scope/x` as a mention, `www.x.com` as
+ * a link, `GH-1` as an issue reference.
+ */
+const code = (s: string) => `\`${s.replace(/`/g, "'")}\``;
 
 function advisoryLink(id: string): string {
   return GHSA_EXACT.test(id) ? `[${id}](https://github.com/advisories/${id})` : id;
 }
 
 function headline(packages: { name: string; from: string; to: string }[], advisories: string[]): string {
-  const pkgs = packages.length ? packages.slice(0, 3).map((p) => `${mdName(p.name)} ${p.from} → ${p.to}`).join(', ') : 'this PR';
+  const pkgs = packages.length ? packages.slice(0, 3).map((p) => `${code(p.name)} ${code(p.from)} → ${code(p.to)}`).join(', ') : 'this PR';
   const more = packages.length > 3 ? ` and ${packages.length - 3} more` : '';
   const ids = advisories.length ? ` (${advisories.slice(0, 5).map(advisoryLink).join(', ')})` : '';
   return `### Security triage: ${pkgs}${more}${ids}`;
