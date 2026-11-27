@@ -119,7 +119,7 @@ export async function runTriageAgent(opts: TriageAgentOptions): Promise<void> {
   const credential = claudeCredential();
   // Doubles as the "is Huddle running and are we authenticated" check.
   const { imageName } = await get<{ imageName: string }>('/api/docker/base-image?ide=vscode');
-  const prompt = fetchPrompt(repo, PROMPT_PATH, 'HUDDLE_TRIAGE_AGENT_PROMPT_REF', 'triage agent');
+  const prompt = localPrompt() ?? fetchPrompt(repo, PROMPT_PATH, 'HUDDLE_TRIAGE_AGENT_PROMPT_REF', 'triage agent');
   const login = app ? (await app.identity()).name : githubLogin();
   const refreshGithub = async () => { await app?.refresh(); };
 
@@ -138,6 +138,21 @@ export async function runTriageAgent(opts: TriageAgentOptions): Promise<void> {
     console.log(`  #${r.pr}  ${color(r.outcome.padEnd(9))} ${r.detail}`);
   }
   if (results.some((r) => r.outcome === 'error')) process.exitCode = 1;
+}
+
+/**
+ * HUDDLE_TRIAGE_AGENT_PROMPT_FILE: a prompt from your own disk, to tune it
+ * locally before it is pushed anywhere. Not in GitHub Actions, where the
+ * prompt must come from the default branch.
+ */
+function localPrompt(): string | null {
+  const file = process.env.HUDDLE_TRIAGE_AGENT_PROMPT_FILE?.trim();
+  if (!file) return null;
+  if (inActions()) throw new Error('HUDDLE_TRIAGE_AGENT_PROMPT_FILE is for local runs only; in CI the prompt comes from the default branch.');
+  const prompt = fs.readFileSync(file, 'utf8');
+  if (!prompt.trim()) throw new Error(`${file} is empty`);
+  console.log(yellow(`Using the local prompt ${file} instead of ${PROMPT_PATH} from the default branch.`));
+  return prompt;
 }
 
 /** Who posts the comment, to find its own earlier one: the developer, or the CI job's token. */
