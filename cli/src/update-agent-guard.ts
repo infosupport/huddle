@@ -278,13 +278,15 @@ export function decide(pr: PrInfo, opts: { skipMajors?: boolean } = {}): PrDecis
 
 /**
  * Requests per host from Huddle's audit log, busiest first. Only proxy
- * decisions count: the log also holds Huddle's own events for the container
- * (`admin:token-register`, `airlock:on`, ...), which are no requests.
+ * decisions count: `allow`, and as blocked `deny` and `requested` (no rule
+ * yet; the proxy answered 403 and asked the operator). The log also holds
+ * Huddle's own events for the container (`admin:token-register`,
+ * `airlock:on`, ...), which are no requests.
  */
 export function requestsByHost(rows: { domain: string; action: string }[]): [string, { allowed: number; denied: number }][] {
   const byHost = new Map<string, { allowed: number; denied: number }>();
   for (const r of rows) {
-    if (r.action !== 'allow' && r.action !== 'deny') continue;
+    if (r.action !== 'allow' && r.action !== 'deny' && r.action !== 'requested') continue;
     const h = byHost.get(r.domain) ?? { allowed: 0, denied: 0 };
     if (r.action === 'allow') h.allowed++;
     else h.denied++;
