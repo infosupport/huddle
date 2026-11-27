@@ -261,9 +261,19 @@ export async function startAgent(spec: AgentSpec): Promise<Agent> {
   return { name, exec, root, stopAll, readFile, writeFile };
 }
 
-/** Claude Code's `--output-format json` answer: its final text, cost and turns (null when it failed before answering). */
-export function parseClaudeOutput(stdout: string): { result: string; costUsd: number; turns: number } | null {
-  let out: { result?: unknown; total_cost_usd?: unknown; num_turns?: unknown } | null = null;
+/** A tool call Claude Code refused because no allow rule matched it. */
+export interface PermissionDenial {
+  tool: string;
+  /** The Bash command, file path or other input, as one line. */
+  input: string;
+}
+
+/**
+ * Claude Code's `--output-format json` answer: its final text, cost, turns and
+ * refused tool calls (null when it failed before answering).
+ */
+export function parseClaudeOutput(stdout: string): { result: string; costUsd: number; turns: number; denials: PermissionDenial[] } | null {
+  let out: { result?: unknown; total_cost_usd?: unknown; num_turns?: unknown; permission_denials?: unknown } | null = null;
   try {
     out = JSON.parse(stdout.trim());
   } catch {
@@ -274,7 +284,18 @@ export function parseClaudeOutput(stdout: string): { result: string; costUsd: nu
     result: typeof out.result === 'string' ? out.result.trim() : '',
     costUsd: typeof out.total_cost_usd === 'number' ? out.total_cost_usd : 0,
     turns: typeof out.num_turns === 'number' ? out.num_turns : 0,
+    denials: Array.isArray(out.permission_denials) ? out.permission_denials.map(denial) : [],
   };
+}
+
+function denial(d: unknown): PermissionDenial {
+  const o = (d && typeof d === 'object' ? d : {}) as { tool_name?: unknown; tool_input?: unknown };
+  const input = (o.tool_input && typeof o.tool_input === 'object' ? o.tool_input : {}) as Record<string, unknown>;
+  // Bash has `command`, the file tools `file_path`; anything else as JSON.
+  const text = typeof input.command === 'string' ? input.command
+    : typeof input.file_path === 'string' ? input.file_path
+      : JSON.stringify(o.tool_input ?? null);
+  return { tool: typeof o.tool_name === 'string' ? o.tool_name : '?', input: text.replace(/\s+/g, ' ').trim().slice(0, 300) };
 }
 
 // ── network log and usage ────────────────────────────────────────────────────

@@ -383,6 +383,12 @@ function reportClaude(ctx: Ctx, r: RunResult): string {
     if (out?.result) printUntrusted(out.result.replace(/^/gm, '    '));
     else if (!out && r.stdout.trim()) printUntrusted(r.stdout.trim());
   }
+  // A refused call is a check the agent could not do: ALLOWED_TOOLS or the prompt needs a look.
+  // In Actions only the tools: a command line can carry what the agent was looking into.
+  if (out?.denials.length) {
+    console.log(yellow(`  Claude Code refused ${out.denials.length} tool call(s) that no allow rule matched:`));
+    printUntrusted(out.denials.map((d) => `    ${d.tool}${inActions() ? '' : `: ${d.input}`}`).join('\n'), yellow, 6_000);
+  }
   if (r.status !== 0 && r.stderr.trim()) printUntrusted(r.stderr.trim());
   return out?.result ?? '';
 }
