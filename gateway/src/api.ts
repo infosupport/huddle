@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, clearContainerAuthorizations, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -62,6 +62,7 @@ import {
   clearSessionCookie,
 } from './auth';
 import { attachTerminal } from './terminal';
+import { registerTokenExchangeRoutes } from './token-exchange-api';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
 import {
@@ -928,13 +929,14 @@ export async function createApiServer(): Promise<FastifyInstance> {
     containerName: string;
     ideName?: string;
     empty?: boolean;
+    isolated?: boolean;
     presentableName?: string;
     memory?: string;
     cpus?: string;
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, isolated, presentableName: presentableNameOverride, memory, cpus } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -1006,10 +1008,20 @@ export async function createApiServer(): Promise<FastifyInstance> {
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
+        isolated: isolated === true,
         memory,
         cpus,
       };
       try {
+        // An isolated container runs untrusted code: it starts without anything
+        // an operator once granted a container with the same name. Only when
+        // no such container exists: an existing one keeps its rights.
+        if (params.isolated) {
+          if (await containerNameTaken(containerName)) {
+            return reply.code(409).send({ error: `Container '${containerName}' already exists. Remove it first.` });
+          }
+          clearContainerAuthorizations(containerName);
+        }
         const id = await createAndStartContainer(params);
         return { id, containerName };
       } catch (err: any) {
@@ -1140,6 +1152,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const last5 = db.prepare('SELECT id, ts, container_id, domain, action FROM audit_log ORDER BY ts DESC LIMIT 5').all();
     return { dbPath, rowsBefore: before, rowsAfter: after, insertedId, insertError, last5 };
   });
+
+  // Host-registered Claude credentials for the token exchange (update agent).
+  registerTokenExchangeRoutes(app);
 
   // ── Ephemeral sudo grant (admin access to 'noot') ─────────────────────────
   // The 'noot' admin user starts LOCKED without a password. Admin access is
@@ -1602,4 +1617,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
   console.log(`[api] listening on ${address}`);
 
   return app;
+}
+
+// Whether a container with this name exists. Any error other than "not found" is
+// passed on: a start must not clear rights when it cannot tell.
+async function containerNameTaken(name: string): Promise<boolean> {
+  try {
+    await inspectContainer(name);
+    return true;
+  } catch (err: any) {
+    if (/ → 404:/.test(String(err?.message))) return false;
+    throw err;
+  }
 }
