@@ -1,4 +1,4 @@
-import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
 import { ApiService, HuddleSettings, FolderMapping, IndexedFolder } from '../../core/services/api.service';
@@ -9,6 +9,7 @@ import {
 } from '../../shared/components/folder-select/folder-tree.util';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-settings',
   standalone: true,
   imports: [FormsModule, IconComponent, FolderSelectComponent],

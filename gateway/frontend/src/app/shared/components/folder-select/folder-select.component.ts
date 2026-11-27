@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, EventEmitter, Input, Output, ChangeDetectionStrategy } from '@angular/core';
 import { IndexedFolder } from '../../../core/services/api.service';
 import { FolderPickerModalComponent } from '../../modals/folder-picker-modal/folder-picker-modal.component';
 
@@ -15,6 +15,7 @@ import { FolderPickerModalComponent } from '../../modals/folder-picker-modal/fol
 let uid = 0;
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-folder-select',
   standalone: true,
   imports: [FolderPickerModalComponent],

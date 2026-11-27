@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../services/auth.service';
 
@@ -7,6 +7,7 @@ import { AuthService } from '../services/auth.service';
 // voor een httpOnly session-cookie. Getoond door de app-shell zolang de
 // operator niet geauthenticeerd is.
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-login',
   standalone: true,
   imports: [FormsModule],

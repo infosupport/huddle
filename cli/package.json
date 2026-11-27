@@ -20,14 +20,15 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "install-global": "npm run build && npm install -g .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "~6.0.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "files": [
     "dist"

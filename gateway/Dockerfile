@@ -1,4 +1,4 @@
-FROM node:24-alpine AS builder
+FROM node:24.22.2-alpine3.24 AS builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
@@ -20,8 +20,15 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 
-FROM node:24-alpine AS runtime
+FROM node:24.22.2-alpine3.24 AS runtime
 WORKDIR /app
+# The runtime only runs `node dist/index.js`; it never needs a package manager. The
+# npm bundled in the node image ships its own (often vulnerable) copies of undici,
+# brace-expansion and friends, so remove npm, npx and corepack entirely instead of
+# chasing their CVEs with upgrades.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /root/.npm
 RUN mkdir -p /data /tmp/dc-sockets
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist

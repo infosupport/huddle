@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges, ChangeDetectionStrategy } from '@angular/core';
 import { IconComponent } from '../../components/icon/icon.component';
 import { IndexedFolder } from '../../../core/services/api.service';
 import {
@@ -16,6 +16,7 @@ import {
 // It stays a *picker*: it selects a path, it does not save anything. The caller
 // decides what the chosen folder means (workspace, mount, mapping).
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-folder-picker-modal',
   standalone: true,
   imports: [IconComponent],

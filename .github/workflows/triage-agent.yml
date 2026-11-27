@@ -1,0 +1,119 @@
+name: Triage agent
+# AI security triage agent (Huddle PDF part 2, agent 3): when a PR is labelled `security`, run
+# `huddle triage-agent <pr>` on this runner. The agent itself runs inside a throwaway Huddle's
+# airlocked devcontainer, as it does on a developer's machine, and the CLI posts one comment.
+# Environment "triage-agent" (deployment branches: the default branch only): secret CLAUDE_CODE_OAUTH_TOKEN.
+# Repository variable SECURITY_REPORT_AGE_RECIPIENT (shared with the test agent) encrypts an analysis
+# that must stay private. Optional repository variable TRIAGE_AGENT_MODEL pins the Claude model.
+# Setup: docs/triage-agent.md.
+
+on:
+  # pull_request_target runs this file from the base branch, never a PR's copy. Safe because no PR
+  # code runs on this runner: the CLI only clones it into the agent's container.
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number (labelled security)
+        required: true
+      dry-run:
+        description: Analyse, but do not comment
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  triage-agent:
+    # Only the security label, on an open PR from a branch in this repository. The CLI checks again
+    # who opened the PR (Renovate, or a security/* branch from security-bump.sh) and that it is open.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'security' &&
+       github.event.pull_request.state == 'open' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # On the job, not the workflow: every other label (dependencies, needs-security-review, ...) also
+    # starts this workflow, and at workflow level its skipped run would cancel the real one. The newest
+    # triage run for a PR wins; a cancelled run has posted nothing yet or only its comment.
+    concurrency:
+      group: triage-agent-pr-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    # One Claude Code run of at most 20 minutes, plus starting Huddle.
+    timeout-minutes: 45
+    environment: triage-agent
+    permissions:
+      contents: read # the default branch's Huddle, CLI and prompt; the PR's lockfiles
+      pull-requests: write # the triage comment; nothing else
+    steps:
+      # Never the PR's code on this runner: the CLI only clones it into the agent's container.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Start Huddle
+        run: |
+          HUDDLE_OPERATOR_TOKEN=$(openssl rand -hex 32); echo "::add-mask::$HUDDLE_OPERATOR_TOKEN"
+          echo "HUDDLE_OPERATOR_TOKEN=$HUDDLE_OPERATOR_TOKEN" >> "$GITHUB_ENV"
+          export HUDDLE_OPERATOR_TOKEN
+          npm ci --ignore-scripts --prefix cli && npm run build --prefix cli
+          docker build -q -t huddle:ci gateway
+          HUDDLE_IMAGE=huddle:ci HUDDLE_NO_PULL=1 node cli/dist/index.js init
+          api() { curl -sf -H "Authorization: Bearer $HUDDLE_OPERATOR_TOKEN" "http://localhost:3000$1"; }
+          for _ in $(seq 60); do api '/api/docker/base-image?ide=vscode' > "$RUNNER_TEMP/base.json" && break; sleep 2; done
+          image=$(jq -r '.imageName // empty' "$RUNNER_TEMP/base.json" 2>/dev/null || true)
+          if [ -z "$image" ]; then
+            echo "::error::Huddle did not come up on http://localhost:3000 within 2 minutes."
+            docker logs --tail 100 huddle || true
+            exit 1
+          fi
+          docker pull -q "$image"
+
+      - name: Run the triage agent
+        env:
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
+          HUDDLE_TRIAGE_AGENT_MODEL: ${{ vars.TRIAGE_AGENT_MODEL }}
+          # Handed to the Huddle gateway's token exchange; the container gets a placeholder.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # A comment does not need to start CI, so the job's own token is enough (no GitHub App).
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! [[ "$PR" =~ ^[0-9]+$ ]]; then echo "::error::Not a PR number."; exit 1; fi
+          node cli/dist/index.js triage-agent "$PR" $DRY_RUN --out "$RUNNER_TEMP/triage-agent"
+
+      # An analysis that goes beyond the advisory must not become public, and artifacts of a public
+      # repository can be downloaded by anyone: encrypt it, or drop it. Its network log goes with it:
+      # the paths the agent fetched can point at the undisclosed vector.
+      - name: Encrypt a withheld analysis
+        if: always()
+        env:
+          AGE_RECIPIENT: ${{ vars.SECURITY_REPORT_AGE_RECIPIENT }}
+        run: |
+          shopt -s nullglob
+          private=("$RUNNER_TEMP"/triage-agent/*-private.md)
+          [ ${#private[@]} -gt 0 ] || exit 0
+          files=("${private[@]}" "$RUNNER_TEMP"/triage-agent/*-network.json)
+          trap 'rm -f "${files[@]}"' EXIT # the plaintext never stays, also when encryption fails
+          if [ -z "$AGE_RECIPIENT" ]; then
+            echo "::warning::The analysis went beyond the advisory, but SECURITY_REPORT_AGE_RECIPIENT is not set: it was dropped. Run the agent locally to see it."
+            exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq age
+          for f in "${files[@]}"; do age -r "$AGE_RECIPIENT" -o "$f.age" "$f"; done
+          echo "::notice::The analysis went beyond the advisory: it is in the encrypted artifact, decrypt it with the security-report key."
+
+      # The agent's traffic as Huddle logged it (host, method, path and status, no headers or bodies),
+      # and the encrypted analysis. Never the plain .md.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: triage-agent-pr-${{ github.event.pull_request.number || inputs.pr }}
+          path: |
+            ${{ runner.temp }}/triage-agent/*.json
+            ${{ runner.temp }}/triage-agent/*.age
+          retention-days: 30
+          if-no-files-found: ignore

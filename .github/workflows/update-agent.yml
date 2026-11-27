@@ -1,0 +1,121 @@
+name: Update agent
+# AI update agent (Huddle PDF part 2, agent 1) in CI: when Test fails on a Renovate PR, run
+# `huddle update-agent <pr>` on this runner. The agent itself runs inside a throwaway Huddle's
+# airlocked devcontainer, as it does on a developer's machine, so the firewall still applies.
+# Environment "update-agent" (deployment branches: the default branch only):
+#   secrets CLAUDE_CODE_OAUTH_TOKEN, UPDATE_AGENT_APP_PRIVATE_KEY; variable UPDATE_AGENT_APP_CLIENT_ID.
+# Optional repository variables: UPDATE_AGENT_MAJORS ('true' to include major updates),
+#   UPDATE_AGENT_MODEL (pins the Claude model).
+# Setup: docs/update-agent.md.
+
+on:
+  # workflow_run always runs this file from the default branch, never a PR's copy.
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Renovate PR number
+        required: true
+      dry-run:
+        description: Fix and verify, but do not push or comment
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  find-pr:
+    # Only a failed Test run on a Renovate branch in this repository. The CLI checks again that
+    # Renovate opened the PR, and what to do with it.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'renovate/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+    steps:
+      - name: Find the PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          INPUT_PR: ${{ inputs.pr }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            pr="$INPUT_PR"
+          else
+            # A fork PR can use the same branch name; only the PR from this repository counts.
+            pr=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number,isCrossRepository \
+              -q 'map(select(.isCrossRepository == false)) | .[0].number // empty')
+          fi
+          if ! [[ "$pr" =~ ^[0-9]+$ ]]; then echo "No open PR found."; exit 0; fi
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+
+  update-agent:
+    needs: find-pr
+    if: needs.find-pr.outputs.number
+    # One run per PR at a time, automatic or by hand. A run is not cancelled halfway: it may be pushing.
+    concurrency:
+      group: update-agent-pr-${{ needs.find-pr.outputs.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    # Three attempts of Claude Code plus verification; the CLI has its own per-step timeouts.
+    timeout-minutes: 180
+    environment: update-agent
+    permissions:
+      contents: read # the default branch's Huddle, CLI and prompt
+    steps:
+      # Never the PR's code on this runner: the CLI only clones it into the agent's container
+      # and reads the result back as a git bundle.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Start Huddle
+        run: |
+          HUDDLE_OPERATOR_TOKEN=$(openssl rand -hex 32); echo "::add-mask::$HUDDLE_OPERATOR_TOKEN"
+          echo "HUDDLE_OPERATOR_TOKEN=$HUDDLE_OPERATOR_TOKEN" >> "$GITHUB_ENV"
+          export HUDDLE_OPERATOR_TOKEN
+          npm ci --ignore-scripts --prefix cli && npm run build --prefix cli
+          docker build -q -t huddle:ci gateway
+          HUDDLE_IMAGE=huddle:ci HUDDLE_NO_PULL=1 node cli/dist/index.js init
+          api() { curl -sf -H "Authorization: Bearer $HUDDLE_OPERATOR_TOKEN" "http://localhost:3000$1"; }
+          for _ in $(seq 60); do api '/api/docker/base-image?ide=vscode' > "$RUNNER_TEMP/base.json" && break; sleep 2; done
+          image=$(jq -r '.imageName // empty' "$RUNNER_TEMP/base.json" 2>/dev/null || true)
+          if [ -z "$image" ]; then
+            echo "::error::Huddle did not come up on http://localhost:3000 within 2 minutes."
+            docker logs --tail 100 huddle || true
+            exit 1
+          fi
+          docker pull -q "$image"
+
+      - name: Run the update agent
+        env:
+          PR: ${{ needs.find-pr.outputs.number }}
+          DRY_RUN: ${{ inputs.dry-run && '--dry-run' || '' }}
+          SKIP_MAJORS: ${{ vars.UPDATE_AGENT_MAJORS != 'true' && '--skip-majors' || '' }}
+          HUDDLE_UPDATE_AGENT_MODEL: ${{ vars.UPDATE_AGENT_MODEL }}
+          # Handed to the Huddle gateway's token exchange; the container gets a placeholder.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The CLI mints short-lived App tokens itself: an agent run can outlast one token.
+          HUDDLE_GITHUB_APP_CLIENT_ID: ${{ vars.UPDATE_AGENT_APP_CLIENT_ID }}
+          HUDDLE_GITHUB_APP_PRIVATE_KEY: ${{ secrets.UPDATE_AGENT_APP_PRIVATE_KEY }}
+        run: node cli/dist/index.js update-agent "$PR" $DRY_RUN $SKIP_MAJORS --out "$RUNNER_TEMP/update-agent"
+
+      # The agent's traffic as Huddle logged it: host, method, path and status, no headers or bodies.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: update-agent-network-pr-${{ needs.find-pr.outputs.number }}
+          path: ${{ runner.temp }}/update-agent
+          retention-days: 30
+          if-no-files-found: ignore
