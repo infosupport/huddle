@@ -267,7 +267,10 @@ function advisoryLink(id: string): string {
 function headline(packages: { name: string; from: string; to: string }[], advisories: string[]): string {
   const pkgs = packages.length ? packages.slice(0, 3).map((p) => `${code(p.name)} ${code(p.from)} → ${code(p.to)}`).join(', ') : 'this PR';
   const more = packages.length > 3 ? ` and ${packages.length - 3} more` : '';
-  const ids = advisories.length ? ` (${advisories.slice(0, 5).map(advisoryLink).join(', ')})` : '';
+  // GHSA ids first: they link to the advisory. A CVE id only adds a name for the same issue.
+  const ordered = [...advisories.filter((a) => GHSA_EXACT.test(a)), ...advisories.filter((a) => !GHSA_EXACT.test(a))];
+  const moreIds = ordered.length > 5 ? `, +${ordered.length - 5} more` : '';
+  const ids = ordered.length ? ` (${ordered.slice(0, 5).map(advisoryLink).join(', ')}${moreIds})` : '';
   return `### Security triage: ${pkgs}${more}${ids}`;
 }
 
@@ -345,9 +348,10 @@ export function renderComment(c: CommentInput): string {
       ...footer,
     ].join('\n');
   }
-  const blobUrl = (u: Usage) => `https://github.com/${c.repo}/blob/${c.headSha}/${u.file}#L${u.startLine}-L${u.endLine}`;
+  const lines = (u: Usage) => (u.startLine === u.endLine ? `L${u.startLine}` : `L${u.startLine}-L${u.endLine}`);
+  const blobUrl = (u: Usage) => `https://github.com/${c.repo}/blob/${c.headSha}/${u.file}#${lines(u)}`;
   const usage = r.usage.length
-    ? r.usage.map((u) => `[${u.file}:L${u.startLine}-L${u.endLine}](${blobUrl(u)})${u.note.trim() ? ` ${inert(u.note, 200)}` : ''}`).join('; ')
+    ? r.usage.map((u) => `[${u.file}:${lines(u)}](${blobUrl(u)})${u.note.trim() ? ` ${inert(u.note, 200)}` : ''}`).join('; ')
     : 'none found';
   const unclear = r.affected === 'unclear' || r.reachable === 'unclear';
   const recommendation = unclear

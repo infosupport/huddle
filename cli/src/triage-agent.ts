@@ -100,6 +100,10 @@ const ALLOWED_TOOLS = [
   'Bash(ls:*)', 'Bash(cat:*)', 'Bash(head:*)',
   'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git grep:*)',
 ].join(',');
+/** Where the agent unpacks the old and new package. */
+const SCRATCH_DIR = '/tmp/triage';
+/** Working directories next to /workspace/repo: its inputs, its output and its scratch space. */
+const WORK_DIRS = ['/workspace/input', '/workspace/out', SCRATCH_DIR];
 /** A token for comments only, when the CLI runs as a GitHub App. */
 const APP_PERMISSIONS = { contents: 'read', pull_requests: 'write' } as const;
 
@@ -261,11 +265,16 @@ async function triagePr(ctx: Ctx, name: string, ws: string): Promise<Result> {
     name, engine: ctx.engine, imageName: ctx.imageName, credential: ctx.credential, rules: TRIAGE_RULES, workspace: ws,
     description: 'airlocked: npm registry, GitHub, OSV and Anthropic API only',
   });
+  // Scratch space for the package tarballs: outside the mount, so they never land on the host.
+  const scratch = await agent.exec(['mkdir', '-p', SCRATCH_DIR], '/workspace');
+  if (scratch.status !== 0) throw new Error(`could not create ${SCRATCH_DIR} in ${name}: ${scratch.stderr.trim()}`);
   console.log(dim('  running Claude Code'));
   const model = process.env.HUDDLE_TRIAGE_AGENT_MODEL?.trim();
   const claude = await agent.exec([
     'claude', '-p', ctx.prompt, '--output-format', 'json', '--max-turns', String(MAX_TURNS),
     ...(model ? ['--model', model] : []), '--allowedTools', ALLOWED_TOOLS,
+    // Claude Code refuses even `cat` and `ls` on paths outside its working directories.
+    ...WORK_DIRS.flatMap((d) => ['--add-dir', d]),
   ], '/workspace/repo', { timeout: CLAUDE_TIMEOUT_MS, liveStderr: !inActions() });
   const answer = reportClaude(ctx, claude);
   agent.stopAll();

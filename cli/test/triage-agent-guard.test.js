@@ -238,3 +238,16 @@ test('extractTriageJson takes the answer itself or its json block', () => {
   assert.equal(t.extractTriageJson('Done.\n```json\n{"a":1}\n```\nBye'), '{"a":1}');
   assert.equal(t.extractTriageJson('Wrote /workspace/out/triage.json.'), '');
 });
+
+test('renderComment lists GHSA ids before CVE ids and shows a one-line reference as one line', () => {
+  const body = t.renderComment({
+    ...ctx,
+    report: report({
+      advisories: ['GHSA-6qrw-m8cv-hcxf', 'CVE-2026-119192', 'GHSA-5x38-2vff-x55p', 'CVE-2026-119190', 'GHSA-7wch-p9px-956x', 'GHSA-rhr8-3pm8-cq29'],
+      usage: [{ file: 'gateway/src/proxy.ts', startLine: 9, endLine: 9, note: '' }],
+    }),
+    bumps: [],
+  });
+  assert.match(body, /\(\[GHSA-6qrw-m8cv-hcxf\]\([^)]*\), \[GHSA-5x38-2vff-x55p\]\([^)]*\), \[GHSA-7wch-p9px-956x\]\([^)]*\), \[GHSA-rhr8-3pm8-cq29\]\([^)]*\), CVE-2026-119192, \+1 more\)$/m);
+  assert.match(body, /\[gateway\/src\/proxy\.ts:L9\]\(https:\/\/github\.com\/infosupport\/huddle\/blob\/[0-9a-f]{40}\/gateway\/src\/proxy\.ts#L9\)/);
+});
