@@ -551,6 +551,18 @@ for pair in ${pairs}; do
 done`;
 }
 
+function buildJavaKeystoreScript(seedscript: string): string {
+  return `
+    # Generate a Java keystore that includes the Huddle MITM CA for Java tools to trust.
+    keytool \
+      -importcert -noprompt -trustcacerts -alias huddle-ca \
+      -file /usr/local/share/ca-certificates/huddle-ca.crt \
+      -keystore /usr/local/share/ca-certificates/huddle-ca.jks -storepass changeit
+    
+    ${seedscript}
+  `
+}
+
 // Docker access goes via the socket in the mounted directory /var/run/huddle
 // (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
 // Shared between the JetBrains and VS Code startup scripts.
@@ -1080,10 +1092,12 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     // hardcode the default path the config script also places a symlink at
     // /var/run/docker.sock.
     'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
+    // Using Java is not limited to JetBrains products (and vice versa) so we define
+    // JAVA_TOOL_OPTIONS regardless of which IDE is selected.
+    'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/usr/local/share/ca-certificates/huddle-ca.jks -Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
     ...(isVscode ? [] : [
       'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
       'XDG_DATA_HOME=/.jbdevcontainer/data',
-      'JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
     ]),
   ];
 
@@ -1174,7 +1188,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
   const containerPaths = folderMounts.map(m => m.Target);
-  const seedScript = buildFolderMappingSeedScript(containerPaths);
+  const seedScript = buildJavaKeystoreScript(buildFolderMappingSeedScript(containerPaths));
 
   // Run config script via exec — VS Code variant without JB host-config/backend.
   const script = isVscode
@@ -1182,7 +1196,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
-    Cmd: ['sh', '-c', script],
+    Cmd: ['sh', '-c', 'exec > /tmp/huddle-prepare.stdout.log 2> /tmp/huddle-prepare.stderr.log \n\n ' + script],
   });
   await dockerRequest('POST', `/exec/${execCreate.Id}/start`, { Detach: true });
 
