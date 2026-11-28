@@ -1,0 +1,205 @@
+name: Test agent
+# AI test agent (Huddle PDF part 2): attacks a throwaway Huddle built from the PR.
+# Public output is only the pass/fail line per area. Findings are encrypted before they
+# leave the agent's runner, and filed as a private vulnerability report by a separate job.
+# Secrets: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`). In the "security-report"
+# environment, with required reviewers: SECURITY_REPORT_AGE_IDENTITY, SECURITY_REPORT_APP_PRIVATE_KEY.
+# Variables: SECURITY_REPORT_AGE_RECIPIENT, SECURITY_REPORT_APP_CLIENT_ID.
+# Setup, and why "security-report" must have required reviewers: docs/test-agent-ci.md.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a PR cancels its run in progress: only the latest commit is tested.
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The only report lines that may be made public.
+  REPORT_LINES: '(Firewall|HTTPS interception|Bypass attempts|Docker socket|Sudo|Portal): (PASS|UNCLEAR|security check failed, details sent to maintainers)|Portal: FAIL - [A-Za-z0-9 .,()-]{1,100}'
+
+jobs:
+  test-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.result.outputs.report }}
+      findings: ${{ steps.result.outputs.findings }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Runs code from the PR (build scripts, the gateway image, the CLI).
+      - name: Start Huddle and the target devcontainer
+        run: |
+          export HUDDLE_OPERATOR_TOKEN=$(openssl rand -hex 32); echo "::add-mask::$HUDDLE_OPERATOR_TOKEN"
+          docker build -q -t huddle:pr gateway
+          docker pull -q ghcr.io/infosupport/base-devimage-vscode
+          npm ci --ignore-scripts --prefix cli && npm run build --prefix cli
+          HUDDLE_IMAGE=huddle:pr HUDDLE_NO_PULL=1 node cli/dist/index.js init
+          until node cli/dist/index.js start --ide vscode --empty --name target-dc; do sleep 3; done
+          # The browser's login, outside the working directory so the agent cannot read the token.
+          ( umask 077; echo "{\"cookies\":[{\"name\":\"huddle_session\",\"value\":\"$HUDDLE_OPERATOR_TOKEN\",\"domain\":\"localhost\",\"path\":\"/\",\"expires\":-1,\"httpOnly\":true,\"secure\":false,\"sameSite\":\"Strict\"}],\"origins\":[]}" > "$RUNNER_TEMP/huddle-session.json" )
+
+      # The agent's prompt and tools come from the base branch, so a PR cannot weaken the test
+      # that judges it. Installed after the PR's own build steps, so those cannot overwrite them.
+      # A PR that changes them is tested with the old ones.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.base_ref || github.ref }}
+          path: base
+          sparse-checkout: .github/agent
+          persist-credentials: false
+
+      - name: Install the test agent
+        run: |
+          if [ -f base/.github/agent/test-agent.md ]; then
+            rm -rf .github/agent && mv base/.github/agent .github/agent
+          else
+            echo "::warning::.github/agent is not on the base branch yet, so this run uses the PR's copy."
+          fi
+          rm -rf base
+          # A PR could plant a symlink (for example to the login file below) or its own
+          # report.md, which would count if the agent writes none. Remove both.
+          find . -type l ! -path './.github/agent/node_modules/*' -print -delete
+          rm -f evidence.md report.md findings.md
+          # Claude Code config from the PR could widen the allowlist or add instructions. The
+          # action also restores these from the base branch on PRs; this covers manual runs too.
+          rm -rf .claude .mcp.json CLAUDE.md CLAUDE.local.md
+          # The PR's build ran on this runner and could have written user-level Claude config or
+          # set CLAUDE_CONFIG_DIR through GITHUB_ENV. Start from a fresh home and config dir; these
+          # lines come last in GITHUB_ENV, so they win.
+          export HOME="$(mktemp -d "$RUNNER_TEMP/home.XXXXXX")"
+          export CLAUDE_CONFIG_DIR="$(mktemp -d "$RUNNER_TEMP/claude-config.XXXXXX")"
+          printf 'HOME=%s\nCLAUDE_CONFIG_DIR=%s\n' "$HOME" "$CLAUDE_CONFIG_DIR" >> "$GITHUB_ENV"
+          # The Playwright MCP server and its dependencies, locked by .github/agent/package-lock.json.
+          npm ci --ignore-scripts --prefix .github/agent
+          .github/agent/node_modules/.bin/playwright install --with-deps chromium
+          # Point the MCP config at the login file in $RUNNER_TEMP.
+          jq --arg s "$RUNNER_TEMP/huddle-session.json" '.mcpServers.playwright.args |= map(if . == "huddle-session.json" then $s else . end)' \
+            .github/agent/playwright-mcp.json > "$RUNNER_TEMP/playwright-mcp.json"
+          grep -qF "$RUNNER_TEMP/huddle-session.json" "$RUNNER_TEMP/playwright-mcp.json"
+
+      - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
+        id: agent
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: Follow the instructions in ${{ github.workspace }}/.github/agent/test-agent.md. The REPO_DIR placeholder in it, and your working directory, is ${{ github.workspace }}. Write evidence.md, report.md and findings.md there, by absolute path.
+          # Permission mode "default": only the allowlist below decides, anything else is denied.
+          # Auto mode adds a safety classifier that blocks the very attacks the agent must try
+          # (for example `docker run --privileged`), which left scenarios UNCLEAR.
+          # File rules use absolute paths: a `cd` by the agent changes what `./` means, which
+          # once made its own output files unwritable.
+          claude_args: >-
+            --permission-mode default
+            --model claude-sonnet-5-5
+            --max-turns 120
+            --mcp-config ${{ runner.temp }}/playwright-mcp.json
+            --allowedTools "mcp__playwright__*,Bash(docker exec target-dc:*),Bash(docker exec -u root target-dc:*),Read(/${{ github.workspace }}/.github/agent/test-agent.md),Read(/${{ github.workspace }}/gateway/test/e2e/**),Read(/${{ github.workspace }}/evidence.md),Read(/${{ github.workspace }}/report.md),Read(/${{ github.workspace }}/findings.md),Edit(/${{ github.workspace }}/evidence.md),Edit(/${{ github.workspace }}/report.md),Edit(/${{ github.workspace }}/findings.md)"
+            --disallowedTools "Read(//proc/**),Read(/${{ runner.temp }}/**)"
+
+      # report.md is agent output: keep only lines in the exact allowed format. Findings and the
+      # debug bundle are encrypted, because artifacts of a public repo can be downloaded by anyone.
+      - name: Check the report and encrypt the findings
+        id: result
+        if: always()
+        env:
+          AGE_RECIPIENT: ${{ vars.SECURITY_REPORT_AGE_RECIPIENT }}
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          grep -xE "$REPORT_LINES" report.md > public.md || echo "The test agent wrote no valid report." > public.md
+          { echo 'report<<EOF'; cat public.md; echo EOF; } >> "$GITHUB_OUTPUT"
+          sudo apt-get update -qq && sudo apt-get install -y -qq age
+          if [ -f findings.md ]; then
+            age -r "$AGE_RECIPIENT" -o findings.md.age findings.md && rm findings.md
+            echo "findings=true" >> "$GITHUB_OUTPUT"
+          fi
+          # Debug bundle for maintainers: the agent's full transcript, its raw report and evidence.
+          mkdir debug
+          cp "${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}" debug/transcript.json 2>/dev/null || true
+          cp evidence.md report.md debug/ 2>/dev/null || true
+          tar -czf - debug | age -r "$AGE_RECIPIENT" -o debug.tar.gz.age && rm -rf debug
+          # Green only when all six areas PASS: a failed or UNCLEAR (untested) area turns it red.
+          [ "$(grep -c ': PASS$' public.md)" = 6 ]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.result.outputs.findings == 'true'
+        with:
+          name: findings
+          path: findings.md.age
+          retention-days: 1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: debug
+          path: debug.tar.gz.age
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # A fresh runner: nothing the agent left behind can reach the reporting credentials. The
+  # environment's reviewers approve before its secrets are released to a PR's run.
+  report-findings:
+    needs: test-agent
+    if: always() && needs.test-agent.outputs.findings == 'true'
+    runs-on: ubuntu-latest
+    environment: security-report # must have required reviewers, see docs/test-agent-ci.md
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: findings
+
+      # The token gets the App's permissions, so the App must have only "Security advisories".
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        id: app-token
+        with:
+          client-id: ${{ vars.SECURITY_REPORT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SECURITY_REPORT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      # The title says which areas FAILED (a possible vulnerability, severity high) and which
+      # are UNCLEAR (not verified, no severity), taken from the public report lines.
+      - name: Report findings privately
+        env:
+          AGE_IDENTITY: ${{ secrets.SECURITY_REPORT_AGE_IDENTITY }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPORT: ${{ needs.test-agent.outputs.report }}
+        run: |
+          set -o pipefail
+          areas() { printf '%s\n' "$REPORT" | grep -xE "$REPORT_LINES" | sed -n "s/: $1\$//p" | paste -sd, - | sed 's/,/, /g' || true; }
+          failed=$(areas 'security check failed, details sent to maintainers')
+          unclear=$(areas UNCLEAR)
+          summary="Test agent, run ${{ github.run_id }}"
+          [ -n "$failed" ] && summary="$summary | FAILED: $failed"
+          [ -n "$unclear" ] && summary="$summary | UNCLEAR: $unclear"
+          sudo apt-get update -qq && sudo apt-get install -y -qq age
+          age -d -i <(printf '%s\n' "$AGE_IDENTITY") findings.md.age \
+            | jq -Rs --arg s "$summary" --arg sev "${failed:+high}" '{summary: $s, description: .} + (if $sev == "" then {} else {severity: $sev} end)' \
+            | gh api --method POST "repos/${{ github.repository }}/security-advisories/reports" --input - >/dev/null
+
+  report:
+    needs: test-agent
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # Filtered again on this clean runner, in case the agent's runner was tampered with.
+      # One comment per PR, updated by every run.
+      - name: Post the public report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ needs.test-agent.outputs.report }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          printf '%s\n' "$REPORT" | grep -xE "$REPORT_LINES" > public.md || echo "The test agent wrote no valid report." > public.md
+          tee -a "$GITHUB_STEP_SUMMARY" < public.md
+          if [ -n "$PR_NUMBER" ]; then gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body-file public.md --edit-last --create-if-none; fi
