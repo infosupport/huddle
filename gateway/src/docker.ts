@@ -155,16 +155,52 @@ export async function listDevcontainers(): Promise<DevcontainerInfo[]> {
 export async function refreshContainerIptables(containerId: string, containerName: string): Promise<void> {
   // After a huddle restart the container's iptables rules still point to the old huddle IP.
   // Rebuild both the nat DNAT rule and the filter DROP rules with the new huddle IP.
+  const networks = (await inspectContainer(containerName))?.NetworkSettings?.Networks ?? {};
+  const dcNetName = networks[`dc-net-${containerName}`]
+    ? `dc-net-${containerName}`
+    : 'devcontainer-net';
+  const gateways = await getNetworkGateways(dcNetName);
   const script = `
 HUDDLE_IP=$(getent hosts huddle 2>/dev/null | awk '{print $1}')
 [ -z "$HUDDLE_IP" ] && exit 0
 iptables -t nat -L OUTPUT --line-numbers -n 2>/dev/null \
   | awk '/DNAT.*dpt:80/{print $1}' | sort -rn \
   | while read LINE; do iptables -t nat -D OUTPUT "$LINE" 2>/dev/null || true; done
+# Determine the dc-net subnet(s): the interface that carries the route to huddle.
+# Deliberately NOT every global-scope interface — a second, routable NIC must
+# never end up in the ACCEPT/RETURN exemptions below. No interface found means no
+# exemption at all (fail closed).
+DC_IF=$(ip -o route get "$HUDDLE_IP" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev") {print $(i+1); exit}}')
+DC_CIDRS=$(ip -o -f inet addr show dev "$DC_IF" scope global 2>/dev/null | awk '{print $4}')
+# The gateway of that subnet is the HOST end of the bridge, not a sibling — see
+# ipv4Gateways(). Without this exclusion the exemptions below also open every
+# service on the developer's machine that listens on 0.0.0.0. An unknown gateway
+# means no exemption at all (fail closed) rather than an exposed host.
+DC_GATEWAYS="${gateways.join(' ')}"
+[ -z "$DC_GATEWAYS" ] && DC_CIDRS=""
 iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || true
+for CIDR in $DC_CIDRS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null \
+    || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null || true
+done
+# The gateway is exempt from that RETURN: :80 to the host keeps going through the
+# huddle proxy, exactly as it did before the subnet exemption existed. Inserted
+# after the RETURN, so it ends up in FRONT of it.
+for GW in $DC_GATEWAYS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$GW" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null \
+    || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$GW" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || true
+done
 iptables -F OUTPUT 2>/dev/null || true
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+# Appended BEFORE the subnet ACCEPT below, so everything else to the host stays
+# closed — on every protocol, not just TCP.
+for GW in $DC_GATEWAYS; do
+  iptables -A OUTPUT -d "$GW" -j DROP
+done
+for CIDR in $DC_CIDRS; do
+  iptables -A OUTPUT -d "$CIDR" -j ACCEPT
+done
 iptables -A OUTPUT -p tcp -j DROP
 `;
   try {
@@ -431,6 +467,33 @@ export async function createNetwork(name: string): Promise<void> {
   await dockerRequest('POST', '/networks/create', { Name: name, Internal: true });
 }
 
+// The IPv4 gateway(s) of a network: the HOST's own end of the bridge. The egress
+// firewall exempts the whole dc-net subnet so that compose siblings are
+// reachable, and this address sits in that same subnet — without an explicit
+// exclusion the exemption also hands the devcontainer every service on the
+// developer's machine that listens on 0.0.0.0. See the firewall blocks below.
+//
+// Only the network's own IPAM config carries it: on an `internal` network the
+// container-side endpoint reports an empty Gateway, because the daemon installs
+// no route to it. The strict dotted-quad filter also keeps the value safe to
+// interpolate into the shell scripts below.
+export function ipv4Gateways(network: any): string[] {
+  const configs: any[] = Array.isArray(network?.IPAM?.Config) ? network.IPAM.Config : [];
+  return configs
+    .map(c => (typeof c?.Gateway === 'string' ? c.Gateway.trim() : ''))
+    .filter(gw => /^(\d{1,3}\.){3}\d{1,3}$/.test(gw));
+}
+
+// Fail-closed: an unknown gateway yields an empty list, and the firewall blocks
+// then drop the subnet exemption altogether rather than open the host.
+export async function getNetworkGateways(name: string): Promise<string[]> {
+  try {
+    return ipv4Gateways(await dockerRequest('GET', `/networks/${encodeURIComponent(name)}`));
+  } catch {
+    return [];
+  }
+}
+
 export async function imageExists(name: string): Promise<boolean> {
   try {
     await dockerRequest('GET', `/images/${encodeURIComponent(name)}/json`);
@@ -682,7 +745,7 @@ fi`;
 
 // ── jb-config.sh — same logic as devcontainer-manager.ps1 ───────────────────
 
-export function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string): string {
+export function buildJbConfigScript(containerWorkspace: string, containerName: string, ideName: IdeName, caCertPem: string, seedScript: string, gateways: string[] = []): string {
   const ideFilter = ideName === 'rider' ? 'rider' : ideName === 'webstorm' ? 'webstorm' : 'idea';
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   return `#!/bin/sh
@@ -731,8 +794,51 @@ ${DOCKER_SOCK_SYMLINK}
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+# Determine the dc-net subnet(s): the interface that carries the route to huddle.
+# Deliberately NOT every global-scope interface — a second, routable NIC must
+# never end up in the ACCEPT/RETURN exemptions below. No interface found means no
+# exemption at all (fail closed).
+DC_IF=$(ip -o route get "$HUDDLE_IP" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev") {print $(i+1); exit}}')
+DC_CIDRS=$(ip -o -f inet addr show dev "$DC_IF" scope global 2>/dev/null | awk '{print $4}')
+# De gateway van dat subnet is de HOST-kant van de bridge, geen sibling. Zonder
+# uitzondering zetten de vrijstellingen hieronder ook elke dienst open die op de
+# machine van de ontwikkelaar op 0.0.0.0 luistert — buiten de proxy, het beleid en
+# de audit om. huddle vult DC_GATEWAYS uit de IPAM-config van het netwerk (zie
+# ipv4Gateways); een onbekende gateway betekent helemaal geen vrijstelling
+# (fail closed) in plaats van een open host.
+DC_GATEWAYS="${gateways.join(' ')}"
+[ -z "$DC_GATEWAYS" ] && DC_CIDRS=""
+# Sluit dc-net-siblings uit van de poort-80 DNAT: verkeer naar een sibling op :80
+# moet die sibling bereiken, niet omgeleid worden naar de huddle-proxy. -I OUTPUT 1
+# zet de RETURN vóór de DNAT, ook als die er bij een re-attach al staat.
+for CIDR in $DC_CIDRS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$CIDR" -j RETURN
+done
+# De gateway valt NIET onder die RETURN: verkeer naar de host op :80 loopt gewoon
+# via de huddle-proxy, net als voor de subnet-vrijstelling. Deze regel wordt na de
+# RETURN ingevoegd en staat daardoor ervóór.
+for GW in $DC_GATEWAYS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$GW" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$GW" -j DNAT --to-destination "$HUDDLE_IP:80"
+done
 iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+# Sta verkeer naar sibling-containers op het eigen dc-net toe: docker compose zet
+# zijn services op dc-net-<naam>, hetzelfde netwerk als deze devcontainer. Zonder
+# deze regel dropt de OUTPUT-chain al het niet-huddle TCP, dus bv. postgres op
+# :5432 is dan onbereikbaar. -I OUTPUT 1 zet de ACCEPT vóór de DROP, ook als die
+# er bij een re-attach al staat.
+#
+# Dit is alleen veilig zolang siblings single-homed op dc-net blijven: een sibling
+# met een tweede, routeerbare NIC zou hiermee een relay om de egress-proxy heen
+# zijn. socket-proxy.ts (networkAttachDenial + sanitizeNetworkCreate) borgt dat.
+for CIDR in $DC_CIDRS; do
+  iptables -C OUTPUT -d "$CIDR" -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -d "$CIDR" -j ACCEPT
+done
+# Idem in de filter-chain: al het overige verkeer naar de host blijft dicht, op elk
+# protocol. Na de ACCEPT hierboven ingevoegd, dus staat ervóór.
+for GW in $DC_GATEWAYS; do
+  iptables -C OUTPUT -d "$GW" -j DROP 2>/dev/null || iptables -I OUTPUT 1 -d "$GW" -j DROP
+done
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
@@ -841,7 +947,7 @@ export function buildVscodeMachineSettings(): Record<string, unknown> {
   };
 }
 
-export function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string): string {
+export function buildVscodeConfigScript(containerWorkspace: string, containerName: string, caCertPem: string, seedScript: string, gateways: string[] = []): string {
   const caB64 = Buffer.from(caCertPem, 'utf8').toString('base64');
   const settingsB64 = Buffer.from(JSON.stringify(buildVscodeMachineSettings(), null, 2), 'utf8').toString('base64');
   return `#!/bin/sh
@@ -854,8 +960,51 @@ ${DOCKER_SOCK_SYMLINK}
 HUDDLE_IP=$(getent hosts huddle | awk '{print $1}')
 iptables -t nat -C OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || \\
   iptables -t nat -A OUTPUT -p tcp --dport 80 ! -d "$HUDDLE_IP" -j DNAT --to-destination "$HUDDLE_IP:80"
+# Determine the dc-net subnet(s): the interface that carries the route to huddle.
+# Deliberately NOT every global-scope interface — a second, routable NIC must
+# never end up in the ACCEPT/RETURN exemptions below. No interface found means no
+# exemption at all (fail closed).
+DC_IF=$(ip -o route get "$HUDDLE_IP" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="dev") {print $(i+1); exit}}')
+DC_CIDRS=$(ip -o -f inet addr show dev "$DC_IF" scope global 2>/dev/null | awk '{print $4}')
+# De gateway van dat subnet is de HOST-kant van de bridge, geen sibling. Zonder
+# uitzondering zetten de vrijstellingen hieronder ook elke dienst open die op de
+# machine van de ontwikkelaar op 0.0.0.0 luistert — buiten de proxy, het beleid en
+# de audit om. huddle vult DC_GATEWAYS uit de IPAM-config van het netwerk (zie
+# ipv4Gateways); een onbekende gateway betekent helemaal geen vrijstelling
+# (fail closed) in plaats van een open host.
+DC_GATEWAYS="${gateways.join(' ')}"
+[ -z "$DC_GATEWAYS" ] && DC_CIDRS=""
+# Sluit dc-net-siblings uit van de poort-80 DNAT: verkeer naar een sibling op :80
+# moet die sibling bereiken, niet omgeleid worden naar de huddle-proxy. -I OUTPUT 1
+# zet de RETURN vóór de DNAT, ook als die er bij een re-attach al staat.
+for CIDR in $DC_CIDRS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$CIDR" -j RETURN 2>/dev/null || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$CIDR" -j RETURN
+done
+# De gateway valt NIET onder die RETURN: verkeer naar de host op :80 loopt gewoon
+# via de huddle-proxy, net als voor de subnet-vrijstelling. Deze regel wordt na de
+# RETURN ingevoegd en staat daardoor ervóór.
+for GW in $DC_GATEWAYS; do
+  iptables -t nat -C OUTPUT -p tcp --dport 80 -d "$GW" -j DNAT --to-destination "$HUDDLE_IP:80" 2>/dev/null || iptables -t nat -I OUTPUT 1 -p tcp --dport 80 -d "$GW" -j DNAT --to-destination "$HUDDLE_IP:80"
+done
 iptables -C OUTPUT -o lo -j ACCEPT 2>/dev/null || iptables -A OUTPUT -o lo -j ACCEPT
 iptables -C OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp -d "$HUDDLE_IP" -j ACCEPT
+# Sta verkeer naar sibling-containers op het eigen dc-net toe: docker compose zet
+# zijn services op dc-net-<naam>, hetzelfde netwerk als deze devcontainer. Zonder
+# deze regel dropt de OUTPUT-chain al het niet-huddle TCP, dus bv. postgres op
+# :5432 is dan onbereikbaar. -I OUTPUT 1 zet de ACCEPT vóór de DROP, ook als die
+# er bij een re-attach al staat.
+#
+# Dit is alleen veilig zolang siblings single-homed op dc-net blijven: een sibling
+# met een tweede, routeerbare NIC zou hiermee een relay om de egress-proxy heen
+# zijn. socket-proxy.ts (networkAttachDenial + sanitizeNetworkCreate) borgt dat.
+for CIDR in $DC_CIDRS; do
+  iptables -C OUTPUT -d "$CIDR" -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -d "$CIDR" -j ACCEPT
+done
+# Idem in de filter-chain: al het overige verkeer naar de host blijft dicht, op elk
+# protocol. Na de ACCEPT hierboven ingevoegd, dus staat ervóór.
+for GW in $DC_GATEWAYS; do
+  iptables -C OUTPUT -d "$GW" -j DROP 2>/dev/null || iptables -I OUTPUT 1 -d "$GW" -j DROP
+done
 iptables -C OUTPUT -p tcp -j DROP 2>/dev/null || iptables -A OUTPUT -p tcp -j DROP
 
 # Install huddle's MITM CA in the system trust store + set env vars for tools
@@ -1193,9 +1342,12 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   const seedScript = buildJavaKeystoreScript(buildFolderMappingSeedScript(containerPaths));
 
   // Run config script via exec — VS Code variant without JB host-config/backend.
+  // Host end of the dc-net bridge: the firewall in the config script must keep it
+  // out of the subnet exemption (see ipv4Gateways).
+  const gateways = await getNetworkGateways(netName);
   const script = isVscode
-    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript)
-    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript);
+    ? buildVscodeConfigScript(containerWorkspace, containerName, getCaCertPem(), seedScript, gateways)
+    : buildJbConfigScript(containerWorkspace, containerName, ideName, getCaCertPem(), seedScript, gateways);
   const execCreate = await dockerRequest('POST', `/containers/${id}/exec`, {
     User: 'root',
     Cmd: ['sh', '-c', 'exec > /tmp/huddle-prepare.stdout.log 2> /tmp/huddle-prepare.stderr.log \n\n ' + script],
