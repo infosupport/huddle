@@ -10,6 +10,7 @@ import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
 import { ensureBaseImage } from './base-image-build';
+import { JAVA_TOOL_OPTIONS, buildJavaTruststoreScript } from './java-truststore';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -619,17 +620,6 @@ for pair in ${pairs}; do
 done`;
 }
 
-function buildJavaKeystoreScript(seedscript: string): string {
-  return `
-    # Generate a Java keystore that includes the Huddle MITM CA for Java tools to trust.
-    keytool \
-      -importcert -noprompt -trustcacerts -alias huddle-ca \
-      -file /usr/local/share/ca-certificates/huddle-ca.crt \
-      -keystore /usr/local/share/ca-certificates/huddle-ca.jks -storepass changeit
-    
-    ${seedscript}
-  `
-}
 
 // Docker access goes via the socket in the mounted directory /var/run/huddle
 // (see DOCKER_HOST). Symlink the default path for tools that ignore DOCKER_HOST.
@@ -1247,7 +1237,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     'DOCKER_HOST=unix:///var/run/huddle/docker.sock',
     // Using Java is not limited to JetBrains products (and vice versa) so we define
     // JAVA_TOOL_OPTIONS regardless of which IDE is selected.
-    'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/usr/local/share/ca-certificates/huddle-ca.jks -Dhttp.proxyHost=huddle -Dhttp.proxyPort=80 -Dhttps.proxyHost=huddle -Dhttps.proxyPort=80 -Dhttp.nonProxyHosts=localhost|127.*|[::1]',
+    `JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS}`,
     ...(isVscode ? [] : [
       'DEVCONTAINER_CONFIG_PATH=/.jbdevcontainer/config/JetBrains/host-config.json',
       'XDG_DATA_HOME=/.jbdevcontainer/data',
@@ -1346,7 +1336,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
   await dockerRequest('POST', `/containers/${id}/start`, {});
 
   const containerPaths = folderMounts.map(m => m.Target);
-  const seedScript = buildJavaKeystoreScript(buildFolderMappingSeedScript(containerPaths));
+  const seedScript = buildJavaTruststoreScript(getCaCertPem()) + buildFolderMappingSeedScript(containerPaths);
 
   // Run config script via exec — VS Code variant without JB host-config/backend.
   // Host end of the dc-net bridge: the firewall in the config script must keep it
