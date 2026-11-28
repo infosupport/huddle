@@ -996,7 +996,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
           clearContainerAuthorizations(containerName);
         }
         const id = await createAndStartContainer(params);
-        return { id, containerName };
+        // containerWorkspace is echoed back so a client (the CLI) can point an
+        // IDE at the mount without re-deriving the path itself (#136).
+        return { id, containerName, containerWorkspace };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
       }

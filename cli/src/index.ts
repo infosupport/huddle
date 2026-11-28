@@ -31,7 +31,7 @@ interface ParsedArgs {
 }
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'no-vscode-config']);
 const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'triage-agent', 'images', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -189,6 +189,8 @@ Start options:
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
+  --no-vscode-config                 Do not write the per-container attach config
+                                     that makes VS Code open the workspace folder
 
 Update-agent options:
   --dry-run                          Fix and verify, but print the diff instead of
@@ -294,6 +296,7 @@ async function main(): Promise<void> {
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),
+      vscodeConfig: !flagBool(flags, 'no-vscode-config'),
     });
     return;
   }
