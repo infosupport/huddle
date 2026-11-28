@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { AsyncPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { StateService } from '../../core/services/state.service';
@@ -25,6 +25,7 @@ interface PathRequestRow {
 }
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-firewall',
   standalone: true,
   imports: [AsyncPipe, FormsModule, RelTimePipe, PieMenuComponent, PathAllowlistComponent, IconComponent, FirewallGroupsPanelComponent],

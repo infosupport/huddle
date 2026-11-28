@@ -10,6 +10,10 @@ Runbook for getting a security fix from advisory to published image quickly.
    the latest commit. Spend about 15 minutes on two questions:
    - Does the vulnerable code path touch our code?
    - Does the fix contain breaking changes?
+
+   The [triage agent](triage-agent.md) answers both in a comment on the PR, with file and line references. Check its
+   analysis instead of starting from the advisory. When it says *needs a human deep-dive*, or the comment is missing,
+   do the full review above.
 5. **Merge.** `publish-image.yml` publishes the image.
 6. **No upstream fix yet?** Run `scripts/security-bump.sh <package> <version>` to pin a patched version through an
    `overrides` entry. It needs `jq`, a clean working tree and an exact version (`1.2.3`, not a range or tag). It finds

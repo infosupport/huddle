@@ -8,6 +8,7 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runTriageAgent } from './triage-agent';
 import { runUpdateAgent } from './update-agent';
 import { resolveImages } from './images';
 import { cliVersion } from './self-update';
@@ -28,7 +29,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'triage-agent', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -156,6 +157,9 @@ Usage:
   huddle update-agent [PR]           Let Claude fix Renovate PRs whose CI is red,
                                      inside an airlocked devcontainer (needs gh and
                                      CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
+  huddle triage-agent [PR]           Let Claude analyse open PRs labelled security
+                                     and comment its impact analysis, inside an
+                                     airlocked devcontainer (same requirements)
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
@@ -187,6 +191,14 @@ Update-agent options:
   --skip-majors                      Skip PRs Renovate labelled 'major'
   --out <dir>                        Write each run's network log to <dir>
                                      (pr-<n>-network.json)
+
+Triage-agent options:
+  --dry-run                          Analyse, but print the comment instead of posting it
+  --keep                             Keep the agent container and its folder
+                                     (~/.huddle/triage-agent) for inspection
+  --out <dir>                        Write each run's network log (pr-<n>-network.json)
+                                     and any analysis that must stay private
+                                     (pr-<n>-private.md) to <dir>
 
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
@@ -395,6 +407,17 @@ async function main(): Promise<void> {
       dryRun: flagBool(flags, 'dry-run'),
       keep: flagBool(flags, 'keep'),
       skipMajors: flagBool(flags, 'skip-majors'),
+      out: flagString(flags, 'out'),
+      runtime: flagString(flags, 'runtime'),
+    });
+    return;
+  }
+
+  if (cmd === 'triage-agent') {
+    await runTriageAgent({
+      pr: positional[1] !== undefined ? parseIssueNumber(positional[1]) : undefined,
+      dryRun: flagBool(flags, 'dry-run'),
+      keep: flagBool(flags, 'keep'),
       out: flagString(flags, 'out'),
       runtime: flagString(flags, 'runtime'),
     });

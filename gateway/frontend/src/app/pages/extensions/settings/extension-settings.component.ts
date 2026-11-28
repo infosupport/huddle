@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
@@ -6,6 +6,7 @@ import { ApiService } from '../../../core/services/api.service';
 import { Extension, ExtensionSetting } from '../../../core/extensions/extension.model';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-extension-settings',
   standalone: true,
   imports: [FormsModule, RouterLink],

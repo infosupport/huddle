@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { AsyncPipe, NgClass } from '@angular/common';
 import { ThemeService } from '../../core/services/theme.service';
 import { ModalService } from '../../core/services/modal.service';
@@ -6,6 +6,7 @@ import { NotificationService } from '../../core/services/notification.service';
 import { AuthService } from '../../core/services/auth.service';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-topbar',
   standalone: true,
   imports: [AsyncPipe, NgClass],

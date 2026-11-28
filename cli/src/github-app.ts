@@ -74,7 +74,11 @@ export class GithubApp {
   private mintedAt = 0;
   private installationId?: number;
 
-  constructor(private readonly cfg: AppConfig) {}
+  /** permissions: what each installation token may do; the update agent's by default. */
+  constructor(
+    private readonly cfg: AppConfig,
+    private readonly permissions: Readonly<Record<string, string>> = APP_PERMISSIONS,
+  ) {}
 
   get repo(): string {
     return this.cfg.repo;
@@ -88,7 +92,7 @@ export class GithubApp {
     // Scoped to this one repository and these permissions, whatever else the App may do.
     const { token } = await github<{ token: string }>('POST', `/app/installations/${this.installationId}/access_tokens`, jwt, {
       repositories: [this.cfg.repo.split('/')[1]],
-      permissions: APP_PERMISSIONS,
+      permissions: this.permissions,
     });
     if (process.env.GITHUB_ACTIONS === 'true') console.log(`::add-mask::${token}`);
     this.token = token;
