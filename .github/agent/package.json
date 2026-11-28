@@ -1,0 +1,8 @@
+{
+  "name": "huddle-test-agent-tools",
+  "private": true,
+  "description": "Tools for the test agent (.github/workflows/test-agent.yml), pinned with package-lock.json",
+  "dependencies": {
+    "@playwright/mcp": "0.0.86"
+  }
+}

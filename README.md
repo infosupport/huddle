@@ -31,7 +31,7 @@ npm install -g @infosupport/huddle-cli
 huddle init            # portal → http://localhost:3000
 
 # 3 — launch a devcontainer from your project directory
-huddle                 # IntelliJ (default) · --ide vscode · --ide rider
+huddle                 # IntelliJ (default) · --ide vscode · --ide rider · --ide webstorm
 ```
 
 Open **http://localhost:3000** to approve firewall requests, manage Docker access and watch the network log. Full walkthrough — Rancher Desktop, runtimes, prebuilt base images, opening in your IDE — is in **[Getting Started](#getting-started)** below.
@@ -119,10 +119,20 @@ Two servers run in the same process:
 
 ### Container management
 - Overview of all devcontainers with status, image, uptime, and pending rule requests
-- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / VS Code)
+- Start a new devcontainer from a snapshot or base image (IntelliJ / Rider / WebStorm / VS Code)
 - Commit a running container to a snapshot image
 - Force-remove a container including network cleanup
 - A per-container Docker socket proxy is created automatically on start
+
+### Environment variable mappings
+Variables handed to a devcontainer when it is created, configured once in **Settings → Environment variables**.
+
+- **Global** variables go into every new devcontainer; the rest are offered as tick boxes in the start dialog, with an option to remember that choice for the workspace directory
+- **Secret** variables never reach the container: it receives an opaque placeholder (`huddle_env_…`), and the egress proxy swaps in the real value — only for requests to the hosts listed on that mapping (exact or `*.example.com`, the same matching as a firewall rule). A secret mapping must name at least one host; the API refuses one with an empty list rather than storing a credential that could never be used
+- A placeholder is bound to the container that received it, so one devcontainer cannot redeem another's secret, and it is revoked when that container is removed
+- The network log records the placeholder, never the secret — and neither does the response: if an allowlisted host echoes the credential back (a debug endpoint, an error quoting it, a `Set-Cookie`), the proxy puts the placeholder back before the devcontainer sees it, so the workload cannot read the real value out of its own traffic
+- Definitions live in `~/.huddle/config.json` so a team can review them in version control; secret **values** stay in Huddle's own database and are never sent back to the portal
+- Variables that carry Huddle's own security posture (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `DOCKER_HOST`, `PATH`, …) cannot be overridden by a mapping
 
 ### Admin access (sudo)
 Each managed container has two users: `vscode` (the normal dev user, **without** sudo) and `noot` (administrator **with** sudo). Instead of a permanent admin password, Huddle uses an **ephemeral per-grant model**:
@@ -181,7 +191,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pulls the latest Huddle image and starts the container. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
+`huddle init` pulls the latest Huddle image, starts the container and builds the devcontainer base images on your machine in the background (see [Base images](#base-images)). It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
 
 After that, you start devcontainers directly from a project directory:
 
@@ -214,15 +224,22 @@ If auto-detection ever fails, make sure the `rancher-desktop` context is active
 
 ---
 
-## Building base images (optional)
+## Base images
 
-Huddle builds base images automatically when you start a devcontainer. To speed this up, you can build them ahead of time:
+The devcontainer base images (`base-devimage` plus one per IDE) are **built on your
+machine**, not pulled from a registry. That way you get the latest Claude Code, Codex
+and Copilot CLIs without waiting for a new Huddle release.
 
-```bash
-docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
-docker build -t base-devimage-intellij  -f base-devimage-intellij/Dockerfile  .
-docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
-```
+- `huddle init` starts the build in the background and returns right away. A
+  devcontainer that starts before the build is done waits for it.
+- `huddle images status` shows which images are present; the build log is in
+  `~/.huddle/images/build.log`.
+- `huddle images build --refresh` rebuilds everything with the newest tools
+  (`--ide <vscode|intellij|rider|webstorm>` limits it to one IDE).
+
+The images are tagged `localhost/huddle/base-devimage[-<ide>]:<channel>` (`latest`, or
+`experiment-<nr>` while an experiment is active). The Dockerfiles ship with the CLI;
+`BASE_IMAGE_<IDE>` still overrides the image the gateway uses.
 
 ---
 

@@ -4,6 +4,7 @@ import { bold, green, dim, yellow } from './utils';
 import { resolveRuntime } from './runtime';
 import { ResolvedImages, gatewayEnvArgs } from './images';
 import { readConfig, updateConfig, CONFIG_DIR } from './config';
+import { startBackgroundBuild } from './base-images';
 import fs from 'fs';
 
 const CONTAINER = 'huddle';
@@ -46,28 +47,6 @@ function runArgsSilent(file: string, args: string[]): boolean {
 }
 
 /**
- * Pulls the devcontainer base images ahead of time. Best-effort: if an image is
- * not (yet) available in the registry, we only warn — the gateway then builds it
- * from the bundled Dockerfile on the first start.
- */
-function pullBaseImages(rt: string, images: string[]): void {
-  console.log(dim(`Pulling devcontainer base images (${images.length})`));
-  const failed: string[] = [];
-  for (const image of images) {
-    console.log(dim(`  Pulling ${image}`));
-    try {
-      runArgs(rt, ['pull', image]);
-    } catch {
-      failed.push(image);
-      console.log(yellow(`  [!] Could not pull ${image} — the gateway will build it later if needed.`));
-    }
-  }
-  if (failed.length === images.length) {
-    console.log(yellow('[!] No base image could be pulled. Are the images published and reachable?'));
-  }
-}
-
-/**
  * Starts the Huddle gateway. Which images run (stable or experiment) is decided
  * by the caller via `images` (see resolveImages() in images.ts); this function
  * only does runtime and container orchestration.
@@ -89,7 +68,6 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   } else {
     console.log(dim(`Pulling ${IMAGE}`));
     runArgs(rt, ['pull', IMAGE]);
-    pullBaseImages(rt, images.baseImages.map((b) => b.image));
   }
 
   console.log(dim(`Volume: ${VOLUME}`));
@@ -181,6 +159,19 @@ export async function runInit(opts: InitOptions, images: ResolvedImages): Promis
   dockerArgs.push(...gatewayEnvArgs(images));
   dockerArgs.push(IMAGE);
   runArgs(rt, dockerArgs);
+
+  // Devcontainer base images are built on this machine, not pulled. Non-blocking:
+  // init returns right away; a devcontainer that starts before the build is done
+  // waits for it in the gateway. HUDDLE_NO_BUILD=1 skips it (CI builds itself).
+  if (process.env.HUDDLE_NO_BUILD === '1') {
+    console.log(dim('HUDDLE_NO_BUILD=1 → not building devcontainer base images'));
+  } else {
+    try {
+      startBackgroundBuild(rt, images.tag);
+    } catch (err) {
+      console.log(yellow(`[!] Could not start the base-image build: ${err}. Run "huddle images build".`));
+    }
+  }
 
   // Attaching devcontainer-net after the container has started pollutes
   // resolv.conf on Podman with that network's internal aardvark-DNS; the

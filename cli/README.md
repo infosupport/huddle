@@ -16,7 +16,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with Docker and Podman: the runtime is detected automatically (Docker first, then Podman), or pick one explicitly with `huddle init --runtime <docker|podman>` or the `HUDDLE_RUNTIME` env var. If you run `huddle` while Huddle isn't running, you automatically get a hint to run this command.
+Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with Docker, Podman and WSLc: the runtime is detected automatically (Docker first, then Podman, then WSLc), or pick one explicitly with `huddle init --runtime <docker|podman|wslc>` or the `HUDDLE_RUNTIME` env var. If you run `huddle` while Huddle isn't running, you automatically get a hint to run this command.
 
 ## Starting devcontainers
 
@@ -24,6 +24,7 @@ Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with D
 huddle                 # start an IntelliJ devcontainer for the current directory
 huddle ./project       # start for a specific directory
 huddle --ide rider
+huddle --ide webstorm
 huddle --ide vscode --name devcontainer-demo
 huddle --ide vscode --mount ../docker-corpa=/workspaces/backend --mount ../frontend-real-estate-info=/workspaces/frontend --name corpa-dev
 huddle fw list
@@ -108,13 +109,14 @@ npm run install-global
 Main flags:
 
 ```text
---ide <intellij|rider|vscode>
+--ide <intellij|rider|webstorm|vscode>
 --workspace <path>
 --mount <host>=<container>   (repeatable, container path must be absolute)
 --workspace-root <path>      (container path the IDE opens; requires --mount)
 --name <name>
 --image <image>
 --empty
+--no-vscode-config
 -i, --interactive
 --container <name>
 --status <requested|allow|deny>

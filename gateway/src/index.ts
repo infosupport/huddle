@@ -6,6 +6,7 @@ import { listDevcontainers, networkExists, connectNetwork, refreshContainerIptab
 import { sweepExpiredSudoGrants } from './sudo-grant';
 import { createContainerProxy } from './socket-proxy';
 import { initCa } from './tls-ca';
+import { migrateEnvSecretsToUids, purgeOrphanedEnvMappings } from './env-mappings';
 import { sanitizeResolvConf, scheduleSettlingSanitize } from './dns-egress';
 
 // ECONNRESET / EPIPE are normal client-disconnect events on a TCP server.
@@ -22,6 +23,13 @@ const SOCKET_DIR = '/tmp/dc-sockets';
 initDb();
 // Resource limits + folder mappings moved from the DB into config.json (#98).
 runSettingsMigration();
+// Secrets used to be filed under the mapping's numeric id, which config.json can
+// hand back out; re-key them onto the mapping's uid before anything reads one.
+migrateEnvSecretsToUids();
+// config.json is hand-editable, so a mapping can vanish without the API's delete
+// path running. Tidy up the bindings it left behind (#108). Never touches a
+// stored secret — a stale binding is already unresolvable via its uid.
+purgeOrphanedEnvMappings();
 initCa();
 createProxyServer();
 createApiServer().catch(err => {

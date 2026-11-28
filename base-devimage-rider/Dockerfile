@@ -1,4 +1,6 @@
-FROM ghcr.io/infosupport/base-devimage
+# Bouwt lokaal op de gedeelde base-devimage (gebouwd door `huddle images build` of de gateway).
+ARG BASE_IMAGE=localhost/huddle/base-devimage:latest
+FROM ${BASE_IMAGE}
 
 # JB Gateway downloadt zelf de .NET-runtime in de RemoteDev-dist. Als je dotnet
 # ook in je terminal wil, voeg dan apt-install dotnet-sdk-8.0 toe.
@@ -10,4 +12,9 @@ LABEL com.devcontainer.snapshot=true
 LABEL com.devcontainer.source=base-devimage-rider
 LABEL com.devcontainer.ide=rider
 
+ # Rider 2026.3 crashes when opening a solution if ~/Downloads does not exist.
+RUN mkdir -p /home/vscode/Downloads
+
 # Geen ENTRYPOINT/CMD override — huddle's spawn-flow zet die zelf.
+
+

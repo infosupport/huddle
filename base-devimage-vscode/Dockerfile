@@ -1,4 +1,6 @@
-FROM ghcr.io/infosupport/base-devimage
+# Bouwt lokaal op de gedeelde base-devimage (gebouwd door `huddle images build` of de gateway).
+ARG BASE_IMAGE=localhost/huddle/base-devimage:latest
+FROM ${BASE_IMAGE}
 
 # Voor VS Code hoeft er hier GEEN backend geïnstalleerd te worden. VS Code installeert
 # zijn eigen "VS Code Server" automatisch in de container zodra je via de Dev Containers-

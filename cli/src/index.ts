@@ -8,7 +8,12 @@ import { runFirewallList, runFirewallAdd, runFirewallDelete, runFirewallExport, 
 import { runInit } from './init';
 import { runMigrate } from './migrate';
 import { runIndexFolder } from './indexfolder';
+import { runTriageAgent } from './triage-agent';
+import { runUpdateAgent } from './update-agent';
 import { resolveImages } from './images';
+import { IDES, Ide, buildImages, printStatus } from './base-images';
+import { imageTag } from './config';
+import { resolveRuntime } from './runtime';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
 import {
@@ -26,8 +31,8 @@ interface ParsedArgs {
 }
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
-const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'help', 'version']);
+const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear', 'no-vscode-config']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'triage-agent', 'images', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -152,19 +157,29 @@ Usage:
   huddle firewall folder set <path>  Set the team-managed rules folder
   huddle firewall folder reload      Re-read the team-managed rules folder
   huddle firewall folder sync        Write the portal's groups back to the folder
+  huddle update-agent [PR]           Let Claude fix Renovate PRs whose CI is red,
+                                     inside an airlocked devcontainer (needs gh and
+                                     CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
+  huddle triage-agent [PR]           Let Claude analyse open PRs labelled security
+                                     and comment its impact analysis, inside an
+                                     airlocked devcontainer (same requirements)
   huddle experiment use <nr>         Activate the experimental build of issue/PR <nr>
                                      and run init
   huddle experiment reset            Back to the stable release
   huddle experiment status           Show the active channel and CLI version
+  huddle images build [--refresh]    Build the devcontainer base images on this machine
+                                     (--refresh: rebuild with the latest Claude Code,
+                                     Codex and Copilot CLIs; --ide <ide>: one IDE only)
+  huddle images status               Show which base images are present
 
 Init options:
-  --runtime <docker|podman>          Container runtime (default: auto-detected;
+  --runtime <docker|podman|wslc>     Container runtime (default: auto-detected;
                                      also via the HUDDLE_RUNTIME env var)
   --experiment <nr>                  Use the experimental build of issue/PR <nr>
                                      (same as "huddle experiment use <nr>")
 
 Start options:
-  --ide <intellij|rider|vscode>      IDE (default: intellij)
+  --ide <intellij|rider|webstorm|vscode> IDE (default: intellij)
   --workspace <path>                 Workspace directory (default: current directory)
   --mount <host>=<container>         Mount a host folder at an absolute container path, e.g.
                                      C:/projects/my-repo/backend=/workspace/backend
@@ -174,6 +189,25 @@ Start options:
   --name <name>                      Container name (default: devcontainer-<foldername>)
   --image <image>                    Use a specific image
   --empty                            Empty container without a workspace
+  --no-vscode-config                 Do not write the per-container attach config
+                                     that makes VS Code open the workspace folder
+
+Update-agent options:
+  --dry-run                          Fix and verify, but print the diff instead of
+                                     pushing or commenting
+  --keep                             Keep the agent container and its folder
+                                     (~/.huddle/update-agent) for inspection
+  --skip-majors                      Skip PRs Renovate labelled 'major'
+  --out <dir>                        Write each run's network log to <dir>
+                                     (pr-<n>-network.json)
+
+Triage-agent options:
+  --dry-run                          Analyse, but print the comment instead of posting it
+  --keep                             Keep the agent container and its folder
+                                     (~/.huddle/triage-agent) for inspection
+  --out <dir>                        Write each run's network log (pr-<n>-network.json)
+                                     and any analysis that must stay private
+                                     (pr-<n>-private.md) to <dir>
 
 Migrate options:
   --ca-path <path>                   Where the Huddle CA lands in the container
@@ -262,6 +296,7 @@ async function main(): Promise<void> {
       name: flagString(flags, 'name'),
       image: flagString(flags, 'image'),
       empty: flagBool(flags, 'empty'),
+      vscodeConfig: !flagBool(flags, 'no-vscode-config'),
     });
     return;
   }
@@ -292,6 +327,29 @@ async function main(): Promise<void> {
     const initOpts = { runtime: flagString(flags, 'runtime') };
     ensureCliForChannel(process.argv.slice(2));
     await runInit(initOpts, resolveImages());
+    return;
+  }
+
+  if (cmd === 'images') {
+    const subCmd = sub ?? 'status';
+    const rt = resolveRuntime(flagString(flags, 'runtime')).name;
+    // The background build from `huddle init` passes the channel tag explicitly.
+    const tag = process.env.HUDDLE_IMAGES_TAG?.trim() || imageTag();
+    if (subCmd === 'build') {
+      const ide = flagString(flags, 'ide');
+      if (ide !== undefined && !(IDES as readonly string[]).includes(ide)) {
+        console.error(`Unknown IDE: ${ide} (choose from ${IDES.join(', ')})`);
+        process.exit(1);
+      }
+      const ok = buildImages({ rt, tag, ides: ide ? [ide as Ide] : undefined, refresh: flagBool(flags, 'refresh') });
+      if (!ok) process.exit(1);
+    } else if (subCmd === 'status') {
+      printStatus(rt, tag);
+    } else {
+      console.error(`Unknown images subcommand: ${subCmd}`);
+      console.error('Usage: huddle images <build [--refresh] [--ide <ide>]|status>');
+      process.exit(1);
+    }
     return;
   }
 
@@ -372,6 +430,29 @@ async function main(): Promise<void> {
       replace: flagBool(flags, 'replace'),
       clear: flagBool(flags, 'clear'),
       list: flagBool(flags, 'list'),
+    });
+    return;
+  }
+
+  if (cmd === 'update-agent') {
+    await runUpdateAgent({
+      pr: positional[1] !== undefined ? parseIssueNumber(positional[1]) : undefined,
+      dryRun: flagBool(flags, 'dry-run'),
+      keep: flagBool(flags, 'keep'),
+      skipMajors: flagBool(flags, 'skip-majors'),
+      out: flagString(flags, 'out'),
+      runtime: flagString(flags, 'runtime'),
+    });
+    return;
+  }
+
+  if (cmd === 'triage-agent') {
+    await runTriageAgent({
+      pr: positional[1] !== undefined ? parseIssueNumber(positional[1]) : undefined,
+      dryRun: flagBool(flags, 'dry-run'),
+      keep: flagBool(flags, 'keep'),
+      out: flagString(flags, 'out'),
+      runtime: flagString(flags, 'runtime'),
     });
     return;
   }

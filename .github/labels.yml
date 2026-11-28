@@ -55,3 +55,11 @@
 - name: dependencies
   color: 0366d6
   description: Dependency updates or issues
+
+- name: needs-security-review
+  color: e99695
+  description: Security-critical dependency; a maintainer must approve the latest commit
+
+- name: agent-gave-up
+  color: b60205
+  description: The update agent could not fix this PR; a person needs to take over

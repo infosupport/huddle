@@ -216,19 +216,47 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       expect(curlStatusIn(E2E_NAME, 'https://GIST.GITHUB.COM')).toBe('000');
     });
 
-    // Finding #7 (MEDIUM) — pad-allowlist bypass via traversal. `--path-as-is`
-    // bootst een aanvaller-client na die het pad niet client-side normaliseert.
-    it('pad-traversal glipt niet door een /foo/* allowlist (finding #7)', async () => {
+    // example.org: host-level deny in path-mode, met alleen /foo/* toegestaan. Gedeeld
+    // door de pad-tests hieronder (traversal, interceptie, %-encoding).
+    async function allowOnlyFooPath() {
       await clearRulesForDomain('example.org');
       const denyId = await createRule('example.org', 'deny');
       await enablePathMode(denyId);
       await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
       await sleep(1000);
+    }
+
+    // Finding #7 (MEDIUM) — pad-allowlist bypass via traversal. `--path-as-is`
+    // bootst een aanvaller-client na die het pad niet client-side normaliseert.
+    it('pad-traversal glipt niet door een /foo/* allowlist (finding #7)', async () => {
+      await allowOnlyFooPath();
       // Legitiem subpad mag (bereikt upstream — 2xx/3xx/4xx, in elk geval geen 403).
-      expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is')).not.toBe('403');
+      // Match op een échte HTTP-status: '000' (kapotte TLS/MITM) is ook "niet 403".
+      const allowed = curlStatusIn(E2E_NAME, 'https://example.org/foo/', '--path-as-is');
+      expect(allowed).toMatch(/^[1-5]\d\d$/);
+      expect(allowed).not.toBe('403');
       // Traversal buiten /foo/ → door Huddle geblokkeerd (403), niet doorgestuurd.
       expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/../secret', '--path-as-is')).toBe('403');
       expect(curlStatusIn(E2E_NAME, 'https://example.org/foo/..%2f..%2fadmin', '--path-as-is')).toBe('403');
+    });
+
+    // HTTPS-interceptie expliciet vastgepind: de bovenstaande tests bewijzen dit
+    // indirect (een pad-403 kan alleen na TLS-terminatie), maar hier asserteren we
+    // het direct. De leaf die de container ziet moet door Huddle's eigen root-CA zijn
+    // uitgegeven — dáár zou een node-forge- of TLS-regressie in de MITM-keten zichtbaar
+    // worden. (curl vertrouwt de CA in de devcontainer; zonder interceptie zou de
+    // issuer de echte upstream-CA zijn.)
+    it('https wordt geïntercepteerd: het leaf-cert komt van de Huddle-CA', async () => {
+      await allowOnlyFooPath();
+      // Geen grep/|| true: bewaar de volledige verbose-output zodat een falende run
+      // laat zien of het om curl/netwerk gaat of om een echte MITM-regressie.
+      const r = execIn(E2E_NAME, `curl -sv -o /dev/null --path-as-is https://example.org/foo/ 2>&1`);
+      const output = r.stdout + r.stderr;
+      const issuerLines = output.split('\n').filter(l => /issuer:/i.test(l));
+      expect(
+        issuerLines.join('\n'),
+        `geen Huddle-CA issuer gevonden (curl exit ${r.status}). Volledige curl-output:\n${output}`,
+      ).toContain('Huddle DMZ Proxy Root CA');
     });
 
     // Regressie op de finding #7-fix: de beslissing valt op de gedecodeerde
@@ -252,11 +280,7 @@ describe.skipIf(!E2E_ENABLED)('live security boundary', () => {
       expect(status).not.toBe('400'); // niet de forward-guard: encoded bytes gooien nooit
     };
     it('%-encoded pad (%20) wordt geforward en crasht de gateway niet', async () => {
-      await clearRulesForDomain('example.org');
-      const denyId = await createRule('example.org', 'deny');
-      await enablePathMode(denyId);
-      await createRule('example.org', 'allow', { path_pattern: '/foo/*' });
-      await sleep(1000);
+      await allowOnlyFooPath();
       // MITM-pad (https): matcht /foo/* op de gedecodeerde vorm, bereikt upstream.
       forwardedOk(curlStatusIn(E2E_NAME, 'https://example.org/foo/a%20b', '--path-as-is'));
       // Plain-HTTP-pad: zelfde invariant.

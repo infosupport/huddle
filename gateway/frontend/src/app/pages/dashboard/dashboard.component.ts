@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { AsyncPipe, NgClass } from '@angular/common';
 import { StateService } from '../../core/services/state.service';
@@ -12,6 +12,7 @@ import { PieMenuConfig } from '../../shared/components/pie-menu/pie-menu.model';
 import { combineLatest, map } from 'rxjs';
 
 @Component({
+  changeDetection: ChangeDetectionStrategy.Eager,
   selector: 'app-dashboard',
   standalone: true,
   imports: [AsyncPipe, NgClass, RouterLink, RelTimePipe, PieMenuComponent],

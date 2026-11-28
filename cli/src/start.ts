@@ -1,7 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import { get, post } from './api';
-import { bold, green, cyan, dim } from './utils';
+import { bold, green, cyan, dim, yellow } from './utils';
+import { findImageConfigs, writeAttachedContainerConfig } from './vscode';
+import { ensureImageForStart } from './base-images';
+import { resolveRuntime } from './runtime';
 
 export interface StartOptions {
   ide: string;
@@ -11,9 +14,10 @@ export interface StartOptions {
   name?: string;
   image?: string;
   empty: boolean;
+  vscodeConfig?: boolean;
 }
 
-type IdeName = 'rider' | 'intellij' | 'vscode';
+type IdeName = 'rider' | 'intellij' | 'webstorm' | 'vscode';
 
 interface BaseImageResponse {
   imageName: string;
@@ -22,6 +26,8 @@ interface BaseImageResponse {
 interface StartResponse {
   id: string;
   containerName: string;
+  /** Mount point inside the container; absent on gateways older than this CLI. */
+  containerWorkspace?: string;
 }
 
 export async function runStart(opts: StartOptions): Promise<void> {
@@ -98,18 +104,70 @@ export async function runStart(opts: StartOptions): Promise<void> {
     body.workspaceDir = workspaceDir;
   }
 
+  // Our base images are built on this machine; make sure this one exists before the
+  // gateway starts the container (it would otherwise build it inside the request).
+  let rt: string | undefined;
+  try {
+    rt = resolveRuntime().name;
+  } catch {
+    // No local container runtime (e.g. HUDDLE_URL points elsewhere): leave it to the gateway.
+  }
+  if (rt) await ensureImageForStart(rt, ide, imageName);
+
   const result = await post<StartResponse>('/api/docker/start', body);
 
   console.log(green(`[OK] Container started: ${result.containerName} (${result.id.slice(0, 12)})`));
   console.log();
 
   if (ide === 'vscode') {
+    const containerWorkspace = result.containerWorkspace ?? containerWorkspacePath(workspaceDir, containerName);
+    if (opts.vscodeConfig !== false) {
+      configureVscodeAttach(containerName, containerWorkspace, imageName);
+    }
     console.log(`Open in VS Code: ${cyan('Dev Containers: Attach to Running Container')} -> ${bold(result.containerName)}`);
     return;
   }
 
   console.log(`Open in JetBrains Gateway: ${cyan('Remote Development > Dev Containers')} -> ${bold(result.containerName)}`);
   await tryPrintIdeLink(result.containerName);
+}
+
+/**
+ * Teach VS Code which folder to open on attach. Best-effort: a failure here
+ * costs one manual File > Open Folder, never the container itself.
+ */
+function configureVscodeAttach(containerName: string, containerWorkspace: string, imageName: string): void {
+  let result;
+  try {
+    result = writeAttachedContainerConfig(containerName, containerWorkspace);
+  } catch (err) {
+    console.log(yellow(`! Could not configure VS Code: ${err instanceof Error ? err.message : String(err)}`));
+    return;
+  }
+
+  for (const file of result.written) {
+    console.log(dim(`VS Code will open ${containerWorkspace} on attach (${file})`));
+  }
+  for (const { file, reason } of result.skipped) {
+    console.log(yellow(`! Left ${file} untouched: ${reason}`));
+  }
+  if (!result.written.length && !result.skipped.length) {
+    console.log(dim('No VS Code config changes were made; if attach opens an empty window, use File > Open Folder on the container workspace.'));
+  }
+
+  // The name-level config above wins for THIS container, but a leftover
+  // image-level one still misdirects every other container on the same image.
+  for (const file of findImageConfigs(imageName)) {
+    console.log(yellow(`! Image-level config still present: ${file} (applies to every container from this image; consider deleting it)`));
+  }
+}
+
+/** Mirrors the gateway's containerWorkspacePath() for gateways that predate it. */
+function containerWorkspacePath(workspaceDir: string | undefined, containerName: string): string {
+  const leaf = workspaceDir
+    ? workspaceDir.replace(/\\/g, '/').replace(/\/$/, '').split('/').pop() || containerName
+    : containerName.replace(/^devcontainer-/, '') || containerName;
+  return `/workspaces/${leaf}`;
 }
 
 async function tryPrintIdeLink(containerName: string): Promise<void> {
@@ -161,6 +219,7 @@ function parseIde(value: string): IdeName {
   const normalized = value.toLowerCase().replace(/[ _-]+/g, '');
   if (normalized === 'rider') return 'rider';
   if (normalized === 'vscode' || normalized === 'code') return 'vscode';
+  if (normalized === 'webstorm' || normalized === 'ws') return 'webstorm';
   if (normalized === 'intellij' || normalized === 'intelij' || normalized === 'idea') return 'intellij';
-  throw new Error(`Unknown IDE: ${value}. Choose intellij, rider, or vscode.`);
+  throw new Error(`Unknown IDE: ${value}. Choose intellij, rider, webstorm, or vscode.`);
 }

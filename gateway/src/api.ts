@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Fastify, { FastifyInstance } from 'fastify';
 import { stateEvents, notifyStateChanged } from './events';
 import fastifyStatic from '@fastify/static';
-import { db, getAllGrants, setGrant, deleteGrant, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS } from './db';
+import { db, getAllGrants, setGrant, deleteGrant, clearContainerAuthorizations, getGrant, setActionPolicy, logAudit, getSudoGrant, getAirlocked, setAirlocked, listApprovedHostPorts, addApprovedHostPort, removeApprovedHostPort, ApprovedHostPort, listGroups, getGroup, getGroupByName, createGroup, updateGroup, deleteGroup, listIndexedFolders, countIndexedFolders, upsertIndexedFolder, deleteIndexedFolder, clearIndexedFolders, MAX_INDEXED_FOLDERS, setEnvSecret, deleteEnvSecret, listEnvSecretUids, purgeEnvMapping, deleteContainerEnvMappings, getRememberedEnvMappings, rememberEnvMappings } from './db';
 import {
   exportGroup,
   importGroupEnvelope,
@@ -27,7 +27,15 @@ import {
   deleteFolderMapping,
   toWireMapping,
   fromWirePatch,
+  listEnvMappings,
+  getEnvMapping,
+  createEnvMapping,
+  updateEnvMapping,
+  deleteEnvMapping,
+  toWireEnvMapping,
+  fromWireEnvPatch,
 } from './host-config';
+import { validateEnvVarName, validateEnvValue } from './env-mappings';
 import { containerPathError, defaultMultiMountWorkspace } from './workspace-root';
 import { normalizeHostPath, hostPathError, hostPathLeaf } from './host-path';
 import { DOCKER_ACTIONS, getEffectivePolicies, isKnownAction } from './docker-actions';
@@ -56,12 +64,14 @@ import { grantSudo, revokeSudo } from './sudo-grant';
 import {
   getOperatorToken,
   isAuthenticated,
+  operatorAuthHook,
   timingSafeEqualStr,
   isAllowedOrigin,
   sessionCookie,
   clearSessionCookie,
 } from './auth';
 import { attachTerminal } from './terminal';
+import { registerTokenExchangeRoutes } from './token-exchange-api';
 import { ptyManager } from './pty-manager';
 import { getCaCertPem } from './tls-ca';
 import {
@@ -104,40 +114,25 @@ interface ShareableRule {
   expires_at: number | null;
 }
 
+// The key a "remember these env mappings" choice is stored under (#108). A
+// multi-folder container has no single workspace directory, so its first mount
+// stands in for it — that is the folder the operator picked first and the one the
+// container is named after. Both inputs are already normalizeHostPath()'d, so the
+// same folder spelled two ways lands on the same key.
+export function envWorkspaceKey(
+  workspaceDir: string,
+  mounts?: { hostPath: string; containerPath: string }[],
+): string {
+  if (mounts?.length) return mounts[0].hostPath;
+  return workspaceDir;
+}
+
 export async function createApiServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
-  // One access model for the entire management API: the operator token (auth.ts).
-  // Source IP says nothing reliable here — Docker's proxy and Podman's
-  // rootlessport rewrite the source to a bridge-gateway IP, and under
-  // rootless Podman even which network that is changes per restart/disconnect
-  // (GetRootlessPortChildIP iterates a map). Devcontainers, LAN and operator
-  // can therefore only be separated by the token; the former subnet gate has
-  // thus been replaced by auth on every /api/* route.
-  //
-  // Endpoints that devcontainers must be able to reach without a token (sudo-audit
-  // ingest and the proxy CA). Keep this deliberately minimal: everything here is
-  // callable by anyone on the network.
-  const devcontainerPublicApi: Array<{ method: string; path: string }> = [
-    { method: 'POST', path: '/api/audit/sudo' },
-    { method: 'GET',  path: '/api/tls/ca.crt' },
-  ];
-  // Endpoints that the operator browser/CLI must be able to reach without a
-  // logged-in session in order to be able to log in at all (and to see that
-  // login is needed). The static SPA assets fall under this too (everything
-  // outside /api/): it is only client code, and the API itself stays behind auth.
-  const authPublicApi = new Set<string>(['/api/auth/login', '/api/auth/logout', '/api/auth/status']);
-
-  app.addHook('onRequest', async (req, reply) => {
-    const url = req.url ?? '';
-    const pathOnly = url.split('?')[0];
-    if (!pathOnly.startsWith('/api/')) return;      // static SPA assets are free
-    if (authPublicApi.has(pathOnly)) return;         // login/logout/status free
-    if (devcontainerPublicApi.some(w => w.method === req.method && w.path === pathOnly)) return;
-    if (!isAuthenticated(req.headers)) {
-      reply.code(401).send({ error: 'unauthorized', reason: 'operator authentication required' });
-    }
-  });
+  // One access model for the entire management API: the operator token on every
+  // /api/* route, with a minimal allowlist. See operatorAuthHook in auth.ts.
+  app.addHook('onRequest', operatorAuthHook);
 
   // ── Auth-endpoints ─────────────────────────────────────────────────────────
   // Login: check the token (constant-time) and on success set an httpOnly,
@@ -893,6 +888,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
       const inspect = await inspectContainer(name);
       await forceDeleteContainer(inspect.Id);
       await cleanupContainerNetwork(name);
+      // Drop the container's env-mapping placeholders (#108): a removed container
+      // must not leave a redeemable secret behind for whatever reuses its name.
+      deleteContainerEnvMappings(name);
       notifyStateChanged();
       return { ok: true };
     } catch (err: any) {
@@ -928,13 +926,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
     containerName: string;
     ideName?: string;
     empty?: boolean;
+    isolated?: boolean;
     presentableName?: string;
     memory?: string;
     cpus?: string;
+    envMappingIds?: number[];
+    rememberEnvMappings?: boolean;
   } }>(
     '/api/docker/start',
     async (req, reply) => {
-      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, presentableName: presentableNameOverride, memory, cpus } = req.body;
+      const { imageName, workspaceDir, mounts, containerWorkspace: containerWorkspaceOverride, containerName, ideName, empty, isolated, presentableName: presentableNameOverride, memory, cpus, envMappingIds, rememberEnvMappings: remember } = req.body;
       if (!imageName || !containerName) {
         return reply.code(400).send({ error: 'imageName and containerName required' });
       }
@@ -997,6 +998,11 @@ export async function createApiServer(): Promise<FastifyInstance> {
         return reply.code(400).send({ error: `containerWorkspace ${workspaceProblem}: "${containerWorkspace}"` });
       }
       const ide: IdeName = isIdeName(ideName) ? ideName : 'intellij';
+      // Only positive integers reach the mapping layer; anything else is dropped
+      // rather than passed on (#108).
+      const selectedEnvMappings = Array.isArray(envMappingIds)
+        ? envMappingIds.map(Number).filter(n => Number.isInteger(n) && n > 0)
+        : [];
       const params: StartParams = {
         imageName,
         workspaceDir: empty ? '' : fwd,
@@ -1006,12 +1012,29 @@ export async function createApiServer(): Promise<FastifyInstance> {
         presentableName: presentableNameOverride || leaf,
         ideName: ide,
         empty: empty === true,
+        isolated: isolated === true,
         memory,
         cpus,
+        envMappingIds: selectedEnvMappings,
       };
       try {
+        // An isolated container runs untrusted code: it starts without anything
+        // an operator once granted a container with the same name. Only when
+        // no such container exists: an existing one keeps its rights.
+        if (params.isolated) {
+          if (await containerNameTaken(containerName)) {
+            return reply.code(409).send({ error: `Container '${containerName}' already exists. Remove it first.` });
+          }
+          clearContainerAuthorizations(containerName);
+        }
         const id = await createAndStartContainer(params);
-        return { id, containerName };
+        // "Remember for this workspace directory" — only after a successful
+        // start, and only when there is a directory to key on (#108).
+        const rememberKey = envWorkspaceKey(fwd, normalizedMounts);
+        if (remember && rememberKey) rememberEnvMappings(rememberKey, selectedEnvMappings);
+        // containerWorkspace is echoed back so a client (the CLI) can point an
+        // IDE at the mount without re-deriving the path itself (#136).
+        return { id, containerName, containerWorkspace };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
       }
@@ -1140,6 +1163,9 @@ export async function createApiServer(): Promise<FastifyInstance> {
     const last5 = db.prepare('SELECT id, ts, container_id, domain, action FROM audit_log ORDER BY ts DESC LIMIT 5').all();
     return { dbPath, rowsBefore: before, rowsAfter: after, insertedId, insertError, last5 };
   });
+
+  // Host-registered Claude credentials for the token exchange (update agent).
+  registerTokenExchangeRoutes(app);
 
   // ── Ephemeral sudo grant (admin access to 'noot') ─────────────────────────
   // The 'noot' admin user starts LOCKED without a password. Admin access is
@@ -1467,6 +1493,137 @@ export async function createApiServer(): Promise<FastifyInstance> {
     }
   );
 
+  // ── Environment Variable Mappings CRUD (#108) ─────────────────────────────
+  // Definitions live in the mounted CLI config, like the folder mappings above.
+  // A secret's VALUE does not: it is stored in the DB and never serialised back,
+  // so neither the committed config file nor an API response can leak it. The
+  // portal sees `has_value` instead.
+
+  // `workspace` (optional) adds a `remembered` flag per mapping, so the start
+  // dialog can pre-tick what was chosen last time for that folder.
+  app.get<{ Querystring: { workspace?: string } }>('/api/env-mappings', async (req) => {
+    const workspace = normalizeHostPath(req.query.workspace ?? '');
+    const remembered = new Set(getRememberedEnvMappings(workspace));
+    const withSecret = listEnvSecretUids();
+    return listEnvMappings().map(m => ({
+      ...toWireEnvMapping(m, withSecret.has(m.uid)),
+      remembered: remembered.has(m.id),
+    }));
+  });
+
+  app.post<{ Body: { name: string; var_name: string; value?: string; is_secret?: number; secret_hosts?: string; is_global?: number; enabled?: number; sort_order?: number } }>(
+    '/api/env-mappings',
+    async (req, reply) => {
+      const { name, var_name, value = '', is_secret = 0, secret_hosts = '', is_global = 0, enabled = 1, sort_order = 0 } = req.body;
+      if (!name || !var_name) return reply.code(400).send({ error: 'name and var_name are required' });
+      if (!hostConfigAvailable()) return reply.code(503).send({ error: 'config_not_mounted' });
+      const secret = is_secret === 1;
+      try {
+        validateEnvVarName(var_name);
+        validateEnvValue(value);
+        // Fail-closed: a secret without hosts would never be redeemable anyway —
+        // refuse it now, rather than leaving the operator to debug it later.
+        if (secret && !secret_hosts.trim()) {
+          throw new Error('a secret mapping needs at least one host it may be redeemed for');
+        }
+        if (secret && !value) throw new Error('a secret mapping needs a value');
+      } catch (err) {
+        return reply.code(400).send({ error: 'invalid_env_mapping', message: (err as Error).message });
+      }
+      const id = createEnvMapping({
+        name,
+        varName: var_name,
+        // The value of a secret goes to the DB below, never into config.json.
+        value: secret ? '' : value,
+        secret,
+        secretHosts: secret_hosts,
+        global: is_global === 1,
+        enabled: enabled === 1,
+        sortOrder: sort_order,
+      });
+      if (id === null) return reply.code(500).send({ error: 'config_write_failed' });
+      // The uid is minted by createEnvMapping; the secret is filed under it, not
+      // under the numeric id the portal shows.
+      const created = getEnvMapping(id);
+      if (!created?.uid) return reply.code(500).send({ error: 'config_write_failed' });
+      if (secret) setEnvSecret(created.uid, value);
+      // Deliberately no value, name or variable in the audit line: this endpoint
+      // is where credentials are handed over.
+      logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-create' });
+      notifyStateChanged();
+      return { id };
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/env-mappings/:id',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const existing = getEnvMapping(id);
+      if (!existing) return reply.code(404).send({ error: 'not_found' });
+      if (!hostConfigAvailable()) return reply.code(503).send({ error: 'config_not_mounted' });
+      let patch;
+      try {
+        patch = fromWireEnvPatch(req.body);
+      } catch (err: any) {
+        // Unknown field (fail-closed, finding #9) → 400 instead of 500.
+        return reply.code(400).send({ error: 'invalid_field', message: err.message });
+      }
+      // The portal never receives a secret, so it cannot send one back: an
+      // omitted `value` means "leave the stored secret alone".
+      const valueGiven = Object.prototype.hasOwnProperty.call(req.body, 'value');
+      const nextValue = valueGiven ? String(patch.value ?? '') : null;
+      const willBeSecret = patch.secret !== undefined ? patch.secret : existing.secret;
+      const hosts = patch.secretHosts !== undefined ? patch.secretHosts : existing.secretHosts;
+      try {
+        if (patch.varName !== undefined) validateEnvVarName(patch.varName);
+        if (nextValue !== null) validateEnvValue(nextValue);
+        if (willBeSecret && !String(hosts).trim()) {
+          throw new Error('a secret mapping needs at least one host it may be redeemed for');
+        }
+        // Flipping the secret flag moves the value between two stores, so the new
+        // value has to come with it. Without this, turning a secret into a plain
+        // variable would copy the credential into the committed config file, and
+        // the other direction would leave a plain value marked secret.
+        if (willBeSecret !== existing.secret && nextValue === null) {
+          throw new Error('changing the secret flag requires the value to be sent along');
+        }
+        if (willBeSecret && nextValue === '') throw new Error('a secret mapping needs a value');
+      } catch (err) {
+        return reply.code(400).send({ error: 'invalid_env_mapping', message: (err as Error).message });
+      }
+      // config.json only ever holds a non-secret value.
+      if (willBeSecret) patch.value = '';
+      else if (nextValue !== null) patch.value = nextValue;
+      else delete patch.value;
+
+      if (!updateEnvMapping(id, patch)) return reply.code(500).send({ error: 'config_write_failed' });
+      // Keyed on the uid the mapping was created with — `existing` was read before
+      // the write, and a patch cannot change the uid.
+      if (willBeSecret && nextValue !== null) setEnvSecret(existing.uid, nextValue);
+      if (!willBeSecret) deleteEnvSecret(existing.uid);
+      logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-update' });
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/env-mappings/:id',
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      // Read the uid before the definition goes, or its secret is unreachable.
+      const doomed = getEnvMapping(id);
+      if (!deleteEnvMapping(id)) return reply.code(500).send({ error: 'config_write_failed' });
+      // Only after the definition is gone: its secret, the placeholders handed out
+      // for it, and any remembered pre-selection.
+      purgeEnvMapping(id, doomed?.uid ?? '');
+      logAudit({ containerId: null, domain: 'env-mappings', action: 'admin:env-mapping-delete' });
+      notifyStateChanged();
+      return { ok: true };
+    }
+  );
+
   // ── Indexed host folders ──────────────────────────────────────────────────
   // Huddle's portal runs in a container: it cannot open a file dialog on the
   // host, so a host path has always had to be typed from memory. `huddle
@@ -1602,4 +1759,16 @@ export async function createApiServer(): Promise<FastifyInstance> {
   console.log(`[api] listening on ${address}`);
 
   return app;
+}
+
+// Whether a container with this name exists. Any error other than "not found" is
+// passed on: a start must not clear rights when it cannot tell.
+async function containerNameTaken(name: string): Promise<boolean> {
+  try {
+    await inspectContainer(name);
+    return true;
+  } catch (err: any) {
+    if (/ → 404:/.test(String(err?.message))) return false;
+    throw err;
+  }
 }

@@ -1,0 +1,140 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    'helpers:pinGitHubActionDigests',
+    'docker:pinDigests',
+    'customManagers:githubActionsVersions', // updates `# renovate:` annotated *_VERSION env vars in workflows
+  ],
+  timezone: 'Europe/Amsterdam',
+  // Setting ignorePaths replaces config:recommended's defaults, so they are repeated here.
+  // docker-demo is a demo project that is not shipped; keep it out of dependency PRs.
+  ignorePaths: [
+    '**/node_modules/**',
+    '**/bower_components/**',
+    '**/vendor/**',
+    '**/examples/**',
+    '**/__tests__/**',
+    '**/test/**',
+    '**/tests/**',
+    '**/__fixtures__/**',
+    'docker-demo/**',
+  ],
+  // Hosted Renovate runs roughly every 4 hours; a "before 7am" window can be missed.
+  schedule: ['* 0-11 * * 1'],
+  labels: ['dependencies'],
+  // Most hijacked npm releases are pulled within days. Security fixes skip this (see vulnerabilityAlerts).
+  minimumReleaseAge: '3 days',
+
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ['* 0-11 * * 1'],
+    minimumReleaseAge: null, // has no release timestamp; would stay pending forever
+    // No release-age wait is possible here and it also refreshes security-critical packages
+    // within their ranges, so a person reviews it.
+    automerge: false,
+  },
+
+  vulnerabilityAlerts: {
+    // This block overrides every packageRule. Keep automerge false here, or security
+    // PRs for security-critical packages (last packageRule) would merge without review.
+    labels: ['dependencies', 'security'],
+    automerge: false,
+  },
+  osvVulnerabilityAlerts: true, // experimental; direct dependencies only
+
+  packageRules: [
+    {
+      description: 'Supported Node range in engines is a product decision, not an update',
+      matchDepTypes: ['engines'],
+      enabled: false,
+    },
+    {
+      description: 'Dev tooling: patch + minor grouped, automerge on green',
+      matchManagers: ['npm'],
+      matchDepTypes: ['devDependencies'],
+      matchUpdateTypes: ['minor', 'patch'],
+      groupName: 'dev tooling (non-major)',
+      automerge: true,
+    },
+    {
+      description: 'Runtime patches: automerge on green',
+      matchManagers: ['npm'],
+      matchDepTypes: ['dependencies'],
+      matchUpdateTypes: ['patch'],
+      automerge: true,
+    },
+    {
+      description: 'Angular moves as one unit; a person reviews it',
+      matchPackageNames: ['@angular/**', '@angular-devkit/**', '@schematics/angular', 'zone.js', 'rxjs'],
+      groupName: 'angular',
+      automerge: false,
+    },
+    {
+      description: "The frontend's TypeScript version is dictated by Angular",
+      matchFileNames: ['gateway/frontend/package.json'],
+      matchPackageNames: ['typescript'],
+      groupName: 'angular',
+      automerge: false,
+    },
+    {
+      description: 'Node image and @types/node move together',
+      matchDepNames: ['node', '@types/node'],
+      groupName: 'node runtime',
+      automerge: false,
+    },
+    {
+      // The gateway image is published by publish-image.yml; no digest pin, no release timestamps.
+      description: 'Own GHCR images: no digest pin, no release timestamps',
+      matchDatasources: ['docker'],
+      matchPackageNames: ['ghcr.io/infosupport/**'],
+      pinDigests: false,
+      minimumReleaseAge: null,
+    },
+    {
+      // The IDE Dockerfiles build FROM the locally built base (ARG BASE_IMAGE=localhost/huddle/…);
+      // that image exists only on the user's machine, so there is nothing to look up or update.
+      description: 'Locally built base images are not in any registry',
+      matchDatasources: ['docker'],
+      matchPackageNames: ['localhost/**'],
+      enabled: false,
+    },
+    {
+      description: 'Digest pins and refreshes have no release timestamps',
+      matchUpdateTypes: ['pinDigest', 'digest'],
+      minimumReleaseAge: null,
+    },
+    {
+      // Actions are pinned by digest with a major tag comment (`# v6`), so every non-major update is a
+      // digest update. A re-pointed tag or compromised action must not reach the publish workflows unreviewed.
+      description: 'GitHub Actions: grouped, a maintainer reviews',
+      matchManagers: ['github-actions'],
+      matchDepNames: ['!node'], // the `node-version` in workflows belongs to the 'node runtime' group
+      groupName: 'github actions',
+      automerge: false,
+    },
+    {
+      description: 'Renovate CLI version used by the config validator in renovate-config.yml: with the github actions group',
+      matchManagers: ['custom.regex'],
+      matchDepNames: ['renovate'],
+      groupName: 'github actions',
+      automerge: false,
+    },
+    {
+      description: 'Majors are planned work: approve them from the Dependency Dashboard',
+      matchUpdateTypes: ['major'],
+      dependencyDashboardApproval: true,
+      automerge: false,
+      // The update agent's rollout (`--skip-majors`) recognises majors by this label.
+      addLabels: ['major'],
+    },
+    {
+      // security-review-gate.yml reads matchPackageNames from this rule (keep the single-quoted list and
+      // addLabels below it). The list is the only copy; `/**` globs are supported, other globs are not.
+      description: 'Security-critical packages: always a human review. Keep this rule LAST (last match wins).',
+      matchPackageNames: ['node-forge', 'fastify', '@fastify/**', 'ws', 'better-sqlite3'],
+      automerge: false,
+      addLabels: ['needs-security-review'],
+    },
+  ],
+}
