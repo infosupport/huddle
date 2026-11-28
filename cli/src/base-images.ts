@@ -178,3 +178,38 @@ export function printStatus(rt: string, tag: string): void {
   }
   if (fs.existsSync(LOG_PATH)) console.log(dim(`Log: ${LOG_PATH}`));
 }
+
+const STALE_MS = 60 * 60 * 1000;
+
+/**
+ * Called by `huddle start` before it asks the gateway to start a container.
+ * The gateway would otherwise block the request for the whole build and the
+ * CLI's HTTP call times out after 5 minutes. So: wait here for a running
+ * background build (with progress), or build in the foreground when nothing is
+ * building. Only for our own local images; a snapshot or custom image is left
+ * to the gateway.
+ */
+export async function ensureImageForStart(rt: string, ide: Ide, imageName: string): Promise<void> {
+  const m = /^localhost\/huddle\/base-devimage-[a-z]+:(.+)$/.exec(imageName);
+  if (!m || imageExists(rt, imageName)) return;
+  const tag = m[1];
+  let announced = false;
+  for (;;) {
+    const s = readStatus();
+    const building = s?.state === 'building' && Date.now() - Date.parse(s.updatedAt) < STALE_MS;
+    if (!building || imageExists(rt, imageName)) break;
+    if (!announced) {
+      console.log(dim(`Waiting for the base-image build to finish (${s?.image ?? imageName}); log: ${LOG_PATH}`));
+      announced = true;
+    } else {
+      process.stdout.write(dim('.'));
+    }
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+  if (announced) console.log();
+  if (imageExists(rt, imageName)) return;
+  console.log(bold(`Base image ${imageName} is missing; building it now (one-time, a few minutes).`));
+  if (!buildImages({ rt, tag, ides: [ide] })) {
+    throw new Error(`Could not build ${imageName}; see the output above or run "huddle images build"`);
+  }
+}

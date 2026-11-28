@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { get, post } from './api';
 import { bold, green, cyan, dim } from './utils';
+import { ensureImageForStart } from './base-images';
+import { resolveRuntime } from './runtime';
 
 export interface StartOptions {
   ide: string;
@@ -97,6 +99,16 @@ export async function runStart(opts: StartOptions): Promise<void> {
   } else {
     body.workspaceDir = workspaceDir;
   }
+
+  // Our base images are built on this machine; make sure this one exists before the
+  // gateway starts the container (it would otherwise build it inside the request).
+  let rt: string | undefined;
+  try {
+    rt = resolveRuntime().name;
+  } catch {
+    // No local container runtime (e.g. HUDDLE_URL points elsewhere): leave it to the gateway.
+  }
+  if (rt) await ensureImageForStart(rt, ide, imageName);
 
   const result = await post<StartResponse>('/api/docker/start', body);
 
