@@ -24,6 +24,7 @@ Pulls `ghcr.io/infosupport/huddle:latest` and starts the container. Works with D
 huddle                 # start an IntelliJ devcontainer for the current directory
 huddle ./project       # start for a specific directory
 huddle --ide rider
+huddle --ide webstorm
 huddle --ide vscode --name devcontainer-demo
 huddle --ide vscode --mount ../docker-corpa=/workspaces/backend --mount ../frontend-real-estate-info=/workspaces/frontend --name corpa-dev
 huddle fw list
@@ -108,7 +109,7 @@ npm run install-global
 Main flags:
 
 ```text
---ide <intellij|rider|vscode>
+--ide <intellij|rider|webstorm|vscode>
 --workspace <path>
 --mount <host>=<container>   (repeatable, container path must be absolute)
 --workspace-root <path>      (container path the IDE opens; requires --mount)

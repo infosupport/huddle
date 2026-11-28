@@ -13,7 +13,7 @@ export interface StartOptions {
   empty: boolean;
 }
 
-type IdeName = 'rider' | 'intellij' | 'vscode';
+type IdeName = 'rider' | 'intellij' | 'webstorm' | 'vscode';
 
 interface BaseImageResponse {
   imageName: string;
@@ -161,6 +161,7 @@ function parseIde(value: string): IdeName {
   const normalized = value.toLowerCase().replace(/[ _-]+/g, '');
   if (normalized === 'rider') return 'rider';
   if (normalized === 'vscode' || normalized === 'code') return 'vscode';
+  if (normalized === 'webstorm' || normalized === 'ws') return 'webstorm';
   if (normalized === 'intellij' || normalized === 'intelij' || normalized === 'idea') return 'intellij';
-  throw new Error(`Unknown IDE: ${value}. Choose intellij, rider, or vscode.`);
+  throw new Error(`Unknown IDE: ${value}. Choose intellij, rider, webstorm, or vscode.`);
 }

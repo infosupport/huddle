@@ -38,6 +38,7 @@ export function resolveImages(): ResolvedImages {
       { image: process.env.BASE_IMAGE ?? `ghcr.io/infosupport/base-devimage:${tag}` },
       { image: process.env.BASE_IMAGE_RIDER ?? `ghcr.io/infosupport/base-devimage-rider:${tag}`, gatewayEnv: 'BASE_IMAGE_RIDER' },
       { image: process.env.BASE_IMAGE_INTELLIJ ?? `ghcr.io/infosupport/base-devimage-intellij:${tag}`, gatewayEnv: 'BASE_IMAGE_INTELLIJ' },
+      { image: process.env.BASE_IMAGE_WEBSTORM ?? `ghcr.io/infosupport/base-devimage-webstorm:${tag}`, gatewayEnv: 'BASE_IMAGE_WEBSTORM' },
       { image: process.env.BASE_IMAGE_VSCODE ?? `ghcr.io/infosupport/base-devimage-vscode:${tag}`, gatewayEnv: 'BASE_IMAGE_VSCODE' },
     ],
   };

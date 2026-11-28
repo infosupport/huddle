@@ -88,6 +88,15 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/infosupport/base-devimage-intellij:latest
 
+      - name: Build and push base-devimage-webstorm
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: base-devimage-webstorm/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/infosupport/base-devimage-webstorm:latest
+
       - name: Build and push base-devimage-rider
         uses: docker/build-push-action@v7
         with:

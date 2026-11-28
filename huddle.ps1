@@ -12,6 +12,7 @@ $HUDDLE_PORT      = 3000
 $IDE_DEFS = @(
     [PSCustomObject]@{ Key = 'rider';    Display = 'Rider';    Backend = 'Rider';    Image = 'ghcr.io/infosupport/base-devimage-rider';    Folder = 'base-devimage-rider' }
     [PSCustomObject]@{ Key = 'intellij'; Display = 'IntelliJ'; Backend = 'IntelliJ'; Image = 'ghcr.io/infosupport/base-devimage-intellij'; Folder = 'base-devimage-intellij' }
+    [PSCustomObject]@{ Key = 'webstorm'; Display = 'WebStorm'; Backend = 'WebStorm'; Image = 'ghcr.io/infosupport/base-devimage-webstorm'; Folder = 'base-devimage-webstorm' }
     # VS Code installeert zijn eigen backend (VS Code Server) in de container bij
     # het attachen — er hoeft dus geen IDE-distro gedownload te worden zoals bij JB.
     [PSCustomObject]@{ Key = 'vscode';   Display = 'VS Code';  Backend = 'VSCode';   Image = 'ghcr.io/infosupport/base-devimage-vscode';   Folder = 'base-devimage-vscode' }
