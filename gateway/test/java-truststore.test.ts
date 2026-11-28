@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import crypto from 'crypto';
 import forge from 'node-forge';
-import { buildJksTruststore, buildJavaTruststoreScript, JAVA_TOOL_OPTIONS, pemToDer } from '../src/java-truststore';
+import { buildJksTruststore, buildJavaTruststoreScript, JAVA_TOOL_OPTIONS, MAVEN_SETTINGS_XML, pemToDer } from '../src/java-truststore';
 
 // Java-tools (Maven, Gradle, IntelliJ met een gedownloade JDK) lezen de systeem-CA
 // niet. De gateway maakt daarom zelf een JKS-truststore met de Huddle-CA (#44):
@@ -52,5 +52,12 @@ describe('buildJksTruststore', () => {
     expect(script).toMatch(/base64 -d > \/usr\/local\/share\/ca-certificates\/huddle-ca\.jks/);
     expect(JAVA_TOOL_OPTIONS).toMatch(/trustStoreType=JKS/);
     expect(JAVA_TOOL_OPTIONS).toMatch(/trustStorePassword=changeit/);
+  });
+
+  it('zet Maven-proxy in ~/.m2/settings.xml, maar overschrijft een bestaande niet', () => {
+    const script = buildJavaTruststoreScript(pem);
+    expect(script).toMatch(/if \[ ! -e \/home\/vscode\/\.m2\/settings\.xml \]/);
+    expect(MAVEN_SETTINGS_XML).toMatch(/<host>huddle<\/host><port>80<\/port>/);
+    expect(MAVEN_SETTINGS_XML).toMatch(/<protocol>https<\/protocol>/);
   });
 });
