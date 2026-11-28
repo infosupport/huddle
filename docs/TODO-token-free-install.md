@@ -18,7 +18,7 @@ done, every CLI publish job (including experiment builds) will fail.
 
 | Package | Registry today | Anonymous (token-free) install? |
 |---------|----------------|---------------------------------|
-| Huddle image (`ghcr.io/infosupport/huddle`) + base-devimages | GitHub Container Registry (ghcr.io) | ✅ **Only if the package visibility is set to Public.** Public ghcr images can be pulled anonymously. |
+| Huddle image (`ghcr.io/infosupport/huddle`) — base-devimages are built locally since #137, not published | GitHub Container Registry (ghcr.io) | ✅ **Only if the package visibility is set to Public.** Public ghcr images can be pulled anonymously. |
 | CLI (`@infosupport/huddle-cli`) | **GitHub Packages npm** (`npm.pkg.github.com`) | ❌ **No.** GitHub Packages' npm registry requires authentication for *every* install, even for public packages. This is a documented GitHub limitation. |
 
 So the Docker side just needs a visibility flip; the npm side needs a registry
@@ -31,8 +31,7 @@ migration to **npmjs.com** (the public default registry).
 No code change; this is a GitHub setting.
 
 1. Go to the org packages: `https://github.com/orgs/infosupport/packages`.
-2. For each Huddle package — `huddle`, `base-devimage`, `base-devimage-vscode`,
-   `base-devimage-intellij`, `base-devimage-rider` — open **Package settings**.
+2. For the `huddle` package (the base-devimage packages are no longer published) — open **Package settings**.
 3. Under **Danger Zone → Change visibility**, set to **Public**.
 4. Verify from a machine with no Docker login:
    ```bash

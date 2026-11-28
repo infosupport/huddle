@@ -11,6 +11,9 @@ import { runIndexFolder } from './indexfolder';
 import { runTriageAgent } from './triage-agent';
 import { runUpdateAgent } from './update-agent';
 import { resolveImages } from './images';
+import { IDES, Ide, buildImages, printStatus } from './base-images';
+import { imageTag } from './config';
+import { resolveRuntime } from './runtime';
 import { cliVersion } from './self-update';
 import { dim } from './utils';
 import {
@@ -29,7 +32,7 @@ interface ParsedArgs {
 
 const VALUE_FLAGS = new Set(['url', 'ide', 'name', 'image', 'workspace', 'container', 'status', 'runtime', 'experiment', 'path', 'ca-path', 'output', 'out', 'workspace-root', 'depth']);
 const BOOLEAN_FLAGS = new Set(['help', 'h', 'empty', 'i', 'interactive', 'version', 'v', 'deny', 'docker-socket', 'force', 'replace', 'all', 'list', 'clear']);
-const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'triage-agent', 'help', 'version']);
+const COMMANDS = new Set(['start', 'firewall', 'fw', 'init', 'restart', 'experiment', 'migrate', 'indexfolder', 'indexfolders', 'update-agent', 'triage-agent', 'images', 'help', 'version']);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -164,6 +167,10 @@ Usage:
                                      and run init
   huddle experiment reset            Back to the stable release
   huddle experiment status           Show the active channel and CLI version
+  huddle images build [--refresh]    Build the devcontainer base images on this machine
+                                     (--refresh: rebuild with the latest Claude Code,
+                                     Codex and Copilot CLIs; --ide <ide>: one IDE only)
+  huddle images status               Show which base images are present
 
 Init options:
   --runtime <docker|podman>          Container runtime (default: auto-detected;
@@ -317,6 +324,29 @@ async function main(): Promise<void> {
     const initOpts = { runtime: flagString(flags, 'runtime') };
     ensureCliForChannel(process.argv.slice(2));
     await runInit(initOpts, resolveImages());
+    return;
+  }
+
+  if (cmd === 'images') {
+    const subCmd = sub ?? 'status';
+    const rt = resolveRuntime(flagString(flags, 'runtime')).name;
+    // The background build from `huddle init` passes the channel tag explicitly.
+    const tag = process.env.HUDDLE_IMAGES_TAG?.trim() || imageTag();
+    if (subCmd === 'build') {
+      const ide = flagString(flags, 'ide');
+      if (ide !== undefined && !(IDES as readonly string[]).includes(ide)) {
+        console.error(`Unknown IDE: ${ide} (choose from ${IDES.join(', ')})`);
+        process.exit(1);
+      }
+      const ok = buildImages({ rt, tag, ides: ide ? [ide as Ide] : undefined, refresh: flagBool(flags, 'refresh') });
+      if (!ok) process.exit(1);
+    } else if (subCmd === 'status') {
+      printStatus(rt, tag);
+    } else {
+      console.error(`Unknown images subcommand: ${subCmd}`);
+      console.error('Usage: huddle images <build [--refresh] [--ide <ide>]|status>');
+      process.exit(1);
+    }
     return;
   }
 

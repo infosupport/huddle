@@ -8,6 +8,7 @@ import type { ExecResult } from './sudo-grant';
 import { getCaCertPem } from './tls-ca';
 import { ensureWorktree } from './worktree';
 import { sanitizeResolvConf } from './dns-egress';
+import { ensureBaseImage } from './base-image-build';
 
 const SOCKET_DIR = '/tmp/dc-sockets';
 
@@ -188,7 +189,8 @@ export function isIdeName(value: unknown): value is IdeName {
 
 export function getBaseImageName(ide: IdeName): string {
   const envKey = `BASE_IMAGE_${ide.toUpperCase()}`;
-  return process.env[envKey] ?? `ghcr.io/infosupport/base-devimage-${ide}`;
+  // Built locally by the CLI (`huddle images build`) or by ensureBaseImage(); never pulled.
+  return process.env[envKey] ?? `localhost/huddle/base-devimage-${ide}:latest`;
 }
 
 export async function inspectContainer(name: string): Promise<any> {
@@ -438,7 +440,7 @@ export async function imageExists(name: string): Promise<boolean> {
   }
 }
 
-export async function buildImage(imageName: string, dockerfilePath: string): Promise<void> {
+export async function buildImage(imageName: string, dockerfilePath: string, buildArgs?: Record<string, string>): Promise<void> {
   const dockerfileContent = fs.readFileSync(dockerfilePath);
   // Minimal single-file tar: just the Dockerfile.
   const header = Buffer.alloc(512);
@@ -463,7 +465,8 @@ export async function buildImage(imageName: string, dockerfilePath: string): Pro
     const options: http.RequestOptions = {
       socketPath: '/var/run/docker.sock',
       method: 'POST',
-      path: `/build?t=${encodeURIComponent(imageName)}`,
+      path: `/build?t=${encodeURIComponent(imageName)}` +
+        (buildArgs ? `&buildargs=${encodeURIComponent(JSON.stringify(buildArgs))}` : ''),
       headers: {
         'content-type': 'application/x-tar',
         'content-length': tarData.length,
@@ -1053,15 +1056,7 @@ export async function createAndStartContainer(params: StartParams): Promise<stri
     if (!msg.includes('already exists in network') && !msg.includes('already connected')) throw err;
   }
 
-  if (!(await imageExists(imageName))) {
-    const dockerfilePath = `/base-devimage-${ideName}/Dockerfile`;
-    if (!fs.existsSync(dockerfilePath)) {
-      throw new Error(`Image '${imageName}' not found and ${dockerfilePath} is not mounted`);
-    }
-    console.log(`[huddle] Building base image '${imageName}' from ${dockerfilePath}...`);
-    await buildImage(imageName, dockerfilePath);
-    console.log(`[huddle] Base image '${imageName}' built successfully`);
-  }
+  await ensureBaseImage(ideName, imageName, { imageExists, buildImage });
 
   // Create per-container Docker socket proxy (injects X-Container-Id for OPA policy)
   await createContainerProxy(containerName, SOCKET_DIR);

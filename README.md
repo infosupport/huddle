@@ -181,7 +181,7 @@ npm install -g @infosupport/huddle-cli
 huddle init
 ```
 
-`huddle init` pulls the latest Huddle image and starts the container. It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
+`huddle init` pulls the latest Huddle image, starts the container and builds the devcontainer base images on your machine in the background (see [Base images](#base-images)). It automatically detects whether Docker or Podman is available; use `huddle init --runtime <docker|podman>` (or the `HUDDLE_RUNTIME` env var) to pick a runtime explicitly. The web UI is available at `http://localhost:3000`.
 
 After that, you start devcontainers directly from a project directory:
 
@@ -214,16 +214,22 @@ If auto-detection ever fails, make sure the `rancher-desktop` context is active
 
 ---
 
-## Building base images (optional)
+## Base images
 
-Huddle builds base images automatically when you start a devcontainer. To speed this up, you can build them ahead of time:
+The devcontainer base images (`base-devimage` plus one per IDE) are **built on your
+machine**, not pulled from a registry. That way you get the latest Claude Code, Codex
+and Copilot CLIs without waiting for a new Huddle release.
 
-```bash
-docker build -t base-devimage-vscode    -f base-devimage-vscode/Dockerfile    .
-docker build -t base-devimage-intellij  -f base-devimage-intellij/Dockerfile  .
-docker build -t base-devimage-rider     -f base-devimage-rider/Dockerfile     .
-docker build -t base-devimage-webstorm  -f base-devimage-webstorm/Dockerfile  .
-```
+- `huddle init` starts the build in the background and returns right away. A
+  devcontainer that starts before the build is done waits for it.
+- `huddle images status` shows which images are present; the build log is in
+  `~/.huddle/images/build.log`.
+- `huddle images build --refresh` rebuilds everything with the newest tools
+  (`--ide <vscode|intellij|rider|webstorm>` limits it to one IDE).
+
+The images are tagged `localhost/huddle/base-devimage[-<ide>]:<channel>` (`latest`, or
+`experiment-<nr>` while an experiment is active). The Dockerfiles ship with the CLI;
+`BASE_IMAGE_<IDE>` still overrides the image the gateway uses.
 
 ---
 

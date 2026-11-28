@@ -1,4 +1,6 @@
-FROM ghcr.io/infosupport/base-devimage
+# Bouwt lokaal op de gedeelde base-devimage (gebouwd door `huddle images build` of de gateway).
+ARG BASE_IMAGE=localhost/huddle/base-devimage:latest
+FROM ${BASE_IMAGE}
 
 # JB Gateway downloadt zelf de WebStorm-backend (RemoteDev-dist). Node.js 24 zit al
 # in base-devimage (nodesource), dus node/npm zijn direct beschikbaar in de terminal

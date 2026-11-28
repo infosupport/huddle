@@ -29,7 +29,7 @@ Optional overrides (env):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `HUDDLE_URL` | `http://localhost:3000` | huddle's admin API |
-| `HUDDLE_E2E_IMAGE` | `base-devimage-vscode` | base image for the throwaway container |
+| `HUDDLE_E2E_IMAGE` | `localhost/huddle/base-devimage-vscode:latest` | base image for the throwaway container |
 | `HUDDLE_E2E_IDE` | `vscode` | ide type for the spawn |
 | `HUDDLE_E2E_NAME` | `devcontainer-e2e-boundary` | name of the throwaway container |
 

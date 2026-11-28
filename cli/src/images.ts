@@ -1,8 +1,10 @@
 import { activeExperiment, imageTag } from './config';
+import { localImageName } from './base-images';
 
 /**
  * Channel-aware image resolution: based on the active channel (stable or
- * experiment), determines which gateway and base images init should use.
+ * experiment), determines which gateway image init pulls and which locally
+ * built base images the gateway uses.
  * That keeps init.ts pure orchestration of runtime and containers.
  */
 
@@ -34,28 +36,28 @@ export function resolveImages(): ResolvedImages {
     experiment,
     tag,
     image: process.env.HUDDLE_IMAGE ?? `ghcr.io/infosupport/huddle:${tag}`,
+    // Built locally (see base-images.ts), never pulled. BASE_IMAGE_<IDE> still
+    // overrides, e.g. to point at a self-built or team-registry image.
     baseImages: [
-      { image: process.env.BASE_IMAGE ?? `ghcr.io/infosupport/base-devimage:${tag}` },
-      { image: process.env.BASE_IMAGE_RIDER ?? `ghcr.io/infosupport/base-devimage-rider:${tag}`, gatewayEnv: 'BASE_IMAGE_RIDER' },
-      { image: process.env.BASE_IMAGE_INTELLIJ ?? `ghcr.io/infosupport/base-devimage-intellij:${tag}`, gatewayEnv: 'BASE_IMAGE_INTELLIJ' },
-      { image: process.env.BASE_IMAGE_WEBSTORM ?? `ghcr.io/infosupport/base-devimage-webstorm:${tag}`, gatewayEnv: 'BASE_IMAGE_WEBSTORM' },
-      { image: process.env.BASE_IMAGE_VSCODE ?? `ghcr.io/infosupport/base-devimage-vscode:${tag}`, gatewayEnv: 'BASE_IMAGE_VSCODE' },
+      { image: process.env.BASE_IMAGE ?? localImageName(undefined, tag), gatewayEnv: 'BASE_IMAGE' },
+      { image: process.env.BASE_IMAGE_RIDER ?? localImageName('rider', tag), gatewayEnv: 'BASE_IMAGE_RIDER' },
+      { image: process.env.BASE_IMAGE_INTELLIJ ?? localImageName('intellij', tag), gatewayEnv: 'BASE_IMAGE_INTELLIJ' },
+      { image: process.env.BASE_IMAGE_WEBSTORM ?? localImageName('webstorm', tag), gatewayEnv: 'BASE_IMAGE_WEBSTORM' },
+      { image: process.env.BASE_IMAGE_VSCODE ?? localImageName('vscode', tag), gatewayEnv: 'BASE_IMAGE_VSCODE' },
     ],
   };
 }
 
 /**
- * `-e KEY=val` argv pairs for the gateway container. During an experiment (or
- * with an explicit override) the gateway must start devcontainers from the same
- * base images the CLI just pulled. Returned as an argv array (not a shell
- * string) so init can spawn `docker run` without a shell.
+ * `-e KEY=val` argv pairs for the gateway container, so it starts devcontainers
+ * from (and, if missing, builds) exactly the local images of the active channel.
+ * Returned as an argv array (not a shell string) so init can spawn `docker run`
+ * without a shell.
  */
 export function gatewayEnvArgs(resolved: ResolvedImages): string[] {
   const args: string[] = [];
   for (const b of resolved.baseImages) {
-    if (b.gatewayEnv && (resolved.experiment !== undefined || process.env[b.gatewayEnv])) {
-      args.push('-e', `${b.gatewayEnv}=${b.image}`);
-    }
+    if (b.gatewayEnv) args.push('-e', `${b.gatewayEnv}=${b.image}`);
   }
   return args;
 }

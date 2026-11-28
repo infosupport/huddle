@@ -39,9 +39,9 @@ jobs:
         run: |
           export HUDDLE_OPERATOR_TOKEN=$(openssl rand -hex 32); echo "::add-mask::$HUDDLE_OPERATOR_TOKEN"
           docker build -q -t huddle:pr gateway
-          docker pull -q ghcr.io/infosupport/base-devimage-vscode
           npm ci --ignore-scripts --prefix cli && npm run build --prefix cli
-          HUDDLE_IMAGE=huddle:pr HUDDLE_NO_PULL=1 node cli/dist/index.js init
+          node cli/dist/index.js images build --ide vscode > /dev/null
+          HUDDLE_IMAGE=huddle:pr HUDDLE_NO_PULL=1 HUDDLE_NO_BUILD=1 node cli/dist/index.js init
           until node cli/dist/index.js start --ide vscode --empty --name target-dc; do sleep 3; done
           # The browser's login, outside the working directory so the agent cannot read the token.
           ( umask 077; echo "{\"cookies\":[{\"name\":\"huddle_session\",\"value\":\"$HUDDLE_OPERATOR_TOKEN\",\"domain\":\"localhost\",\"path\":\"/\",\"expires\":-1,\"httpOnly\":true,\"secure\":false,\"sameSite\":\"Strict\"}],\"origins\":[]}" > "$RUNNER_TEMP/huddle-session.json" )

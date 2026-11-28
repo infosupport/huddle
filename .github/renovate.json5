@@ -84,13 +84,20 @@
       automerge: false,
     },
     {
-      // publish-image.yml builds base-devimage:latest and then builds the IDE images on top of
-      // :latest in the same job. A digest pin would make them build on the previous base.
-      description: 'Own GHCR images: no digest pin (built together in publish-image.yml), no release timestamps',
+      // The gateway image is published by publish-image.yml; no digest pin, no release timestamps.
+      description: 'Own GHCR images: no digest pin, no release timestamps',
       matchDatasources: ['docker'],
       matchPackageNames: ['ghcr.io/infosupport/**'],
       pinDigests: false,
       minimumReleaseAge: null,
+    },
+    {
+      // The IDE Dockerfiles build FROM the locally built base (ARG BASE_IMAGE=localhost/huddle/…);
+      // that image exists only on the user's machine, so there is nothing to look up or update.
+      description: 'Locally built base images are not in any registry',
+      matchDatasources: ['docker'],
+      matchPackageNames: ['localhost/**'],
+      enabled: false,
     },
     {
       description: 'Digest pins and refreshes have no release timestamps',

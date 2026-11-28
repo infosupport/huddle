@@ -23,7 +23,7 @@
 #   TEST_AGENT_MODEL            default claude-sonnet-5-5 (pinned; change it deliberately)
 #   TEST_AGENT_MAX_TURNS        default 120 (60 was too few once the portal scenario drives the UI)
 #   TEST_AGENT_TIMEOUT_MIN      default 45
-#   TEST_AGENT_BUILD_BASE=1     build base-devimage* from this checkout instead of pulling
+#   TEST_AGENT_BUILD_BASE=1     rebuild base-devimage* even when they already exist
 #   TEST_AGENT_ALLOW_BARE_METAL=1  skip the "am I in a VM" check (not recommended)
 #
 # Exit code: 0 no failures, 1 at least one area failed, 2 no report was produced.
@@ -39,8 +39,8 @@ MODEL="${TEST_AGENT_MODEL:-claude-sonnet-5-5}"
 TIMEOUT_MIN="${TEST_AGENT_TIMEOUT_MIN:-45}"
 HUDDLE_URL="http://localhost:3000"
 TARGET="target-dc"
-BASE_IMAGE="ghcr.io/infosupport/base-devimage"
-IDE_IMAGE="ghcr.io/infosupport/base-devimage-vscode"
+BASE_IMAGE="localhost/huddle/base-devimage"
+IDE_IMAGE="localhost/huddle/base-devimage-vscode"
 KEEP=0
 CREATED=0
 
@@ -115,20 +115,20 @@ trap cleanup EXIT INT TERM
 CREATED=1
 
 # ── Build (same as the CI e2e job) ──────────────────────────────────────────
-ensure_image() { # <image> <dockerfile relative to the repo>
-  local img="$1" dockerfile="$2"
-  if [ "${TEST_AGENT_BUILD_BASE:-0}" != 1 ] && docker pull -q "$img:latest" >/dev/null 2>&1; then
-    log "pulled $img"
+ensure_image() { # <image> <folder in the repo> [build-arg]
+  local img="$1" folder="$2" arg="${3:-}"
+  if [ "${TEST_AGENT_BUILD_BASE:-0}" != 1 ] && docker image inspect "$img:latest" >/dev/null 2>&1; then
+    log "using existing $img"
     return
   fi
-  log "building $img from this checkout (pull skipped or failed)"
-  docker build -q -t "$img:latest" -f "$REPO_DIR/$dockerfile" "$REPO_DIR" >/dev/null
+  log "building $img from this checkout (base images are built locally, never pulled)"
+  docker build -q -t "$img:latest" ${arg:+--build-arg "$arg"} -f "$REPO_DIR/$folder/Dockerfile" "$REPO_DIR/$folder" >/dev/null
 }
 
 log "building the Huddle gateway image"
 docker build -q -t huddle:pr "$REPO_DIR/gateway" >/dev/null
-ensure_image "$BASE_IMAGE" base-devimage/Dockerfile
-ensure_image "$IDE_IMAGE"  base-devimage-vscode/Dockerfile
+ensure_image "$BASE_IMAGE" base-devimage
+ensure_image "$IDE_IMAGE"  base-devimage-vscode "BASE_IMAGE=$BASE_IMAGE:latest"
 
 # ── Start the throwaway Huddle (same as the CI "Start Huddle" step) ─────────
 TOKEN="$(openssl rand -hex 24)"

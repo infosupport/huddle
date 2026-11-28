@@ -1,4 +1,6 @@
-FROM ghcr.io/infosupport/base-devimage
+# Bouwt lokaal op de gedeelde base-devimage (gebouwd door `huddle images build` of de gateway).
+ARG BASE_IMAGE=localhost/huddle/base-devimage:latest
+FROM ${BASE_IMAGE}
 
 # JB Gateway downloadt zelf de .NET-runtime in de RemoteDev-dist. Als je dotnet
 # ook in je terminal wil, voeg dan apt-install dotnet-sdk-8.0 toe.
