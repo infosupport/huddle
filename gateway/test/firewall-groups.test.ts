@@ -19,11 +19,13 @@ try {
 
 let dbMod: typeof import('../src/db');
 let groups: typeof import('../src/firewall-groups');
+let rulesMod: typeof import('../src/rules');
 
 beforeAll(async () => {
   if (!sqliteAvailable) return;
   dbMod = await import('../src/db');
   groups = await import('../src/firewall-groups');
+  rulesMod = await import('../src/rules');
   dbMod.initDb();
 });
 
@@ -165,6 +167,63 @@ describe.skipIf(!sqliteAvailable)('firewall-groups module', () => {
     const second = groups.reloadFirewallRulesFolder();
     expect(second.groups).toBe(1);
     expect(dbMod.listGroups().map((g) => g.name)).toEqual(['OpenAI']);
+  });
+
+  it('takes the auto-created path-mode marker down with the group file that needed it', () => {
+    // A hand-written team file carries path rules but no explicit host-only
+    // marker, so the import auto-creates one. That marker used to be inserted as
+    // source='manual', which the reload cleanup never deletes — removing the file
+    // then left the domain in path-mode forever: the proxy kept opening CONNECT
+    // tunnels and filing new 'requested' subpaths for a rule set the team had
+    // deleted.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
+    const file = path.join(dir, 'internal.json');
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1, kind: 'huddle-firewall-group', group: { name: 'Internal' }, rules: [
+        { domain: 'internal.example', container_id: null, status: 'allow', path_pattern: '/api/*', path_mode: 0, expires_at: null },
+      ],
+    }));
+
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    groups.reloadFirewallRulesFolder();
+
+    const marker = () => dbMod.db
+      .prepare("SELECT source FROM rules WHERE domain = 'internal.example' AND path_pattern IS NULL")
+      .get() as { source: string } | undefined;
+    expect(marker()?.source).toBe('startup-folder');
+    expect(rulesMod.isPathMode('internal.example', null)).toBe(true);
+
+    fs.rmSync(file);
+    const after = groups.reloadFirewallRulesFolder();
+    expect(after.errors).toHaveLength(0);
+    expect(marker()).toBeUndefined();
+    expect(rulesMod.isPathMode('internal.example', null)).toBe(false);
+  });
+
+  it('leaves a manually created host rule alone when a folder import needs it in path-mode', () => {
+    // The mirror image: an existing marker keeps its own source. Re-tagging a
+    // manual rule as folder-managed would hand it to the reload cleanup and
+    // delete it — the same hijack importGroupEnvelope refuses for group rules.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'huddle-fw-'));
+    const file = path.join(dir, 'internal.json');
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1, kind: 'huddle-firewall-group', group: { name: 'Internal' }, rules: [
+        { domain: 'internal.example', container_id: null, status: 'allow', path_pattern: '/api/*', path_mode: 0, expires_at: null },
+      ],
+    }));
+    dbMod.db
+      .prepare("INSERT INTO rules (domain, container_id, status, path_pattern, path_mode, source) VALUES ('internal.example', NULL, 'deny', NULL, 0, 'manual')")
+      .run();
+
+    process.env.HUDDLE_FIREWALL_RULES_MOUNT = dir;
+    groups.reloadFirewallRulesFolder();
+
+    fs.rmSync(file);
+    groups.reloadFirewallRulesFolder();
+    const marker = dbMod.db
+      .prepare("SELECT source FROM rules WHERE domain = 'internal.example' AND path_pattern IS NULL")
+      .get() as { source: string } | undefined;
+    expect(marker?.source).toBe('manual');
   });
 
   it('refuses to read a symlinked group file instead of following it', () => {
